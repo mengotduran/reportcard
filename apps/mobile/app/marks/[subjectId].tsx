@@ -1,0 +1,384 @@
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useTheme, Colors } from '@/lib/useTheme'
+import {
+  View, Text, ScrollView, TextInput, TouchableOpacity,
+  StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView,
+  Platform, Keyboard,
+} from 'react-native'
+import { useLocalSearchParams, useNavigation, useFocusEffect } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
+import {
+  getClassOverview, getReportCard, createReportCard,
+  saveEntries, getSubjects,
+} from '@/lib/api/reportcards'
+import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { useAuthStore } from '@/lib/store/auth.store'
+
+interface Row {
+  studentId: string
+  name: string
+  studentIdCode: string
+  reportCardId: string | null
+  score: string
+  otherSeqScore: number | null
+  isLocked: boolean
+}
+
+export default function MarksEntryScreen() {
+  const { subjectId, classLevel, termId, subjectName, sequence } = useLocalSearchParams<{
+    subjectId: string; classLevel: string; termId: string
+    subjectName: string; sequence: string
+  }>()
+  const navigation = useNavigation()
+  const { user } = useAuthStore()
+  const { colors, isDark } = useTheme()
+  const s = makeSStyles(colors)
+  const seqIndex = Number(sequence)
+  const seqLabel = seqIndex === 0 ? 'First Sequence' : 'Second Sequence'
+  const decodedSubjectId = decodeURIComponent(subjectId)
+  const decodedClass = decodeURIComponent(classLevel)
+  const decodedSubjectName = decodeURIComponent(subjectName)
+
+  const [rows, setRows] = useState<Row[]>([])
+  const [maxScore, setMaxScore] = useState(20)
+  const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [activeCell, setActiveCell] = useState<string | null>(null)
+  const inputRefs = useRef<Record<string, TextInput | null>>({})
+
+  useEffect(() => {
+    navigation.setOptions({ title: `${decodedSubjectName} · ${seqLabel}` })
+  }, [decodedSubjectName, seqLabel])
+
+  const fetchData = useCallback(async () => {
+    const [subjectData, scaleData] = await Promise.all([
+      getSubjects(),
+      getGradingScale().catch(() => ({ ranges: DEFAULT_RANGES })),
+    ])
+    const subject = subjectData.subjects.find((s) => s.id === decodedSubjectId)
+    if (subject?.maxScore) setMaxScore(subject.maxScore)
+    if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
+
+    const overview = await getClassOverview(termId, decodedClass)
+    // Sort alphabetically
+    const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
+
+    const loaded: Row[] = await Promise.all(
+      sorted.map(async (s) => {
+        let score = ''
+        let otherSeqScore: number | null = null
+        if (s.reportCard) {
+          try {
+            const rc = await getReportCard(s.reportCard.id)
+            const entry = rc.entries.find((e) => e.subject.id === decodedSubjectId) as any
+            if (entry) {
+              score = seqIndex === 0
+                ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
+                : (entry.seq2Score != null ? String(entry.seq2Score) : '')
+              otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+            }
+          } catch { /* no entries yet */ }
+        }
+        const isPublished = s.reportCard?.status === 'PUBLISHED'
+        const grantedToMe = s.reportCard?.marksEditGrantedTo === user?.id
+        return { studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null, score, otherSeqScore, isLocked: isPublished && !grantedToMe }
+      })
+    )
+    setRows(loaded)
+  }, [termId, decodedClass, decodedSubjectId, seqIndex])
+
+  useFocusEffect(useCallback(() => {
+    fetchData().finally(() => setLoading(false))
+  }, [fetchData]))
+
+  const updateScore = (studentId: string, value: string) => {
+    const clean = value.replace(/[^0-9]/g, '')
+    const num = Math.min(maxScore, Number(clean))
+    setRows((prev) => prev.map((r) => r.studentId === studentId ? { ...r, score: clean === '' ? '' : String(num) } : r))
+  }
+
+  const editableRows = rows.filter(r => !r.isLocked)
+  const publishedCount = rows.length - editableRows.length
+
+  const handleSaveAll = async () => {
+    setSaving(true)
+    Keyboard.dismiss()
+    try {
+      const updated = await Promise.all(
+        editableRows.map(async (r) => {
+          if (!r.reportCardId) {
+            const data = await createReportCard({ studentId: r.studentId, termId })
+            return { ...r, reportCardId: data.reportCard.id }
+          }
+          return r
+        })
+      )
+
+      const rcDetails = await Promise.all(updated.map((r) => getReportCard(r.reportCardId!)))
+
+      await Promise.all(
+        updated.map((r, i) => {
+          const rc = rcDetails[i]
+          const allSubjectIds = Array.from(new Set([
+            ...rc.entries.map((e) => e.subject.id),
+            decodedSubjectId,
+          ]))
+
+          const entries = allSubjectIds.map((sid) => {
+            const existing = rc.entries.find((e) => e.subject.id === sid) as any
+            if (sid === decodedSubjectId) {
+              const cur = r.score !== '' ? Number(r.score) : null
+              return {
+                subjectId: sid,
+                seq1Score: seqIndex === 0 ? cur : (existing?.seq1Score ?? null),
+                seq2Score: seqIndex === 1 ? cur : (existing?.seq2Score ?? null),
+                // no remarks — API auto-fills from grading scale
+              }
+            }
+            return {
+              subjectId: sid,
+              seq1Score: existing?.seq1Score ?? undefined,
+              seq2Score: existing?.seq2Score ?? undefined,
+              score: existing?.score ?? 0,
+              // no remarks — API auto-fills from grading scale
+            }
+          })
+
+          return saveEntries(r.reportCardId!, { entries: entries as any })
+        })
+      )
+
+      Alert.alert('Saved', 'Marks saved for all students.')
+      fetchData()
+    } catch {
+      Alert.alert('Error', 'Failed to save marks.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const filled = rows.filter((r) => r.score !== '').length
+  const otherSeqLabel = seqIndex === 0 ? 'Second Sequence' : 'First Sequence'
+  const otherSeqShort = seqIndex === 0 ? 'Seq 2' : 'Seq 1'
+
+  const handleCopyFromOther = () => {
+    const hasCurrent = rows.some((r) => r.score !== '')
+    const doCopy = () => {
+      setRows((prev) =>
+        prev.map((r) =>
+          r.otherSeqScore !== null
+            ? { ...r, score: String(r.otherSeqScore) }
+            : r
+        )
+      )
+    }
+    if (hasCurrent) {
+      Alert.alert(
+        `Copy from ${otherSeqLabel}`,
+        'This will overwrite all current marks with the other sequence scores. Continue?',
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Copy', onPress: doCopy }]
+      )
+    } else {
+      const hasOther = rows.some((r) => r.otherSeqScore !== null)
+      if (!hasOther) {
+        Alert.alert('No data', `${otherSeqLabel} has no marks yet.`)
+        return
+      }
+      doCopy()
+    }
+  }
+
+  return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
+      <View style={s.container}>
+        {loading ? (
+          <View style={s.center}><ActivityIndicator size="large" color="#F03E2F" /></View>
+        ) : (
+        <>
+        {/* Info bar */}
+        <View style={s.infoBar}>
+          <Text style={s.infoText}>{decodedClass} · {filled}/{rows.length} filled</Text>
+          <Text style={s.seqPill}>{seqLabel}</Text>
+        </View>
+
+        {/* Published lock banner */}
+        {publishedCount > 0 && (
+          <View style={s.lockBanner}>
+            <Text style={s.lockBannerText}>
+              🔒 {publishedCount === rows.length ? 'All cards published' : `${publishedCount} card(s) published`} — contact admin to edit
+            </Text>
+          </View>
+        )}
+
+        {/* Copy bar — always visible */}
+        <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
+          <Ionicons name="copy-outline" size={15} color="#7c3aed" />
+          <Text style={s.copyBarText}>Copy marks from {otherSeqShort} → fill here</Text>
+          <Ionicons name="chevron-forward" size={14} color="#7c3aed" />
+        </TouchableOpacity>
+
+        {/* Table */}
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+          {/* Header */}
+          <View style={s.headerRow}>
+            <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
+            <View style={s.colName}><Text style={s.headerText}>STUDENT NAME</Text></View>
+            <View style={s.colScore}><Text style={s.headerText}>MARKS / {maxScore}</Text></View>
+            <View style={s.colRemark}><Text style={s.headerText}>PERFORMANCE</Text></View>
+          </View>
+
+          {rows.map((row, index) => {
+            const num = Number(row.score)
+            const hasScore = row.score !== ''
+            const g = hasScore ? gradeFromScore(num, maxScore, gradingRanges) : null
+            const isActive = activeCell === row.studentId
+
+            return (
+              <View key={row.studentId} style={[s.dataRow, index % 2 === 1 && s.dataRowAlt, row.isLocked && s.dataRowLocked]}>
+                {/* Row number */}
+                <View style={s.colNum}>
+                  <Text style={s.rowNum}>{index + 1}</Text>
+                </View>
+
+                {/* Name */}
+                <View style={s.colName}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={s.nameText} numberOfLines={1}>{row.name}</Text>
+                    {row.isLocked && <Text style={{ fontSize: 10 }}>🔒</Text>}
+                  </View>
+                  {row.otherSeqScore !== null && (
+                    <Text style={s.otherSeq}>
+                      {seqIndex === 0 ? 'Seq2' : 'Seq1'}: {row.otherSeqScore}
+                    </Text>
+                  )}
+                </View>
+
+                {/* Score input */}
+                <TouchableOpacity
+                  style={[s.colScore, s.cellTouch, isActive && s.cellActive]}
+                  onPress={() => {
+                    if (row.isLocked) return
+                    setActiveCell(row.studentId)
+                    inputRefs.current[row.studentId]?.focus()
+                  }}
+                  activeOpacity={row.isLocked ? 1 : 0.7}
+                >
+                  <TextInput
+                    ref={(ref) => { inputRefs.current[row.studentId] = ref }}
+                    style={[s.cellInput, isActive && s.cellInputActive]}
+                    value={row.score}
+                    onChangeText={(v) => updateScore(row.studentId, v)}
+                    onFocus={() => setActiveCell(row.studentId)}
+                    onBlur={() => setActiveCell(null)}
+                    keyboardType="numeric"
+                    maxLength={String(maxScore).length + 1}
+                    placeholder="--"
+                    placeholderTextColor="#9ca3af"
+                    returnKeyType="next"
+                    selectTextOnFocus
+                    editable={!row.isLocked}
+                    onSubmitEditing={() => {
+                      const next = rows[index + 1]
+                      if (next) {
+                        setActiveCell(next.studentId)
+                        inputRefs.current[next.studentId]?.focus()
+                      } else {
+                        Keyboard.dismiss()
+                        setActiveCell(null)
+                      }
+                    }}
+                  />
+                </TouchableOpacity>
+
+                {/* Remark */}
+                <View style={s.colRemark}>
+                  {g ? (
+                    <View style={[s.remarkPill, { backgroundColor: `${g.color}18` }]}>
+                      <Text style={[s.remarkText, { color: g.color }]} numberOfLines={1}>{g.remark}</Text>
+                    </View>
+                  ) : (
+                    <Text style={s.dashText}>--</Text>
+                  )}
+                </View>
+              </View>
+            )
+          })}
+        </ScrollView>
+
+        {/* Footer */}
+        <View style={s.footer}>
+          <TouchableOpacity style={[s.saveBtn, (saving || editableRows.length === 0) && s.disabled]} onPress={handleSaveAll} disabled={saving || editableRows.length === 0} activeOpacity={0.8}>
+            {saving
+              ? <ActivityIndicator color="#fff" />
+              : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? 'All Cards Published' : 'Save All Marks'}</Text></>}
+          </TouchableOpacity>
+        </View>
+        </>
+        )}
+      </View>
+    </KeyboardAvoidingView>
+  )
+}
+
+const HEADER_BG = '#1a0605'
+
+const makeSStyles = (colors: Colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.card },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  infoBar: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: colors.bgSecondary, paddingHorizontal: 14, paddingVertical: 9,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  infoText: { fontSize: 12, color: colors.textSecondary },
+  seqPill: { fontSize: 12, fontWeight: '700', color: '#F03E2F', backgroundColor: '#FEF2F1', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+  copyBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.bgSecondary, paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  copyBarText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#7c3aed' },
+
+  // Table
+  headerRow: {
+    flexDirection: 'row', backgroundColor: HEADER_BG,
+    borderBottomWidth: 2, borderBottomColor: '#c73225',
+  },
+  dataRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.card },
+  dataRowAlt: { backgroundColor: colors.bgSecondary },
+  dataRowLocked: { opacity: 0.55 },
+  lockBanner: { backgroundColor: 'rgba(240,62,47,0.06)', borderBottomWidth: 1, borderBottomColor: 'rgba(240,62,47,0.2)', paddingHorizontal: 14, paddingVertical: 8 },
+  lockBannerText: { fontSize: 12, color: '#c2410c' },
+
+  colNum: { width: 36, justifyContent: 'center', alignItems: 'center', paddingVertical: 10, borderRightWidth: 1, borderRightColor: colors.border },
+  colName: { flex: 1, justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRightWidth: 1, borderRightColor: colors.border },
+  colScore: { width: 88, justifyContent: 'center', alignItems: 'center', borderRightWidth: 1, borderRightColor: colors.border },
+  colRemark: { width: 100, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+
+  headerText: { fontSize: 11, fontWeight: '700', color: '#fff', textTransform: 'uppercase', letterSpacing: 0.5 },
+  rowNum: { fontSize: 11, color: colors.textMuted },
+  nameText: { fontSize: 13, fontWeight: '600', color: colors.text },
+  otherSeq: { fontSize: 10, color: '#7c3aed', marginTop: 1 },
+
+  cellTouch: { paddingVertical: 6 },
+  cellActive: { backgroundColor: 'rgba(240,62,47,0.06)' },
+  cellInput: {
+    fontSize: 16, fontWeight: '700', color: colors.text,
+    textAlign: 'center', width: '100%', paddingVertical: 6,
+    backgroundColor: 'transparent',
+  },
+  cellInputActive: { color: '#F03E2F' },
+
+  remarkPill: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4, maxWidth: 96 },
+  remarkText: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
+  dashText: { fontSize: 14, color: colors.textMuted, fontWeight: '500' },
+
+  footer: { padding: 12, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border },
+  saveBtn: {
+    backgroundColor: '#F03E2F', borderRadius: 12, padding: 14,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  disabled: { opacity: 0.5 },
+})

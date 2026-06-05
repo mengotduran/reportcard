@@ -1,0 +1,127 @@
+@import "tailwindcss";
+@variant dark (&:where(.dark, .dark *));
+
+/* ── Sanity-inspired design tokens ───────────────────────────────────────── */
+:root {
+  --background:           #e2e2e2;
+  --foreground:           #09090b;
+  --card:                 #e8e8e8;
+  --card-foreground:      #09090b;
+  --muted:                #d5d5d5;
+  --muted-foreground:     #71717a;
+  --border:               #bebebe;
+  --input:                #e2e2e2;
+  --primary:              #F03E2F;
+  --primary-foreground:   #ffffff;
+  --secondary:            #f4f4f5;
+  --secondary-foreground: #18181b;
+  --destructive:          #ef4444;
+  --ring:                 #F03E2F;
+}
+
+.dark {
+  --background:           #101112;
+  --foreground:           #ffffff;
+  --card:                 #161618;
+  --card-foreground:      #ffffff;
+  --muted:                #1c1c1f;
+  --muted-foreground:     #a1a1aa;
+  --border:               #27272a;
+  --input:                #1c1c1f;
+  --primary:              #F03E2F;
+  --primary-foreground:   #ffffff;
+  --secondary:            #1c1c1f;
+  --secondary-foreground: #fafafa;
+  --destructive:          #f87171;
+  --ring:                 #F03E2F;
+}
+
+@theme inline {
+  --font-sans:                  var(--font-inter);
+  --font-mono:                  var(--font-geist-mono);
+  --color-background:           var(--background);
+  --color-foreground:           var(--foreground);
+  --color-card:                 var(--card);
+  --color-card-foreground:      var(--card-foreground);
+  --color-muted:                var(--muted);
+  --color-muted-foreground:     var(--muted-foreground);
+  --color-border:               var(--border);
+  --color-input:                var(--input);
+  --color-primary:              var(--primary);
+  --color-primary-foreground:   var(--primary-foreground);
+  --color-secondary:            var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive:          var(--destructive);
+  --color-ring:                 var(--ring);
+}
+
+/* ── Card shadows (light mode only) ─────────────────────────────────────── */
+html:not(.dark) .bg-card {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, a, [role="button"], select, label[for], summary {
+  cursor: pointer;
+}
+
+/* ── Form elements ────────────────────────────────────────────────────────── */
+input, textarea, select {
+  color: var(--foreground);
+  background-color: var(--input);
+}
+
+.dark input:not([type="color"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+.dark textarea,
+.dark select {
+  color: var(--foreground);
+  background-color: var(--input);
+  border-color: var(--border);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--muted-foreground);
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: var(--muted-foreground);
+}
+
+button:disabled, [disabled] {
+  cursor: not-allowed;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 5px; height: 5px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: var(--border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); opacity: 0.5; }
+
+aside ::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Print ────────────────────────────────────────────────────────────────── */
+@media print {
+  @page { margin: 0; size: A4 portrait; }
+  html, body { margin: 0 !important; padding: 0 !important; }
+  body > *:not(#report-card-printable) { display: none !important; }
+  #report-card-printable {
+    display: block !important;
+    visibility: visible !important;
+    position: relative !important;
+    overflow: hidden !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  #report-card-printable * { visibility: visible !important; }
+  #report-card-printable tbody tr,
+  #report-card-printable tbody td { background-color: transparent !important; }
+}

@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "ReportCard",
+    "slug": "reportcard-mobile",
+    "version": "1.0.0",
+    "scheme": "reportcard",
+    "platforms": ["ios", "android"],
+    "assetBundlePatterns": ["**/*"],
+    "plugins": ["expo-router"],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
+    }
+  }
+}

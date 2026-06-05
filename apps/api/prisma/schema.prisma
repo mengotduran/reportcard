@@ -1,0 +1,215 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum SchoolType {
+  PRIMARY
+  SECONDARY
+  UNIVERSITY
+}
+
+enum UserRole {
+  SUPERADMIN
+  SCHOOL_ADMIN
+  VICE_PRINCIPAL
+  CLASS_MASTER
+  CLASS_TEACHER
+  SUBJECT_TEACHER
+  STUDENT
+  PARENT
+}
+
+enum ReportStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model ParentSchool {
+  id        String   @id @default(uuid())
+  name      String
+  city      String?
+  country   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  sections  School[]
+}
+
+model School {
+  id             String     @id @default(uuid())
+  parentSchoolId String?
+  name           String
+  type           SchoolType
+  email          String     @unique
+  phone          String?
+  address        String?
+  logo           String?
+  coverImage     String?
+  coverImages    String[]
+  subdomain      String     @unique
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  parentSchool   ParentSchool? @relation(fields: [parentSchoolId], references: [id])
+
+  users               User[]
+  students            Student[]
+  subjects            Subject[]
+  terms               Term[]
+  reportCards         ReportCard[]
+  classLevels         ClassLevel[]
+  reportCardTemplate  ReportCardTemplate?
+  gradingScale        GradingScale?
+}
+
+model GradingScale {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  ranges    Json     @default("[]")
+  updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
+model ReportCardTemplate {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  config    Json     @default("{}")
+  updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
+model ClassLevel {
+  id        String   @id @default(uuid())
+  schoolId  String
+  name      String
+  hasStream Boolean  @default(false)
+  order     Int      @default(0)
+  maxScore  Int      @default(20)
+  createdAt DateTime @default(now())
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@unique([schoolId, name])
+}
+
+model User {
+  id               String   @id @default(uuid())
+  schoolId         String?
+  name             String
+  email            String   @unique
+  password         String
+  role             UserRole
+  masterClassLevel String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  school          School?          @relation(fields: [schoolId], references: [id])
+  reportCards     ReportCard[]
+  teacherSubjects TeacherSubject[]
+}
+
+model Student {
+  id            String   @id @default(uuid())
+  schoolId      String
+  name          String
+  studentId     String
+  classLevel    String
+  guardianName  String?
+  guardianPhone String?
+  guardianEmail String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  school      School       @relation(fields: [schoolId], references: [id])
+  reportCards ReportCard[]
+
+  @@unique([schoolId, studentId])
+}
+
+model Subject {
+  id          String   @id @default(uuid())
+  schoolId    String
+  name        String
+  classLevel  String
+  maxScore    Int      @default(20)
+  coefficient Int      @default(1)
+  createdAt   DateTime @default(now())
+
+  school          School           @relation(fields: [schoolId], references: [id])
+  reportEntries   ReportEntry[]
+  teacherSubjects TeacherSubject[]
+}
+
+model TeacherSubject {
+  id        String   @id @default(uuid())
+  userId    String
+  subjectId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+}
+
+model Term {
+  id        String   @id @default(uuid())
+  schoolId  String
+  name      String
+  session   String
+  startDate DateTime
+  endDate   DateTime
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  school      School       @relation(fields: [schoolId], references: [id])
+  reportCards ReportCard[]
+}
+
+model ReportCard {
+  id          String       @id @default(uuid())
+  studentId   String
+  schoolId    String
+  termId      String
+  createdById String
+  status              ReportStatus @default(DRAFT)
+  totalScore          Float?
+  average             Float?
+  position            Int?
+  remarks             String?
+  marksEditGrantedTo    String?
+  remarksEditGrantedTo  String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  student   Student       @relation(fields: [studentId], references: [id])
+  school    School        @relation(fields: [schoolId], references: [id])
+  term      Term          @relation(fields: [termId], references: [id])
+  createdBy User          @relation(fields: [createdById], references: [id])
+  entries   ReportEntry[]
+
+  @@unique([studentId, termId])
+}
+
+model ReportEntry {
+  id           String  @id @default(uuid())
+  reportCardId String
+  subjectId    String
+  seq1Score    Float?
+  seq2Score    Float?
+  score        Float?
+  grade        String?
+  remarks      String?
+
+  reportCard ReportCard @relation(fields: [reportCardId], references: [id])
+  subject    Subject    @relation(fields: [subjectId], references: [id])
+}

@@ -1,0 +1,87 @@
+import { create } from 'zustand'
+import { persist, createJSONStorage } from 'zustand/middleware'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+  masterClassLevel?: string | null
+}
+
+interface School {
+  id: string
+  name: string
+  type: string
+  subdomain: string
+  logo: string | null
+  coverImage: string | null
+  coverImages: string[]
+}
+
+interface AuthState {
+  user: User | null
+  school: School | null
+  token: string | null
+  isAuthenticated: boolean
+  lastActivity: number
+  _hasHydrated: boolean
+  setHasHydrated: (val: boolean) => void
+  setAuth: (user: User, school: School | null, token: string) => void
+  updateActivity: () => void
+  updateSchool: (school: School) => void
+  updateUser: (updates: Partial<User>) => void
+  logout: () => void
+}
+
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      school: null,
+      token: null,
+      isAuthenticated: false,
+      lastActivity: Date.now(),
+      _hasHydrated: false,
+      setHasHydrated: (val) => set({ _hasHydrated: val }),
+      setAuth: (user, school, token) => {
+        localStorage.setItem('token', token)
+        set({ user, school, token, isAuthenticated: true, lastActivity: Date.now() })
+      },
+      updateActivity: () => {
+        const state = get()
+        if (!state.isAuthenticated) return
+        const now = Date.now()
+        if (now - state.lastActivity > INACTIVITY_TIMEOUT) {
+          localStorage.removeItem('token')
+          set({ user: null, school: null, token: null, isAuthenticated: false })
+          window.location.href = '/login'
+          return
+        }
+        set({ lastActivity: now })
+      },
+      updateSchool: (school) => set({ school }),
+      updateUser: (updates) => set(state => ({ user: state.user ? { ...state.user, ...updates } : null })),
+      logout: () => {
+        localStorage.removeItem('token')
+        set({ user: null, school: null, token: null, isAuthenticated: false })
+      },
+    }),
+    {
+      name: 'auth-storage',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        user: state.user,
+        school: state.school,
+        token: state.token,
+        isAuthenticated: state.isAuthenticated,
+        lastActivity: state.lastActivity,
+      }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true)
+      },
+    }
+  )
+)

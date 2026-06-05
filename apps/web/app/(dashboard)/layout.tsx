@@ -1,0 +1,131 @@
+'use client'
+import { useRouter, usePathname } from 'next/navigation'
+import { useEffect } from 'react'
+import { useAuthStore } from '@/lib/store/auth.store'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare } from 'lucide-react'
+import ActivityTracker from '@/components/ActivityTracker'
+import AuthGuard from '@/components/AuthGuard'
+import ThemeToggle from '@/components/ui/ThemeToggle'
+
+const ADMIN_NAV = [
+  { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
+  { icon: Users,           label: 'Students',     href: '/students' },
+  { icon: GraduationCap,   label: 'Classes',      href: '/classes' },
+  { icon: BookOpen,        label: 'Subjects',     href: '/subjects' },
+  { icon: Calendar,        label: 'Terms',        href: '/terms' },
+  { icon: FileText,        label: 'Report Cards', href: '/report-cards' },
+  { icon: Palette,         label: 'Card Design',  href: '/report-card-design' },
+  { icon: Star,            label: 'Grading',      href: '/grading-scale' },
+  { icon: School,          label: 'Teachers',     href: '/teachers' },
+  { icon: Settings,        label: 'Settings',     href: '/settings' },
+]
+
+const TEACHER_NAV = [
+  { icon: LayoutDashboard, label: 'Home',    href: '/dashboard' },
+  { icon: FileText,        label: 'Classes', href: '/report-cards' },
+]
+
+const CLASS_MASTER_NAV = [
+  { icon: LayoutDashboard, label: 'Home',     href: '/dashboard' },
+  { icon: FileText,        label: 'Classes',  href: '/report-cards' },
+  { icon: MessageSquare,   label: 'My Class', href: '/class-master' },
+]
+
+const SUPERADMIN_NAV = [
+  { icon: ShieldCheck, label: 'Schools', href: '/superadmin' },
+]
+
+const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const { user, school, logout } = useAuthStore()
+
+  const isSuperAdmin = user?.role === 'SUPERADMIN'
+  const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
+  const isClassMaster = user?.role === 'CLASS_MASTER'
+  const navItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
+
+  useEffect(() => {
+    if (isSuperAdmin && pathname === '/dashboard') router.replace('/superadmin')
+  }, [isSuperAdmin, isTeacher, pathname])
+
+  return (
+    <AuthGuard>
+      <div className="min-h-screen bg-background flex">
+        <ActivityTracker />
+
+        {/* ── Sidebar ─────────────────────────────────────────────────────── */}
+        <aside className="w-[220px] bg-background flex flex-col fixed h-full" style={{ boxShadow: '2px 0 8px rgba(0,0,0,0.08)', borderRight: '1px solid var(--border)' }}>
+
+          {/* Brand */}
+          <div className="px-5 py-4 border-b border-border">
+            <div className="flex items-center gap-2.5 mb-1.5">
+              <div className="w-5 h-5 bg-primary rounded-[4px] flex items-center justify-center flex-shrink-0">
+                <span className="text-white text-[9px] font-black tracking-tight">RC</span>
+              </div>
+              <span className="font-semibold text-[13px] text-foreground tracking-tight truncate">
+                {isSuperAdmin ? 'ReportCard' : (school?.name || 'ReportCard')}
+              </span>
+            </div>
+            <span className="text-[10px] font-semibold tracking-widest uppercase text-muted-foreground">
+              {isSuperAdmin ? 'Superadmin' : (school?.type || '')}
+            </span>
+          </div>
+
+          {/* Nav */}
+          <nav className="flex-1 px-2 py-3 overflow-y-auto space-y-0.5">
+            {navItems.map((item) => {
+              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              return (
+                <button
+                  key={item.label}
+                  onClick={() => router.push(item.href)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition-colors ${
+                    isActive
+                      ? 'bg-muted text-foreground font-medium'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  <item.icon size={14} className={isActive ? 'text-primary' : ''} />
+                  {item.label}
+                </button>
+              )
+            })}
+          </nav>
+
+          {/* User + controls */}
+          <div className="px-2 py-3 border-t border-border space-y-0.5">
+            <div className="flex items-center gap-2.5 px-3 py-2">
+              <div className="w-7 h-7 bg-primary rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                {user?.name.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-medium text-foreground truncate">{user?.name}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{user?.role?.replace(/_/g, ' ')}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
+              <span className="text-[13px] text-muted-foreground">Appearance</span>
+              <ThemeToggle compact />
+            </div>
+
+            <button
+              onClick={() => { logout(); router.push('/login') }}
+              className="w-full flex items-center gap-2 px-3 py-[7px] text-[13px] text-muted-foreground hover:text-destructive hover:bg-muted rounded-md transition-colors"
+            >
+              <LogOut size={13} /> Logout
+            </button>
+          </div>
+        </aside>
+
+        {/* ── Main content ─────────────────────────────────────────────────── */}
+        <main className="flex-1 ml-[220px] p-8 min-h-screen bg-background">
+          {children}
+        </main>
+      </div>
+    </AuthGuard>
+  )
+}
