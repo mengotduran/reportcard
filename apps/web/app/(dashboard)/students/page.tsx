@@ -202,7 +202,8 @@ export default function StudentsPage() {
             <p className="text-muted-foreground text-sm">No students yet.</p>
           </div>
         ) : (
-          <table className="w-full">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Name</th>
@@ -217,7 +218,7 @@ export default function StudentsPage() {
                 <tr key={s.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">
+                      <div className="w-8 h-8 flex-shrink-0 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">
                         {s.name.charAt(0)}
                       </div>
                       <span className="text-sm font-medium text-foreground">{s.name}</span>
@@ -242,6 +243,7 @@ export default function StudentsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

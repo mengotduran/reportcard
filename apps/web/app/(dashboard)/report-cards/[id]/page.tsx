@@ -446,7 +446,7 @@ export default function ReportCardDetailPage() {
             <div className="px-4 py-3 bg-muted border-b border-border">
               <h3 className="text-sm font-semibold text-foreground">Subject Scores</h3>
             </div>
-            <table className="w-full">
+            <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
               <thead className="border-b border-gray-100 dark:border-border">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Subject</th>
@@ -492,7 +492,7 @@ export default function ReportCardDetailPage() {
                   )
                 })}
               </tbody>
-            </table>
+            </table></div>
           </div>
 
           {/* Admin attribution panel — who is blocking this card */}

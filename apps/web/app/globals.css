@@ -91,6 +91,18 @@ input::placeholder, textarea::placeholder {
   color: var(--muted-foreground);
 }
 
+/* Prevent mobile browsers (esp. iOS Safari) from auto-zooming when a form
+   field is focused — they do this whenever font-size < 16px. We bump fields
+   to 16px on small screens only, keeping the smaller desktop sizing intact.
+   !important is needed to win over Tailwind's text-sm utility on inputs. */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 .dark input::placeholder,
 .dark textarea::placeholder {
   color: var(--muted-foreground);

@@ -6,6 +6,7 @@ import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight } fro
 import api from '@/lib/api/client'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import DesktopOnly from '@/components/ui/DesktopOnly'
 
 // Images are proxied through Next.js rewrites — use relative paths directly
 
@@ -70,6 +71,7 @@ export default function SettingsPage() {
   const initials = school?.name?.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase() ?? 'SC'
 
   return (
+    <DesktopOnly>
     <div className="max-w-2xl mx-auto">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-foreground tracking-tight">School Settings</h2>
@@ -228,5 +230,6 @@ export default function SettingsPage() {
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>
+    </DesktopOnly>
   )
 }

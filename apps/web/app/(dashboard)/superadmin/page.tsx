@@ -433,7 +433,7 @@ export default function SuperAdminPage() {
         <div>
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Standalone Schools</h3>
           <div className="bg-card rounded-xl border border-border overflow-hidden">
-            <table className="w-full">
+            <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
               <thead className="bg-muted border-b border-border">
                 <tr>
                   {['School', 'Type', 'Subdomain', 'Students', 'Cards', 'Registered', 'Status', 'Actions'].map((h) => (
@@ -446,7 +446,7 @@ export default function SuperAdminPage() {
                   <tr key={school.id} className="hover:bg-muted dark:hover:bg-muted">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">{school.name.charAt(0)}</div>
+                        <div className="w-8 h-8 flex-shrink-0 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">{school.name.charAt(0)}</div>
                         <div>
                           <p className="text-sm font-medium text-foreground">{school.name}</p>
                           <p className="text-xs text-muted-foreground">{school.email}</p>
@@ -493,7 +493,7 @@ export default function SuperAdminPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </div>
       )}

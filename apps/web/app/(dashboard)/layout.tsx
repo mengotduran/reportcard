@@ -1,8 +1,8 @@
 'use client'
 import { useRouter, usePathname } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -47,6 +47,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const navItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
 
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+  // Close the mobile drawer whenever the route changes
+  useEffect(() => { setMobileNavOpen(false) }, [pathname])
+
   useEffect(() => {
     if (isSuperAdmin && pathname === '/dashboard') router.replace('/superadmin')
   }, [isSuperAdmin, isTeacher, pathname])
@@ -56,22 +61,51 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="min-h-screen bg-background flex">
         <ActivityTracker />
 
-        {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-        <aside className="w-[220px] bg-background flex flex-col fixed h-full" style={{ boxShadow: '2px 0 8px rgba(0,0,0,0.08)', borderRight: '1px solid var(--border)' }}>
+        {/* ── Mobile top bar (hamburger) ──────────────────────────────────── */}
+        <header className="md:hidden fixed top-0 inset-x-0 h-14 z-30 bg-background border-b border-border flex items-center gap-3 px-4">
+          <button onClick={() => setMobileNavOpen(true)} aria-label="Open menu" className="text-foreground -ml-1 p-1">
+            <Menu size={22} />
+          </button>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-5 h-5 bg-primary rounded-[4px] flex items-center justify-center flex-shrink-0">
+              <span className="text-white text-[9px] font-black tracking-tight">RC</span>
+            </div>
+            <span className="font-semibold text-[13px] text-foreground tracking-tight truncate">
+              {isSuperAdmin ? 'ReportCard' : (school?.name || 'ReportCard')}
+            </span>
+          </div>
+        </header>
+
+        {/* ── Backdrop (mobile, when drawer open) ─────────────────────────── */}
+        {mobileNavOpen && (
+          <div className="md:hidden fixed inset-0 bg-black/50 z-40" onClick={() => setMobileNavOpen(false)} aria-hidden />
+        )}
+
+        {/* ── Sidebar / mobile drawer ─────────────────────────────────────── */}
+        <aside
+          className={`w-[220px] bg-background flex flex-col fixed h-full z-50 transition-transform duration-200 ease-out md:translate-x-0 ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}
+          style={{ boxShadow: '2px 0 8px rgba(0,0,0,0.08)', borderRight: '1px solid var(--border)' }}
+        >
 
           {/* Brand */}
-          <div className="px-5 py-4 border-b border-border">
-            <div className="flex items-center gap-2.5 mb-1.5">
-              <div className="w-5 h-5 bg-primary rounded-[4px] flex items-center justify-center flex-shrink-0">
-                <span className="text-white text-[9px] font-black tracking-tight">RC</span>
+          <div className="px-5 py-4 border-b border-border flex items-start justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2.5 mb-1.5">
+                <div className="w-5 h-5 bg-primary rounded-[4px] flex items-center justify-center flex-shrink-0">
+                  <span className="text-white text-[9px] font-black tracking-tight">RC</span>
+                </div>
+                <span className="font-semibold text-[13px] text-foreground tracking-tight truncate">
+                  {isSuperAdmin ? 'ReportCard' : (school?.name || 'ReportCard')}
+                </span>
               </div>
-              <span className="font-semibold text-[13px] text-foreground tracking-tight truncate">
-                {isSuperAdmin ? 'ReportCard' : (school?.name || 'ReportCard')}
+              <span className="text-[10px] font-semibold tracking-widest uppercase text-muted-foreground">
+                {isSuperAdmin ? 'Superadmin' : (school?.type || '')}
               </span>
             </div>
-            <span className="text-[10px] font-semibold tracking-widest uppercase text-muted-foreground">
-              {isSuperAdmin ? 'Superadmin' : (school?.type || '')}
-            </span>
+            {/* Close button — mobile only */}
+            <button onClick={() => setMobileNavOpen(false)} aria-label="Close menu" className="md:hidden text-muted-foreground hover:text-foreground p-1 -mr-1 -mt-1">
+              <X size={18} />
+            </button>
           </div>
 
           {/* Nav */}
@@ -81,7 +115,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               return (
                 <button
                   key={item.label}
-                  onClick={() => router.push(item.href)}
+                  onClick={() => { router.push(item.href); setMobileNavOpen(false) }}
                   className={`w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition-colors ${
                     isActive
                       ? 'bg-muted text-foreground font-medium'
@@ -122,7 +156,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </aside>
 
         {/* ── Main content ─────────────────────────────────────────────────── */}
-        <main className="flex-1 ml-[220px] p-8 min-h-screen bg-background">
+        <main className="flex-1 min-w-0 overflow-x-clip md:ml-[220px] p-4 pt-20 md:p-8 min-h-screen bg-background">
           {children}
         </main>
       </div>

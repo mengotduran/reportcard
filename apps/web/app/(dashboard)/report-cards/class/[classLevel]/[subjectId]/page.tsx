@@ -194,7 +194,7 @@ export default function MarksEntryPage() {
 
       {/* Table */}
       <div className="flex-1 bg-card border-x border-border">
-        <table className="w-full">
+        <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
           <thead>
             <tr style={{ backgroundColor: '#1e3a5f' }}>
               <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
@@ -254,7 +254,7 @@ export default function MarksEntryPage() {
               )
             })}
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       {/* Full-width Save button at bottom — exactly like mobile */}

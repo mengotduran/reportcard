@@ -128,7 +128,7 @@ export default function ClassesPage() {
             <p className="text-muted-foreground text-sm">No classes yet. Add your first class to get started.</p>
           </div>
         ) : (
-          <table className="w-full">
+          <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Order</th>
@@ -188,7 +188,7 @@ export default function ClassesPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
 

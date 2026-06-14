@@ -107,14 +107,14 @@ export default function ClassMasterPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div className="min-w-0">
           <h2 className="text-2xl font-bold text-foreground">Class Master — {masterClass}</h2>
           <p className="text-muted-foreground text-sm mt-1">
             {term ? `${term.name} — ${term.session}` : 'No active term'}
           </p>
         </div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground flex-shrink-0">
           <MessageSquare size={15} />
           <span>{filledCount}/{students.length} remarks filled</span>
         </div>
@@ -132,7 +132,7 @@ export default function ClassMasterPage() {
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <table className="w-full">
+          <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">#</th>
@@ -199,7 +199,7 @@ export default function ClassMasterPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       )}
 

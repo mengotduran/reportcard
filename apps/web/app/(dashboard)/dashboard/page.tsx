@@ -57,7 +57,7 @@ function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; weekData: Weekly
   const Icon = cfg.icon
 
   return (
-    <div className="bg-card rounded-2xl border border-border p-5 flex flex-col gap-3">
+    <div className="bg-card rounded-2xl border border-border p-5 flex flex-col gap-3 min-w-0">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-2xl font-bold text-foreground">{total.toLocaleString()}</p>
@@ -144,8 +144,8 @@ function TeacherHome() {
 
   return (
     <div className="space-y-5">
-      {/* Hero — full bleed (negative margins cancel the p-8 on main) */}
-      <div className="-mx-8 -mt-8 relative min-h-[300px] flex items-center">
+      {/* Hero — full bleed (negative margins cancel main's padding at each breakpoint) */}
+      <div className="-mx-4 -mt-4 md:-mx-8 md:-mt-8 relative min-h-[260px] md:min-h-[300px] flex items-center">
         {sliderImages.length > 0 ? (
           <div className="absolute inset-0">
             <ImageSlider images={sliderImages} className="w-full h-full" />
@@ -154,18 +154,18 @@ function TeacherHome() {
         ) : (
           <div className="absolute inset-0 bg-gradient-to-br from-[#18060a] via-[#1c1c1f] to-[#101112]" />
         )}
-        <div className="relative px-10 py-10 flex items-center gap-6 w-full">
+        <div className="relative px-5 py-8 md:px-10 md:py-10 flex items-center gap-4 md:gap-6 w-full">
           {logoUrl ? (
-            <img src={logoUrl} alt="logo" className="w-24 h-24 rounded-2xl object-cover border-2 border-white/40 shadow-lg flex-shrink-0" />
+            <img src={logoUrl} alt="logo" className="w-20 h-20 md:w-24 md:h-24 rounded-2xl object-cover border-2 border-white/40 shadow-lg flex-shrink-0" />
           ) : (
-            <div className={`w-24 h-24 rounded-2xl ${colors.bg} flex items-center justify-center shadow-lg border-2 border-white/30 flex-shrink-0`}>
+            <div className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl ${colors.bg} flex items-center justify-center shadow-lg border-2 border-white/30 flex-shrink-0`}>
               <span className="text-white font-black text-2xl tracking-tight">{initials}</span>
             </div>
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <p className="text-white font-bold text-lg">{school?.name}</p>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20">{school?.type}</span>
+              <p className="text-base md:text-lg text-white font-bold truncate min-w-0 max-w-full">{school?.name}</p>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type}</span>
             </div>
             <p className="text-white/60 text-sm">{getGreeting()}, <span className="text-white font-semibold">{user?.name}</span></p>
             <p className="text-white/40 text-xs mt-1">{user?.role?.replace('_', ' ')} · {today}</p>
@@ -264,7 +264,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Hero banner — full bleed */}
-      <div className="-mx-8 -mt-8 relative min-h-[280px] flex items-end">
+      <div className="-mx-4 -mt-4 md:-mx-8 md:-mt-8 relative min-h-[240px] md:min-h-[280px] flex items-end">
         {sliderImages.length > 0 && (
           <div className="absolute inset-0">
             <ImageSlider images={sliderImages} className="w-full h-full" />
@@ -274,18 +274,18 @@ export default function DashboardPage() {
         {sliderImages.length === 0 && (
           <div className="absolute inset-0 bg-gradient-to-br from-[#18060a] via-[#1c1c1f] to-[#101112]" />
         )}
-        <div className="relative p-6 flex items-center gap-5">
+        <div className="relative p-5 md:p-6 flex items-center gap-4 md:gap-5 w-full">
           {logoUrl ? (
-            <img src={logoUrl} alt="logo" className="w-24 h-24 rounded-2xl object-cover border-2 border-white/30 shadow-lg flex-shrink-0" />
+            <img src={logoUrl} alt="logo" className="w-20 h-20 md:w-24 md:h-24 rounded-2xl object-cover border-2 border-white/30 shadow-lg flex-shrink-0" />
           ) : (
-            <div className="w-24 h-24 rounded-2xl bg-white/15 border-2 border-white/30 flex items-center justify-center shadow-lg flex-shrink-0 backdrop-blur-sm">
+            <div className="w-20 h-20 md:w-24 md:h-24 rounded-2xl bg-white/15 border-2 border-white/30 flex items-center justify-center shadow-lg flex-shrink-0 backdrop-blur-sm">
               <span className="text-white font-black text-2xl tracking-tight">{initials}</span>
             </div>
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold text-white truncate">{school?.name}</h1>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20">{school?.type}</span>
+              <h1 className="text-lg md:text-xl font-bold text-white truncate min-w-0">{school?.name}</h1>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type}</span>
             </div>
             <p className="text-sm text-white/60 mt-1">{today}</p>
             <p className="text-sm text-white/90 mt-2">{getGreeting()}, <span className="font-semibold text-white">{user?.name?.split(' ')[0]}</span> 👋</p>

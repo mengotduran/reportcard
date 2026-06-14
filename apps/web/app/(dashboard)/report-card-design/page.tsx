@@ -12,7 +12,7 @@ import {
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
-import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical } from 'lucide-react'
+import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor } from 'lucide-react'
 
 // ── Sample data for canvas preview ──────────────────────────────────────────
 const SD = {
@@ -805,7 +805,21 @@ export default function ReportCardDesignPage() {
   if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
 
   return (
-    <div>
+    <>
+      {/* ── Mobile: designer needs a larger screen ── */}
+      <div className="md:hidden flex flex-col items-center justify-center text-center min-h-[60vh] px-6">
+        <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center mb-5">
+          <Monitor size={26} className="text-primary" />
+        </div>
+        <h2 className="text-lg font-bold text-foreground">Open this on a larger screen</h2>
+        <p className="text-sm text-muted-foreground mt-2 max-w-xs">
+          The Report Card Designer needs the space and precision of a bigger display.
+          Please use a laptop or desktop computer to customize your report card layout.
+        </p>
+      </div>
+
+      {/* ── Designer — desktop / tablet only ── */}
+      <div className="hidden md:block">
       {/* ── Sticky toolbar ── */}
       <div className="sticky top-0 z-20 bg-card border-b border-border -mx-8 -mt-8 px-8 py-3 mb-6 flex items-center gap-4 flex-wrap">
         <div>
@@ -1091,6 +1105,7 @@ export default function ReportCardDesignPage() {
 
       {showAddMenu && <div className="fixed inset-0 z-20" onClick={() => setShowAddMenu(false)} />}
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
-    </div>
+      </div>
+    </>
   )
 }

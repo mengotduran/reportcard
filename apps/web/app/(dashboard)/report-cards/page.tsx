@@ -10,6 +10,7 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
+import DesktopOnly from '@/components/ui/DesktopOnly'
 import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig } from '@/lib/api/reportCardTemplate'
 
 function printClassListDocument(
@@ -624,6 +625,7 @@ export default function ReportCardsPage() {
   )
 
   return (
+    <DesktopOnly>
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -788,7 +790,7 @@ export default function ReportCardsPage() {
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <table className="w-full">
+          <div className="overflow-x-auto"><table className="w-full min-w-[760px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Student</th>
@@ -805,7 +807,7 @@ export default function ReportCardsPage() {
                 <tr key={rc.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center text-xs font-bold">
+                      <div className="w-8 h-8 flex-shrink-0 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center text-xs font-bold">
                         {rc.student.name.charAt(0)}
                       </div>
                       <div>
@@ -844,7 +846,7 @@ export default function ReportCardsPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       )}
 
@@ -955,5 +957,6 @@ export default function ReportCardsPage() {
         </div>
       )}
     </div>
+    </DesktopOnly>
   )
 }

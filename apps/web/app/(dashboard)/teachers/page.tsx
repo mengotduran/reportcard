@@ -218,7 +218,7 @@ export default function TeachersPage() {
             <p className="text-muted-foreground text-sm">No teachers yet.</p>
           </div>
         ) : (
-          <table className="w-full">
+          <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Name</th>
@@ -234,7 +234,7 @@ export default function TeachersPage() {
                 <tr key={t.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">
+                      <div className="w-8 h-8 flex-shrink-0 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">
                         {t.name.charAt(0)}
                       </div>
                       <span className="text-sm font-medium text-foreground">{t.name}</span>
@@ -242,13 +242,13 @@ export default function TeachersPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{t.email}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${roleColors[t.role] || 'bg-muted text-muted-foreground'}`}>
+                    <span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full font-medium ${roleColors[t.role] || 'bg-muted text-muted-foreground'}`}>
                       {roleLabels[t.role] || t.role}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">
                     {t.masterClassLevel
-                      ? <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">{t.masterClassLevel}</span>
+                      ? <span className="inline-block whitespace-nowrap text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">{t.masterClassLevel}</span>
                       : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
@@ -275,7 +275,7 @@ export default function TeachersPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
 

@@ -96,7 +96,7 @@ export default function GradingScalePage() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-foreground tracking-tight">Grading Scale</h2>
           <p className="text-muted-foreground text-sm mt-1">Define grade ranges — grades are calculated automatically from these</p>
@@ -130,7 +130,7 @@ export default function GradingScalePage() {
             <Plus size={14} /> Add Range
           </button>
         </div>
-        <table className="w-full">
+        <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
           <thead>
             <tr className="border-b border-gray-100 dark:border-border">
               <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Grade</th>
@@ -187,7 +187,7 @@ export default function GradingScalePage() {
               <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">No ranges defined. Add one above.</td></tr>
             )}
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       {/* Live tester */}
