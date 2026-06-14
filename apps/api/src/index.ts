@@ -14,6 +14,7 @@ import schoolRoutes from './routes/school.routes'
 import classLevelRoutes from './routes/classlevel.routes'
 import reportCardTemplateRoutes from './routes/reportcardtemplate.routes'
 import gradingScaleRoutes from './routes/gradingscale.routes'
+import { UPLOAD_DIR } from './config/uploads'
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') })
 
@@ -22,7 +23,7 @@ const PORT = process.env.PORT || 5000
 
 app.use(cors())
 app.use(express.json())
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
+app.use('/uploads', express.static(UPLOAD_DIR))
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'ReportCard API is running' })

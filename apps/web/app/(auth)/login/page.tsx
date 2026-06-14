@@ -18,7 +18,7 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const setAuth = useAuthStore((s) => s.setAuth)
-  const errorTimer = useRef<ReturnType<typeof setTimeout>>()
+  const errorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // Keep module cache in sync
   const handleEmailChange = (v: string) => { _email = v; setEmail(v) }

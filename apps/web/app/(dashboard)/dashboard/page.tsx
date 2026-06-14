@@ -43,7 +43,16 @@ function TrendIndicator({ data }: { data: number[] }) {
   return <span className="flex items-center gap-1 text-muted-foreground text-xs font-semibold"><Minus size={13} />No change</span>
 }
 
-function WeeklyChart({ cfg, weekData, total }: { cfg: typeof CHART_CONFIG[0]; weekData: WeeklyStats; total: number }) {
+type ChartCfg = {
+  key: 'students' | 'reportCards' | 'teachers' | 'subjects'
+  label: string
+  color: string
+  type: 'area' | 'line' | 'bar'
+  icon: typeof Users
+  statKey: 'students' | 'reportCards' | 'teachers' | 'subjects'
+}
+
+function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; weekData: WeeklyStats; total: number }) {
   const chartData = weekData.labels.map((label, i) => ({ label, value: weekData[cfg.key][i] ?? 0 }))
   const Icon = cfg.icon
 

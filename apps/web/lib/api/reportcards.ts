@@ -17,6 +17,7 @@ export const getClassOverviewApi = async (termId: string, classLevel: string): P
       id: string; name: string; studentId: string; classLevel: string
       reportCard: { id: string; status: string; average: number | null; marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean } | null
     }[]
+    subjectCount: number
   }
 }
 

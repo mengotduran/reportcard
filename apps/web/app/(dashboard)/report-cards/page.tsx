@@ -256,20 +256,6 @@ function TeacherClassesView() {
     }
   }
 
-  const handlePrintClassList = async (classLevel: string) => {
-    if (!term) return
-    setPrinting(true)
-    try {
-      const overview = await getClassOverviewApi(term.id, classLevel)
-      const students = overview.students.map((s: any) => ({ name: s.name, studentId: s.studentId }))
-      printClassListDocument(students, classLevel, school?.name ?? '', school?.type ?? '')
-    } catch {
-      showToast('Failed to load class list', 'error')
-    } finally {
-      setPrinting(false)
-    }
-  }
-
   const handleBulkPublish = async (classLevel: string) => {
     if (!term) return
     setBulkPublishing(classLevel)
@@ -381,11 +367,6 @@ function TeacherClassesView() {
                   <button onClick={() => router.push(`/report-cards/class/${encodeURIComponent(c.classLevel)}?termId=${term?.id}`)}
                     className="flex-1 text-xs border border-border text-muted-foreground py-1.5 rounded-lg hover:bg-muted transition">
                     View Class
-                  </button>
-                  <button onClick={() => handlePrintClassList(c.classLevel)} disabled={printing}
-                    className="flex items-center gap-1.5 text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-lg hover:bg-muted transition disabled:opacity-50"
-                    title="Print class list">
-                    <List size={12} /> Class List
                   </button>
                   {isAdmin && c.filled > c.published && (
                     <button

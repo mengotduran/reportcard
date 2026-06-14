@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { UPLOAD_DIR } from '../config/uploads'
 
 export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
@@ -113,7 +114,7 @@ export const removeCoverImage = async (req: AuthRequest, res: Response) => {
 
 function deleteFile(urlPath: string) {
   try {
-    const filePath = path.join(__dirname, '../../uploads', path.basename(urlPath))
+    const filePath = path.join(UPLOAD_DIR, path.basename(urlPath))
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
   } catch { /* ignore */ }
 }
