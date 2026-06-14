@@ -33,9 +33,6 @@ apps/api/.env
 apps/web/.env*
 apps/mobile/.env*
 
-# Prisma
-apps/api/prisma/migrations/
-
 # Uploaded files (user-generated content, managed separately)
 apps/api/uploads/
 

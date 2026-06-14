@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "UserRole" ADD VALUE 'CLASS_MASTER';

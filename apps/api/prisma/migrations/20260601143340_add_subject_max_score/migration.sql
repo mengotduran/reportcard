@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Subject" ADD COLUMN     "maxScore" INTEGER NOT NULL DEFAULT 20;

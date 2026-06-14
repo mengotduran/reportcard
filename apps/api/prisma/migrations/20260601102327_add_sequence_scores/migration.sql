@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "ReportEntry" ADD COLUMN     "seq1Score" DOUBLE PRECISION,
+ADD COLUMN     "seq2Score" DOUBLE PRECISION;
