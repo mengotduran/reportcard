@@ -3,8 +3,7 @@ import { useEffect, useState } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { ArrowLeft, BookOpen } from 'lucide-react'
-
-const SEQUENCES = ['First Sequence', 'Second Sequence']
+import { seqFull } from '@/lib/sequences'
 
 interface Subject { id: string; name: string; classLevel: string }
 
@@ -14,6 +13,7 @@ export default function ClassSubjectsPage() {
   const searchParams = useSearchParams()
   const classLevel = decodeURIComponent(String(params.classLevel))
   const termId = searchParams.get('termId') ?? ''
+  const termName = searchParams.get('termName') ?? ''
 
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [selectedSeq, setSelectedSeq] = useState(0)
@@ -43,14 +43,14 @@ export default function ClassSubjectsPage() {
       <div className="bg-card rounded-xl border border-border p-5 mb-5">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Select Sequence</p>
         <div className="flex gap-3">
-          {SEQUENCES.map((seq, i) => (
-            <button key={seq} onClick={() => setSelectedSeq(i)}
+          {[0, 1].map((i) => (
+            <button key={i} onClick={() => setSelectedSeq(i)}
               className={`flex-1 py-2.5 px-4 rounded-xl border-2 text-sm font-semibold transition ${
                 selectedSeq === i
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground hover:border-border'
               }`}>
-              {seq}
+              {seqFull(termName, i)}
             </button>
           ))}
         </div>
@@ -72,7 +72,7 @@ export default function ClassSubjectsPage() {
             {subjects.map((subject) => (
               <button key={subject.id}
                 onClick={() => router.push(
-                  `/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subject.id)}?termId=${termId}&subjectName=${encodeURIComponent(subject.name)}&sequence=${selectedSeq}`
+                  `/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subject.id)}?termId=${termId}&termName=${encodeURIComponent(termName)}&subjectName=${encodeURIComponent(subject.name)}&sequence=${selectedSeq}`
                 )}
                 className="w-full flex items-center gap-4 px-5 py-4 hover:bg-primary/10 transition group text-left">
                 <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center flex-shrink-0">

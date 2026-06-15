@@ -146,6 +146,75 @@ export function getDefaultLayout(tpl: TemplateName): TemplateConfig & { sections
   return { ...t, sections }
 }
 
+// ── Section-type defaults (Primary / Secondary / University) ──────────────────
+function buildLayout(opts: {
+  primaryColor: string; reportTitle: string; subtitle: string
+  infoRows: { label: string; field: string }[]
+  marks: { showSeq1: boolean; showSeq2: boolean; showGrade: boolean; showRemarks: boolean; headers?: Record<string, string> }
+  summaryBoxes: { label: string; field: string }[]
+  remarksLabel: string; signatures: string[]; footerText?: string
+}): TemplateConfig & { sections: LayoutSection[] } {
+  const base = TEMPLATE_DEFAULTS.classic
+  const sections: LayoutSection[] = [
+    { id: uid('hdr'), type: 'header', reportTitle: opts.reportTitle, subtitle: opts.subtitle, showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    { id: uid('info'), type: 'student_info', columns: 2, rows: opts.infoRows.map(r => ({ id: uid('r'), label: r.label, field: r.field })) },
+    { id: uid('tbl'), type: 'marks_table', showSeq1: opts.marks.showSeq1, showSeq2: opts.marks.showSeq2, showGrade: opts.marks.showGrade, showRemarks: opts.marks.showRemarks, ...(opts.marks.headers ? { headers: opts.marks.headers } : {}) },
+    { id: uid('sum'), type: 'summary', boxes: opts.summaryBoxes.map(b => ({ id: uid('b'), label: b.label, field: b.field })) },
+    { id: uid('rem'), type: 'remarks', label: opts.remarksLabel },
+    { id: uid('sig'), type: 'signatures', lines: opts.signatures.map(l => ({ id: uid('s'), label: l })) },
+    ...(opts.footerText ? [{ id: uid('ft'), type: 'text_block' as const, content: opts.footerText, align: 'center' as const }] : []),
+  ]
+  return { ...base, primaryColor: opts.primaryColor, reportTitle: opts.reportTitle, schoolSubtitle: opts.subtitle, sections }
+}
+
+/** Default report-card layout tailored to the school's section type. */
+export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  if (schoolType === 'PRIMARY') return buildLayout({
+    primaryColor: '#0f766e',
+    reportTitle: 'PRIMARY SCHOOL REPORT CARD', subtitle: '',
+    infoRows: [
+      { label: 'Pupil Name', field: 'student.name' },
+      { label: 'Pupil ID', field: 'student.studentId' },
+      { label: 'Class', field: 'student.classLevel' },
+      { label: 'Parent / Guardian', field: 'student.guardianName' },
+      { label: 'Term', field: 'term.name' },
+      { label: 'Session', field: 'term.session' },
+    ],
+    marks: { showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true },
+    summaryBoxes: [
+      { label: 'Average', field: 'average' },
+      { label: 'Position', field: 'position' },
+      { label: 'Conduct', field: 'conduct' },
+      { label: 'Attendance', field: 'attendance' },
+      { label: 'No. on Roll', field: 'rollCount' },
+    ],
+    remarksLabel: "Class Teacher's Comment",
+    signatures: ["Class Teacher's Signature", "Head Teacher's Signature", "Parent / Guardian's Signature"],
+  })
+  if (schoolType === 'UNIVERSITY') return buildLayout({
+    primaryColor: '#1e3a8a',
+    reportTitle: 'STUDENT SEMESTER REPORT', subtitle: '',
+    infoRows: [
+      { label: 'Student Name', field: 'student.name' },
+      { label: 'Matric No.', field: 'student.studentId' },
+      { label: 'Programme / Dept.', field: 'student.classLevel' },
+      { label: 'Guardian', field: 'student.guardianName' },
+      { label: 'Semester', field: 'term.name' },
+      { label: 'Session', field: 'term.session' },
+    ],
+    marks: { showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, headers: { seq1: 'CA', seq2: 'Exam' } },
+    summaryBoxes: [
+      { label: 'GPA', field: 'gpa' },
+      { label: 'CGPA', field: 'cgpa' },
+      { label: 'Total Credits', field: 'credits' },
+      { label: 'Average', field: 'average' },
+    ],
+    remarksLabel: 'Remarks',
+    signatures: ["Course Adviser's Signature", "H.O.D's Signature", "Dean's Signature"],
+  })
+  return getDefaultLayout('classic') // secondary / default
+}
+
 // ── API helpers ───────────────────────────────────────────────────────────────
 export const getTemplateApi = async (): Promise<{ config: Partial<TemplateConfig> }> => {
   const res = await api.get('/report-card-template')

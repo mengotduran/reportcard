@@ -64,6 +64,7 @@ model School {
   reportCards         ReportCard[]
   classLevels         ClassLevel[]
   reportCardTemplate  ReportCardTemplate?
+  classListTemplate   ClassListTemplate?
   gradingScale        GradingScale?
 }
 
@@ -77,6 +78,15 @@ model GradingScale {
 }
 
 model ReportCardTemplate {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  config    Json     @default("{}")
+  updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
+model ClassListTemplate {
   id        String   @id @default(uuid())
   schoolId  String   @unique
   config    Json     @default("{}")

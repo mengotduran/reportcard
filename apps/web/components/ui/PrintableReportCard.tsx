@@ -38,14 +38,17 @@ const cell = (extra?: React.CSSProperties): React.CSSProperties => ({
   padding: '6px 10px', borderBottom: '1px solid #ddd', ...extra,
 })
 
-function Watermark({ cfg, schoolLogo }: { cfg: any; schoolLogo?: string | null }) {
+function Watermark({ cfg, schoolLogo, schoolName }: { cfg: any; schoolLogo?: string | null; schoolName?: string }) {
   const wm = cfg.watermark
   if (!wm?.enabled) return null
   const opacity = (wm.opacity ?? 8) / 100
   const rotation = wm.rotation ?? -45
   const x = wm.x ?? 50
   const y = wm.y ?? 50
-  const base: React.CSSProperties = { position: 'absolute', top: `${y}%`, left: `${x}%`, transform: `translate(-50%, -50%) rotate(${rotation}deg)`, pointerEvents: 'none', userSelect: 'none', zIndex: 0 }
+  // High z-index so the (faint) watermark stamps ON TOP of all content — a
+  // logo is big enough to peek through transparent table cells, but centred
+  // text would otherwise sit behind opaque sections and never show.
+  const base: React.CSSProperties = { position: 'absolute', top: `${y}%`, left: `${x}%`, transform: `translate(-50%, -50%) rotate(${rotation}deg)`, pointerEvents: 'none', userSelect: 'none', zIndex: 9999 }
   if (wm.type === 'logo') {
     const src = wm.logoUrl || schoolLogo
     if (!src) return null
@@ -54,7 +57,7 @@ function Watermark({ cfg, schoolLogo }: { cfg: any; schoolLogo?: string | null }
   }
   return (
     <div style={{ ...base, fontSize: wm.size ?? 80, fontWeight: 'bold', opacity, color: wm.color || '#000', whiteSpace: 'nowrap' }}>
-      {wm.text || ''}
+      {wm.text || schoolName || ''}
     </div>
   )
 }
@@ -76,7 +79,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
 
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: '40px', maxWidth: '800px', margin: '0 auto', color: '#111', fontSize: '13px', position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} />
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       <div style={{ textAlign: 'center', borderBottom: `3px solid ${cfg.primaryColor}`, paddingBottom: '16px', marginBottom: '20px' }}>
         {school.logo && <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Logo url={school.logo} size={60} color={cfg.primaryColor} /></div>}
         {cfg.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase' }}>{school.type} SCHOOL</p>}
@@ -169,7 +172,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
 
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: '36px', maxWidth: '800px', margin: '0 auto', color: '#111', fontSize: '12px', position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} />
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       <div style={{ textAlign: 'center', backgroundColor: cfg.primaryColor, color: '#fff', padding: '20px', marginBottom: '16px' }}>
         {cfg.schoolSubtitle && <p style={{ margin: '0 0 4px', fontSize: '11px', letterSpacing: '1px', opacity: 0.85 }}>{cfg.schoolSubtitle}</p>}
         {school.logo && <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Logo url={school.logo} size={56} color={cfg.primaryColor} /></div>}
@@ -274,7 +277,7 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
 
   return (
     <div id="report-card-printable" style={{ fontFamily: "'Helvetica Neue', Arial, sans-serif", maxWidth: '800px', margin: '0 auto', color: '#1f2937', fontSize: '13px', position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} />
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       <div style={{ backgroundColor: cfg.primaryColor, padding: '28px 40px', color: '#fff', display: 'flex', alignItems: 'center', gap: 16 }}>
         {school.logo && <Logo url={school.logo} size={52} color={cfg.primaryColor} />}
         <div>
@@ -375,7 +378,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
 
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Times New Roman, serif', padding: '32px', maxWidth: '800px', margin: '0 auto', color: '#111', fontSize: '13px', border: `3px double ${cfg.primaryColor}`, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} />
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       <div style={{ textAlign: 'center', borderBottom: border, paddingBottom: '16px', marginBottom: '16px' }}>
         {cfg.schoolSubtitle && <p style={{ margin: '0 0 4px', fontSize: '11px', fontStyle: 'italic', color: '#555' }}>{cfg.schoolSubtitle}</p>}
         {school.logo ? (
@@ -654,7 +657,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: 40, maxWidth: 800, margin: '0 auto', color: '#111', fontSize: 13, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} />
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       {sections.map(sec => <div key={sec.id}>{renderSec(sec)}</div>)}
     </div>
   )

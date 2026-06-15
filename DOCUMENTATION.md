@@ -1,6 +1,6 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-06-03 (SuperAdmin mobile added)
+> Last updated: 2026-06-15 (Per-section designs + editable class-list canvas)
 > This document is updated every time a new feature or change is made.
 
 ---
@@ -19,11 +19,12 @@
 10. [Class Master System](#10-class-master-system)
 11. [Teacher Management](#11-teacher-management)
 12. [Report Card Design](#12-report-card-design)
-13. [School Customisation](#13-school-customisation)
-14. [Print System](#14-print-system)
-15. [Web App Pages](#15-web-app-pages)
-16. [Mobile App Screens](#16-mobile-app-screens)
-17. [Known Behaviours & Rules](#17-known-behaviours--rules)
+13. [Class List Design](#13-class-list-design)
+14. [School Customisation](#14-school-customisation)
+15. [Print System](#15-print-system)
+16. [Web App Pages](#16-web-app-pages)
+17. [Mobile App Screens](#17-mobile-app-screens)
+18. [Known Behaviours & Rules](#18-known-behaviours--rules)
 
 ---
 
@@ -115,6 +116,7 @@ npx prisma studio          # View data at localhost:5555
 |-------|---------|
 | `GradingScale` | Stores custom grade ranges as JSON |
 | `ReportCardTemplate` | Stores full card layout config as JSON |
+| `ClassListTemplate` | Stores the printable class list / marks register design as JSON |
 
 ---
 
@@ -143,7 +145,7 @@ npx prisma studio          # View data at localhost:5555
 | Role | Pages visible |
 |------|-------------|
 | SUPERADMIN | Schools management only |
-| SCHOOL_ADMIN / VICE_PRINCIPAL | Dashboard, Students, Classes, Subjects, Terms, Report Cards, Card Design, Grading, Teachers, Settings |
+| SCHOOL_ADMIN / VICE_PRINCIPAL | Dashboard, Students, Classes, Subjects, Terms, Report Cards, Card Design, Class List, Grading, Teachers, Settings |
 | CLASS_MASTER | Dashboard, Classes (marks entry), My Class (general remarks) |
 | CLASS_TEACHER | Dashboard, Classes (marks entry) |
 
@@ -225,6 +227,7 @@ Base URL: `http://localhost:5000/api`
 |--------|-------|-------------|
 | GET/PUT | `/grading-scale` | Get/update the school's grading scale |
 | GET/PUT | `/report-card-template` | Get/update the report card layout config |
+| GET/PUT | `/class-list-template` | Get/update the class list / marks register design config (save: admin/VP) |
 | POST/DELETE | `/school/logo` | Upload/remove school logo |
 | POST/DELETE | `/school/cover` | Upload/remove cover image |
 
@@ -339,6 +342,7 @@ The admin report card detail page is fully **read-only** for marks and remarks. 
 ### Marks entry (teacher / class master)
 
 - Go to: Classes → select class → select subject → select sequence
+- **Sequence labels are term-aware** (Cameroon system): Term 1 → Seq 1/2, Term 2 → Seq 3/4, Term 3 → Seq 5/6. Data still stores in `seq1Score`/`seq2Score`; only the displayed label changes (derived from the term name — see `lib/sequences.ts`, web + mobile).
 - Marks are entered one student per row, out of the subject's maxScore
 - The **REMARK** column shows live performance text (e.g. "Average") from the grading scale
 - Saving marks does **not** overwrite the general remarks set by the class master
@@ -422,9 +426,48 @@ Layout stored as `sections` array. Section types:
 - **Position**: shown as `3rd` (ordinal)
 - Grade badges: squared corners (not circular)
 
+### Section-type defaults (Primary / Secondary / University)
+A school with **no saved report-card design** starts from a layout tailored to its `school.type` (`getDefaultLayoutForType`). Admins edit & save from there. The three are fully independent:
+
+| Section | Tailored defaults |
+|---------|-------------------|
+| **Primary** | Teal theme · "PRIMARY SCHOOL REPORT CARD" · **Pupil** labels · summary boxes **Conduct / Attendance / No. on Roll** · "Class Teacher's Comment" · **Class Teacher + Head Teacher** signatures |
+| **Secondary** | Current look — Seq 1/2 · coefficients · /20 average · position · class-master remarks |
+| **University** | Navy theme · "STUDENT SEMESTER REPORT" · **Matric No / Programme / Semester** · **CA + Exam** columns · **GPA / CGPA / Total Credits** summary · **Course Adviser / HOD / Dean** signatures |
+
+Hand-filled fields (Conduct, Attendance, GPA, CGPA, Credits) render as `—` placeholders — design only, no change to grade calculation.
+
 ---
 
-## 13. School Customisation
+## 13. Class List Design
+
+Each school designs its own printable **class list / marks register** — the blank sheet teachers print to record marks by hand — in a **click-to-edit canvas** (`/class-list-design`, admin, **desktop-only**).
+
+- **Storage**: `ClassListTemplate` model — one `config` JSON per school (`GET/PUT /class-list-template`; save restricted to admin/VP).
+- **Same generator** (`lib/classListDocument.ts`) renders both the on-screen canvas and the actual print.
+
+### Click-to-edit canvas
+The A4 sheet itself is editable:
+- Click the **title**, any **group heading** (e.g. "1st Term") or **column label** (e.g. "Seq 1") to rename inline.
+- **+ Group** adds a term/semester column group; **×** removes it.
+- **+** adds a column to a group; **×** removes a column; **☆/★** marks a column as an "average" (tinted) column.
+- A side panel holds non-text options: logo / school-type toggles, header & average colours, Student ID column, orientation, blank rows, meta fields (Subject/Teacher/Year), and footer signature fields.
+
+### Flexible column model
+`config.groups[] → columns[]`, each column `{ label, avg }`. This replaced the old fixed term/sequence toggles; **legacy saved configs auto-migrate** to groups.
+
+### Presets & section-type defaults
+A **preset** dropdown seeds a starting layout: **Secondary** (3 terms × Seq 1/2 · 3/4 · 5/6 + Avg), **Primary** (Eval 1–6 + Avg), **University** (Semester × CA / Exam / Final). A school with no saved design defaults to the preset matching its `school.type` (`typeToClassListPreset`). Sequence numbers run continuously across terms (Term 1 → Seq 1/2, Term 2 → Seq 3/4, Term 3 → Seq 5/6).
+
+### Printing
+The saved design drives the **Class List** print in the Report Cards toolbar: pick a class → the popup renders the roster (A4) using the school's design. Mark cells print blank; extra blank rows are added for new admissions.
+
+### Mobile
+Desktop-only. The mobile app shows a **"Better on Desktop"** screen under More → Class List Design.
+
+---
+
+## 14. School Customisation
 
 ### Logo & Cover Image
 Uploaded via **Settings** page. Stored in `apps/api/uploads/`.
@@ -434,7 +477,7 @@ Admin defines custom grade ranges (min%, max%, grade letter, remark, color). Def
 
 ---
 
-## 14. Print System
+## 15. Print System
 
 ### Individual report card
 On the report card detail page, **Print / Save PDF**:
@@ -451,9 +494,12 @@ On the report card detail page, **Print / Save PDF**:
 4. `page-break-after: always` between cards → one card per printed page
 5. Shows "Loading..." while data loads
 
+### Class list / marks register
+**Class List** dropdown (Report Cards toolbar) → pick a class → opens a popup that prints the roster (A4) using the school's saved **Class List Design** (see Section 13). Mark cells print blank for hand-filling, plus extra blank rows for new admissions.
+
 ---
 
-## 15. Web App Pages
+## 16. Web App Pages
 
 | Page | Path | Who |
 |------|------|-----|
@@ -466,6 +512,7 @@ On the report card detail page, **Print / Save PDF**:
 | Report Card detail | `/report-cards/:id` | Admin (read-only) |
 | Marks entry | `/report-cards/class/:class/:subjectId` | CLASS_TEACHER, CLASS_MASTER |
 | Card Design | `/report-card-design` | Admin |
+| Class List Design | `/class-list-design` | Admin (desktop-only) |
 | Grading Scale | `/grading-scale` | Admin |
 | Class Master | `/class-master` | CLASS_MASTER |
 | Teachers | `/teachers` | Admin |
@@ -474,7 +521,7 @@ On the report card detail page, **Print / Save PDF**:
 
 ---
 
-## 16. Mobile App Screens
+## 17. Mobile App Screens
 
 | Screen | File | Who | Description |
 |--------|------|-----|-------------|
@@ -501,7 +548,7 @@ On the report card detail page, **Print / Save PDF**:
 
 ---
 
-## 17. Known Behaviours & Rules
+## 18. Known Behaviours & Rules
 
 | Behaviour | Detail |
 |-----------|--------|

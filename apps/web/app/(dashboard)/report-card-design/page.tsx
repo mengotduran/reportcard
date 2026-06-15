@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
@@ -745,6 +745,12 @@ export default function ReportCardDesignPage() {
         setConfig(merged)
         setColorText(merged.primaryColor)
         setBgText(merged.bgColor || '#ffffff')
+      } else {
+        // No saved design yet → start from the section-type default
+        const layout = getDefaultLayoutForType(school?.type)
+        setConfig(layout)
+        setColorText(layout.primaryColor)
+        setBgText(layout.bgColor || '#ffffff')
       }
       setLoading(false)
     }).catch(() => setLoading(false))

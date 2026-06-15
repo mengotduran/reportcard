@@ -13,6 +13,7 @@ import {
 } from '@/lib/api/reportcards'
 import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { seqFull, seqShort } from '@/lib/sequences'
 
 interface Row {
   studentId: string
@@ -25,16 +26,16 @@ interface Row {
 }
 
 export default function MarksEntryScreen() {
-  const { subjectId, classLevel, termId, subjectName, sequence } = useLocalSearchParams<{
+  const { subjectId, classLevel, termId, termName, subjectName, sequence } = useLocalSearchParams<{
     subjectId: string; classLevel: string; termId: string
-    subjectName: string; sequence: string
+    termName: string; subjectName: string; sequence: string
   }>()
   const navigation = useNavigation()
   const { user } = useAuthStore()
   const { colors, isDark } = useTheme()
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
-  const seqLabel = seqIndex === 0 ? 'First Sequence' : 'Second Sequence'
+  const seqLabel = seqFull(termName, seqIndex)
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
   const decodedSubjectName = decodeURIComponent(subjectName)
@@ -159,8 +160,8 @@ export default function MarksEntryScreen() {
   }
 
   const filled = rows.filter((r) => r.score !== '').length
-  const otherSeqLabel = seqIndex === 0 ? 'Second Sequence' : 'First Sequence'
-  const otherSeqShort = seqIndex === 0 ? 'Seq 2' : 'Seq 1'
+  const otherSeqLabel = seqFull(termName, seqIndex === 0 ? 1 : 0)
+  const otherSeqShort = seqShort(termName, seqIndex === 0 ? 1 : 0)
 
   const handleCopyFromOther = () => {
     const hasCurrent = rows.some((r) => r.score !== '')

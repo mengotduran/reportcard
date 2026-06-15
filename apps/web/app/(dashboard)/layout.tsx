@@ -2,7 +2,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -15,6 +15,7 @@ const ADMIN_NAV = [
   { icon: Calendar,        label: 'Terms',        href: '/terms' },
   { icon: FileText,        label: 'Report Cards', href: '/report-cards' },
   { icon: Palette,         label: 'Card Design',  href: '/report-card-design' },
+  { icon: ClipboardList,   label: 'Class List',   href: '/class-list-design' },
   { icon: Star,            label: 'Grading',      href: '/grading-scale' },
   { icon: School,          label: 'Teachers',     href: '/teachers' },
   { icon: Settings,        label: 'Settings',     href: '/settings' },

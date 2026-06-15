@@ -92,6 +92,7 @@ export interface ClassReadiness {
   missingSeqs: number
   missingRemarks: number
   total: number
+  noSubjects: boolean
 }
 
 export interface ReadinessDetail {

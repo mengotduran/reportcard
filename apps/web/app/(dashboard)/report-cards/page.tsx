@@ -11,139 +11,9 @@ import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 import DesktopOnly from '@/components/ui/DesktopOnly'
-import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig } from '@/lib/api/reportCardTemplate'
-
-function printClassListDocument(
-  students: { name: string; studentId: string }[],
-  classLevel: string,
-  schoolName: string,
-  schoolType: string
-) {
-  const pw = window.open('', '_blank', 'width=1200,height=800')
-  if (!pw) { alert('Allow popups to print the class list.'); return }
-
-  const sorted = [...students].sort((a, b) => a.name.localeCompare(b.name))
-  // Add 5 blank rows at the bottom for new admissions
-  const blankRows = Array(5).fill(null)
-
-  const rowHtml = [
-    ...sorted.map((s, i) => `
-      <tr>
-        <td class="num">${i + 1}</td>
-        <td class="sid">${s.studentId}</td>
-        <td class="name">${s.name}</td>
-        <td class="score"></td><td class="score"></td><td class="avg"></td>
-        <td class="score"></td><td class="score"></td><td class="avg"></td>
-        <td class="score"></td><td class="score"></td><td class="avg"></td>
-      </tr>`),
-    ...blankRows.map((_, i) => `
-      <tr class="blank-row">
-        <td class="num">${sorted.length + i + 1}</td>
-        <td class="sid"></td>
-        <td class="name"></td>
-        <td class="score"></td><td class="score"></td><td class="avg"></td>
-        <td class="score"></td><td class="score"></td><td class="avg"></td>
-        <td class="score"></td><td class="score"></td><td class="avg"></td>
-      </tr>`),
-  ].join('')
-
-  pw.document.write(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Class List — ${classLevel} | ${schoolName}</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Arial', sans-serif; padding: 14px; color: #111; }
-  .header { text-align: center; border-bottom: 3px double #111; padding-bottom: 10px; margin-bottom: 12px; }
-  .school-name { font-size: 20px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; }
-  .school-type { font-size: 12px; color: #555; margin-top: 2px; text-transform: uppercase; letter-spacing: 2px; }
-  .doc-title { font-size: 14px; font-weight: bold; margin-top: 8px; text-transform: uppercase; letter-spacing: 1.5px; border: 2px solid #111; display: inline-block; padding: 3px 18px; }
-  .meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 10px; gap: 8px; }
-  .meta-item { display: flex; align-items: center; gap: 4px; }
-  .fill-line { display: inline-block; border-bottom: 1px solid #555; min-width: 90px; height: 14px; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th { border: 1px solid #333; padding: 4px 3px; text-align: center; font-weight: bold; }
-  td { border: 1px solid #888; padding: 0 3px; height: 22px; text-align: center; }
-  .name { text-align: left; padding-left: 6px; min-width: 140px; }
-  .sid { color: #666; font-size: 10px; min-width: 55px; }
-  .num { width: 26px; font-size: 10px; color: #555; }
-  .score { min-width: 40px; }
-  .avg { min-width: 40px; background: #f0f0f0; font-weight: bold; }
-  .term-hd { background: #1a1a1a; color: #fff; font-size: 11px; letter-spacing: 0.5px; }
-  .sub-hd { background: #ddd; font-size: 10px; }
-  .col-hd { background: #f5f5f5; font-size: 10px; }
-  tr:nth-child(even) td { background: #fafafa; }
-  tr:nth-child(even) td.avg { background: #ebebeb; }
-  .blank-row td { background: #fff !important; }
-  .footer { margin-top: 20px; display: flex; justify-content: space-between; font-size: 11px; gap: 16px; border-top: 1px solid #ccc; padding-top: 14px; }
-  .footer-field { flex: 1; }
-  .footer-label { color: #444; margin-bottom: 4px; }
-  .footer-line { border-bottom: 1px solid #111; height: 18px; }
-  @page { size: A4 landscape; margin: 8mm; }
-  @media print { body { padding: 0; } }
-</style>
-</head>
-<body>
-  <div class="header">
-    <div class="school-name">${schoolName}</div>
-    <div class="school-type">${schoolType} School</div>
-    <div style="margin-top:8px">
-      <span class="doc-title">Class Marks Register &mdash; ${classLevel}</span>
-    </div>
-  </div>
-
-  <div class="meta">
-    <div class="meta-item"><strong>Class:</strong>&nbsp;${classLevel}</div>
-    <div class="meta-item"><strong>Subject:</strong>&nbsp;<span class="fill-line"></span></div>
-    <div class="meta-item"><strong>Teacher:</strong>&nbsp;<span class="fill-line" style="min-width:120px"></span></div>
-    <div class="meta-item"><strong>Academic Year:</strong>&nbsp;<span class="fill-line" style="min-width:80px"></span></div>
-    <div class="meta-item"><strong>Students:</strong>&nbsp;${sorted.length}</div>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th rowspan="2" class="num col-hd">#</th>
-        <th rowspan="2" class="sid col-hd">ID</th>
-        <th rowspan="2" class="name col-hd" style="text-align:left;padding-left:6px">Student Name</th>
-        <th colspan="3" class="term-hd">1<sup>st</sup> TERM</th>
-        <th colspan="3" class="term-hd">2<sup>nd</sup> TERM</th>
-        <th colspan="3" class="term-hd">3<sup>rd</sup> TERM</th>
-      </tr>
-      <tr>
-        <th class="sub-hd">Seq 1</th><th class="sub-hd">Seq 2</th><th class="sub-hd" style="background:#ccc">Avg</th>
-        <th class="sub-hd">Seq 3</th><th class="sub-hd">Seq 4</th><th class="sub-hd" style="background:#ccc">Avg</th>
-        <th class="sub-hd">Seq 5</th><th class="sub-hd">Seq 6</th><th class="sub-hd" style="background:#ccc">Avg</th>
-      </tr>
-    </thead>
-    <tbody>${rowHtml}</tbody>
-  </table>
-
-  <div class="footer">
-    <div class="footer-field">
-      <div class="footer-label">Teacher's Full Name</div>
-      <div class="footer-line"></div>
-    </div>
-    <div class="footer-field">
-      <div class="footer-label">Signature</div>
-      <div class="footer-line"></div>
-    </div>
-    <div class="footer-field" style="flex:0.5">
-      <div class="footer-label">Date</div>
-      <div class="footer-line"></div>
-    </div>
-    <div class="footer-field" style="flex:0.5">
-      <div class="footer-label">HOD / Principal</div>
-      <div class="footer-line"></div>
-    </div>
-  </div>
-</body>
-</html>`)
-  pw.document.close()
-  pw.focus()
-  setTimeout(() => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }, 350)
-}
+import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
+import { printClassList } from '@/lib/classListDocument'
+import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
@@ -250,7 +120,7 @@ function TeacherClassesView() {
       if (!published.length) { setPrinting(false); return }
       const saved = tplData.config as Partial<TemplateConfig> | undefined
       const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : base
+      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
       setPrintJob({ cards: published, config })
     } catch {
       setPrinting(false)
@@ -365,7 +235,7 @@ function TeacherClassesView() {
                   </>
                 )}
                 <div className="flex gap-2 flex-wrap">
-                  <button onClick={() => router.push(`/report-cards/class/${encodeURIComponent(c.classLevel)}?termId=${term?.id}`)}
+                  <button onClick={() => router.push(`/report-cards/class/${encodeURIComponent(c.classLevel)}?termId=${term?.id}&termName=${encodeURIComponent(term?.name ?? '')}`)}
                     className="flex-1 text-xs border border-border text-muted-foreground py-1.5 rounded-lg hover:bg-muted transition">
                     View Class
                   </button>
@@ -507,9 +377,20 @@ export default function ReportCardsPage() {
   const handlePrintClassList = async (classLevel: string, termId: string) => {
     setPrinting(true)
     try {
-      const overview = await getClassOverviewApi(termId, classLevel)
+      const [overview, tpl] = await Promise.all([
+        getClassOverviewApi(termId, classLevel),
+        getClassListTemplateApi().catch(() => ({ config: {} })),
+      ])
       const students = overview.students.map((s: any) => ({ name: s.name, studentId: s.studentId }))
-      printClassListDocument(students, classLevel, school?.name ?? '', school?.type ?? '')
+      const logoUrl = school?.logo ? window.location.origin + school.logo : null
+      printClassList({
+        students,
+        classLevel,
+        schoolName: school?.name ?? '',
+        schoolType: school?.type ?? '',
+        logoUrl,
+        config: mergeClassListConfig(tpl.config, school?.type),
+      })
     } catch {
       showToast('Failed to load class list', 'error')
     } finally {
@@ -528,7 +409,7 @@ export default function ReportCardsPage() {
       if (!published.length) { showToast('No published cards for this class', 'error'); setPrinting(false); return }
       const saved = tplData.config as Partial<TemplateConfig> | undefined
       const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : base
+      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
       setPrintJob({ cards: published, config })
     } catch {
       showToast('Failed to load cards for printing', 'error')
@@ -664,6 +545,8 @@ export default function ReportCardsPage() {
                     const ready = !r || r.ready
                     const missingSeqs = r?.missingSeqs ?? 0
                     const missingRemarks = r?.missingRemarks ?? 0
+                    const noSubjects = r?.noSubjects ?? false
+                    const nothingToPublish = !!r && !r.noSubjects && (r.total ?? 0) === 0
                     return (
                       <div key={cl} className="px-1">
                         <button
@@ -676,6 +559,11 @@ export default function ReportCardsPage() {
                             <p className="font-medium text-foreground">{cl}</p>
                             {!ready && (
                               <div className="flex flex-wrap gap-1 mt-0.5">
+                                {noSubjects && (
+                                  <span className="text-[10px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
+                                    No subjects assigned
+                                  </span>
+                                )}
                                 {missingSeqs > 0 && (
                                   <span className="text-[10px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
                                     {missingSeqs} missing seqs
@@ -684,6 +572,11 @@ export default function ReportCardsPage() {
                                 {missingRemarks > 0 && (
                                   <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
                                     {missingRemarks} no remarks
+                                  </span>
+                                )}
+                                {nothingToPublish && (
+                                  <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">
+                                    Nothing to publish
                                   </span>
                                 )}
                               </div>

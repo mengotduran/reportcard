@@ -14,6 +14,7 @@ const MENU_ITEMS = [
   { label: 'Grading Scale', icon: 'stats-chart-outline' as const, route: '/admin/grading' },
   { label: 'Settings', icon: 'settings-outline' as const, route: '/admin/settings' },
   { label: 'Report Card Design', icon: 'laptop-outline' as const, route: '/admin/report-card-design' },
+  { label: 'Class List Design', icon: 'list-outline' as const, route: '/admin/class-list-design' },
 ]
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({

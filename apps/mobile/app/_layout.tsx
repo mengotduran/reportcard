@@ -28,6 +28,7 @@ export default function RootLayout() {
       <Stack.Screen name="admin/grading/index" options={{ title: 'Grading Scale', headerBackTitle: '' }} />
       <Stack.Screen name="admin/settings/index" options={{ title: 'Settings', headerBackTitle: '' }} />
       <Stack.Screen name="admin/report-card-design" options={{ title: 'Card Design', headerBackTitle: '' }} />
+      <Stack.Screen name="admin/class-list-design" options={{ title: 'Class List Design', headerBackTitle: '' }} />
     </Stack>
   )
 }

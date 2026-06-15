@@ -220,9 +220,43 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
 
-    const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
+    const reportCard = await prisma.reportCard.findFirst({
+      where: { id, schoolId },
+      include: {
+        entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
+        student: { select: { classLevel: true } },
+      },
+    })
     if (!reportCard) {
       res.status(404).json({ message: 'Report card not found' })
+      return
+    }
+
+    const classLevel = reportCard.student.classLevel
+    const [subjects, classMaster] = await Promise.all([
+      prisma.subject.findMany({ where: { schoolId, classLevel }, select: { id: true, name: true } }),
+      prisma.user.findFirst({ where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true } }),
+    ])
+
+    // Rule 1 — a class with no subjects cannot be published
+    if (subjects.length === 0) {
+      res.status(400).json({ message: 'This class has no subjects. Add subjects before publishing.' })
+      return
+    }
+
+    // Rule 2 — every subject must have both sequences filled
+    const missing = subjects.filter(s => {
+      const e = reportCard.entries.find(en => en.subjectId === s.id)
+      return !e || e.seq1Score == null || e.seq2Score == null
+    })
+    if (missing.length > 0) {
+      res.status(400).json({ message: `Cannot publish — missing marks for: ${missing.map(s => s.name).slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` })
+      return
+    }
+
+    // Rule 3 — if the class has a master, general remarks are required
+    if (classMaster && !reportCard.remarks?.trim()) {
+      res.status(400).json({ message: 'Cannot publish — the class master has not added general remarks yet.' })
       return
     }
 
@@ -460,6 +494,12 @@ export const bulkPublish = async (req: AuthRequest, res: Response) => {
       select: { id: true, name: true }
     })
 
+    // A class with no subjects cannot be published
+    if (subjects.length === 0) {
+      res.json({ published: 0, skipped: students.length, issues: [{ student: '—', reason: 'This class has no subjects — add subjects before publishing' }] })
+      return
+    }
+
     // Get all report cards for this class + term
     const reportCards = await prisma.reportCard.findMany({
       where: { schoolId, termId, student: { classLevel }, status: { not: 'PUBLISHED' } },
@@ -537,7 +577,7 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
     // Class levels present in this term
     const classLevels = [...new Set(students.map(s => s.classLevel))]
 
-    const result: Record<string, { ready: boolean; missingSeqs: number; missingRemarks: number; total: number }> = {}
+    const result: Record<string, { ready: boolean; missingSeqs: number; missingRemarks: number; total: number; noSubjects: boolean }> = {}
 
     for (const classLevel of classLevels) {
       const classStudents = students.filter(s => s.classLevel === classLevel)
@@ -572,11 +612,13 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
         return rc && rc.status !== 'PUBLISHED'
       }).length
 
+      const noSubjects = classSubjects.length === 0
       result[classLevel] = {
-        ready: missingSeqs === 0 && missingRemarks === 0 && unpublished > 0,
+        ready: !noSubjects && missingSeqs === 0 && missingRemarks === 0 && unpublished > 0,
         missingSeqs,
         missingRemarks,
         total: unpublished,
+        noSubjects,
       }
     }
 

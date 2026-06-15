@@ -181,7 +181,7 @@ function TeacherReportCards() {
           return (
             <TouchableOpacity
               style={[styles.card, isClassMaster && styles.cardMaster]}
-              onPress={() => router.push(`/class/${encodeURIComponent(item.classLevel)}?termId=${term?.id}` as any)}
+              onPress={() => router.push(`/class/${encodeURIComponent(item.classLevel)}?termId=${term?.id}&termName=${encodeURIComponent(term?.name ?? '')}` as any)}
               activeOpacity={0.7}
             >
               <View style={styles.cardHeader}>

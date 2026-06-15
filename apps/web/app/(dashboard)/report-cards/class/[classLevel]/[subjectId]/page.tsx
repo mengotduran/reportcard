@@ -8,6 +8,7 @@ import {
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getGradingScaleApi, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { gradeFromScore } from '@/lib/grading'
+import { seqShort, seqFull } from '@/lib/sequences'
 import { ArrowLeft, Save, Copy } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -35,9 +36,10 @@ export default function MarksEntryPage() {
   const termId = searchParams.get('termId') ?? ''
   const subjectName = decodeURIComponent(searchParams.get('subjectName') ?? '')
   const seqIndex = Number(searchParams.get('sequence') ?? 0)
-  const seqLabel = seqIndex === 0 ? 'First Sequence' : 'Second Sequence'
-  const otherSeqLabel = seqIndex === 0 ? 'Seq 2' : 'Seq 1'
-  const otherSeqFull = seqIndex === 0 ? 'Second Sequence' : 'First Sequence'
+  const termName = searchParams.get('termName') ?? ''
+  const seqLabel = seqFull(termName, seqIndex)
+  const otherSeqLabel = seqShort(termName, seqIndex === 0 ? 1 : 0)
+  const otherSeqFull = seqFull(termName, seqIndex === 0 ? 1 : 0)
 
   const [rows, setRows] = useState<Row[]>([])
   const [maxScore, setMaxScore] = useState(20)

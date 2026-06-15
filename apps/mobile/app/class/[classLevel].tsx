@@ -9,8 +9,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { getSubjects, Subject } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
-
-const SEQUENCES = ['First Sequence', 'Second Sequence']
+import { seqFull } from '@/lib/sequences'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -74,7 +73,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function ClassScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
-  const { classLevel, termId } = useLocalSearchParams<{ classLevel: string; termId: string }>()
+  const { classLevel, termId, termName } = useLocalSearchParams<{ classLevel: string; termId: string; termName: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuthStore()
@@ -124,15 +123,15 @@ export default function ClassScreen() {
       <View style={styles.seqContainer}>
         <Text style={styles.seqLabel}>Select Sequence</Text>
         <View style={styles.seqRow}>
-          {SEQUENCES.map((seq, i) => (
+          {[0, 1].map((i) => (
             <TouchableOpacity
-              key={seq}
+              key={i}
               style={[styles.seqBtn, selectedSeq === i && styles.seqBtnActive]}
               onPress={() => setSelectedSeq(i)}
               activeOpacity={0.7}
             >
               <Text style={[styles.seqBtnText, selectedSeq === i && styles.seqBtnTextActive]}>
-                {seq}
+                {seqFull(termName, i)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -155,7 +154,7 @@ export default function ClassScreen() {
             style={styles.row}
             onPress={() =>
               router.push(
-                `/marks/${encodeURIComponent(item.id)}?classLevel=${encodeURIComponent(decodedClass)}&termId=${termId}&subjectName=${encodeURIComponent(item.name)}&sequence=${selectedSeq}`
+                `/marks/${encodeURIComponent(item.id)}?classLevel=${encodeURIComponent(decodedClass)}&termId=${termId}&termName=${encodeURIComponent(termName ?? '')}&subjectName=${encodeURIComponent(item.name)}&sequence=${selectedSeq}`
               )
             }
             activeOpacity={0.7}

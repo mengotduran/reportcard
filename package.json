@@ -8,7 +8,9 @@
   ],
   "scripts": {
     "dev": "turbo run dev",
-    "build": "turbo run build"
+    "build": "turbo run build",
+    "mobile": "npm run dev --workspace apps/mobile",
+    "mobile:clean": "npm run dev --workspace apps/mobile -- -c"
   },
   "devDependencies": {
     "turbo": "latest"
