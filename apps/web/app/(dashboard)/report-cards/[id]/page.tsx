@@ -183,7 +183,7 @@ export default function ReportCardDetailPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      if (isClassMaster) {
+      if (isClassMaster || canAdminEditRemarks) {
         await updateRemarksApi(String(params.id), generalRemarks)
       } else {
         await saveEntriesApi(String(params.id), { entries })
@@ -274,6 +274,9 @@ export default function ReportCardDetailPage() {
   const canPublish = allSeqsFilled && hasRemarks
   // Class master can only give remarks once ALL sequences for this report card are filled
   const canEditRemarks = isClassMaster && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
+  // When a class has NO class master, admin / VP write the general remarks themselves.
+  const noClassMaster = readiness ? !readiness.classMaster : false
+  const canAdminEditRemarks = isAdmin && noClassMaster && reportCard.status === 'DRAFT'
 
   return (
     <div>
@@ -369,7 +372,7 @@ export default function ReportCardDetailPage() {
             </div>
           ) : (
             <>
-              {isClassMaster && (
+              {(isClassMaster || canAdminEditRemarks) && (
                 <button
                   onClick={handleSave}
                   disabled={saving}
@@ -421,7 +424,7 @@ export default function ReportCardDetailPage() {
           <p className="text-xs text-muted-foreground mt-1">Terms Average</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4 text-center">
-          <p className="text-2xl font-bold text-foreground">{gradeFromScore(average, avgMaxScore, gradingRanges).remark || gradeFromScore(average, avgMaxScore, gradingRanges).grade}</p>
+          <p className="text-2xl font-bold text-foreground">{gradeFromScore(average, avgMaxScore, gradingRanges).grade}</p>
           <p className="text-xs text-muted-foreground mt-1">Overall Grade</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4 text-center">
@@ -479,7 +482,7 @@ export default function ReportCardDetailPage() {
                               return (
                                 <span className="text-xs font-bold px-2 py-1 rounded"
                                   style={{ backgroundColor: gr.bgColor, color: gr.color }}>
-                                  {gr.remark || gr.grade}
+                                  {gr.grade}
                                 </span>
                               )
                             })()
@@ -511,7 +514,10 @@ export default function ReportCardDetailPage() {
               {readiness.missingRemarks && (
                 <div className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-                  <span className="text-foreground">Class Master <span className="font-medium">{readiness.missingRemarks.name}</span> has not written general remarks</span>
+                  {readiness.classMaster
+                    ? <span className="text-foreground">Class Master <span className="font-medium">{readiness.classMaster.name}</span> has not written general remarks</span>
+                    : <span className="text-foreground">General remarks have not been written yet — <span className="font-medium">admin / vice-principal</span> can add them below</span>
+                  }
                 </div>
               )}
             </div>
@@ -520,9 +526,9 @@ export default function ReportCardDetailPage() {
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-2">
               <label className="block text-sm font-medium text-foreground">General Remarks</label>
-              <span className="text-xs text-muted-foreground italic">Set by class master</span>
+              <span className="text-xs text-muted-foreground italic">{noClassMaster ? 'No class master — set by admin / VP' : 'Set by class master'}</span>
             </div>
-            {canEditRemarks ? (
+            {(canEditRemarks || canAdminEditRemarks) ? (
               <textarea
                 rows={3}
                 placeholder="Overall remarks about the student's performance..."

@@ -114,7 +114,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
                 {cfg.showSeq1 && <td style={cell({ textAlign: 'center' })}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={cell({ textAlign: 'center' })}>{e?.seq2Score ?? '—'}</td>}
                 <td style={cell({ textAlign: 'center', fontWeight: 'bold' })}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{e?.remarks || e?.grade || '—'}</td>}
+                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{e?.grade || '—'}</td>}
                 {cfg.showRemarks && <td style={cell({ color: '#555' })}>{e?.remarks || '—'}</td>}
               </tr>
             )
@@ -209,7 +209,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', borderRight: '1px solid #e5e7eb' }}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{e?.remarks || e?.grade || '—'}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{e?.grade || '—'}</td>}
                 {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{e?.remarks || '—'}</td>}
               </tr>
             )
@@ -317,7 +317,7 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
                   {cfg.showSeq2 && <td style={{ padding: '9px 8px', textAlign: 'center', color: '#6b7280' }}>{e?.seq2Score ?? '—'}</td>}
                   <td style={{ padding: '9px 8px', textAlign: 'center', fontWeight: '700', color: cfg.primaryColor }}>{e?.score ?? 0}</td>
                   {cfg.showGrade && <td style={{ padding: '9px 8px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{e?.remarks || e?.grade || '—'}</span>
+                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{e?.grade || '—'}</span>
                   </td>}
                   {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{e?.remarks || '—'}</td>}
                 </tr>
@@ -426,7 +426,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.remarks || e?.grade || '—'}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.grade || '—'}</td>}
                 {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{e?.remarks || '—'}</td>}
               </tr>
             )
@@ -589,7 +589,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                   {s.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', color: cc.seq1 }}>{e?.seq1Score ?? '—'}</td>}
                   {s.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', color: cc.seq2 }}>{e?.seq2Score ?? '—'}</td>}
                   <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cc.score || color }}>{e?.score ?? 0}</td>
-                  {s.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cc.grade }}>{e?.remarks || e?.grade || '—'}</td>}
+                  {s.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cc.grade }}>{e?.grade || '—'}</td>}
                   {s.showRemarks && <td style={{ padding: '6px 10px', color: cc.remarks || '#555' }}>{e?.remarks || '—'}</td>}
                 </tr>
               )

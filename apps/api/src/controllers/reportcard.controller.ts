@@ -120,24 +120,27 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     const subjects = await prisma.subject.findMany({ where: { id: { in: subjectIds } } })
     const subjectMap = Object.fromEntries(subjects.map(s => [s.id, s]))
 
-    // Fetch grading scale for auto-remarks
+    // Fetch grading scale — drives BOTH the letter grade and the auto-remark
+    // so report cards reflect the school's grading design.
     const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
-    const gradeRanges: { minScore: number; maxScore: number; remark: string }[] =
+    const gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string }[] =
       gradingScale?.ranges ? (gradingScale.ranges as any) : []
 
     const DEFAULT_API_RANGES = [
-      { minScore: 90, maxScore: 100, remark: 'Excellent' },
-      { minScore: 75, maxScore: 89,  remark: 'Very Good' },
-      { minScore: 60, maxScore: 74,  remark: 'Good' },
-      { minScore: 50, maxScore: 59,  remark: 'Average' },
-      { minScore: 40, maxScore: 49,  remark: 'Below Average' },
-      { minScore: 0,  maxScore: 39,  remark: 'Fail' },
+      { minScore: 90, maxScore: 100, grade: 'A+', remark: 'Excellent' },
+      { minScore: 75, maxScore: 89,  grade: 'A',  remark: 'Very Good' },
+      { minScore: 60, maxScore: 74,  grade: 'B',  remark: 'Good' },
+      { minScore: 50, maxScore: 59,  grade: 'C',  remark: 'Average' },
+      { minScore: 40, maxScore: 49,  grade: 'D',  remark: 'Below Average' },
+      { minScore: 0,  maxScore: 39,  grade: 'F',  remark: 'Fail' },
     ]
     const effectiveRanges = gradeRanges.length > 0 ? gradeRanges : DEFAULT_API_RANGES
-    const getAutoRemark = (pct: number): string => {
+    const matchRange = (pct: number) => {
       const sorted = [...effectiveRanges].sort((a, b) => b.minScore - a.minScore)
-      return sorted.find(r => pct >= r.minScore && pct <= r.maxScore)?.remark ?? ''
+      return sorted.find(r => pct >= r.minScore && pct <= r.maxScore)
     }
+    const getAutoRemark = (pct: number): string => matchRange(pct)?.remark ?? ''
+    const getGradeLetter = (pct: number): string => matchRange(pct)?.grade ?? calculateGrade(pct)
 
     const createdEntries = await Promise.all(
       entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; grade?: string; remarks?: string }) => {
@@ -161,7 +164,7 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
             seq1Score: seq1,
             seq2Score: seq2,
             score: finalScore,
-            grade: finalScore !== null ? (entry.grade || calculateGrade(pct!)) : null,
+            grade: finalScore !== null ? (entry.grade || getGradeLetter(pct!)) : null,
             remarks: entry.remarks || autoRemark
           }
         })
@@ -254,9 +257,10 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Rule 3 — if the class has a master, general remarks are required
-    if (classMaster && !reportCard.remarks?.trim()) {
-      res.status(400).json({ message: 'Cannot publish — the class master has not added general remarks yet.' })
+    // Rule 3 — general remarks are required for every report card
+    if (!reportCard.remarks?.trim()) {
+      const who = classMaster ? 'the class master' : 'an admin / vice-principal'
+      res.status(400).json({ message: `Cannot publish — general remarks have not been added yet (${who} must write them).` })
       return
     }
 
@@ -476,11 +480,12 @@ export const bulkPublish = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Check if class has a master
+    // Check if class has a master (for attribution only — remarks are now
+    // required for every class regardless)
     const classMaster = await prisma.user.findFirst({
       where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true }
     })
-    const requiresRemarks = !!classMaster
+    const requiresRemarks = true
 
     // Get all students in this class
     const students = await prisma.student.findMany({
@@ -530,9 +535,9 @@ export const bulkPublish = async (req: AuthRequest, res: Response) => {
         continue
       }
 
-      // Check general remarks (only if class has a master)
+      // Check general remarks (required for every class)
       if (requiresRemarks && !rc.remarks?.trim()) {
-        issues.push({ student: student.name, reason: 'No general remarks from class master' })
+        issues.push({ student: student.name, reason: 'No general remarks yet' })
         continue
       }
 
@@ -583,10 +588,9 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
       const classStudents = students.filter(s => s.classLevel === classLevel)
       const classSubjects = subjects.filter(s => s.classLevel === classLevel)
 
-      const classMaster = await prisma.user.findFirst({
-        where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true }
-      })
-      const requiresRemarks = !!classMaster
+      // General remarks are required for every class (admin/VP can write them
+      // when there is no class master).
+      const requiresRemarks = true
 
       let missingSeqs = 0
       let missingRemarks = 0
@@ -676,7 +680,9 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
     res.json({
       missingSubjects,
       classMaster,
-      missingRemarks: !remarksOk && !!classMaster ? classMaster : null,
+      // Remarks required for every class — attribute to the master if there is
+      // one, otherwise to admin / vice-principal.
+      missingRemarks: !remarksOk ? (classMaster ?? { id: '', name: 'Admin / Vice-Principal' }) : null,
       allSeqsFilled: missingSubjects.length === 0,
     })
   } catch (error) {
