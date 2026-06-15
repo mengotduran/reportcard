@@ -1,11 +1,10 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { loginApi } from '@/lib/api/auth'
-import { getDemoCredentialsApi, DemoCredentials } from '@/lib/api/demo'
 import { useAuthStore } from '@/lib/store/auth.store'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import AuthBackground from '@/components/ui/AuthBackground'
-import { Eye, EyeOff, AlertCircle, Sparkles } from 'lucide-react'
+import { Eye, EyeOff, AlertCircle } from 'lucide-react'
 
 // Module-level cache — survives any component remount caused by Next.js
 // hydration or Zustand store notifications. Cleared on successful login.
@@ -19,24 +18,12 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [demo, setDemo] = useState<DemoCredentials | null>(null)
   const setAuth = useAuthStore((s) => s.setAuth)
   const errorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // Keep module cache in sync
   const handleEmailChange = (v: string) => { _email = v; setEmail(v) }
   const handlePasswordChange = (v: string) => { _password = v; setPassword(v) }
-
-  // Surface demo logins if the demo tenant is available (silent if not).
-  useEffect(() => {
-    getDemoCredentialsApi().then(setDemo)
-  }, [])
-
-  const fillDemo = (login: { email: string; password: string }) => {
-    handleEmailChange(login.email)
-    handlePasswordChange(login.password)
-    setShowPassword(true)
-  }
 
   // Auto-dismiss toast after 4 s
   useEffect(() => {
@@ -162,40 +149,6 @@ export default function LoginPage() {
             ) : 'Sign in'}
           </button>
         </div>
-
-        {/* Demo access — only shown when the demo tenant is available */}
-        {demo && (
-          <div className="mt-5 bg-card/80 border border-border rounded-xl p-4 backdrop-blur">
-            <div className="flex items-center gap-2 mb-2.5">
-              <Sparkles size={14} className="text-primary flex-shrink-0" />
-              <p className="text-xs font-semibold text-foreground">Just exploring? Try the live demo</p>
-            </div>
-            <p className="text-[11px] text-muted-foreground mb-3 leading-relaxed">
-              A sandbox school you can edit freely — it resets periodically.
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => fillDemo(demo.admin)}
-                className="text-left border border-border rounded-lg px-3 py-2 hover:border-primary hover:bg-muted transition-colors"
-              >
-                <span className="block text-xs font-semibold text-foreground">Admin</span>
-                <span className="block text-[10px] text-muted-foreground truncate">{demo.admin.email}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => fillDemo(demo.classMaster)}
-                className="text-left border border-border rounded-lg px-3 py-2 hover:border-primary hover:bg-muted transition-colors"
-              >
-                <span className="block text-xs font-semibold text-foreground">Teacher</span>
-                <span className="block text-[10px] text-muted-foreground truncate">{demo.classMaster.email}</span>
-              </button>
-            </div>
-            <p className="text-[10px] text-muted-foreground mt-2.5 text-center">
-              Tap a role to fill the form, then press Sign in.
-            </p>
-          </div>
-        )}
 
         <p className="mt-5 text-center text-sm text-white/50">
           Contact your administrator to get access.
