@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { demoLimitBlock } from '../config/demo'
 
 export const getSubjects = async (req: AuthRequest, res: Response) => {
   try {
@@ -35,6 +36,9 @@ export const createSubject = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const { name, classLevel, coefficient } = req.body
+
+    const limit = await demoLimitBlock(schoolId, 'subjects')
+    if (limit) { res.status(403).json({ message: limit }); return }
 
     const existing = await prisma.subject.findFirst({
       where: { schoolId, name, classLevel }

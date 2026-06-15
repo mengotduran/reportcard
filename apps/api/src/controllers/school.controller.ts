@@ -4,6 +4,7 @@ import fs from 'fs'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { UPLOAD_DIR } from '../config/uploads'
+import { demoLimitBlock } from '../config/demo'
 
 export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
@@ -83,6 +84,8 @@ export const addCoverImage = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     if (!req.file) { res.status(400).json({ message: 'No file uploaded' }); return }
     const url = `/uploads/${req.file.filename}`
+    const limit = await demoLimitBlock(schoolId, 'images')
+    if (limit) { deleteFile(url); res.status(403).json({ message: limit }); return }
     const school = await prisma.school.findUnique({ where: { id: schoolId } })
     const current = school?.coverImages ?? []
     const updated = await prisma.school.update({ where: { id: schoolId }, data: { coverImages: [...current, url] } })

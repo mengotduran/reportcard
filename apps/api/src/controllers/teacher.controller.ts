@@ -2,6 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import bcrypt from 'bcryptjs'
 import { AuthRequest } from '../middleware/auth'
+import { demoLimitBlock } from '../config/demo'
 
 export const getTeachers = async (req: AuthRequest, res: Response) => {
   try {
@@ -32,17 +33,26 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    const limit = await demoLimitBlock(schoolId, 'teachers')
+    if (limit) { res.status(403).json({ message: limit }); return }
+
     const existing = await prisma.user.findUnique({ where: { email } })
-    if (existing) {
+
+    // Only an ACTIVE user with this email is a real conflict. A soft-deleted
+    // user (isActive: false) still holds the unique email, so re-creating a
+    // previously deleted teacher would otherwise fail — reactivate it instead.
+    if (existing && existing.isActive) {
       res.status(400).json({ message: 'Email already exists' })
       return
     }
 
     const hashedPassword = await bcrypt.hash(password, 12)
-    const teacher = await prisma.user.create({
-      data: { name, email, password: hashedPassword, role, schoolId, masterClassLevel: masterClassLevel ?? null },
-      select: { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true }
-    })
+    const data = { name, email, password: hashedPassword, role, schoolId, masterClassLevel: masterClassLevel ?? null }
+    const select = { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true }
+
+    const teacher = existing
+      ? await prisma.user.update({ where: { id: existing.id }, data: { ...data, isActive: true }, select })
+      : await prisma.user.create({ data, select })
 
     res.status(201).json({ message: 'Teacher created', teacher })
   } catch (error) {

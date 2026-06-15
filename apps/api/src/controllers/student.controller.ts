@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { demoLimitBlock } from '../config/demo'
 
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
@@ -102,6 +103,9 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const { name, classLevel, guardianName, guardianPhone, guardianEmail } = req.body
+
+    const limit = await demoLimitBlock(schoolId, 'students')
+    if (limit) { res.status(403).json({ message: limit }); return }
 
     const studentId = await generateStudentId(schoolId)
 

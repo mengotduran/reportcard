@@ -41,8 +41,9 @@ export default function SettingsPage() {
       const res = await api.post('/school/cover-images', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
       updateSchool(res.data.school)
       showToast('Cover image added')
-    } catch {
-      showToast('Upload failed', 'error')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || 'Upload failed', 'error')
     } finally { setUploadingCover(false) }
   }
 
