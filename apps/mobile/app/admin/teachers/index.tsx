@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { getTeachers, deleteTeacher, Teacher } from '@/lib/api/teachers'
 import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -86,6 +87,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function TeachersScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const tr = useT()
   const router = useRouter()
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [loading, setLoading] = useState(true)
@@ -96,7 +98,7 @@ export default function TeachersScreen() {
       const data = await getTeachers()
       setTeachers(data.teachers)
     } catch {
-      Alert.alert('Error', 'Failed to load teachers.')
+      Alert.alert(tr('Error'), tr('Failed to load teachers.'))
     }
   }, [])
 
@@ -112,22 +114,22 @@ export default function TeachersScreen() {
 
   const handleResetPassword = (teacher: Teacher) => {
     Alert.prompt(
-      'Reset Password',
-      `Set a new password for ${teacher.name}`,
+      tr('Reset Password'),
+      `${tr('Set a new password for')} ${teacher.name}`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: tr('Cancel'), style: 'cancel' },
         {
-          text: 'Reset',
+          text: tr('Reset'),
           onPress: async (newPassword) => {
             if (!newPassword || newPassword.length < 6) {
-              Alert.alert('Error', 'Password must be at least 6 characters.')
+              Alert.alert(tr('Error'), tr('Password must be at least 6 characters.'))
               return
             }
             try {
               await resetUserPasswordApi(teacher.id, newPassword)
-              Alert.alert('Done', `Password updated for ${teacher.name}.`)
+              Alert.alert(tr('Done'), `${tr('Password updated for')} ${teacher.name}.`)
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.message || 'Failed to reset password.')
+              Alert.alert(tr('Error'), e?.response?.data?.message || tr('Failed to reset password.'))
             }
           },
         },
@@ -138,19 +140,19 @@ export default function TeachersScreen() {
 
   const handleDelete = (teacher: Teacher) => {
     Alert.alert(
-      'Delete Teacher',
-      `Remove ${teacher.name} from this school?`,
+      tr('Delete Teacher'),
+      `${tr('Remove')} ${teacher.name} ${tr('from this school?')}`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: tr('Cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: tr('Delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteTeacher(teacher.id)
               setTeachers((prev) => prev.filter((t) => t.id !== teacher.id))
             } catch {
-              Alert.alert('Error', 'Failed to delete teacher.')
+              Alert.alert(tr('Error'), tr('Failed to delete teacher.'))
             }
           },
         },
@@ -173,8 +175,8 @@ export default function TeachersScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="people-outline" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>No teachers yet</Text>
-            <Text style={styles.emptySubText}>Tap the + button to add a teacher</Text>
+            <Text style={styles.emptyText}>{tr('No teachers yet')}</Text>
+            <Text style={styles.emptySubText}>{tr('Tap the + button to add a teacher')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -188,7 +190,7 @@ export default function TeachersScreen() {
               <View style={styles.badgeRow}>
                 <View style={[styles.badge, item.role === 'CLASS_MASTER' ? styles.badgePurple : styles.badgeBlue]}>
                   <Text style={[styles.badgeText, item.role === 'CLASS_MASTER' ? styles.badgeTextPurple : styles.badgeTextBlue]}>
-                    {item.role === 'CLASS_MASTER' ? 'Class Master' : 'Class Teacher'}
+                    {item.role === 'CLASS_MASTER' ? tr('Class Master') : tr('Class Teacher')}
                   </Text>
                 </View>
                 {item.role === 'CLASS_MASTER' && item.masterClassLevel && (

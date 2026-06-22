@@ -123,7 +123,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
           role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] },
         },
       }),
-      prisma.reportCard.count({ where: { schoolId } }),
+      prisma.reportCard.count({ where: { schoolId, term: { isCurrent: true } } }),
       prisma.subject.count({ where: { schoolId } }),
     ])
 

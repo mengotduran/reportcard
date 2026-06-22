@@ -44,6 +44,7 @@ model School {
   parentSchoolId String?
   name           String
   type           SchoolType
+  language       String     @default("EN")
   email          String     @unique
   phone          String?
   address        String?
@@ -196,6 +197,10 @@ model ReportCard {
   average             Float?
   position            Int?
   remarks             String?
+  remarksFr           String?
+  remarksAiEn         String?
+  remarksAiFr         String?
+  remarksSource       String?
   marksEditGrantedTo    String?
   remarksEditGrantedTo  String?
   createdAt           DateTime     @default(now())

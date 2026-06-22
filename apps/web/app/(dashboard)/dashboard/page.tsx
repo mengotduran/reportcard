@@ -5,6 +5,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getDashboardStatsApi, getWeeklyStatsApi, getTeacherChartStatsApi, WeeklyStats, TeacherChartStats } from '@/lib/api/dashboard'
 import { Users, BookOpen, FileText, School, GraduationCap, ArrowRight, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import ImageSlider from '@/components/ui/ImageSlider'
+import { useT, useLocaleCode } from '@/lib/i18n'
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Area, AreaChart,
@@ -35,12 +36,13 @@ const CHART_CONFIG = [
 ]
 
 function TrendIndicator({ data }: { data: number[] }) {
+  const t = useT()
   const last = data[data.length - 1] ?? 0
   const prev = data[data.length - 2] ?? 0
   const delta = last - prev
-  if (delta > 0) return <span className="flex items-center gap-1 text-green-500 text-xs font-semibold"><TrendingUp size={13} />+{delta} this week</span>
-  if (delta < 0) return <span className="flex items-center gap-1 text-red-500 text-xs font-semibold"><TrendingDown size={13} />{delta} this week</span>
-  return <span className="flex items-center gap-1 text-muted-foreground text-xs font-semibold"><Minus size={13} />No change</span>
+  if (delta > 0) return <span className="flex items-center gap-1 text-green-500 text-xs font-semibold"><TrendingUp size={13} />+{delta} {t('this week')}</span>
+  if (delta < 0) return <span className="flex items-center gap-1 text-red-500 text-xs font-semibold"><TrendingDown size={13} />{delta} {t('this week')}</span>
+  return <span className="flex items-center gap-1 text-muted-foreground text-xs font-semibold"><Minus size={13} />{t('No change')}</span>
 }
 
 type ChartCfg = {
@@ -53,6 +55,7 @@ type ChartCfg = {
 }
 
 function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; weekData: WeeklyStats; total: number }) {
+  const t = useT()
   const chartData = weekData.labels.map((label, i) => ({ label, value: weekData[cfg.key][i] ?? 0 }))
   const Icon = cfg.icon
 
@@ -61,7 +64,7 @@ function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; weekData: Weekly
       <div className="flex items-start justify-between">
         <div>
           <p className="text-2xl font-bold text-foreground">{total.toLocaleString()}</p>
-          <p className="text-sm text-muted-foreground">{cfg.label}</p>
+          <p className="text-sm text-muted-foreground">{t(cfg.label)}</p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: cfg.color + '18' }}>
@@ -117,7 +120,7 @@ function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; weekData: Weekly
         )}
       </ResponsiveContainer>
 
-      <p className="text-xs text-muted-foreground text-right -mt-1">8-week trend</p>
+      <p className="text-xs text-muted-foreground text-right -mt-1">{t('8-week trend')}</p>
     </div>
   )
 }
@@ -125,10 +128,12 @@ function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; weekData: Weekly
 // ── Teacher / Class Master home ──────────────────────────────────────────────
 function TeacherHome() {
   const { user, school } = useAuthStore()
+  const t = useT()
+  const locale = useLocaleCode()
   const router = useRouter()
   const [chartStats, setChartStats] = useState<TeacherChartStats | null>(null)
   const [chartLoading, setChartLoading] = useState(true)
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const today = new Date().toLocaleDateString(locale, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
   const logoUrl = school?.logo ?? null
   const sliderImages: string[] = ((school as any)?.coverImages?.length > 0 ? (school as any).coverImages : school?.coverImage ? [school.coverImage] : [])
   const initials = school?.name?.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase() ?? 'SC'
@@ -165,17 +170,17 @@ function TeacherHome() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
               <p className="text-base md:text-lg text-white font-bold truncate min-w-0 max-w-full">{school?.name}</p>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type}</span>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type ? t(school.type) : ''}</span>
             </div>
-            <p className="text-white/60 text-sm">{getGreeting()}, <span className="text-white font-semibold">{user?.name}</span></p>
-            <p className="text-white/40 text-xs mt-1">{user?.role?.replace('_', ' ')} · {today}</p>
+            <p className="text-white/60 text-sm">{t(getGreeting())}, <span className="text-white font-semibold">{user?.name}</span></p>
+            <p className="text-white/40 text-xs mt-1">{user?.role ? t(user.role.replace(/_/g, ' ')) : ''} · {today}</p>
           </div>
           <button
             onClick={() => router.push('/report-cards')}
             className="hidden md:flex flex-shrink-0 items-center gap-2 bg-white/15 hover:bg-white/25 border border-white/30 text-white rounded-xl px-5 py-3 font-semibold text-sm transition backdrop-blur-sm"
           >
             <GraduationCap size={18} />
-            {isClassMaster ? 'Manage Remarks' : 'Enter My Classes'}
+            {isClassMaster ? t('Manage Remarks') : t('Enter My Classes')}
             <ArrowRight size={15} className="opacity-70" />
           </button>
         </div>
@@ -227,6 +232,8 @@ function TeacherHome() {
 // ── Admin / VP dashboard ─────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { user, school } = useAuthStore()
+  const t = useT()
+  const locale = useLocaleCode()
   const [stats, setStats] = useState<Stats | null>(null)
   const [weeklyStats, setWeeklyStats] = useState<WeeklyStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -248,7 +255,7 @@ export default function DashboardPage() {
 
   const colors = TYPE_COLORS[school?.type ?? 'PRIMARY'] ?? TYPE_COLORS.PRIMARY
   const initials = school?.name?.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase() ?? 'SC'
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const today = new Date().toLocaleDateString(locale, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
   const logoUrl = school?.logo ?? null
   const sliderImages: string[] = ((school as any)?.coverImages?.length > 0 ? (school as any).coverImages : school?.coverImage ? [school.coverImage] : [])
 
@@ -285,10 +292,10 @@ export default function DashboardPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg md:text-xl font-bold text-white truncate min-w-0">{school?.name}</h1>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type}</span>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type ? t(school.type) : ''}</span>
             </div>
             <p className="text-sm text-white/60 mt-1">{today}</p>
-            <p className="text-sm text-white/90 mt-2">{getGreeting()}, <span className="font-semibold text-white">{user?.name?.split(' ')[0]}</span> 👋</p>
+            <p className="text-sm text-white/90 mt-2">{t(getGreeting())}, <span className="font-semibold text-white">{user?.name?.split(' ')[0]}</span> 👋</p>
           </div>
         </div>
       </div>
@@ -305,14 +312,14 @@ export default function DashboardPage() {
                 ? <span className="inline-block w-8 h-7 bg-muted rounded animate-pulse" />
                 : (card.value ?? 0).toLocaleString()}
             </p>
-            <p className="text-sm text-muted-foreground mt-0.5">{card.label}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">{t(card.label)}</p>
           </div>
         ))}
       </div>
 
       {/* Weekly trend charts */}
       <div>
-        <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Weekly Trends</h2>
+        <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">{t('Weekly Trends')}</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {CHART_CONFIG.map((cfg) => (
             <WeeklyChart

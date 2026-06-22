@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 import ThemeToggle from '@/components/ThemeToggle'
 
 const MENU_ITEMS = [
@@ -89,6 +90,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 
 export default function MoreScreen() {
   const { colors, isDark } = useTheme()
+  const t = useT()
   const styles = makeStylesStyles(colors)
   const router = useRouter()
   const { school } = useAuthStore()
@@ -100,12 +102,12 @@ export default function MoreScreen() {
           <Ionicons name="business-outline" size={20} color="#F03E2F" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.schoolName}>{school?.name ?? 'School'}</Text>
-          <Text style={styles.schoolType}>{school?.type ? `${school.type} SCHOOL` : 'Admin Panel'}</Text>
+          <Text style={styles.schoolName}>{school?.name ?? t('School')}</Text>
+          <Text style={styles.schoolType}>{school?.type ? `${t(school.type)} ${t('SCHOOL')}` : t('Admin Panel')}</Text>
         </View>
       </View>
 
-<Text style={styles.sectionLabel}>MANAGEMENT</Text>
+<Text style={styles.sectionLabel}>{t('MANAGEMENT')}</Text>
 
       {MENU_ITEMS.map((item) => (
         <TouchableOpacity
@@ -117,7 +119,7 @@ export default function MoreScreen() {
           <View style={styles.iconBox}>
             <Ionicons name={item.icon} size={22} color="#F03E2F" />
           </View>
-          <Text style={styles.cardLabel}>{item.label}</Text>
+          <Text style={styles.cardLabel}>{t(item.label)}</Text>
           <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
         </TouchableOpacity>
       ))}

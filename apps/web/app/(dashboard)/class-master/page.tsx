@@ -2,24 +2,26 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getCurrentTermApi, getClassOverviewApi, getReportCardApi, updateRemarksApi } from '@/lib/api/reportcards'
+import { getCurrentTermApi, getClassOverviewApi, getReportCardApi, updateRemarksApi, generateRemarksApi } from '@/lib/api/reportcards'
 import { getMeApi } from '@/lib/api/auth'
-import { MessageSquare, CheckCircle, Clock, X, Save } from 'lucide-react'
+import { MessageSquare, CheckCircle, Clock, X, Save, Sparkles } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { useT } from '@/lib/i18n'
 
 interface Student {
   id: string
   name: string
   studentId: string
   classLevel: string
-  reportCard: { id: string; status: string; average: number | null; remarks: string | null; remarksEditGrantedTo: string | null; allSeqsFilled?: boolean } | null
+  reportCard: { id: string; status: string; average: number | null; remarks: string | null; remarksFr?: string | null; remarksEditGrantedTo: string | null; allSeqsFilled?: boolean } | null
 }
 
 export default function ClassMasterPage() {
   const router = useRouter()
   const { isAuthenticated, user, updateUser } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
 
   const masterClass = user?.masterClassLevel ?? ''
   const [term, setTerm] = useState<{ id: string; name: string; session: string } | null>(null)
@@ -27,7 +29,10 @@ export default function ClassMasterPage() {
   const [loading, setLoading] = useState(true)
   const [editTarget, setEditTarget] = useState<Student | null>(null)
   const [remarksText, setRemarksText] = useState('')
+  const [remarksFrText, setRemarksFrText] = useState('')
+  const [schoolLang, setSchoolLang] = useState<'EN' | 'FR'>('EN')
   const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
@@ -55,7 +60,7 @@ export default function ClassMasterPage() {
       setTerm(t)
       await loadStudents(t.id, classLevel)
     } catch {
-      showToast('Failed to load data', 'error')
+      showToast(t('Failed to load data'), 'error')
     } finally { setLoading(false) }
   }
 
@@ -69,66 +74,83 @@ export default function ClassMasterPage() {
           if (!s.reportCard) return { ...s, reportCard: null }
           try {
             const rc = await getReportCardApi(s.reportCard.id)
+            if (rc.school?.language) setSchoolLang(rc.school.language === 'FR' ? 'FR' : 'EN')
             const allSeqsFilled = rc.entries?.length > 0 &&
               rc.entries.every((e: any) => e.seq1Score != null && e.seq2Score != null)
-            return { ...s, reportCard: { ...s.reportCard, remarks: rc.remarks ?? null, allSeqsFilled } }
-          } catch { return { ...s, reportCard: { ...s.reportCard, remarks: null, allSeqsFilled: false } } }
+            return { ...s, reportCard: { ...s.reportCard, remarks: rc.remarks ?? null, remarksFr: rc.remarksFr ?? null, allSeqsFilled } }
+          } catch { return { ...s, reportCard: { ...s.reportCard, remarks: null, remarksFr: null, allSeqsFilled: false } } }
         })
       )
       setStudents(enriched)
     } catch {
-      showToast('Failed to load students', 'error')
+      showToast(t('Failed to load students'), 'error')
     } finally { setLoading(false) }
   }, [])
 
   const openEdit = (student: Student) => {
     setEditTarget(student)
     setRemarksText(student.reportCard?.remarks ?? '')
+    setRemarksFrText(student.reportCard?.remarksFr ?? '')
+  }
+
+  const handleGenerate = async () => {
+    if (!editTarget?.reportCard) return
+    setGenerating(true)
+    try {
+      const result = await generateRemarksApi(editTarget.reportCard.id)
+      setRemarksText(result.remarks ?? '')
+      setRemarksFrText(result.remarksFr ?? '')
+      showToast(result.aiAvailable ? t('AI draft ready — review and edit before saving') : t('AI unavailable — inserted a default you can edit'), result.aiAvailable ? 'success' : 'error')
+    } catch {
+      showToast(t('Failed to generate remarks'), 'error')
+    } finally { setGenerating(false) }
   }
 
   const handleSaveRemarks = async () => {
     if (!editTarget?.reportCard) return
     setSaving(true)
     try {
-      await updateRemarksApi(editTarget.reportCard.id, remarksText)
-      showToast('Remarks saved')
+      if (schoolLang === 'FR') await updateRemarksApi(editTarget.reportCard.id, undefined, remarksFrText)
+      else await updateRemarksApi(editTarget.reportCard.id, remarksText)
+      showToast(t('Remarks saved'))
       setStudents(prev => prev.map(s =>
         s.id === editTarget.id
-          ? { ...s, reportCard: s.reportCard ? { ...s.reportCard, remarks: remarksText } : null }
+          ? { ...s, reportCard: s.reportCard ? { ...s.reportCard, remarks: remarksText, remarksFr: remarksFrText } : null }
           : s
       ))
       setEditTarget(null)
     } catch {
-      showToast('Failed to save remarks', 'error')
+      showToast(t('Failed to save remarks'), 'error')
     } finally { setSaving(false) }
   }
 
-  const filledCount = students.filter(s => s.reportCard && (s.reportCard.remarks ?? '').trim().length > 0).length
+  const activeRemark = (rc: Student['reportCard']) => (schoolLang === 'FR' ? rc?.remarksFr : rc?.remarks) ?? ''
+  const filledCount = students.filter(s => s.reportCard && activeRemark(s.reportCard).trim().length > 0).length
 
   return (
     <div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div className="min-w-0">
-          <h2 className="text-2xl font-bold text-foreground">Class Master — {masterClass}</h2>
+          <h2 className="text-2xl font-bold text-foreground">{t('Class Master —')} {masterClass}</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {term ? `${term.name} — ${term.session}` : 'No active term'}
+            {term ? `${term.name} — ${term.session}` : t('No active term')}
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground flex-shrink-0">
           <MessageSquare size={15} />
-          <span>{filledCount}/{students.length} remarks filled</span>
+          <span>{filledCount}/{students.length} {t('remarks filled')}</span>
         </div>
       </div>
 
       {!masterClass ? (
         <div className="bg-card rounded-xl border border-border text-center py-12 text-muted-foreground text-sm">
-          No class assigned. Ask your admin to set your master class.
+          {t('No class assigned. Ask your admin to set your master class.')}
         </div>
       ) : loading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">Loading students...</div>
       ) : students.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12 text-muted-foreground text-sm">
-          No students found for {masterClass}.
+          {t('No students found for')} {masterClass}.
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -136,10 +158,10 @@ export default function ClassMasterPage() {
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">#</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Student</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Average</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Card Status</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">General Remarks</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Student')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Average')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Card Status')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('General Remarks')}</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -156,21 +178,21 @@ export default function ClassMasterPage() {
                   </td>
                   <td className="px-4 py-3">
                     {!s.reportCard ? (
-                      <span className="text-xs text-muted-foreground">No card</span>
+                      <span className="text-xs text-muted-foreground">{t('No card')}</span>
                     ) : s.reportCard.status === 'PUBLISHED' ? (
                       <span className="flex items-center gap-1 text-xs text-green-700 bg-green-100 px-2 py-1 rounded-full w-fit">
-                        <CheckCircle size={10} /> Published
+                        <CheckCircle size={10} /> {t('Published')}
                       </span>
                     ) : (
                       <span className="flex items-center gap-1 text-xs text-yellow-700 bg-yellow-100 px-2 py-1 rounded-full w-fit">
-                        <Clock size={10} /> Draft
+                        <Clock size={10} /> {t('Draft')}
                       </span>
                     )}
                   </td>
                   <td className="px-4 py-3 max-w-xs">
                     {s.reportCard ? (
-                      (s.reportCard.remarks ?? '').trim()
-                        ? <p className="text-sm text-foreground truncate">{s.reportCard.remarks}</p>
+                      activeRemark(s.reportCard).trim()
+                        ? <p className="text-sm text-foreground truncate">{activeRemark(s.reportCard)}</p>
                         : <span className="text-xs text-muted-foreground italic">No remarks yet</span>
                     ) : <span className="text-xs text-muted-foreground">—</span>}
                   </td>
@@ -181,17 +203,17 @@ export default function ClassMasterPage() {
                       const seqsOk = s.reportCard.allSeqsFilled !== false
                       return isLocked ? (
                         <span className="flex items-center gap-1.5 text-xs text-muted-foreground px-3 py-1.5">
-                          🔒 Locked
+                          🔒 {t('Locked')}
                         </span>
                       ) : !seqsOk ? (
-                        <span className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg" title="All subject sequences must be filled before adding remarks">
-                          ⚠ Marks incomplete
+                        <span className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg" title={t('All subject sequences must be filled before adding remarks')}>
+                          ⚠ {t('Marks incomplete')}
                         </span>
                       ) : (
                         <button onClick={() => openEdit(s)}
                           className={`flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition ${isGranted ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-muted-foreground hover:bg-muted'}`}>
                           <MessageSquare size={12} />
-                          {isGranted ? '✏️ Edit (permitted)' : (s.reportCard.remarks ?? '').trim() ? 'Edit' : 'Add Remarks'}
+                          {isGranted ? `✏️ ${t('Edit (permitted)')}` : activeRemark(s.reportCard).trim() ? t('Edit') : t('Add Remarks')}
                         </button>
                       )
                     })()}
@@ -210,27 +232,40 @@ export default function ClassMasterPage() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-semibold text-foreground">{editTarget.name}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">{editTarget.classLevel} · General Remarks</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{editTarget.classLevel} · {t('General Remarks')}</p>
               </div>
               <button onClick={() => setEditTarget(null)} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
                 <X size={20} />
               </button>
             </div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-muted-foreground">
+                {t('Average:')} {editTarget.reportCard?.average != null ? editTarget.reportCard.average.toFixed(1) : '—'}/20 · {schoolLang === 'FR' ? t('French') : t('English')}
+              </span>
+              <button
+                onClick={handleGenerate}
+                disabled={generating || editTarget.reportCard?.average == null}
+                title={editTarget.reportCard?.average == null ? t('Average not computed yet — fill all sequences first') : t('Generate a draft from the average')}
+                className="flex items-center gap-1.5 text-xs border border-primary/30 text-primary px-3 py-1.5 rounded-lg hover:bg-primary/10 disabled:opacity-50 transition">
+                <Sparkles size={12} /> {generating ? t('Generating…') : t('Generate with AI')}
+              </button>
+            </div>
             <textarea
               rows={5}
-              value={remarksText}
-              onChange={e => setRemarksText(e.target.value)}
-              placeholder="e.g. This student has shown great improvement this term. Keep it up!"
+              value={schoolLang === 'FR' ? remarksFrText : remarksText}
+              onChange={e => schoolLang === 'FR' ? setRemarksFrText(e.target.value) : setRemarksText(e.target.value)}
+              placeholder={schoolLang === 'FR' ? 'ex. Cet élève a fait de grands progrès ce trimestre. Continue ainsi !' : 'e.g. This student has shown great improvement this term. Keep it up!'}
               className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
             />
+            <p className="text-[11px] text-muted-foreground mt-2">{t('AI drafts are a starting point — review and edit before saving.')}</p>
             <div className="flex gap-3 mt-4">
               <button onClick={() => setEditTarget(null)}
                 className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">
-                Cancel
+                {t('Cancel')}
               </button>
               <button onClick={handleSaveRemarks} disabled={saving}
                 className="flex-1 flex items-center justify-center gap-2 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                <Save size={14} /> {saving ? 'Saving...' : 'Save Remarks'}
+                <Save size={14} /> {saving ? t('Saving...') : t('Save Remarks')}
               </button>
             </div>
           </div>

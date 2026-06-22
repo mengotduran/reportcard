@@ -7,14 +7,16 @@ import {
 import { useLocalSearchParams, useNavigation } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
-  getCurrentTerm, getClassOverview, getReportCard, updateRemarks,
+  getCurrentTerm, getClassOverview, getReportCard, updateRemarks, generateRemarks,
   ClassStudentOverview,
 } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 interface StudentRow extends ClassStudentOverview {
   remarks: string | null
+  remarksFr: string | null
   allSeqsFilled: boolean
 }
 
@@ -113,6 +115,7 @@ const makeSStyles = (colors: Colors) => StyleSheet.create(({
 export default function ClassMasterScreen() {
   const { colors, isDark } = useTheme()
   const s = makeSStyles(colors)
+  const t = useT()
   const { classLevel, termId: paramTermId } = useLocalSearchParams<{ classLevel: string; termId: string }>()
   const { user } = useAuthStore()
   const navigation = useNavigation()
@@ -126,7 +129,9 @@ export default function ClassMasterScreen() {
   // Remarks modal state
   const [editTarget, setEditTarget] = useState<StudentRow | null>(null)
   const [remarksText, setRemarksText] = useState('')
+  const [schoolLang, setSchoolLang] = useState<'EN' | 'FR'>('EN')
   const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     navigation.setOptions({ title: decodedClass })
@@ -145,20 +150,21 @@ export default function ClassMasterScreen() {
 
       const enriched: StudentRow[] = await Promise.all(
         sorted.map(async (s) => {
-          if (!s.reportCard) return { ...s, remarks: null, allSeqsFilled: false }
+          if (!s.reportCard) return { ...s, remarks: null, remarksFr: null, allSeqsFilled: false }
           try {
             const rc = await getReportCard(s.reportCard.id)
+            if (rc.school?.language) setSchoolLang(rc.school.language === 'FR' ? 'FR' : 'EN')
             const seqsFilled = rc.entries?.length > 0 &&
               rc.entries.every((e: any) => e.seq1Score != null && e.seq2Score != null)
-            return { ...s, remarks: rc.remarks ?? null, allSeqsFilled: seqsFilled }
+            return { ...s, remarks: rc.remarks ?? null, remarksFr: rc.remarksFr ?? null, allSeqsFilled: seqsFilled }
           } catch {
-            return { ...s, remarks: null, allSeqsFilled: false }
+            return { ...s, remarks: null, remarksFr: null, allSeqsFilled: false }
           }
         })
       )
       setStudents(enriched)
     } catch {
-      Alert.alert('Error', 'Failed to load students.')
+      Alert.alert(t('Error'), t('Failed to load students.'))
     }
   }, [decodedClass, termId])
 
@@ -174,26 +180,48 @@ export default function ClassMasterScreen() {
 
   const openEdit = (student: StudentRow) => {
     setEditTarget(student)
-    setRemarksText(student.remarks ?? '')
+    setRemarksText((schoolLang === 'FR' ? student.remarksFr : student.remarks) ?? '')
+  }
+
+  const handleGenerate = async () => {
+    if (!editTarget?.reportCard) return
+    if (editTarget.reportCard.average == null) {
+      Alert.alert(t('Not ready'), t('The term average has not been computed yet — fill all sequences first.'))
+      return
+    }
+    setGenerating(true)
+    try {
+      const result = await generateRemarks(editTarget.reportCard.id)
+      setRemarksText((schoolLang === 'FR' ? result.remarksFr : result.remarks) ?? '')
+      if (!result.aiAvailable) Alert.alert(t('AI unavailable'), t('Inserted a default remark you can edit.'))
+    } catch {
+      Alert.alert(t('Error'), t('Failed to generate remarks.'))
+    } finally {
+      setGenerating(false)
+    }
   }
 
   const handleSave = async () => {
     if (!editTarget?.reportCard) return
     setSaving(true)
     try {
-      await updateRemarks(editTarget.reportCard.id, remarksText)
+      if (schoolLang === 'FR') await updateRemarks(editTarget.reportCard.id, undefined, remarksText)
+      else await updateRemarks(editTarget.reportCard.id, remarksText)
       setStudents(prev =>
-        prev.map(s => s.id === editTarget.id ? { ...s, remarks: remarksText } : s)
+        prev.map(s => s.id === editTarget.id
+          ? { ...s, ...(schoolLang === 'FR' ? { remarksFr: remarksText } : { remarks: remarksText }) }
+          : s)
       )
       setEditTarget(null)
     } catch {
-      Alert.alert('Error', 'Failed to save remarks.')
+      Alert.alert(t('Error'), t('Failed to save remarks.'))
     } finally {
       setSaving(false)
     }
   }
 
-  const filledCount = students.filter(s => (s.remarks ?? '').trim().length > 0).length
+  const activeRemark = (row: StudentRow) => (schoolLang === 'FR' ? row.remarksFr : row.remarks) ?? ''
+  const filledCount = students.filter(s => activeRemark(s).trim().length > 0).length
 
   return (
     <View style={s.container}>
@@ -206,7 +234,7 @@ export default function ClassMasterScreen() {
         <Text style={s.infoText}>{decodedClass}</Text>
         <View style={s.pill}>
           <Ionicons name="chatbubble-ellipses-outline" size={12} color="#7c3aed" />
-          <Text style={s.pillText}>{filledCount}/{students.length} remarks</Text>
+          <Text style={s.pillText}>{filledCount}/{students.length} {t('remarks')}</Text>
         </View>
       </View>
 
@@ -219,11 +247,11 @@ export default function ClassMasterScreen() {
         ListEmptyComponent={
           <View style={s.center}>
             <Ionicons name="people-outline" size={40} color="#d1d5db" />
-            <Text style={s.emptyText}>No students found for {decodedClass}</Text>
+            <Text style={s.emptyText}>{t('No students found for')} {decodedClass}</Text>
           </View>
         }
         renderItem={({ item, index }) => {
-          const hasRemarks = (item.remarks ?? '').trim().length > 0
+          const hasRemarks = activeRemark(item).trim().length > 0
           const isPublished = item.reportCard?.status === 'PUBLISHED'
           const seqsOk = item.allSeqsFilled
           return (
@@ -243,20 +271,20 @@ export default function ClassMasterScreen() {
                         <Text style={s.avg}>
                           {item.reportCard.average != null
                             ? `${item.reportCard.average.toFixed(1)}/20`
-                            : 'No marks'}
+                            : t('No marks')}
                         </Text>
                         <View style={[s.statusBadge, isPublished ? s.published : s.draft]}>
                           <Text style={[s.statusText, { color: isPublished ? '#15803d' : '#92400e' }]}>
-                            {isPublished ? 'Published' : 'Draft'}
+                            {isPublished ? t('Published') : t('Draft')}
                           </Text>
                         </View>
                       </>
                     ) : (
-                      <Text style={s.noCard}>No report card yet</Text>
+                      <Text style={s.noCard}>{t('No report card yet')}</Text>
                     )}
                   </View>
                   {hasRemarks && (
-                    <Text style={s.remarksPreview} numberOfLines={1}>{item.remarks}</Text>
+                    <Text style={s.remarksPreview} numberOfLines={1}>{activeRemark(item)}</Text>
                   )}
                 </View>
               </View>
@@ -269,7 +297,7 @@ export default function ClassMasterScreen() {
                 ) : !seqsOk ? (
                   <View style={s.incompleteBtn}>
                     <Ionicons name="warning-outline" size={12} color="#d97706" />
-                    <Text style={s.incompleteBtnText}>Marks missing</Text>
+                    <Text style={s.incompleteBtnText}>{t('Marks missing')}</Text>
                   </View>
                 ) : (
                   <TouchableOpacity
@@ -283,7 +311,7 @@ export default function ClassMasterScreen() {
                       color={item.reportCard.remarksEditGrantedTo === user?.id ? '#F03E2F' : hasRemarks ? '#7c3aed' : '#9ca3af'}
                     />
                     <Text style={[s.editBtnText, hasRemarks && s.editBtnTextFilled, item.reportCard.remarksEditGrantedTo === user?.id && { color: '#F03E2F' }]}>
-                      {item.reportCard.remarksEditGrantedTo === user?.id ? 'Edit ✓' : hasRemarks ? 'Edit' : 'Add'}
+                      {item.reportCard.remarksEditGrantedTo === user?.id ? t('Edit ✓') : hasRemarks ? t('Edit') : t('Add')}
                     </Text>
                   </TouchableOpacity>
                 )
@@ -305,10 +333,27 @@ export default function ClassMasterScreen() {
             <View style={s.modalHeader}>
               <View>
                 <Text style={s.modalTitle}>{editTarget?.name}</Text>
-                <Text style={s.modalSub}>General Remarks · {decodedClass}</Text>
+                <Text style={s.modalSub}>{t('General Remarks')} · {decodedClass}</Text>
               </View>
               <TouchableOpacity onPress={() => setEditTarget(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontSize: 12, color: colors.textMuted }}>
+                {t('Average:')} {editTarget?.reportCard?.average != null ? `${editTarget.reportCard.average.toFixed(1)}/20` : '—'} · {schoolLang === 'FR' ? t('French') : t('English')}
+              </Text>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: '#ddd6fe', backgroundColor: '#faf5ff', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, opacity: (generating || editTarget?.reportCard?.average == null) ? 0.5 : 1 }}
+                onPress={handleGenerate}
+                disabled={generating || editTarget?.reportCard?.average == null}
+                activeOpacity={0.7}
+              >
+                {generating
+                  ? <ActivityIndicator color="#7c3aed" size="small" />
+                  : <Ionicons name="sparkles-outline" size={14} color="#7c3aed" />}
+                <Text style={{ fontSize: 12, fontWeight: '600', color: '#7c3aed' }}>{generating ? t('Generating…') : t('Generate with AI')}</Text>
               </TouchableOpacity>
             </View>
 
@@ -316,17 +361,18 @@ export default function ClassMasterScreen() {
               style={s.textarea}
               value={remarksText}
               onChangeText={setRemarksText}
-              placeholder="e.g. This student has shown great improvement this term. Encourage them to keep up the good work."
+              placeholder={schoolLang === 'FR' ? 'ex. Cet élève a fait de grands progrès ce trimestre. Continue ainsi !' : 'e.g. This student has shown great improvement this term. Encourage them to keep up the good work.'}
               placeholderTextColor="#9ca3af"
               multiline
               numberOfLines={5}
               textAlignVertical="top"
               autoFocus
             />
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 6 }}>{t('AI drafts are a starting point — review and edit before saving.')}</Text>
 
             <View style={s.modalActions}>
               <TouchableOpacity style={s.cancelBtn} onPress={() => setEditTarget(null)}>
-                <Text style={s.cancelBtnText}>Cancel</Text>
+                <Text style={s.cancelBtnText}>{t('Cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.saveBtn, saving && s.disabled]}
@@ -338,7 +384,7 @@ export default function ClassMasterScreen() {
                   ? <ActivityIndicator color="#fff" size="small" />
                   : <>
                       <Ionicons name="checkmark-outline" size={16} color="#fff" />
-                      <Text style={s.saveBtnText}>Save Remarks</Text>
+                      <Text style={s.saveBtnText}>{t('Save Remarks')}</Text>
                     </>}
               </TouchableOpacity>
             </View>

@@ -82,9 +82,34 @@ export const deleteReportCardApi = async (id: string) => {
   return res.data
 }
 
-export const updateRemarksApi = async (id: string, remarks: string) => {
-  const res = await api.put(`/report-cards/${id}/remarks`, { remarks })
+export const updateRemarksApi = async (id: string, remarks?: string, remarksFr?: string) => {
+  const res = await api.put(`/report-cards/${id}/remarks`, { remarks, remarksFr })
   return res.data
+}
+
+export interface GenerateRemarksResult {
+  message: string
+  aiAvailable: boolean
+  language: 'EN' | 'FR'
+  remarks: string | null
+  remarksFr: string | null
+}
+
+// Generate an AI bilingual remark draft. Returns editable EN/FR text — not saved
+// as final until the user saves via updateRemarksApi.
+export const generateRemarksApi = async (id: string): Promise<GenerateRemarksResult> => {
+  const res = await api.post(`/report-cards/${id}/generate-remarks`)
+  return res.data
+}
+
+// Provenance label for a remark, for admin display.
+export const remarkSourceLabel = (source: string | null | undefined): { text: string; tone: 'ai' | 'edited' | 'manual' } | null => {
+  switch (source) {
+    case 'AI': return { text: 'AI-generated', tone: 'ai' }
+    case 'AI_EDITED': return { text: 'AI-generated · edited by teacher', tone: 'edited' }
+    case 'MANUAL': return { text: 'Written by teacher', tone: 'manual' }
+    default: return null
+  }
 }
 
 export interface ClassReadiness {

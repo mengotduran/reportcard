@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 
 // Get all report cards for the school
 export const getReportCards = async (req: AuthRequest, res: Response) => {
@@ -370,12 +371,14 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
   }
 }
 
-// Update only the general remarks (for Class Master)
+// Update the general remarks (English + French) for Class Master / Admin.
+// Recomputes provenance (AI / AI_EDITED / MANUAL) by comparing the saved text
+// to the stored AI draft.
 export const updateRemarks = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { remarks } = req.body
+    const { remarks, remarksFr } = req.body
 
     const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
     if (!reportCard) { res.status(404).json({ message: 'Report card not found' }); return }
@@ -391,8 +394,67 @@ export const updateRemarks = async (req: AuthRequest, res: Response) => {
       await prisma.reportCard.update({ where: { id }, data: { remarksEditGrantedTo: null } })
     }
 
-    const updated = await prisma.reportCard.update({ where: { id }, data: { remarks } })
+    // Keep existing FR if the caller only sends EN (backward compatible).
+    const nextFr = remarksFr !== undefined ? remarksFr : reportCard.remarksFr
+    const source = classifyRemarkSource(remarks, nextFr, reportCard.remarksAiEn, reportCard.remarksAiFr)
+
+    const updated = await prisma.reportCard.update({
+      where: { id },
+      data: { remarks, remarksFr: nextFr, remarksSource: source },
+    })
     res.json({ message: 'Remarks updated', reportCard: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Generate an AI bilingual remark DRAFT from the student's term average.
+// Stores the draft as the frozen AI reference + pre-fills the editable remark,
+// but does NOT publish. The class master reviews/edits, then saves via
+// updateRemarks. Never blocks: degrades to a band default if the AI is down.
+export const generateRemarks = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+
+    const reportCard = await prisma.reportCard.findFirst({
+      where: { id, schoolId },
+      include: { student: { select: { name: true } }, school: { select: { language: true } } },
+    })
+    if (!reportCard) { res.status(404).json({ message: 'Report card not found' }); return }
+
+    const role = req.user!.role
+    const userId = req.user!.id
+    if (reportCard.status === 'PUBLISHED' && role === 'CLASS_MASTER' && reportCard.remarksEditGrantedTo !== userId) {
+      res.status(403).json({ message: 'This report card has been published. Request permission from your admin to edit remarks.' })
+      return
+    }
+
+    if (reportCard.average === null || reportCard.average === undefined) {
+      res.status(400).json({ message: 'Cannot generate remarks yet — the term average has not been computed (fill all sequences first).' })
+      return
+    }
+
+    // Generate in the school section's language only (EN or FR), not both.
+    const lang = reportCard.school.language === 'FR' ? 'FR' : 'EN'
+    const result = await generateRemark(reportCard.student.name, reportCard.average, lang)
+
+    // Freeze the AI draft (in the matching language field) for later provenance
+    // comparison and pre-fill the editable remark. Source starts as AI until edited.
+    const data = lang === 'FR'
+      ? { remarksAiFr: result.text, remarksFr: result.text, remarksAiEn: null, remarks: null, remarksSource: 'AI' }
+      : { remarksAiEn: result.text, remarks: result.text, remarksAiFr: null, remarksFr: null, remarksSource: 'AI' }
+    const updated = await prisma.reportCard.update({ where: { id }, data })
+
+    res.json({
+      message: result.source === 'ai' ? 'AI remark generated' : 'AI unavailable — used a default remark you can edit',
+      aiAvailable: result.source === 'ai',
+      language: lang,
+      remarks: updated.remarks,
+      remarksFr: updated.remarksFr,
+      reportCard: updated,
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

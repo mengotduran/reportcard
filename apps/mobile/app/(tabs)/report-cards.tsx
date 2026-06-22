@@ -11,6 +11,7 @@ import { getCurrentTerm, getClassLevels, getClassOverview, getAllReportCards, bu
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
@@ -97,6 +98,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 function TeacherReportCards() {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const router = useRouter()
   const { user } = useAuthStore()
   const isClassMaster = user?.role === 'CLASS_MASTER'
@@ -127,9 +129,9 @@ function TeacherReportCards() {
       setClasses(summaries)
     } catch (err: any) {
       if (err?.response?.status === 404) {
-        setError('No active term set. Please set a current term from the web app.')
+        setError(t('No active term set. Please set a current term from the web app.'))
       } else {
-        setError('Failed to load data.')
+        setError(t('Failed to load data.'))
       }
     }
   }, [])
@@ -172,7 +174,7 @@ function TeacherReportCards() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="people-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No classes found. Add students first.</Text>
+            <Text style={styles.emptyText}>{t('No classes found. Add students first.')}</Text>
           </View>
         }
         renderItem={({ item }) => {
@@ -190,7 +192,7 @@ function TeacherReportCards() {
                 </View>
                 <View style={styles.cardInfo}>
                   <Text style={styles.className}>{item.classLevel}</Text>
-                  <Text style={styles.classMeta}>{item.total} student{item.total !== 1 ? 's' : ''}</Text>
+                  <Text style={styles.classMeta}>{item.total} {item.total !== 1 ? t('students') : t('student')}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
               </View>
@@ -201,9 +203,9 @@ function TeacherReportCards() {
                     <View style={[styles.progressFill, { width: `${progress * 100}%` as any }]} />
                   </View>
                   <View style={styles.statsRow}>
-                    <Text style={styles.statFilled}>{item.filled} filled</Text>
-                    {pending > 0 && <Text style={styles.statPending}>{pending} pending</Text>}
-                    {isClassMaster && <Text style={styles.statPublished}>{item.published} published</Text>}
+                    <Text style={styles.statFilled}>{item.filled} {t('filled')}</Text>
+                    {pending > 0 && <Text style={styles.statPending}>{pending} {t('pending')}</Text>}
+                    {isClassMaster && <Text style={styles.statPublished}>{item.published} {t('published')}</Text>}
                   </View>
                 </>
               )}
@@ -218,6 +220,7 @@ function TeacherReportCards() {
 function AdminReportCards() {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const router = useRouter()
   const [reportCards, setReportCards] = useState<AdminReportCard[]>([])
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
@@ -242,7 +245,7 @@ function AdminReportCards() {
         if (current) setSelectedTermId(current.id)
       }
     } catch {
-      setError('Failed to load report cards.')
+      setError(t('Failed to load report cards.'))
     }
   }, [])
 
@@ -266,22 +269,22 @@ function AdminReportCards() {
   }
 
   const handleBulkPublish = (classLevel: string) => {
-    if (!selectedTermId) { Alert.alert('No term selected'); return }
+    if (!selectedTermId) { Alert.alert(t('No term selected')); return }
     Alert.alert(
-      'Publish All',
-      `Publish all eligible report cards for ${classLevel}?`,
+      t('Publish All'),
+      `${t('Publish all eligible report cards for')} ${classLevel}?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('Cancel'), style: 'cancel' },
         {
-          text: 'Publish',
+          text: t('Publish'),
           onPress: async () => {
             setBulkPublishing(classLevel)
             try {
               const result = await bulkPublish(classLevel, selectedTermId)
-              Alert.alert('Done', `Published: ${result.published}, Skipped: ${result.skipped}`)
+              Alert.alert(t('Done'), `${t('Published')}: ${result.published}, ${t('Skipped')}: ${result.skipped}`)
               fetchData(selectedTermId)
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.message || 'Failed to publish.')
+              Alert.alert(t('Error'), e?.response?.data?.message || t('Failed to publish.'))
             } finally { setBulkPublishing(null) }
           },
         },
@@ -329,7 +332,7 @@ function AdminReportCards() {
         <Ionicons name="search-outline" size={16} color="#9ca3af" />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search by name, class or term..."
+          placeholder={t('Search by name, class or term...')}
           value={search}
           onChangeText={setSearch}
           placeholderTextColor="#9ca3af"
@@ -352,7 +355,7 @@ function AdminReportCards() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="document-text-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No report cards found</Text>
+            <Text style={styles.emptyText}>{t('No report cards found')}</Text>
           </View>
         }
         renderItem={({ item: classLevel }) => {
@@ -369,7 +372,7 @@ function AdminReportCards() {
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#16a34a', opacity: bulkPublishing === classLevel ? 0.5 : 1 }}>
                     {bulkPublishing === classLevel
                       ? <ActivityIndicator size="small" color="#fff" />
-                      : <><Ionicons name="send-outline" size={11} color="#fff" /><Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>Publish All</Text></>
+                      : <><Ionicons name="send-outline" size={11} color="#fff" /><Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>{t('Publish All')}</Text></>
                     }
                   </TouchableOpacity>
                 )}
@@ -396,7 +399,7 @@ function AdminReportCards() {
                       )}
                       <View style={[styles.statusBadge, isPublished ? styles.publishedBadge : styles.draftBadge]}>
                         <Text style={[styles.statusText, { color: isPublished ? '#16a34a' : '#92400e' }]}>
-                          {isPublished ? 'Published' : 'Draft'}
+                          {isPublished ? t('Published') : t('Draft')}
                         </Text>
                       </View>
                     </View>

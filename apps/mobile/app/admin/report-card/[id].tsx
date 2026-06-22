@@ -15,6 +15,7 @@ import {
   grantEditPermission,
   revokeEditPermission,
   getReadinessDetail,
+  remarkSourceLabel,
   ReadinessDetail,
   ReportCardDetail,
   Subject,
@@ -22,6 +23,7 @@ import {
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -182,6 +184,7 @@ function TeacherPickerModal({
   const { colors } = useTheme()
   const c = colors
   const styles = makeStylesStyles(colors)
+  const tr = useT()
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
@@ -198,7 +201,7 @@ function TeacherPickerModal({
             contentContainerStyle={{ paddingBottom: 20 }}
             ListEmptyComponent={
               <View style={{ padding: 24, alignItems: 'center' }}>
-                <Text style={{ color: c.textSecondary }}>No teachers found</Text>
+                <Text style={{ color: c.textSecondary }}>{tr('No teachers found')}</Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -208,7 +211,7 @@ function TeacherPickerModal({
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.teacherName}>{item.name}</Text>
-                  <Text style={styles.teacherRole}>{item.role === 'CLASS_MASTER' ? 'Class Master' : 'Class Teacher'}{item.masterClassLevel ? ` · ${item.masterClassLevel}` : ''}</Text>
+                  <Text style={styles.teacherRole}>{item.role === 'CLASS_MASTER' ? tr('Class Master') : tr('Class Teacher')}{item.masterClassLevel ? ` · ${item.masterClassLevel}` : ''}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
               </TouchableOpacity>
@@ -223,6 +226,7 @@ function TeacherPickerModal({
 export default function AdminReportCardDetail() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const tr = useT()
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
 
@@ -258,7 +262,7 @@ export default function AdminReportCardDetail() {
       // Fetch attribution (which teacher / class master is blocking)
       getReadinessDetail(id).then(setReadiness).catch(() => {})
     } catch {
-      Alert.alert('Error', 'Failed to load report card.')
+      Alert.alert(tr('Error'), tr('Failed to load report card.'))
     }
   }, [id])
 
@@ -268,20 +272,20 @@ export default function AdminReportCardDetail() {
 
   const handlePublish = () => {
     Alert.alert(
-      'Publish Report Card',
-      `Publish ${reportCard?.student.name}'s report card?`,
+      tr('Publish Report Card'),
+      `${tr('Publish the report card for')} ${reportCard?.student.name}?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: tr('Cancel'), style: 'cancel' },
         {
-          text: 'Publish',
+          text: tr('Publish'),
           onPress: async () => {
             setPublishing(true)
             try {
               await publishReportCard(id)
               await fetchData()
-              Alert.alert('Success', 'Report card published.')
+              Alert.alert(tr('Success'), tr('Report card published.'))
             } catch {
-              Alert.alert('Error', 'Failed to publish.')
+              Alert.alert(tr('Error'), tr('Failed to publish.'))
             } finally {
               setPublishing(false)
             }
@@ -293,21 +297,21 @@ export default function AdminReportCardDetail() {
 
   const handleUnpublish = () => {
     Alert.alert(
-      'Unpublish Report Card',
-      `Unpublish ${reportCard?.student.name}'s report card and set back to draft?`,
+      tr('Unpublish Report Card'),
+      `${tr('Unpublish the report card for')} ${reportCard?.student.name}?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: tr('Cancel'), style: 'cancel' },
         {
-          text: 'Unpublish',
+          text: tr('Unpublish'),
           style: 'destructive',
           onPress: async () => {
             setUnpublishing(true)
             try {
               await unpublishReportCard(id)
               await fetchData()
-              Alert.alert('Success', 'Report card unpublished.')
+              Alert.alert(tr('Success'), tr('Report card unpublished.'))
             } catch {
-              Alert.alert('Error', 'Failed to unpublish.')
+              Alert.alert(tr('Error'), tr('Failed to unpublish.'))
             } finally {
               setUnpublishing(false)
             }
@@ -323,9 +327,9 @@ export default function AdminReportCardDetail() {
     try {
       await grantEditPermission(id, 'marks', teacher.id)
       await fetchData()
-      Alert.alert('Done', `Marks permission granted to ${teacher.name}.`)
+      Alert.alert(tr('Done'), `${tr('Marks permission granted to')} ${teacher.name}.`)
     } catch {
-      Alert.alert('Error', 'Failed to grant marks permission.')
+      Alert.alert(tr('Error'), tr('Failed to grant marks permission.'))
     } finally {
       setGrantingMarks(false)
     }
@@ -337,19 +341,19 @@ export default function AdminReportCardDetail() {
     try {
       await grantEditPermission(id, 'remarks', teacher.id)
       await fetchData()
-      Alert.alert('Done', `Remarks permission granted to ${teacher.name}.`)
+      Alert.alert(tr('Done'), `${tr('Remarks permission granted to')} ${teacher.name}.`)
     } catch {
-      Alert.alert('Error', 'Failed to grant remarks permission.')
+      Alert.alert(tr('Error'), tr('Failed to grant remarks permission.'))
     } finally {
       setGrantingRemarks(false)
     }
   }
 
   const handleRevokeMarks = () => {
-    Alert.alert('Revoke Marks Permission', 'Remove marks edit access?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(tr('Revoke Marks Permission'), tr('Remove marks edit access?'), [
+      { text: tr('Cancel'), style: 'cancel' },
       {
-        text: 'Revoke',
+        text: tr('Revoke'),
         style: 'destructive',
         onPress: async () => {
           setRevokingMarks(true)
@@ -357,7 +361,7 @@ export default function AdminReportCardDetail() {
             await revokeEditPermission(id, 'marks')
             await fetchData()
           } catch {
-            Alert.alert('Error', 'Failed to revoke permission.')
+            Alert.alert(tr('Error'), tr('Failed to revoke permission.'))
           } finally {
             setRevokingMarks(false)
           }
@@ -367,10 +371,10 @@ export default function AdminReportCardDetail() {
   }
 
   const handleRevokeRemarks = () => {
-    Alert.alert('Revoke Remarks Permission', 'Remove remarks edit access?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(tr('Revoke Remarks Permission'), tr('Remove remarks edit access?'), [
+      { text: tr('Cancel'), style: 'cancel' },
       {
-        text: 'Revoke',
+        text: tr('Revoke'),
         style: 'destructive',
         onPress: async () => {
           setRevokingRemarks(true)
@@ -378,7 +382,7 @@ export default function AdminReportCardDetail() {
             await revokeEditPermission(id, 'remarks')
             await fetchData()
           } catch {
-            Alert.alert('Error', 'Failed to revoke permission.')
+            Alert.alert(tr('Error'), tr('Failed to revoke permission.'))
           } finally {
             setRevokingRemarks(false)
           }
@@ -414,7 +418,7 @@ export default function AdminReportCardDetail() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
         <Ionicons name="arrow-back" size={18} color="#F03E2F" />
-        <Text style={styles.backText}>Back</Text>
+        <Text style={styles.backText}>{tr('Back')}</Text>
       </TouchableOpacity>
 
       <View style={styles.infoCard}>
@@ -430,17 +434,17 @@ export default function AdminReportCardDetail() {
         <View style={[styles.statusBadge, isDraft ? styles.draftBadge : styles.publishedBadge]}>
           <Ionicons name={isDraft ? 'create-outline' : 'checkmark-circle-outline'} size={13} color={isDraft ? '#854d0e' : '#15803d'} />
           <Text style={[styles.statusText, { color: isDraft ? '#854d0e' : '#15803d' }]}>
-            {isDraft ? 'Draft' : 'Published'}
+            {isDraft ? tr('Draft') : tr('Published')}
           </Text>
         </View>
       </View>
 
       <View style={styles.statsGrid}>
         {[
-          { label: 'Subjects', value: String(subjects.length || reportCard.entries.length) },
-          { label: 'Terms Average', value: average.toFixed(1) },
-          { label: 'Overall Grade', value: gradeResult.remark || gradeResult.grade },
-          { label: 'Position', value: reportCard.position != null ? ordinal(reportCard.position) : '—' },
+          { label: tr('Subjects'), value: String(subjects.length || reportCard.entries.length) },
+          { label: tr('Terms Average'), value: average.toFixed(1) },
+          { label: tr('Overall Grade'), value: gradeResult.remark || gradeResult.grade },
+          { label: tr('Position'), value: reportCard.position != null ? ordinal(reportCard.position) : '—' },
         ].map((item) => (
           <View key={item.label} style={styles.statCard}>
             <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{item.value}</Text>
@@ -452,19 +456,19 @@ export default function AdminReportCardDetail() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
-          <Text style={styles.sectionTitle}>Actions</Text>
+          <Text style={styles.sectionTitle}>{tr('Actions')}</Text>
         </View>
         {/* Readiness badges */}
         {isDraft && !canPublish && (
           <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
             <View style={[styles.readinessBadge, allSeqsFilled ? styles.readinessOk : styles.readinessFail]}>
               <Text style={{ fontSize: 10, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>
-                {allSeqsFilled ? '✓' : '✗'} Sequences
+                {allSeqsFilled ? '✓' : '✗'} {tr('Sequences')}
               </Text>
             </View>
             <View style={[styles.readinessBadge, hasRemarks ? styles.readinessOk : styles.readinessFail]}>
               <Text style={{ fontSize: 10, fontWeight: '700', color: hasRemarks ? '#16a34a' : '#ef4444' }}>
-                {hasRemarks ? '✓' : '✗'} Remarks
+                {hasRemarks ? '✓' : '✗'} {tr('Remarks')}
               </Text>
             </View>
           </View>
@@ -472,14 +476,14 @@ export default function AdminReportCardDetail() {
         {/* Action Required attribution panel */}
         {isDraft && readiness && (readiness.missingSubjects.length > 0 || readiness.missingRemarks) && (
           <View style={styles.attributionPanel}>
-            <Text style={styles.attributionTitle}>ACTION REQUIRED</Text>
+            <Text style={styles.attributionTitle}>{tr('ACTION REQUIRED')}</Text>
             {readiness.missingSubjects.map(s => (
               <View key={s.subjectId} style={styles.attributionRow}>
                 <Ionicons name="ellipse" size={6} color="#ef4444" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
                   {s.teacher
-                    ? <Text><Text style={{ fontWeight: '700' }}>{s.teacher.name}</Text> has not filled <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
-                    : <Text><Text style={{ fontWeight: '700' }}>{s.subjectName}</Text> has no teacher assigned</Text>
+                    ? <Text><Text style={{ fontWeight: '700' }}>{s.teacher.name}</Text> {tr('has not filled marks for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
+                    : <Text><Text style={{ fontWeight: '700' }}>{s.subjectName}</Text> {tr('has no teacher assigned')}</Text>
                   }
                 </Text>
               </View>
@@ -488,7 +492,7 @@ export default function AdminReportCardDetail() {
               <View style={styles.attributionRow}>
                 <Ionicons name="ellipse" size={6} color="#f59e0b" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
-                  Class Master <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> has not written general remarks
+                  {tr('Class Master')} <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> {tr('has not written general remarks')}
                 </Text>
               </View>
             )}
@@ -504,7 +508,7 @@ export default function AdminReportCardDetail() {
               {publishing ? <ActivityIndicator color="#fff" size="small" /> : (
                 <>
                   <Ionicons name="send-outline" size={16} color="#fff" />
-                  <Text style={styles.publishBtnText}>Publish</Text>
+                  <Text style={styles.publishBtnText}>{tr('Publish')}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -517,7 +521,7 @@ export default function AdminReportCardDetail() {
               {unpublishing ? <ActivityIndicator color="#ef4444" size="small" /> : (
                 <>
                   <Ionicons name="arrow-undo-outline" size={16} color="#ef4444" />
-                  <Text style={styles.unpublishBtnText}>Unpublish</Text>
+                  <Text style={styles.unpublishBtnText}>{tr('Unpublish')}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -531,17 +535,17 @@ export default function AdminReportCardDetail() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionAccent} />
-              <Text style={styles.sectionTitle}>Marks Permission</Text>
+              <Text style={styles.sectionTitle}>{tr('Marks Permission')}</Text>
             </View>
-            <Text style={styles.sectionSub}>Grant a teacher edit access to marks</Text>
+            <Text style={styles.sectionSub}>{tr('Grant a teacher edit access to marks')}</Text>
             {marksGrantedTo ? (
               <View style={styles.grantedRow}>
                 <View style={styles.grantedInfo}>
                   <Ionicons name="checkmark-circle" size={16} color="#16a34a" />
-                  <Text style={styles.grantedText}>Granted to {marksTeacher?.name ?? 'Unknown'}</Text>
+                  <Text style={styles.grantedText}>{tr('Granted to')} {marksTeacher?.name ?? tr('Unknown')}</Text>
                 </View>
                 <TouchableOpacity style={styles.revokeBtn} onPress={handleRevokeMarks} disabled={revokingMarks}>
-                  {revokingMarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>Revoke</Text>}
+                  {revokingMarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>{tr('Revoke')}</Text>}
                 </TouchableOpacity>
               </View>
             ) : (
@@ -553,7 +557,7 @@ export default function AdminReportCardDetail() {
                 {grantingMarks ? <ActivityIndicator color="#fff" size="small" /> : (
                   <>
                     <Ionicons name="person-add-outline" size={16} color="#fff" />
-                    <Text style={styles.grantBtnText}>Grant Marks Access</Text>
+                    <Text style={styles.grantBtnText}>{tr('Grant Marks Access')}</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -563,17 +567,17 @@ export default function AdminReportCardDetail() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionAccent} />
-              <Text style={styles.sectionTitle}>Remarks Permission</Text>
+              <Text style={styles.sectionTitle}>{tr('Remarks Permission')}</Text>
             </View>
-            <Text style={styles.sectionSub}>Grant a class master edit access to remarks</Text>
+            <Text style={styles.sectionSub}>{tr('Grant a class master edit access to remarks')}</Text>
             {remarksGrantedTo ? (
               <View style={styles.grantedRow}>
                 <View style={styles.grantedInfo}>
                   <Ionicons name="checkmark-circle" size={16} color="#16a34a" />
-                  <Text style={styles.grantedText}>Granted to {remarksTeacher?.name ?? 'Unknown'}</Text>
+                  <Text style={styles.grantedText}>{tr('Granted to')} {remarksTeacher?.name ?? tr('Unknown')}</Text>
                 </View>
                 <TouchableOpacity style={styles.revokeBtn} onPress={handleRevokeRemarks} disabled={revokingRemarks}>
-                  {revokingRemarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>Revoke</Text>}
+                  {revokingRemarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>{tr('Revoke')}</Text>}
                 </TouchableOpacity>
               </View>
             ) : (
@@ -585,7 +589,7 @@ export default function AdminReportCardDetail() {
                 {grantingRemarks ? <ActivityIndicator color="#fff" size="small" /> : (
                   <>
                     <Ionicons name="chatbubble-outline" size={16} color="#fff" />
-                    <Text style={styles.grantBtnText}>Grant Remarks Access</Text>
+                    <Text style={styles.grantBtnText}>{tr('Grant Remarks Access')}</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -597,10 +601,10 @@ export default function AdminReportCardDetail() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
-          <Text style={styles.sectionTitle}>Subject Scores</Text>
+          <Text style={styles.sectionTitle}>{tr('Subject Scores')}</Text>
         </View>
         {subjects.length === 0 ? (
-          <Text style={styles.emptyText}>No subjects found for this class</Text>
+          <Text style={styles.emptyText}>{tr('No subjects found for this class')}</Text>
         ) : (
           <View style={{ gap: 10 }}>
             {subjects.map((subject) => {
@@ -614,7 +618,7 @@ export default function AdminReportCardDetail() {
                   <View style={styles.scoreCardInner}>
                     <View style={styles.scoreLeft}>
                       <Text style={styles.scoreSubjectName}>{subject.name}</Text>
-                      <Text style={styles.scoreCoeff}>Coeff ×{coeff} · max {maxScore}</Text>
+                      <Text style={styles.scoreCoeff}>Coeff ×{coeff} · {tr('max')} {maxScore}</Text>
                     </View>
                     <View style={styles.scoreRight}>
                       <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : colors.text }]}>
@@ -625,7 +629,7 @@ export default function AdminReportCardDetail() {
                           <Text style={[styles.gradeText, { color: gr.color }]}>{gr.remark || gr.grade}</Text>
                         </View>
                       ) : (
-                        <Text style={{ fontSize: 11, color: colors.textMuted }}>Not filled</Text>
+                        <Text style={{ fontSize: 11, color: colors.textMuted }}>{tr('Not filled')}</Text>
                       )}
                     </View>
                   </View>
@@ -642,15 +646,26 @@ export default function AdminReportCardDetail() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
-          <Text style={styles.sectionTitle}>General Remarks</Text>
+          <Text style={styles.sectionTitle}>{tr('General Remarks')}</Text>
         </View>
-        <Text style={{ fontSize: 12, color: colors.textMuted, marginBottom: 8 }}>Set by class master</Text>
-        <Text style={styles.remarksText}>{reportCard.remarks || '—'}</Text>
+        {(() => {
+          const prov = remarkSourceLabel((reportCard as any).remarksSource)
+          return prov ? (
+            <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: prov.color + '1A', borderColor: prov.color + '55', borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, marginBottom: 8 }}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: prov.color }}>{prov.text}</Text>
+            </View>
+          ) : (
+            <Text style={{ fontSize: 12, color: colors.textMuted, marginBottom: 8 }}>{tr('Set by class master')}</Text>
+          )
+        })()}
+        <Text style={styles.remarksText}>
+          {(reportCard.school?.language === 'FR' ? (reportCard as any).remarksFr : reportCard.remarks) || '—'}
+        </Text>
       </View>
 
       <TeacherPickerModal
         visible={marksPickerVisible}
-        title="Select Teacher for Marks"
+        title={tr('Select Teacher for Marks')}
         teachers={classTeachers.length > 0 ? classTeachers : teachers}
         onSelect={handleGrantMarks}
         onClose={() => setMarksPickerVisible(false)}
@@ -658,7 +673,7 @@ export default function AdminReportCardDetail() {
 
       <TeacherPickerModal
         visible={remarksPickerVisible}
-        title="Select Class Master for Remarks"
+        title={tr('Select Class Master for Remarks')}
         teachers={classMasters.length > 0 ? classMasters : teachers}
         onSelect={handleGrantRemarks}
         onClose={() => setRemarksPickerVisible(false)}

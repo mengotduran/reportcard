@@ -35,7 +35,7 @@ export const getOverview = async (_req: Request, res: Response) => {
 
 export const createStandaloneSchool = async (req: Request, res: Response) => {
   try {
-    const { schoolName, schoolType, schoolEmail, subdomain, adminName, adminEmail, adminPassword, phone, city } = req.body
+    const { schoolName, schoolType, schoolEmail, subdomain, adminName, adminEmail, adminPassword, phone, city, language } = req.body
 
     const existing = await prisma.school.findFirst({ where: { OR: [{ email: schoolEmail }, { subdomain }] } })
     if (existing) { res.status(400).json({ message: 'Email or subdomain already taken' }); return }
@@ -48,6 +48,7 @@ export const createStandaloneSchool = async (req: Request, res: Response) => {
       data: {
         name: schoolName,
         type: schoolType,
+        language: language === 'FR' ? 'FR' : 'EN',
         email: schoolEmail,
         phone,
         address: city,
@@ -76,6 +77,7 @@ export const createParentSchool = async (req: Request, res: Response) => {
       country?: string
       sections: {
         type: string
+        language?: string
         subdomain: string
         schoolEmail: string
         adminName: string
@@ -85,10 +87,12 @@ export const createParentSchool = async (req: Request, res: Response) => {
       }[]
     }
 
-    // Check for duplicate types within the submitted sections
-    const submittedTypes = sections.map((s) => s.type)
-    if (new Set(submittedTypes).size !== submittedTypes.length) {
-      res.status(400).json({ message: 'Each section must have a unique type (PRIMARY, SECONDARY, UNIVERSITY)' }); return
+    // Check for duplicate type+language combos within the submitted sections.
+    // Two sections of the same type are allowed if their language differs
+    // (e.g. an English Secondary and a French Secondary).
+    const combos = sections.map((s) => `${s.type}:${s.language === 'FR' ? 'FR' : 'EN'}`)
+    if (new Set(combos).size !== combos.length) {
+      res.status(400).json({ message: 'Each section must be a unique type + language combination' }); return
     }
 
     // Check for duplicate subdomains / emails
@@ -109,6 +113,7 @@ export const createParentSchool = async (req: Request, res: Response) => {
             parentSchoolId: parent.id,
             name: `${name} — ${s.type}`,
             type: s.type as any,
+            language: s.language === 'FR' ? 'FR' : 'EN',
             email: s.schoolEmail,
             phone: s.phone,
             subdomain: s.subdomain.toLowerCase(),
@@ -131,13 +136,14 @@ export const createParentSchool = async (req: Request, res: Response) => {
 export const addSectionToParent = async (req: Request, res: Response) => {
   try {
     const parentId = String(req.params.id)
-    const { type, subdomain, schoolEmail, adminName, adminEmail, adminPassword, phone } = req.body
+    const { type, subdomain, schoolEmail, adminName, adminEmail, adminPassword, phone, language } = req.body
+    const lang = language === 'FR' ? 'FR' : 'EN'
 
     const parent = await prisma.parentSchool.findUnique({ where: { id: parentId } })
     if (!parent) { res.status(404).json({ message: 'Parent school not found' }); return }
 
-    const typeExists = await prisma.school.findFirst({ where: { parentSchoolId: parentId, type } })
-    if (typeExists) { res.status(400).json({ message: `A ${type} section already exists for this school` }); return }
+    const typeExists = await prisma.school.findFirst({ where: { parentSchoolId: parentId, type, language: lang } })
+    if (typeExists) { res.status(400).json({ message: `A ${lang} ${type} section already exists for this school` }); return }
 
     const dup = await prisma.school.findFirst({ where: { OR: [{ email: schoolEmail }, { subdomain }] } })
     if (dup) { res.status(400).json({ message: 'Email or subdomain already taken' }); return }
@@ -150,6 +156,7 @@ export const addSectionToParent = async (req: Request, res: Response) => {
         parentSchoolId: parentId,
         name: `${parent.name} — ${type}`,
         type: type as any,
+        language: lang,
         email: schoolEmail,
         phone,
         subdomain: subdomain.toLowerCase(),
@@ -199,17 +206,18 @@ export const toggleParentSchoolActive = async (req: Request, res: Response) => {
 export const addSectionToSchool = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id) // existing school id
-    const { type, subdomain, schoolEmail, adminName, adminEmail, adminPassword } = req.body
+    const { type, subdomain, schoolEmail, adminName, adminEmail, adminPassword, language } = req.body
+    const lang = language === 'FR' ? 'FR' : 'EN'
 
     const existing = await prisma.school.findUnique({ where: { id } })
     if (!existing) { res.status(404).json({ message: 'School not found' }); return }
 
-    // Prevent duplicate type in the same group
+    // Prevent duplicate type+language in the same group (same type allowed if language differs)
     if (existing.parentSchoolId) {
-      const siblingExists = await prisma.school.findFirst({ where: { parentSchoolId: existing.parentSchoolId, type } })
-      if (siblingExists) { res.status(400).json({ message: `A ${type} section already exists for this school` }); return }
-    } else if (existing.type === type) {
-      res.status(400).json({ message: `This school is already a ${type} section` }); return
+      const siblingExists = await prisma.school.findFirst({ where: { parentSchoolId: existing.parentSchoolId, type, language: lang } })
+      if (siblingExists) { res.status(400).json({ message: `A ${lang} ${type} section already exists for this school` }); return }
+    } else if (existing.type === type && existing.language === lang) {
+      res.status(400).json({ message: `This school is already a ${lang} ${type} section` }); return
     }
 
     const dup = await prisma.school.findFirst({ where: { OR: [{ email: schoolEmail }, { subdomain }] } })
@@ -234,6 +242,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
         parentSchoolId: parentId,
         name: `${parent!.name} — ${type}`,
         type: type as any,
+        language: lang,
         email: schoolEmail,
         subdomain: subdomain.toLowerCase(),
         users: {
@@ -253,7 +262,8 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
 export const updateSchool = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id)
-    const { name, email, phone, address, subdomain, type } = req.body
+    const { name, email, phone, address, subdomain, type, language } = req.body
+    const lang = language === undefined ? undefined : (language === 'FR' ? 'FR' : 'EN')
 
     const school = await prisma.school.findUnique({ where: { id } })
     if (!school) { res.status(404).json({ message: 'School not found' }); return }
@@ -267,15 +277,17 @@ export const updateSchool = async (req: Request, res: Response) => {
       const dup = await prisma.school.findFirst({ where: { email, id: { not: id } } })
       if (dup) { res.status(400).json({ message: 'Email already taken' }); return }
     }
-    // Prevent duplicate type within the same parent
-    if (type && type !== school.type && school.parentSchoolId) {
-      const typeExists = await prisma.school.findFirst({ where: { parentSchoolId: school.parentSchoolId, type, id: { not: id } } })
-      if (typeExists) { res.status(400).json({ message: `A ${type} section already exists for this school` }); return }
+    // Prevent duplicate type+language within the same parent (same type allowed if language differs)
+    const nextType = type ?? school.type
+    const nextLang = lang ?? school.language
+    if ((type !== undefined || lang !== undefined) && school.parentSchoolId) {
+      const typeExists = await prisma.school.findFirst({ where: { parentSchoolId: school.parentSchoolId, type: nextType, language: nextLang, id: { not: id } } })
+      if (typeExists) { res.status(400).json({ message: `A ${nextLang} ${nextType} section already exists for this school` }); return }
     }
 
     const updated = await prisma.school.update({
       where: { id },
-      data: { name, email, phone, address, subdomain: subdomain?.toLowerCase(), type },
+      data: { name, email, phone, address, subdomain: subdomain?.toLowerCase(), type, ...(lang !== undefined ? { language: lang } : {}) },
       include: schoolInclude,
     })
     res.json({ message: 'School updated', school: updated })
@@ -377,6 +389,7 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
         id: school.id,
         name: school.name,
         type: school.type,
+        language: school.language,
         email: school.email,
         phone: school.phone,
         address: school.address,

@@ -7,6 +7,7 @@ import api from '@/lib/api/client'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import DesktopOnly from '@/components/ui/DesktopOnly'
+import { useT } from '@/lib/i18n'
 
 // Images are proxied through Next.js rewrites — use relative paths directly
 
@@ -14,6 +15,7 @@ export default function SettingsPage() {
   const router = useRouter()
   const { school, updateSchool } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
   const logoRef = useRef<HTMLInputElement>(null)
   const coverRef = useRef<HTMLInputElement>(null)
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -27,9 +29,9 @@ export default function SettingsPage() {
       formData.append(field, file)
       const res = await api.post(`/school/${field}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
       updateSchool(res.data.school)
-      showToast(`${field === 'logo' ? 'Logo' : 'Cover image'} updated successfully`)
+      showToast(field === 'logo' ? t('Logo updated successfully') : t('Cover image updated successfully'))
     } catch {
-      showToast('Upload failed. Make sure the file is an image under 5MB.', 'error')
+      showToast(t('Upload failed. Make sure the file is an image under 5MB.'), 'error')
     } finally { setLoading(false) }
   }
 
@@ -40,10 +42,10 @@ export default function SettingsPage() {
       formData.append('image', file)
       const res = await api.post('/school/cover-images', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
       updateSchool(res.data.school)
-      showToast('Cover image added')
+      showToast(t('Cover image added'))
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
-      showToast(e.response?.data?.message || 'Upload failed', 'error')
+      showToast(e.response?.data?.message || t('Upload failed'), 'error')
     } finally { setUploadingCover(false) }
   }
 
@@ -52,9 +54,9 @@ export default function SettingsPage() {
     try {
       const res = await api.delete(`/school/cover-images/${index}`)
       updateSchool(res.data.school)
-      showToast('Image removed')
+      showToast(t('Image removed'))
     } catch {
-      showToast('Failed to remove image', 'error')
+      showToast(t('Failed to remove image'), 'error')
     } finally { setRemovingIdx(null) }
   }
 
@@ -62,8 +64,8 @@ export default function SettingsPage() {
     try {
       await api.delete('/school/logo')
       updateSchool({ ...school!, logo: null })
-      showToast('Logo removed')
-    } catch { showToast('Failed to remove logo', 'error') }
+      showToast(t('Logo removed'))
+    } catch { showToast(t('Failed to remove logo'), 'error') }
   }
 
   const logoUrl = school?.logo ?? null
@@ -75,8 +77,8 @@ export default function SettingsPage() {
     <DesktopOnly>
     <div className="max-w-2xl mx-auto">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-foreground tracking-tight">School Settings</h2>
-        <p className="text-muted-foreground text-sm mt-1">Customize your school's appearance on the platform</p>
+        <h2 className="text-2xl font-bold text-foreground tracking-tight">{t('School Settings')}</h2>
+        <p className="text-muted-foreground text-sm mt-1">{t('Customize your school\'s appearance on the platform')}</p>
       </div>
 
       {/* School Logo */}
@@ -93,10 +95,10 @@ export default function SettingsPage() {
           </div>
           <div className="flex-1">
             <h3 className="font-semibold text-foreground flex items-center gap-2">
-              <Building2 size={16} /> School Logo
+              <Building2 size={16} /> {t('School Logo')}
             </h3>
             <p className="text-sm text-muted-foreground mt-1">
-              Displayed on the dashboard and home screens. PNG, JPG, or WebP, max 5MB.
+              {t('Displayed on the dashboard and home screens. PNG, JPG, or WebP, max 5MB.')}
             </p>
             <div className="flex gap-2 mt-3">
               <button
@@ -105,14 +107,14 @@ export default function SettingsPage() {
                 className="flex items-center gap-2 bg-primary text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
               >
                 <Upload size={14} />
-                {uploadingLogo ? 'Uploading...' : logoUrl ? 'Change Logo' : 'Upload Logo'}
+                {uploadingLogo ? t('Uploading...') : logoUrl ? t('Change Logo') : t('Upload Logo')}
               </button>
               {logoUrl && (
                 <button
                   onClick={handleRemoveLogo}
                   className="flex items-center gap-2 border border-destructive/20 text-destructive px-3 py-1.5 rounded-lg text-sm hover:bg-destructive/10 transition"
                 >
-                  <Trash2 size={14} /> Remove
+                  <Trash2 size={14} /> {t('Remove')}
                 </button>
               )}
             </div>
@@ -128,12 +130,12 @@ export default function SettingsPage() {
       <div className="bg-card rounded-xl border border-border p-6 mb-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-foreground flex items-center gap-2">
-            <Image size={16} /> Dashboard Background Images
+            <Image size={16} /> {t('Dashboard Background Images')}
           </h3>
-          <span className="text-xs text-muted-foreground">{coverImages.length} image{coverImages.length !== 1 ? 's' : ''} · auto-slides</span>
+          <span className="text-xs text-muted-foreground">{coverImages.length} {coverImages.length !== 1 ? t('images') : t('image')} {t('· auto-slides')}</span>
         </div>
         <p className="text-sm text-muted-foreground mb-4">
-          These images cycle automatically on the dashboard hero. Use wide landscape photos. PNG, JPG or WebP, max 5MB each.
+          {t('These images cycle automatically on the dashboard hero. Use wide landscape photos. PNG, JPG or WebP, max 5MB each.')}
         </p>
 
         {coverImages.length > 0 ? (
@@ -147,7 +149,7 @@ export default function SettingsPage() {
                     disabled={removingIdx === i}
                     className="bg-destructive/100 hover:bg-red-600 text-white rounded-lg px-2.5 py-1 text-xs font-medium flex items-center gap-1"
                   >
-                    <Trash2 size={11} /> {removingIdx === i ? 'Removing…' : 'Remove'}
+                    <Trash2 size={11} /> {removingIdx === i ? t('Removing…') : t('Remove')}
                   </button>
                 </div>
                 <span className="absolute top-1.5 left-1.5 bg-black/60 text-white text-xs rounded px-1.5 py-0.5">#{i + 1}</span>
@@ -160,19 +162,19 @@ export default function SettingsPage() {
               className="h-28 rounded-xl border-2 border-dashed border-border flex flex-col items-center justify-center gap-1.5 text-muted-foreground hover:border-primary/40 hover:text-primary transition disabled:opacity-50"
             >
               <Plus size={20} />
-              <span className="text-xs font-medium">{uploadingCover ? 'Uploading…' : 'Add Image'}</span>
+              <span className="text-xs font-medium">{uploadingCover ? t('Uploading…') : t('Add Image')}</span>
             </button>
           </div>
         ) : (
           <div className="border-2 border-dashed border-border rounded-xl h-36 flex flex-col items-center justify-center gap-2 mb-4 text-muted-foreground">
             <Image size={32} className="opacity-40" />
-            <p className="text-sm">No background images yet</p>
+            <p className="text-sm">{t('No background images yet')}</p>
             <button
               onClick={() => coverRef.current?.click()}
               disabled={uploadingCover}
               className="mt-1 bg-primary hover:bg-[#d63429] text-white px-4 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50 transition"
             >
-              {uploadingCover ? 'Uploading…' : 'Upload First Image'}
+              {uploadingCover ? t('Uploading…') : t('Upload First Image')}
             </button>
           </div>
         )}
@@ -191,9 +193,9 @@ export default function SettingsPage() {
               <Star size={18} className="text-primary" />
             </div>
             <div>
-              <h3 className="font-semibold text-foreground">Grading Scale</h3>
+              <h3 className="font-semibold text-foreground">{t('Grading Scale')}</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Define your own grade ranges (A+, A, B…) with custom score thresholds, remarks, and colors. Grades are calculated automatically.
+                {t('Define your own grade ranges (A+, A, B…) with custom score thresholds, remarks, and colors. Grades are calculated automatically.')}
               </p>
             </div>
           </div>
@@ -201,7 +203,7 @@ export default function SettingsPage() {
             onClick={() => router.push('/grading-scale')}
             className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ml-4"
           >
-            Configure <ArrowRight size={14} />
+            {t('Configure')} <ArrowRight size={14} />
           </button>
         </div>
       </div>
@@ -214,9 +216,9 @@ export default function SettingsPage() {
               <Palette size={18} className="text-primary" />
             </div>
             <div>
-              <h3 className="font-semibold text-foreground">Report Card Design</h3>
+              <h3 className="font-semibold text-foreground">{t('Report Card Design')}</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Choose a template and customize colors, columns, signatures, and layout for your printed report cards.
+                {t('Choose a template and customize colors, columns, signatures, and layout for your printed report cards.')}
               </p>
             </div>
           </div>
@@ -224,7 +226,7 @@ export default function SettingsPage() {
             onClick={() => router.push('/report-card-design')}
             className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ml-4"
           >
-            Customize <ArrowRight size={14} />
+            {t('Customize')} <ArrowRight size={14} />
           </button>
         </div>
       </div>

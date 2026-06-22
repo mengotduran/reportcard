@@ -8,6 +8,7 @@ import { Users, Plus, Search, Trash2, Pencil, X } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { useT } from '@/lib/i18n'
 
 interface Student {
   id: string; name: string; studentId: string
@@ -21,6 +22,7 @@ export default function StudentsPage() {
   const router = useRouter()
   const { isAuthenticated } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
   const [students, setStudents] = useState<Student[]>([])
   const [filterClasses, setFilterClasses] = useState<string[]>([])
   const [definedClasses, setDefinedClasses] = useState<ClassLevel[]>([])
@@ -120,7 +122,7 @@ export default function StudentsPage() {
     e.preventDefault()
     setError('')
     if (needsStream && !form.stream) {
-      setError('Please select a stream (Arts or Science)')
+      setError(t('Please select a stream (Arts or Science)'))
       return
     }
     setSaving(true)
@@ -129,17 +131,17 @@ export default function StudentsPage() {
       const { stream, studentId: _sid, ...rest } = form
       if (editingId) {
         await updateStudentApi(editingId, { ...rest, classLevel })
-        showToast('Student updated')
+        showToast(t('Student updated'))
       } else {
         await createStudentApi({ ...rest, classLevel })
-        showToast('Student added successfully')
+        showToast(t('Student added successfully'))
       }
       closeModal()
       fetchStudents(activeClass)
       fetchFilterClasses()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
-      setError(e.response?.data?.message || 'Failed to save student')
+      setError(e.response?.data?.message || t('Failed to save student'))
     } finally { setSaving(false) }
   }
 
@@ -150,9 +152,9 @@ export default function StudentsPage() {
       setDeleteTarget(null)
       fetchStudents(activeClass)
       fetchFilterClasses()
-      showToast('Student deleted')
+      showToast(t('Student deleted'))
     } catch {
-      showToast('Failed to delete student', 'error')
+      showToast(t('Failed to delete student'), 'error')
     }
   }
 
@@ -160,14 +162,14 @@ export default function StudentsPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Students</h2>
+          <h2 className="text-2xl font-bold text-foreground">{t('Students')}</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {students.length} {activeClass !== 'all' ? `in ${activeClass}` : 'total students'}
+            {students.length} {activeClass !== 'all' ? `${t('in')} ${activeClass}` : t('total students')}
           </p>
         </div>
         <button onClick={openAdd}
           className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
-          <Plus size={16} /> Add Student
+          <Plus size={16} /> {t('Add Student')}
         </button>
       </div>
 
@@ -176,7 +178,7 @@ export default function StudentsPage() {
           <button
             onClick={() => handleClassFilter('all')}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === 'all' ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
-            All
+            {t('All')}
           </button>
           {filterClasses.map((cls) => (
             <button key={cls} onClick={() => handleClassFilter(cls)}
@@ -189,28 +191,28 @@ export default function StudentsPage() {
 
       <div className="relative mb-4">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input type="text" placeholder="Search students..." value={search} onChange={handleSearch}
+        <input type="text" placeholder={t('Search students...')} value={search} onChange={handleSearch}
           className="w-full pl-9 pr-4 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
       </div>
 
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {loading ? (
-          <div className="text-center py-12 text-muted-foreground text-sm">Loading...</div>
+          <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading...')}</div>
         ) : students.length === 0 ? (
           <div className="text-center py-12">
             <Users size={32} className="mx-auto mb-2 text-muted-foreground" />
-            <p className="text-muted-foreground text-sm">No students yet.</p>
+            <p className="text-muted-foreground text-sm">{t('No students yet.')}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
           <table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Name</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Student ID</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Class</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Guardian</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Actions</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Name')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Student ID')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Class')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -251,7 +253,7 @@ export default function StudentsPage() {
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold text-foreground text-lg">{editingId ? 'Edit Student' : 'Add Student'}</h3>
+              <h3 className="font-semibold text-foreground text-lg">{editingId ? t('Edit Student') : t('Add Student')}</h3>
               <button onClick={closeModal} className="text-muted-foreground hover:text-foreground ">
                 <X size={20} />
               </button>
@@ -259,7 +261,7 @@ export default function StudentsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Full Name</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')}</label>
                 <input type="text" placeholder="e.g. Nguemo Alice"
                   value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
@@ -268,31 +270,31 @@ export default function StudentsPage() {
               {/* Student ID is auto-generated by the server — not shown on create */}
               {editingId && (
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Student ID (auto-generated)</label>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">{t('Student ID (auto-generated)')}</label>
                   <input type="text" value={form.studentId} disabled
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted" />
                 </div>
               )}
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Class</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Class')}</label>
                 {definedClasses.length > 0 ? (
                   <select
                     value={form.classLevel}
                     onChange={(e) => setForm({ ...form, classLevel: e.target.value, stream: '' })}
                     required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="">Select class</option>
+                    <option value="">{t('Select class')}</option>
                     {definedClasses.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
                   </select>
                 ) : (
                   <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
-                    No classes defined yet — go to the Classes page to add them.
+                    {t('No classes defined yet — go to the Classes page to add them.')}
                   </div>
                 )}
               </div>
               {needsStream && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-2">Stream</label>
+                  <label className="block text-xs font-medium text-foreground mb-2">{t('Stream')}</label>
                   <div className="flex gap-6">
                     {['Arts', 'Science'].map((s) => (
                       <label key={s} className="flex items-center gap-2 cursor-pointer">
@@ -300,7 +302,7 @@ export default function StudentsPage() {
                           checked={form.stream === s}
                           onChange={() => setForm({ ...form, stream: s })}
                           className="accent-primary" />
-                        <span className="text-sm text-foreground">{s}</span>
+                        <span className="text-sm text-foreground">{t(s)}</span>
                       </label>
                     ))}
                   </div>
@@ -312,7 +314,7 @@ export default function StudentsPage() {
                 { name: 'guardianEmail', label: 'Guardian Email', placeholder: 'e.g. guardian@email.com' },
               ].map((field) => (
                 <div key={field.name}>
-                  <label className="block text-xs font-medium text-foreground mb-1">{field.label}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t(field.label)}</label>
                   <input type="text" placeholder={field.placeholder}
                     value={form[field.name as keyof typeof emptyForm]}
                     onChange={(e) => setForm({ ...form, [field.name]: e.target.value })}
@@ -321,10 +323,10 @@ export default function StudentsPage() {
               ))}
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">Cancel</button>
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{t('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? 'Saving...' : editingId ? 'Save Changes' : 'Add Student'}
+                  {saving ? t('Saving...') : editingId ? t('Save Changes') : t('Add Student')}
                 </button>
               </div>
             </form>
@@ -334,9 +336,9 @@ export default function StudentsPage() {
 
       <ConfirmModal
         isOpen={!!deleteTarget}
-        title="Delete Student"
-        message={`Are you sure you want to delete ${deleteTarget?.name}? This cannot be undone.`}
-        confirmLabel="Delete"
+        title={t('Delete Student')}
+        message={`${t('Are you sure you want to delete')} ${deleteTarget?.name}? ${t('This cannot be undone.')}`}
+        confirmLabel={t('Delete')}
         confirmColor="red"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}

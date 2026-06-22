@@ -10,6 +10,7 @@ import { getStudents, createStudent, updateStudent, deleteStudent, Student } fro
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
@@ -111,13 +112,14 @@ function StudentDetailModal({
 }) {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   if (!student) return null
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <View style={styles.detailSheet}>
           <View style={styles.detailHeader}>
-            <Text style={styles.detailTitle}>Student Details</Text>
+            <Text style={styles.detailTitle}>{t('Student Details')}</Text>
             <TouchableOpacity onPress={onClose}>
               <Ionicons name="close" size={22} color="#6b7280" />
             </TouchableOpacity>
@@ -129,20 +131,20 @@ function StudentDetailModal({
           <Text style={styles.detailMeta}>ID: {student.studentId}</Text>
           <View style={styles.detailRows}>
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Class Level</Text>
+              <Text style={styles.detailLabel}>{t('Class Level')}</Text>
               <Text style={styles.detailValue}>{student.classLevel}</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Guardian</Text>
+              <Text style={styles.detailLabel}>{t('Guardian')}</Text>
               <Text style={styles.detailValue}>{student.guardianName || '—'}</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Status</Text>
+              <Text style={styles.detailLabel}>{t('Status')}</Text>
               <View style={[styles.badge, student.isActive ? styles.badgeActive : styles.badgeInactive]}>
                 <Text style={[styles.badgeText, student.isActive ? styles.badgeTextActive : styles.badgeTextInactive]}>
-                  {student.isActive ? 'Active' : 'Inactive'}
+                  {student.isActive ? t('Active') : t('Inactive')}
                 </Text>
               </View>
             </View>
@@ -150,11 +152,11 @@ function StudentDetailModal({
           <View style={styles.detailActions}>
             <TouchableOpacity style={styles.editBtn} onPress={() => onEdit(student)}>
               <Ionicons name="create-outline" size={16} color="#F03E2F" />
-              <Text style={styles.editBtnText}>Edit</Text>
+              <Text style={styles.editBtnText}>{t('Edit')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.deleteActionBtn} onPress={() => onDelete(student.id)}>
               <Ionicons name="trash-outline" size={16} color="#ef4444" />
-              <Text style={styles.deleteActionText}>Delete</Text>
+              <Text style={styles.deleteActionText}>{t('Delete')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -176,6 +178,7 @@ function CreateStudentModal({
 }) {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const [name, setName] = useState('')
   const [classLevel, setClassLevel] = useState('')
   const [guardianName, setGuardianName] = useState('')
@@ -188,7 +191,7 @@ function CreateStudentModal({
 
   const handleCreate = async () => {
     if (!name.trim() || !classLevel) {
-      Alert.alert('Validation', 'Name and Class Level are required.')
+      Alert.alert(t('Validation'), t('Name and Class Level are required.'))
       return
     }
     setCreating(true)
@@ -198,7 +201,7 @@ function CreateStudentModal({
       onClose()
       onCreated()
     } catch (err: any) {
-      Alert.alert('Error', err?.response?.data?.message ?? 'Failed to create student.')
+      Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to create student.'))
     } finally {
       setCreating(false)
     }
@@ -210,18 +213,18 @@ function CreateStudentModal({
         <View style={styles.modalOverlay}>
           <View style={[styles.detailSheet, { paddingBottom: 40 }]}>
             <View style={styles.detailHeader}>
-              <Text style={styles.detailTitle}>Add Student</Text>
+              <Text style={styles.detailTitle}>{t('Add Student')}</Text>
               <TouchableOpacity onPress={onClose}>
                 <Ionicons name="close" size={22} color="#6b7280" />
               </TouchableOpacity>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.formLabel}>Full Name</Text>
-              <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder="e.g. John Doe" placeholderTextColor="#9ca3af" autoCapitalize="words" />
+              <Text style={styles.formLabel}>{t('Full Name')}</Text>
+              <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder={t('e.g. John Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
-              <Text style={styles.formLabel}>Class Level</Text>
+              <Text style={styles.formLabel}>{t('Class Level')}</Text>
               <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
-                <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>{classLevel || 'Select class level'}</Text>
+                <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>{classLevel || t('Select class level')}</Text>
                 <Ionicons name="chevron-down" size={16} color="#6b7280" />
               </TouchableOpacity>
               {classPickerOpen && (
@@ -234,13 +237,13 @@ function CreateStudentModal({
                 </View>
               )}
 
-              <Text style={styles.formLabel}>Guardian Name (optional)</Text>
-              <TextInput style={styles.formInput} value={guardianName} onChangeText={setGuardianName} placeholder="e.g. Mrs. Jane Doe" placeholderTextColor="#9ca3af" autoCapitalize="words" />
+              <Text style={styles.formLabel}>{t('Guardian Name (optional)')}</Text>
+              <TextInput style={styles.formInput} value={guardianName} onChangeText={setGuardianName} placeholder={t('e.g. Mrs. Jane Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
               <TouchableOpacity style={[styles.createBtn, creating && styles.disabled]} onPress={handleCreate} disabled={creating}>
                 {creating
                   ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.createBtnText}>Add Student</Text>}
+                  : <Text style={styles.createBtnText}>{t('Add Student')}</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -253,6 +256,7 @@ function CreateStudentModal({
 export default function StudentsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const { user } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
 
@@ -277,7 +281,7 @@ export default function StudentsScreen() {
       setStudents(sData.students)
       if (isAdmin) setClassList((clData as { classLevels: ClassLevel[] }).classLevels.sort((a, b) => a.order - b.order))
     } catch {
-      setError('Failed to load students')
+      setError(t('Failed to load students'))
     }
   }, [isAdmin])
 
@@ -307,12 +311,12 @@ export default function StudentsScreen() {
   const handleDeleteStudent = (id: string) => {
     const student = students.find((s) => s.id === id)
     Alert.alert(
-      'Delete Student',
-      `Delete ${student?.name ?? 'this student'}? This cannot be undone.`,
+      t('Delete Student'),
+      `${t('Delete')} ${student?.name ?? t('this student')}? ${t('This cannot be undone.')}`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('Cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('Delete'),
           style: 'destructive',
           onPress: async () => {
             try {
@@ -320,7 +324,7 @@ export default function StudentsScreen() {
               setDetailVisible(false)
               setStudents((prev) => prev.filter((s) => s.id !== id))
             } catch {
-              Alert.alert('Error', 'Failed to delete student.')
+              Alert.alert(t('Error'), t('Failed to delete student.'))
             }
           },
         },
@@ -330,7 +334,7 @@ export default function StudentsScreen() {
 
   const handleEditStudent = (student: Student) => {
     setDetailVisible(false)
-    Alert.alert('Edit', 'Full edit is available on the web dashboard for now.')
+    Alert.alert(t('Edit'), t('Full edit is available on the web dashboard for now.'))
   }
 
   return (
@@ -339,7 +343,7 @@ export default function StudentsScreen() {
         <Ionicons name="search-outline" size={16} color="#9ca3af" style={{ marginRight: 8 }} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search by name, ID or class..."
+          placeholder={t('Search by name, ID or class...')}
           value={search}
           onChangeText={setSearch}
           placeholderTextColor="#9ca3af"
@@ -358,7 +362,7 @@ export default function StudentsScreen() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="people-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No students found</Text>
+            <Text style={styles.emptyText}>{t('No students found')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -381,7 +385,7 @@ export default function StudentsScreen() {
             </View>
             <View style={[styles.badge, item.isActive ? styles.badgeActive : styles.badgeInactive]}>
               <Text style={[styles.badgeText, item.isActive ? styles.badgeTextActive : styles.badgeTextInactive]}>
-                {item.isActive ? 'Active' : 'Inactive'}
+                {item.isActive ? t('Active') : t('Inactive')}
               </Text>
             </View>
           </TouchableOpacity>

@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import {
   getReportCards, getReportCard, createReportCard,
-  saveEntries, updateRemarks, publishReportCard, unpublishReportCard,
+  saveEntries, updateRemarks, generateRemarks, publishReportCard, unpublishReportCard,
   grantEditPermission, revokeEditPermission, bulkPublish,
   deleteReportCard, getClassOverview, getClassReadiness, getReadinessDetail
 } from '../controllers/reportcard.controller'
@@ -18,6 +18,7 @@ router.get('/:id', getReportCard)
 router.post('/', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_TEACHER', 'CLASS_MASTER'), createReportCard)
 router.put('/:id/entries', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_TEACHER', 'CLASS_MASTER'), saveEntries)
 router.put('/:id/remarks', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_MASTER'), updateRemarks)
+router.post('/:id/generate-remarks', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_MASTER'), generateRemarks)
 router.put('/:id/publish', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), publishReportCard)
 router.put('/:id/unpublish', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), unpublishReportCard)
 router.post('/bulk-publish', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), bulkPublish)

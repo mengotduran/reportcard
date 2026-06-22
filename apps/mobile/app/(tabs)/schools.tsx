@@ -23,7 +23,7 @@ const TYPE_COLOR: Record<string, { bg: string; text: string }> = {
 const SCHOOL_TYPES = ['PRIMARY', 'SECONDARY', 'UNIVERSITY']
 
 const emptyForm = {
-  schoolName: '', schoolType: 'SECONDARY', schoolEmail: '', subdomain: '',
+  schoolName: '', schoolType: 'SECONDARY', language: 'EN', schoolEmail: '', subdomain: '',
   adminName: '', adminEmail: '', adminPassword: '', phone: '',
 }
 
@@ -458,6 +458,22 @@ export default function SchoolsScreen() {
                       activeOpacity={0.7}
                     >
                       <Text style={[s.typeBtnText, form.schoolType === t && s.typeBtnTextActive]}>{t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              <View style={s.formField}>
+                <Text style={s.formLabel}>Language * (AI remarks)</Text>
+                <View style={s.typeRow}>
+                  {[{ k: 'EN', label: 'English' }, { k: 'FR', label: 'French' }].map(l => (
+                    <TouchableOpacity
+                      key={l.k}
+                      style={[s.typeBtn, form.language === l.k && s.typeBtnActive]}
+                      onPress={() => setForm(f => ({ ...f, language: l.k }))}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[s.typeBtnText, form.language === l.k && s.typeBtnTextActive]}>{l.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>

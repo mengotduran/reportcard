@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { createTeacher } from '@/lib/api/teachers'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -87,6 +88,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function CreateTeacherScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -98,11 +100,11 @@ export default function CreateTeacherScreen() {
 
   const handleSubmit = async () => {
     if (!name.trim() || !email.trim() || !password.trim()) {
-      Alert.alert('Validation', 'Name, email, and password are required.')
+      Alert.alert(t('Validation'), t('Name, email, and password are required.'))
       return
     }
     if (role === 'CLASS_MASTER' && !masterClassLevel.trim()) {
-      Alert.alert('Validation', 'Master class level is required for Class Master.')
+      Alert.alert(t('Validation'), t('Master class level is required for Class Master.'))
       return
     }
     setLoading(true)
@@ -114,12 +116,12 @@ export default function CreateTeacherScreen() {
         role,
         masterClassLevel: role === 'CLASS_MASTER' ? masterClassLevel.trim() : undefined,
       })
-      Alert.alert('Success', 'Teacher created successfully.', [
-        { text: 'OK', onPress: () => router.back() },
+      Alert.alert(t('Success'), t('Teacher created successfully.'), [
+        { text: t('OK'), onPress: () => router.back() },
       ])
     } catch (err: any) {
-      const msg = err?.response?.data?.message ?? 'Failed to create teacher.'
-      Alert.alert('Error', msg)
+      const msg = err?.response?.data?.message ?? t('Failed to create teacher.')
+      Alert.alert(t('Error'), msg)
     } finally {
       setLoading(false)
     }
@@ -129,36 +131,36 @@ export default function CreateTeacherScreen() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>TEACHER DETAILS</Text>
+          <Text style={styles.sectionLabel}>{t('TEACHER DETAILS')}</Text>
 
-          <Text style={styles.label}>Full Name</Text>
+          <Text style={styles.label}>{t('Full Name')}</Text>
           <TextInput
             style={styles.input}
             value={name}
             onChangeText={setName}
-            placeholder="e.g. Jane Doe"
+            placeholder={t('e.g. Jane Doe')}
             placeholderTextColor="#9ca3af"
             autoCapitalize="words"
           />
 
-          <Text style={styles.label}>Email Address</Text>
+          <Text style={styles.label}>{t('Email Address')}</Text>
           <TextInput
             style={styles.input}
             value={email}
             onChangeText={setEmail}
-            placeholder="e.g. jane@school.com"
+            placeholder={t('e.g. jane@school.com')}
             placeholderTextColor="#9ca3af"
             keyboardType="email-address"
             autoCapitalize="none"
           />
 
-          <Text style={styles.label}>Password</Text>
+          <Text style={styles.label}>{t('Password')}</Text>
           <View style={styles.passwordWrap}>
             <TextInput
               style={styles.passwordInput}
               value={password}
               onChangeText={setPassword}
-              placeholder="Set a password"
+              placeholder={t('Set a password')}
               placeholderTextColor="#9ca3af"
               secureTextEntry={!showPassword}
               autoCapitalize="none"
@@ -170,14 +172,14 @@ export default function CreateTeacherScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>ROLE</Text>
+          <Text style={styles.sectionLabel}>{t('ROLE')}</Text>
           <View style={styles.toggle}>
             <TouchableOpacity
               style={[styles.toggleBtn, role === 'CLASS_TEACHER' && styles.toggleActive]}
               onPress={() => setRole('CLASS_TEACHER')}
             >
               <Text style={[styles.toggleText, role === 'CLASS_TEACHER' && styles.toggleTextActive]}>
-                Class Teacher
+                {t('Class Teacher')}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -185,19 +187,19 @@ export default function CreateTeacherScreen() {
               onPress={() => setRole('CLASS_MASTER')}
             >
               <Text style={[styles.toggleText, role === 'CLASS_MASTER' && styles.toggleTextActive]}>
-                Class Master
+                {t('Class Master')}
               </Text>
             </TouchableOpacity>
           </View>
 
           {role === 'CLASS_MASTER' && (
             <>
-              <Text style={[styles.label, { marginTop: 16 }]}>Master Class Level</Text>
+              <Text style={[styles.label, { marginTop: 16 }]}>{t('Master Class Level')}</Text>
               <TextInput
                 style={styles.input}
                 value={masterClassLevel}
                 onChangeText={setMasterClassLevel}
-                placeholder="e.g. Form 3A"
+                placeholder={t('e.g. Form 3A')}
                 placeholderTextColor="#9ca3af"
                 autoCapitalize="words"
               />
@@ -216,7 +218,7 @@ export default function CreateTeacherScreen() {
             : (
               <>
                 <Ionicons name="person-add-outline" size={18} color="#fff" />
-                <Text style={styles.submitText}>Create Teacher</Text>
+                <Text style={styles.submitText}>{t('Create Teacher')}</Text>
               </>
             )}
         </TouchableOpacity>

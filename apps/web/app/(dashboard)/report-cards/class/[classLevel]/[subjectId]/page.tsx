@@ -13,6 +13,7 @@ import { ArrowLeft, Save, Copy } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { useT, useLang } from '@/lib/i18n'
 
 interface Row {
   studentId: string
@@ -37,9 +38,10 @@ export default function MarksEntryPage() {
   const subjectName = decodeURIComponent(searchParams.get('subjectName') ?? '')
   const seqIndex = Number(searchParams.get('sequence') ?? 0)
   const termName = searchParams.get('termName') ?? ''
-  const seqLabel = seqFull(termName, seqIndex)
-  const otherSeqLabel = seqShort(termName, seqIndex === 0 ? 1 : 0)
-  const otherSeqFull = seqFull(termName, seqIndex === 0 ? 1 : 0)
+  const lang = useLang()
+  const seqLabel = seqFull(termName, seqIndex, lang)
+  const otherSeqLabel = seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
+  const otherSeqFull = seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
 
   const [rows, setRows] = useState<Row[]>([])
   const [maxScore, setMaxScore] = useState(20)
@@ -48,6 +50,7 @@ export default function MarksEntryPage() {
   const [saving, setSaving] = useState(false)
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
 
   const fetchData = useCallback(async () => {
     // Load subject maxScore + grading scale in parallel
@@ -85,9 +88,14 @@ export default function MarksEntryPage() {
   useEffect(() => { fetchData().finally(() => setLoading(false)) }, [fetchData])
 
   const updateScore = (studentId: string, value: string) => {
-    const clean = value.replace(/[^0-9]/g, '')
-    const num = clean === '' ? '' : String(Math.min(maxScore, Number(clean)))
-    setRows((prev) => prev.map((r) => r.studentId === studentId ? { ...r, score: num } : r))
+    // Allow digits and a single decimal point (e.g. 15.5). Clamp to maxScore
+    // only when the value already parses to a number above it — without
+    // reformatting, so a trailing "." while typing isn't stripped.
+    let clean = value.replace(/[^0-9.]/g, '')
+    const firstDot = clean.indexOf('.')
+    if (firstDot !== -1) clean = clean.slice(0, firstDot + 1) + clean.slice(firstDot + 1).replace(/\./g, '')
+    if (clean !== '' && clean !== '.' && Number(clean) > maxScore) clean = String(maxScore)
+    setRows((prev) => prev.map((r) => r.studentId === studentId ? { ...r, score: clean } : r))
   }
 
   const getGrade = (score: number) => gradeFromScore(score, maxScore, gradingRanges)
@@ -143,16 +151,16 @@ export default function MarksEntryPage() {
         })
         return saveEntriesWithSeqApi(r.reportCardId!, { entries: entries as any })
       }))
-      showToast('Marks saved for all students')
+      showToast(t('Marks saved for all students'))
       fetchData()
     } catch {
-      showToast('Failed to save marks', 'error')
+      showToast(t('Failed to save marks'), 'error')
     } finally { setSaving(false) }
   }
 
   const filled = rows.filter((r) => r.score !== '').length
 
-  if (loading) return <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">Loading...</div>
+  if (loading) return <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">{t('Loading...')}</div>
 
   return (
     <div className="flex flex-col h-full" style={{ minHeight: 'calc(100vh - 120px)' }}>
@@ -171,7 +179,7 @@ export default function MarksEntryPage() {
       {/* Info bar */}
       <div className="flex items-center justify-between bg-muted border-b border-border px-4 py-2.5">
         <span className="text-sm text-muted-foreground">
-          {classLevel} · <span className="font-semibold text-primary">{seqLabel}</span> · {filled}/{rows.length} filled
+          {classLevel} · <span className="font-semibold text-primary">{seqLabel}</span> · {filled}/{rows.length} {t('filled')}
         </span>
       </div>
 
@@ -182,7 +190,7 @@ export default function MarksEntryPage() {
       >
         <Copy size={15} className="text-violet-600 flex-shrink-0" />
         <span className="flex-1 text-sm font-semibold text-violet-600">
-          Copy marks from {otherSeqLabel} → fill here
+          {t('Copy marks from')} {otherSeqLabel} {t('→ fill here')}
         </span>
         <span className="text-violet-400 text-sm">›</span>
       </button>
@@ -190,7 +198,7 @@ export default function MarksEntryPage() {
       {/* Published banner */}
       {publishedCount > 0 && (
         <div className="flex items-center gap-2 bg-orange-50 border-b border-orange-200 px-4 py-2.5 text-sm text-orange-700">
-          🔒 {publishedCount === rows.length ? 'All report cards are published' : `${publishedCount} report card(s) are published`} — those rows are locked. Contact your admin to make changes.
+          🔒 {publishedCount === rows.length ? t('All report cards are published') : `${publishedCount} ${t('report card(s) are published')}`} {t('— those rows are locked. Contact your admin to make changes.')}
         </div>
       )}
 
@@ -200,9 +208,9 @@ export default function MarksEntryPage() {
           <thead>
             <tr style={{ backgroundColor: '#1e3a5f' }}>
               <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
-              <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">STUDENT NAME</th>
-              <th className="text-center px-4 py-3 text-xs font-bold text-white w-36 border-r border-white/10">MARKS / {maxScore}</th>
-              <th className="text-center px-4 py-3 text-xs font-bold text-white w-36">PERFORMANCE</th>
+              <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">{t('STUDENT NAME')}</th>
+              <th className="text-center px-4 py-3 text-xs font-bold text-white w-36 border-r border-white/10">{t('MARKS /')} {maxScore}</th>
+              <th className="text-center px-4 py-3 text-xs font-bold text-white w-36">{t('PERFORMANCE')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -223,7 +231,7 @@ export default function MarksEntryPage() {
                     <div className="flex items-center justify-center gap-1">
                     <input
                       ref={(el) => { inputRefs.current[row.studentId] = el }}
-                      type="number" min="0" max={maxScore}
+                      type="number" min="0" max={maxScore} step="any" inputMode="decimal"
                       value={row.score}
                       disabled={row.isPublished}
                       onChange={(e) => updateScore(row.studentId, e.target.value)}
@@ -267,7 +275,7 @@ export default function MarksEntryPage() {
           className="w-full flex items-center justify-center gap-3 bg-primary hover:bg-[#d63429] disabled:opacity-50 text-white py-4 text-base font-bold transition"
         >
           <Save size={18} />
-          {saving ? 'Saving...' : editableRows.length === 0 ? 'All Cards Published' : 'Save All Marks'}
+          {saving ? t('Saving...') : editableRows.length === 0 ? t('All Cards Published') : t('Save All Marks')}
         </button>
       </div>
 

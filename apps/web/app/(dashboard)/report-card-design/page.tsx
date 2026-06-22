@@ -13,6 +13,7 @@ import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor } from 'lucide-react'
+import { useT } from '@/lib/i18n'
 
 // ── Sample data for canvas preview ──────────────────────────────────────────
 const SD = {
@@ -134,6 +135,7 @@ function ET({ value, onChange, onColorApplied, style, placeholder, multiline }: 
   onColorApplied?: (color: string) => void
   style?: React.CSSProperties; placeholder?: string; multiline?: boolean
 }) {
+  const t = useT()
   const divRef = useRef<HTMLDivElement>(null)
   const [editing, setEditing] = useState(false)
 
@@ -174,8 +176,8 @@ function ET({ value, onChange, onColorApplied, style, placeholder, multiline }: 
       style={base} />
   }
   return (
-    <span onClick={startEdit} title="Click to edit" style={base}
-      dangerouslySetInnerHTML={{ __html: value || `<span style="color:#94a3b8">${placeholder || 'Click to edit…'}</span>` }}
+    <span onClick={startEdit} title={t('Click to edit')} style={base}
+      dangerouslySetInnerHTML={{ __html: value || `<span style="color:#94a3b8">${placeholder || t('Click to edit…')}</span>` }}
     />
   )
 }
@@ -184,6 +186,7 @@ function ET({ value, onChange, onColorApplied, style, placeholder, multiline }: 
 function ColorableCell({ sampleText, color, onColorChange, style }: {
   sampleText: string; color?: string; onColorChange: (c: string) => void; style?: React.CSSProperties
 }) {
+  const t = useT()
   const ref = useRef<HTMLSpanElement>(null)
   const active = useRef(false)
   const getHtml = () => color ? `<span style="color:${color}">${sampleText}</span>` : sampleText
@@ -206,7 +209,7 @@ function ColorableCell({ sampleText, color, onColorChange, style }: {
 
   return (
     <span ref={ref} contentEditable suppressContentEditableWarning
-      title="Select text then pick a color to style this column"
+      title={t('Select text then pick a color to style this column')}
       onFocus={handleFocus} onBlur={handleBlur}
       style={{ outline: 'none', cursor: 'text', ...style }}
     />
@@ -250,6 +253,7 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 
 // ── Section renderers (edit mode) ─────────────────────────────────────────────
 function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; update: (s: HeaderSec) => void }) {
+  const t = useT()
   const logoSize = sec.logoSize || 60
 
   const LogoEl = schoolLogo ? (
@@ -263,7 +267,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
   // Reusable colorable elements for school name & type
   const SchoolTypeEl = sec.showSchoolType ? (
     <p style={{ margin: '0 0 2px', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase' }}>
-      <ColorableCell sampleText={`${schoolType} SCHOOL`} color={sec.schoolTypeColor || '#64748b'}
+      <ColorableCell sampleText={`${t(schoolType)} ${t('SCHOOL')}`} color={sec.schoolTypeColor || '#64748b'}
         onColorChange={c => update({ ...sec, schoolTypeColor: c })} />
     </p>
   ) : null
@@ -278,7 +282,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
   const SubtitleEls = (
     <>
       <ET value={sec.subtitle} onChange={v => update({ ...sec, subtitle: v })}
-        placeholder="Subtitle / address…" style={{ display: 'block', fontSize: 12, color: '#555', marginBottom: 6 }} />
+        placeholder={t('Subtitle / address…')} style={{ display: 'block', fontSize: 12, color: '#555', marginBottom: 6 }} />
       <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
         style={{ display: 'block', fontSize: 14, fontWeight: 'bold', color, letterSpacing: 3, textTransform: 'uppercase' }} />
     </>
@@ -298,27 +302,27 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, padding: '6px 8px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
           <input type="checkbox" checked={sec.showLogo} onChange={e => update({ ...sec, showLogo: e.target.checked })} />
-          Show Logo
+          {t('Show Logo')}
         </label>
         {sec.showLogo && <>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            Size:
+            {t('Size:')}
             <input type="range" min={32} max={100} value={logoSize} onChange={e => update({ ...sec, logoSize: Number(e.target.value) })} style={{ width: 70 }} />
             {logoSize}px
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            Position:
+            {t('Position:')}
             {(['left','center','right'] as const).map(p => (
               <button key={p} onClick={() => update({ ...sec, logoPosition: p })}
                 style={{ padding: '1px 6px', fontSize: 10, borderRadius: 3, border: '1px solid', borderColor: sec.logoPosition === p ? color : '#d1d5db', background: sec.logoPosition === p ? color : 'white', color: sec.logoPosition === p ? 'white' : '#374151', cursor: 'pointer' }}>
-                {p}
+                {t(p)}
               </button>
             ))}
           </label>
         </>}
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
           <input type="checkbox" checked={sec.showSchoolType} onChange={e => update({ ...sec, showSchoolType: e.target.checked })} />
-          Show school type
+          {t('Show school type')}
         </label>
       </div>
 
@@ -342,6 +346,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
 }
 
 function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInfoSec; color: string; schoolName: string; update: (s: StudentInfoSec) => void }) {
+  const t = useT()
   const rgb = hexRgb(color)
   const FIELD_OPTIONS = [
     { label: 'Student Name',  value: 'student.name' },
@@ -386,7 +391,7 @@ function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInf
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 11, color: '#64748b' }}>Columns:</span>
+        <span style={{ fontSize: 11, color: '#64748b' }}>{t('Columns:')}</span>
         {([1,2,3] as (1|2|3)[]).map(n => (
           <button key={n} onClick={() => update({ ...sec, columns: n })}
             style={{ padding: '1px 8px', fontSize: 11, borderRadius: 4, border: '1px solid', borderColor: sec.columns === n ? color : '#d1d5db', background: sec.columns === n ? color : 'white', color: sec.columns === n ? 'white' : '#374151' }}>
@@ -422,9 +427,9 @@ function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInf
                 updateRow(row.id, { field: e.target.value, label: newLabel })
               }}
               style={{ fontSize: 10, border: '1px solid #e5e7eb', borderRadius: 3, padding: '1px 2px', color: '#9ca3af', flexShrink: 0 }}
-              title="Choose which student data shows here — label updates automatically"
+              title={t('Choose which student data shows here — label updates automatically')}
             >
-              {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.label)}</option>)}
             </select>
             <button onClick={() => deleteRow(row.id)} style={{ color: '#f87171', cursor: 'pointer', background: 'none', border: 'none', padding: 2 }}>×</button>
           </div>
@@ -432,13 +437,14 @@ function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInf
         })}
       </div>
       <button onClick={addRow} style={{ marginTop: 6, fontSize: 11, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer' }}>
-        + Add Row
+        {t('+ Add Row')}
       </button>
     </div>
   )
 }
 
 function RenderMarksTable({ sec, color, update }: { sec: MarksTableSec; color: string; update: (s: MarksTableSec) => void }) {
+  const t = useT()
   const toggleCols = [
     { key: 'showSeq1' as const, label: 'Seq 1' },
     { key: 'showSeq2' as const, label: 'Seq 2' },
@@ -470,7 +476,7 @@ function RenderMarksTable({ sec, color, update }: { sec: MarksTableSec; color: s
         {toggleCols.map(c => (
           <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer' }}>
             <input type="checkbox" checked={sec[c.key]} onChange={e => update({ ...sec, [c.key]: e.target.checked })} />
-            {c.label}
+            {t(c.label)}
           </label>
         ))}
       </div>
@@ -478,27 +484,27 @@ function RenderMarksTable({ sec, color, update }: { sec: MarksTableSec; color: s
         <thead>
           <tr style={{ backgroundColor: color }}>
             <th style={hStyle('left', '6px 10px')}>
-              <ET value={hdrs.subject ?? 'Subject'} onChange={v => setHeaderText('subject', v)}
+              <ET value={hdrs.subject ?? t('Subject')} onChange={v => setHeaderText('subject', v)}
                 onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
             </th>
             {sec.showSeq1 && <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.seq1 ?? 'Seq 1'} onChange={v => setHeaderText('seq1', v)}
+              <ET value={hdrs.seq1 ?? t('Seq 1')} onChange={v => setHeaderText('seq1', v)}
                 onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
             </th>}
             {sec.showSeq2 && <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.seq2 ?? 'Seq 2'} onChange={v => setHeaderText('seq2', v)}
+              <ET value={hdrs.seq2 ?? t('Seq 2')} onChange={v => setHeaderText('seq2', v)}
                 onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
             </th>}
             <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.score ?? 'Score'} onChange={v => setHeaderText('score', v)}
+              <ET value={hdrs.score ?? t('Score')} onChange={v => setHeaderText('score', v)}
                 onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
             </th>
             {sec.showGrade && <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.grade ?? 'Grade'} onChange={v => setHeaderText('grade', v)}
+              <ET value={hdrs.grade ?? t('Grade')} onChange={v => setHeaderText('grade', v)}
                 onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
             </th>}
             {sec.showRemarks && <th style={hStyle('left', '6px 10px')}>
-              <ET value={hdrs.remarks ?? 'Remarks'} onChange={v => setHeaderText('remarks', v)}
+              <ET value={hdrs.remarks ?? t('Remarks')} onChange={v => setHeaderText('remarks', v)}
                 onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
             </th>}
           </tr>
@@ -539,6 +545,7 @@ function RenderMarksTable({ sec, color, update }: { sec: MarksTableSec; color: s
 }
 
 function RenderSummary({ sec, color, update }: { sec: SummarySec; color: string; update: (s: SummarySec) => void }) {
+  const t = useT()
   const rgb = hexRgb(color)
   const FIELD_OPTIONS = [
     { label: 'Total Score', value: 'total' },
@@ -559,7 +566,7 @@ function RenderSummary({ sec, color, update }: { sec: SummarySec; color: string;
     update({ ...sec, boxes })
   }
   const deleteBox = (id: string) => update({ ...sec, boxes: sec.boxes.filter(b => b.id !== id) })
-  const addBox = () => update({ ...sec, boxes: [...sec.boxes, { id: `b_${Date.now()}`, label: 'New Stat', field: 'total' }] })
+  const addBox = () => update({ ...sec, boxes: [...sec.boxes, { id: `b_${Date.now()}`, label: t('New Stat'), field: 'total' }] })
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -575,26 +582,27 @@ function RenderSummary({ sec, color, update }: { sec: SummarySec; color: string;
               style={{ fontSize: 11, color: '#6b7280', display: 'block', margin: '3px auto 4px' }} />
             <select value={box.field} onChange={e => updateBox(box.id, { field: e.target.value })}
               style={{ fontSize: 10, border: '1px solid #e5e7eb', borderRadius: 3, padding: '1px 2px' }}>
-              {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.label)}</option>)}
             </select>
           </div>
         ))}
       </div>
       <button onClick={addBox} style={{ marginTop: 6, fontSize: 11, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer' }}>
-        + Add Box
+        {t('+ Add Box')}
       </button>
     </div>
   )
 }
 
 function RenderRemarks({ sec, color, update }: { sec: RemarksSec; color: string; update: (s: RemarksSec) => void }) {
+  const t = useT()
   const rgb = hexRgb(color)
   return (
     <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 12, marginBottom: 12 }}>
       <ET value={sec.label} onChange={v => update({ ...sec, label: v })}
         style={{ fontWeight: 'bold', marginBottom: 5, color, display: 'block' }} />
       <div style={{ fontSize: 12, fontStyle: 'italic', minHeight: 32, borderBottom: '1px dashed #e5e7eb', padding: '4px 0' }}>
-        <ColorableCell sampleText="Student remarks will appear here…"
+        <ColorableCell sampleText={t('Student remarks will appear here…')}
           color={sec.placeholderColor || '#9ca3af'}
           onColorChange={c => update({ ...sec, placeholderColor: c })} />
       </div>
@@ -603,6 +611,7 @@ function RenderRemarks({ sec, color, update }: { sec: RemarksSec; color: string;
 }
 
 function RenderSignatures({ sec, color, update }: { sec: SignaturesSec; color: string; update: (s: SignaturesSec) => void }) {
+  const t = useT()
   const syncLineColor = (c: string) =>
     update({ ...sec, lines: sec.lines.map(l => ({ ...l, label: withColor(plainText(l.label), c) })) })
   const updateLine = (id: string, label: string) => {
@@ -626,13 +635,14 @@ function RenderSignatures({ sec, color, update }: { sec: SignaturesSec; color: s
         ))}
       </div>
       <button onClick={addLine} style={{ marginTop: 10, fontSize: 11, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer' }}>
-        + Add Signature Line
+        {t('+ Add Signature Line')}
       </button>
     </div>
   )
 }
 
 function RenderTextBlock({ sec, color, update }: { sec: TextBlockSec; color: string; update: (s: TextBlockSec) => void }) {
+  const t = useT()
   return (
     <div style={{ marginBottom: 8, textAlign: sec.align, padding: '6px 0', borderTop: '1px solid #f1f5f9' }}>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 4 }}>
@@ -644,19 +654,20 @@ function RenderTextBlock({ sec, color, update }: { sec: TextBlockSec; color: str
         ))}
       </div>
       <ET value={sec.content} onChange={v => update({ ...sec, content: v })} multiline
-        placeholder="Type your text here…" style={{ fontSize: 12, color: '#555', width: '100%', display: 'block' }} />
+        placeholder={t('Type your text here…')} style={{ fontSize: 12, color: '#555', width: '100%', display: 'block' }} />
     </div>
   )
 }
 
 function RenderDivider({ sec, color, update }: { sec: DividerSec; color: string; update: (s: DividerSec) => void }) {
+  const t = useT()
   return (
     <div style={{ padding: '8px 0', marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
         {(['solid','dashed'] as const).map(s => (
           <button key={s} onClick={() => update({ ...sec, style: s })}
             style={{ padding: '1px 8px', fontSize: 10, border: '1px solid', borderColor: sec.style === s ? color : '#d1d5db', background: sec.style === s ? color : 'white', color: sec.style === s ? 'white' : '#374151', borderRadius: 3, cursor: 'pointer' }}>
-            {s}
+            {t(s)}
           </button>
         ))}
       </div>
@@ -705,6 +716,7 @@ export default function ReportCardDesignPage() {
   const router = useRouter()
   const { isAuthenticated, school } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const tr = useT()
   const [config, setConfig] = useState<TemplateConfig & { sections: LayoutSection[] }>(getDefaultLayout('classic'))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -802,9 +814,9 @@ export default function ReportCardDesignPage() {
     setSaving(true)
     try {
       await saveTemplateApi(config as TemplateConfig)
-      showToast('Design saved successfully')
+      showToast(tr('Design saved successfully'))
     } catch {
-      showToast('Failed to save', 'error')
+      showToast(tr('Failed to save'), 'error')
     } finally { setSaving(false) }
   }
 
@@ -817,10 +829,9 @@ export default function ReportCardDesignPage() {
         <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center mb-5">
           <Monitor size={26} className="text-primary" />
         </div>
-        <h2 className="text-lg font-bold text-foreground">Open this on a larger screen</h2>
+        <h2 className="text-lg font-bold text-foreground">{tr('Open this on a larger screen')}</h2>
         <p className="text-sm text-muted-foreground mt-2 max-w-xs">
-          The Report Card Designer needs the space and precision of a bigger display.
-          Please use a laptop or desktop computer to customize your report card layout.
+          {tr('The Report Card Designer needs the space and precision of a bigger display. Please use a laptop or desktop computer to customize your report card layout.')}
         </p>
       </div>
 
@@ -829,23 +840,23 @@ export default function ReportCardDesignPage() {
       {/* ── Sticky toolbar ── */}
       <div className="sticky top-0 z-20 bg-card border-b border-border -mx-8 -mt-8 px-8 py-3 mb-6 flex items-center gap-4 flex-wrap">
         <div>
-          <h2 className="text-xl font-bold text-foreground">Report Card Design</h2>
+          <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
         </div>
 
         {/* Template picker */}
         <div className="flex gap-1 ml-2">
           {TEMPLATES.map(t => (
-            <button key={t.id} onClick={() => loadTemplate(t.id)} title={t.label}
+            <button key={t.id} onClick={() => loadTemplate(t.id)} title={tr(t.label)}
               className="px-3 py-1 rounded text-xs font-medium border transition"
               style={{ borderColor: config.template === t.id ? t.color : '#e5e7eb', background: config.template === t.id ? t.color : 'white', color: config.template === t.id ? 'white' : '#374151' }}>
-              {t.label}
+              {tr(t.label)}
             </button>
           ))}
         </div>
 
         {/* Primary color */}
         <div className="flex items-center gap-2 ml-2">
-          <label className="text-xs text-muted-foreground">Color</label>
+          <label className="text-xs text-muted-foreground">{tr('Color')}</label>
           <input type="color" value={config.primaryColor}
             onChange={e => { setConfig(c => ({ ...c, primaryColor: e.target.value })); setColorText(e.target.value) }}
             className="w-7 h-7 rounded border border-border cursor-pointer" />
@@ -860,7 +871,7 @@ export default function ReportCardDesignPage() {
 
         {/* Background color */}
         <div className="flex items-center gap-2 ml-2">
-          <label className="text-xs text-muted-foreground">Background</label>
+          <label className="text-xs text-muted-foreground">{tr('Background')}</label>
           <input type="color" value={config.bgColor || '#ffffff'}
             onChange={e => { setConfig(c => ({ ...c, bgColor: e.target.value })); setBgText(e.target.value) }}
             className="w-7 h-7 rounded border border-border cursor-pointer" />
@@ -873,7 +884,7 @@ export default function ReportCardDesignPage() {
             className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
           {config.bgColor && config.bgColor !== '#ffffff' && (
             <button onClick={() => { setConfig(c => ({ ...c, bgColor: '#ffffff' })); setBgText('#ffffff') }}
-              className="text-xs text-muted-foreground hover:text-muted-foreground underline">reset</button>
+              className="text-xs text-muted-foreground hover:text-muted-foreground underline">{tr('reset')}</button>
           )}
         </div>
 
@@ -881,7 +892,7 @@ export default function ReportCardDesignPage() {
         <div className="flex items-center gap-2 ml-2 border-l border-border pl-4 flex-wrap">
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
             <input type="checkbox" checked={watermark.enabled} onChange={e => setWatermark({ enabled: e.target.checked })} />
-            Watermark
+            {tr('Watermark')}
           </label>
           {watermark.enabled && (
             <>
@@ -889,10 +900,10 @@ export default function ReportCardDesignPage() {
               <div className="flex rounded border border-border overflow-hidden text-xs">
                 <button
                   className={`px-2 py-1 transition ${(watermark.type ?? 'text') === 'text' ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}
-                  onClick={() => setWatermark({ type: 'text' })}>Text</button>
+                  onClick={() => setWatermark({ type: 'text' })}>{tr('Text')}</button>
                 <button
                   className={`px-2 py-1 transition ${(watermark.type ?? 'text') === 'logo' ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}
-                  onClick={() => setWatermark({ type: 'logo' })}>Logo</button>
+                  onClick={() => setWatermark({ type: 'logo' })}>{tr('Logo')}</button>
               </div>
 
               {(watermark.type ?? 'text') === 'text' ? (
@@ -901,11 +912,11 @@ export default function ReportCardDesignPage() {
                     placeholder={schoolName}
                     className="border border-border rounded px-2 py-1 text-xs w-28" />
                   <input type="color" value={watermark.color} onChange={e => setWatermark({ color: e.target.value })}
-                    className="w-7 h-7 rounded border border-border cursor-pointer" title="Watermark color" />
+                    className="w-7 h-7 rounded border border-border cursor-pointer" title={tr('Watermark color')} />
 
                   {/* Font size */}
                   <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">Size</span>
+                    <span className="text-xs text-muted-foreground">{tr('Size')}</span>
                     <input type="range" min={20} max={160} step={2} value={watermark.size ?? 80} onChange={e => setWatermark({ size: Number(e.target.value) })}
                       className="w-20" />
                     <span className="text-xs text-muted-foreground w-8">{watermark.size ?? 80}px</span>
@@ -929,13 +940,13 @@ export default function ReportCardDesignPage() {
 
                   {/* Rotation */}
                   <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">Tilt</span>
+                    <span className="text-xs text-muted-foreground">{tr('Tilt')}</span>
                     <input type="range" min={-180} max={180} step={1} value={watermark.rotation ?? -45} onChange={e => setWatermark({ rotation: Number(e.target.value) })}
                       className="w-20" />
                     <span className="text-xs text-muted-foreground w-8">{watermark.rotation ?? -45}°</span>
                     <button onClick={() => setWatermark({ x: 50, y: 50, rotation: 0 })}
                       className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted transition">
-                      Center
+                      {tr('Center')}
                     </button>
                   </div>
                 </div>
@@ -944,26 +955,26 @@ export default function ReportCardDesignPage() {
                   {/* Preview thumbnail */}
                   {(watermark.logoUrl || schoolLogo)
                     ? <img src={watermark.logoUrl || schoolLogo!} alt="wm" className="w-7 h-7 object-contain rounded border border-border" />
-                    : <span className="text-xs text-muted-foreground italic">No logo</span>}
+                    : <span className="text-xs text-muted-foreground italic">{tr('No logo')}</span>}
 
                   {/* Upload button */}
                   <input ref={wmUploadRef} type="file" accept="image/*" className="hidden" onChange={handleWmUpload} />
                   <button onClick={() => wmUploadRef.current?.click()}
                     className="px-2 py-1 text-xs border border-border rounded hover:bg-muted transition">
-                    Upload image
+                    {tr('Upload image')}
                   </button>
 
                   {/* Revert to school logo */}
                   {watermark.logoUrl && (
                     <button onClick={() => setWatermark({ logoUrl: null })}
                       className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted transition">
-                      Use school logo
+                      {tr('Use school logo')}
                     </button>
                   )}
 
                   {/* Size */}
                   <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">Size</span>
+                    <span className="text-xs text-muted-foreground">{tr('Size')}</span>
                     <input type="range" min={60} max={480} step={10} value={watermark.size ?? 240} onChange={e => setWatermark({ size: Number(e.target.value) })}
                       className="w-20" />
                     <span className="text-xs text-muted-foreground w-8">{watermark.size ?? 240}px</span>
@@ -987,20 +998,20 @@ export default function ReportCardDesignPage() {
 
                   {/* Rotation */}
                   <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">Tilt</span>
+                    <span className="text-xs text-muted-foreground">{tr('Tilt')}</span>
                     <input type="range" min={-180} max={180} step={1} value={watermark.rotation ?? -45} onChange={e => setWatermark({ rotation: Number(e.target.value) })}
                       className="w-20" />
                     <span className="text-xs text-muted-foreground w-8">{watermark.rotation ?? -45}°</span>
                     <button onClick={() => setWatermark({ x: 50, y: 50, rotation: 0 })}
                       className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted transition">
-                      Center
+                      {tr('Center')}
                     </button>
                   </div>
                 </div>
               )}
 
               <div className="flex items-center gap-1">
-                <span className="text-xs text-muted-foreground">Opacity</span>
+                <span className="text-xs text-muted-foreground">{tr('Opacity')}</span>
                 <input type="range" min={2} max={40} value={watermark.opacity} onChange={e => setWatermark({ opacity: Number(e.target.value) })}
                   className="w-20" />
                 <span className="text-xs text-muted-foreground w-6">{watermark.opacity}%</span>
@@ -1015,14 +1026,14 @@ export default function ReportCardDesignPage() {
         <div className="relative">
           <button onClick={() => setShowAddMenu(!showAddMenu)}
             className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
-            <Plus size={14} /> Add Section
+            <Plus size={14} /> {tr('Add Section')}
           </button>
           {showAddMenu && (
             <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-xl shadow-lg z-30 py-1 min-w-[180px]">
               {ADD_OPTIONS.map(o => (
                 <button key={o.type} onClick={() => addSection(o.type)}
                   className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition">
-                  {o.label}
+                  {tr(o.label)}
                 </button>
               ))}
             </div>
@@ -1032,7 +1043,7 @@ export default function ReportCardDesignPage() {
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
           <Save size={14} />
-          {saving ? 'Saving…' : 'Save Design'}
+          {saving ? tr('Saving…') : tr('Save Design')}
         </button>
       </div>
 

@@ -7,7 +7,7 @@ import { AuthRequest } from '../middleware/auth'
 // Register a new school + admin account
 export const registerSchool = async (req: Request, res: Response) => {
   try {
-    const { schoolName, schoolType, schoolEmail, schoolPhone, schoolAddress, subdomain, adminName, adminEmail, adminPassword } = req.body
+    const { schoolName, schoolType, schoolEmail, schoolPhone, schoolAddress, subdomain, adminName, adminEmail, adminPassword, language } = req.body
 
     // Check if school email or subdomain already exists
     const existingSchool = await prisma.school.findFirst({
@@ -32,6 +32,7 @@ export const registerSchool = async (req: Request, res: Response) => {
       data: {
         name: schoolName,
         type: schoolType,
+        language: language === 'FR' ? 'FR' : 'EN',
         email: schoolEmail,
         phone: schoolPhone,
         address: schoolAddress,
@@ -114,6 +115,7 @@ export const login = async (req: Request, res: Response) => {
         id: user.school.id,
         name: user.school.name,
         type: user.school.type,
+        language: user.school.language,
         subdomain: user.school.subdomain,
         logo: user.school.logo,
         coverImage: user.school.coverImage,

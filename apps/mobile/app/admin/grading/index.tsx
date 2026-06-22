@@ -8,6 +8,7 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { getGradingScale, saveGradingScale, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -135,6 +136,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function GradingScaleScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const [ranges, setRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -175,9 +177,9 @@ export default function GradingScaleScreen() {
     setSaving(true)
     try {
       await saveGradingScale(ranges)
-      Alert.alert('Saved', 'Grading scale saved successfully.')
+      Alert.alert(t('Saved'), t('Grading scale saved successfully.'))
     } catch {
-      Alert.alert('Error', 'Failed to save grading scale.')
+      Alert.alert(t('Error'), t('Failed to save grading scale.'))
     } finally {
       setSaving(false)
     }
@@ -196,14 +198,14 @@ export default function GradingScaleScreen() {
       ) : (<>
       <View style={styles.infoBox}>
         <Ionicons name="information-circle-outline" size={16} color="#F03E2F" />
-        <Text style={styles.infoText}>Edit score ranges, grade letters, and remarks below. Scores are treated as percentages.</Text>
+        <Text style={styles.infoText}>{t('Edit score ranges, grade letters, and remarks below. Scores are treated as percentages.')}</Text>
       </View>
 
       <View style={styles.tableHeader}>
-        <Text style={[styles.colHead, { flex: 1.2 }]}>RANGE (%)</Text>
-        <Text style={[styles.colHead, { width: 52 }]}>GRADE</Text>
-        <Text style={[styles.colHead, { flex: 1.5 }]}>REMARK</Text>
-        <Text style={[styles.colHead, { width: 52 }]}>COLOR</Text>
+        <Text style={[styles.colHead, { flex: 1.2 }]}>{t('RANGE (%)')}</Text>
+        <Text style={[styles.colHead, { width: 52 }]}>{t('GRADE')}</Text>
+        <Text style={[styles.colHead, { flex: 1.5 }]}>{t('REMARK')}</Text>
+        <Text style={[styles.colHead, { width: 52 }]}>{t('COLOR')}</Text>
       </View>
 
       {ranges.map((range, index) => (
@@ -261,7 +263,7 @@ export default function GradingScaleScreen() {
           : (
             <>
               <Ionicons name="save-outline" size={18} color="#fff" />
-              <Text style={styles.saveBtnText}>Save Grading Scale</Text>
+              <Text style={styles.saveBtnText}>{t('Save Grading Scale')}</Text>
             </>
           )}
       </TouchableOpacity>

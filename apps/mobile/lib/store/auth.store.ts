@@ -15,6 +15,7 @@ interface School {
   id: string
   name: string
   type: string
+  language?: string
   logo: string | null
   coverImage: string | null
   coverImages: string[]

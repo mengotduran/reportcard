@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -63,26 +64,27 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function ClassListDesignScreen() {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const router = useRouter()
 
   return (
     <View style={styles.container}>
       <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
         <Ionicons name="arrow-back" size={18} color="#F03E2F" />
-        <Text style={styles.backText}>Back</Text>
+        <Text style={styles.backText}>{t('Back')}</Text>
       </TouchableOpacity>
 
       <View style={styles.body}>
         <View style={styles.iconWrap}>
           <Ionicons name="laptop-outline" size={64} color="#F03E2F" />
         </View>
-        <Text style={styles.title}>Better on Desktop</Text>
+        <Text style={styles.title}>{t('Better on Desktop')}</Text>
         <Text style={styles.description}>
-          Class list design and layout customization is only available on the web app. Visit the web dashboard on your computer to customize your printable class list — title, colors, columns, terms, and signatures.
+          {t('Class list design and layout customization is only available on the web app. Visit the web dashboard on your computer to customize your printable class list — title, colors, columns, terms, and signatures.')}
         </Text>
         <View style={styles.hint}>
           <Ionicons name="information-circle-outline" size={16} color="#6b7280" />
-          <Text style={styles.hintText}>Access the web app at your school's subdomain</Text>
+          <Text style={styles.hintText}>{t("Access the web app at your school's subdomain")}</Text>
         </View>
       </View>
     </View>

@@ -5,6 +5,7 @@ import { Save, Plus, Trash2, Printer } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import DesktopOnly from '@/components/ui/DesktopOnly'
+import { useT } from '@/lib/i18n'
 import {
   ClassListConfig, ClassListGroup, ClassListColumn,
   DEFAULT_CLASS_LIST_CONFIG, mergeClassListConfig, presetGroups, clCol, clGroup,
@@ -22,6 +23,7 @@ const SAMPLE = [
 function Editable({ value, onChange, style, placeholder }: {
   value: string; onChange: (v: string) => void; style?: React.CSSProperties; placeholder?: string
 }) {
+  const t = useT()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   useEffect(() => { setDraft(value) }, [value])
@@ -39,9 +41,9 @@ function Editable({ value, onChange, style, placeholder }: {
     )
   }
   return (
-    <span onClick={() => setEditing(true)} title="Click to edit"
+    <span onClick={() => setEditing(true)} title={t('Click to edit')}
       style={{ cursor: 'text', borderBottomWidth: 1, borderBottomStyle: 'dashed', borderBottomColor: 'rgba(0,0,0,0.28)', ...style }}>
-      {value || <span style={{ color: '#aaa' }}>{placeholder || 'edit'}</span>}
+      {value || <span style={{ color: '#aaa' }}>{placeholder || t('edit')}</span>}
     </span>
   )
 }
@@ -69,6 +71,7 @@ function SectionCard({ title, children }: { title: string; children: React.React
 export default function ClassListDesignPage() {
   const { school } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
   const [config, setConfig] = useState<ClassListConfig>(DEFAULT_CLASS_LIST_CONFIG)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -100,8 +103,8 @@ export default function ClassListDesignPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    try { await saveClassListTemplateApi(config); showToast('Class list design saved') }
-    catch { showToast('Failed to save design', 'error') }
+    try { await saveClassListTemplateApi(config); showToast(t('Class list design saved')) }
+    catch { showToast(t('Failed to save design'), 'error') }
     finally { setSaving(false) }
   }
 
@@ -113,60 +116,60 @@ export default function ClassListDesignPage() {
   const tdBase: React.CSSProperties = { border: '1px solid #999', height: 22, fontSize: 11, textAlign: 'center' }
 
   return (
-    <DesktopOnly message="The Class List Designer needs the space and precision of a bigger display. Please use a laptop or desktop computer.">
+    <DesktopOnly message={t('The Class List Designer needs the space and precision of a bigger display. Please use a laptop or desktop computer.')}>
       <div>
         {/* Toolbar */}
         <div className="sticky top-0 z-20 bg-card border-b border-border -mx-8 -mt-8 px-8 py-3 mb-6 flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-bold text-foreground">Class List Design</h2>
-            <p className="text-xs text-muted-foreground">Click any title, heading or column to edit it</p>
+            <h2 className="text-xl font-bold text-foreground">{t('Class List Design')}</h2>
+            <p className="text-xs text-muted-foreground">{t('Click any title, heading or column to edit it')}</p>
           </div>
           <div className="flex items-center gap-2">
             <select className={inputCls} defaultValue="" onChange={e => { if (e.target.value) { applyPreset(e.target.value as ClassListPreset); e.target.value = '' } }}>
-              <option value="">Load preset…</option>
-              <option value="secondary">Secondary</option>
-              <option value="primary">Primary</option>
-              <option value="university">University</option>
+              <option value="">{t('Load preset…')}</option>
+              <option value="secondary">{t('Secondary')}</option>
+              <option value="primary">{t('Primary')}</option>
+              <option value="university">{t('University')}</option>
             </select>
             <button onClick={() => printClassList({ students: SAMPLE, classLevel: 'Form 1', schoolName: school?.name ?? 'School', schoolType: school?.type ?? '', logoUrl, config })}
               className="flex items-center gap-1.5 border border-border text-muted-foreground px-3 py-2 rounded-lg text-sm hover:bg-muted transition-colors">
-              <Printer size={14} /> Test print
+              <Printer size={14} /> {t('Test print')}
             </button>
             <button onClick={handleSave} disabled={saving || loading}
               className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#d63429] disabled:opacity-50 transition-colors">
-              <Save size={15} /> {saving ? 'Saving…' : 'Save Design'}
+              <Save size={15} /> {saving ? t('Saving…') : t('Save Design')}
             </button>
           </div>
         </div>
 
         {loading ? (
-          <div className="text-center py-16 text-muted-foreground text-sm">Loading…</div>
+          <div className="text-center py-16 text-muted-foreground text-sm">{t('Loading…')}</div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-[300px_1fr] gap-6">
             {/* ── Options ── */}
             <div className="space-y-4">
-              <SectionCard title="Header">
-                <Field label="Show school logo"><Toggle checked={c.showLogo} onChange={v => set('showLogo', v)} /></Field>
-                <Field label="Show school type"><Toggle checked={c.showSchoolType} onChange={v => set('showSchoolType', v)} /></Field>
-                <Field label="Heading / title color"><input type="color" value={c.headerColor} onChange={e => set('headerColor', e.target.value)} className="w-8 h-8 rounded border border-border" /></Field>
-                <Field label="Average column color"><input type="color" value={c.accentColor} onChange={e => set('accentColor', e.target.value)} className="w-8 h-8 rounded border border-border" /></Field>
+              <SectionCard title={t('Header')}>
+                <Field label={t('Show school logo')}><Toggle checked={c.showLogo} onChange={v => set('showLogo', v)} /></Field>
+                <Field label={t('Show school type')}><Toggle checked={c.showSchoolType} onChange={v => set('showSchoolType', v)} /></Field>
+                <Field label={t('Heading / title color')}><input type="color" value={c.headerColor} onChange={e => set('headerColor', e.target.value)} className="w-8 h-8 rounded border border-border" /></Field>
+                <Field label={t('Average column color')}><input type="color" value={c.accentColor} onChange={e => set('accentColor', e.target.value)} className="w-8 h-8 rounded border border-border" /></Field>
               </SectionCard>
-              <SectionCard title="Columns & rows">
-                <Field label="Student ID column"><Toggle checked={c.showId} onChange={v => set('showId', v)} /></Field>
-                <Field label="Orientation">
+              <SectionCard title={t('Columns & rows')}>
+                <Field label={t('Student ID column')}><Toggle checked={c.showId} onChange={v => set('showId', v)} /></Field>
+                <Field label={t('Orientation')}>
                   <select className={inputCls} value={c.orientation} onChange={e => set('orientation', e.target.value as 'landscape' | 'portrait')}>
-                    <option value="landscape">Landscape</option>
-                    <option value="portrait">Portrait</option>
+                    <option value="landscape">{t('Landscape')}</option>
+                    <option value="portrait">{t('Portrait')}</option>
                   </select>
                 </Field>
-                <Field label="Blank rows"><input type="number" min={0} max={30} className={`${inputCls} w-20`} value={c.blankRows} onChange={e => set('blankRows', Math.max(0, Math.min(30, Number(e.target.value) || 0)))} /></Field>
+                <Field label={t('Blank rows')}><input type="number" min={0} max={30} className={`${inputCls} w-20`} value={c.blankRows} onChange={e => set('blankRows', Math.max(0, Math.min(30, Number(e.target.value) || 0)))} /></Field>
               </SectionCard>
-              <SectionCard title="Meta row">
-                <Field label="Subject field"><Toggle checked={c.showMeta.subject} onChange={v => set('showMeta', { ...c.showMeta, subject: v })} /></Field>
-                <Field label="Teacher field"><Toggle checked={c.showMeta.teacher} onChange={v => set('showMeta', { ...c.showMeta, teacher: v })} /></Field>
-                <Field label="Academic year field"><Toggle checked={c.showMeta.year} onChange={v => set('showMeta', { ...c.showMeta, year: v })} /></Field>
+              <SectionCard title={t('Meta row')}>
+                <Field label={t('Subject field')}><Toggle checked={c.showMeta.subject} onChange={v => set('showMeta', { ...c.showMeta, subject: v })} /></Field>
+                <Field label={t('Teacher field')}><Toggle checked={c.showMeta.teacher} onChange={v => set('showMeta', { ...c.showMeta, teacher: v })} /></Field>
+                <Field label={t('Academic year field')}><Toggle checked={c.showMeta.year} onChange={v => set('showMeta', { ...c.showMeta, year: v })} /></Field>
               </SectionCard>
-              <SectionCard title="Footer signatures">
+              <SectionCard title={t('Footer signatures')}>
                 <div className="space-y-2 pt-1">
                   {c.footerFields.map((f, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -175,7 +178,7 @@ export default function ClassListDesignPage() {
                     </div>
                   ))}
                   {c.footerFields.length < 6 && (
-                    <button onClick={() => set('footerFields', [...c.footerFields, 'New Field'])} className="flex items-center gap-1 text-sm text-primary font-medium mt-1"><Plus size={14} /> Add field</button>
+                    <button onClick={() => set('footerFields', [...c.footerFields, t('New Field')])} className="flex items-center gap-1 text-sm text-primary font-medium mt-1"><Plus size={14} /> {t('Add field')}</button>
                   )}
                 </div>
               </SectionCard>
@@ -189,12 +192,12 @@ export default function ClassListDesignPage() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
                     {c.showLogo && logoUrl && <img src={logoUrl} alt="logo" style={{ width: 48, height: 48, objectFit: 'contain' }} />}
                     <div>
-                      <div style={{ fontSize: 20, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 1 }}>{school?.name ?? 'Your School'}</div>
-                      {c.showSchoolType && <div style={{ fontSize: 12, color: '#555', textTransform: 'uppercase', letterSpacing: 2 }}>{school?.type} School</div>}
+                      <div style={{ fontSize: 20, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 1 }}>{school?.name ?? t('Your School')}</div>
+                      {c.showSchoolType && <div style={{ fontSize: 12, color: '#555', textTransform: 'uppercase', letterSpacing: 2 }}>{school?.type} {t('School')}</div>}
                     </div>
                   </div>
                   <div style={{ fontSize: 11, color: '#444', marginTop: 4 }}>
-                    <Editable value={c.subtitle} onChange={v => set('subtitle', v)} placeholder="add subtitle (optional)" />
+                    <Editable value={c.subtitle} onChange={v => set('subtitle', v)} placeholder={t('add subtitle (optional)')} />
                   </div>
                   <div style={{ marginTop: 8 }}>
                     <span style={{ fontSize: 14, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.5, border: `2px solid ${c.headerColor}`, color: c.headerColor, display: 'inline-block', padding: '3px 18px' }}>
@@ -209,12 +212,12 @@ export default function ClassListDesignPage() {
                     <thead>
                       <tr>
                         <th rowSpan={2} style={{ ...thBase, width: 26, background: '#f5f5f5' }}>#</th>
-                        {c.showId && <th rowSpan={2} style={{ ...thBase, background: '#f5f5f5' }}>ID</th>}
-                        <th rowSpan={2} style={{ ...thBase, background: '#f5f5f5', textAlign: 'left', paddingLeft: 6 }}>Student Name</th>
+                        {c.showId && <th rowSpan={2} style={{ ...thBase, background: '#f5f5f5' }}>{t('ID')}</th>}
+                        <th rowSpan={2} style={{ ...thBase, background: '#f5f5f5', textAlign: 'left', paddingLeft: 6 }}>{t('Student Name')}</th>
                         {c.groups.map((g, gi) => (
                           <th key={g.id} colSpan={g.columns.length} style={{ ...thBase, background: c.headerColor, color: '#fff', position: 'relative' }}>
                             <Editable value={g.label} onChange={v => updateGroup(gi, { label: v })} style={{ color: '#fff', borderBottomColor: 'rgba(255,255,255,0.5)' }} />
-                            <button onClick={() => removeGroup(gi)} title="Remove group"
+                            <button onClick={() => removeGroup(gi)} title={t('Remove group')}
                               style={{ position: 'absolute', top: -8, right: -8, background: '#ef4444', color: '#fff', borderRadius: 999, width: 16, height: 16, fontSize: 10, lineHeight: '16px', cursor: 'pointer' }}>×</button>
                           </th>
                         ))}
@@ -223,15 +226,15 @@ export default function ClassListDesignPage() {
                         {c.groups.map((g, gi) => g.columns.map((col, ci) => (
                           <th key={col.id} style={{ ...thBase, background: col.avg ? c.accentColor : '#ddd', color: col.avg ? '#fff' : '#111', fontSize: 10, position: 'relative', whiteSpace: 'nowrap' }}>
                             <Editable value={col.label} onChange={v => updateColumn(gi, ci, { label: v })} style={col.avg ? { color: '#fff', borderBottomColor: 'rgba(255,255,255,0.5)' } : undefined} />
-                            <span onClick={() => updateColumn(gi, ci, { avg: !col.avg })} title="Toggle average column"
+                            <span onClick={() => updateColumn(gi, ci, { avg: !col.avg })} title={t('Toggle average column')}
                               style={{ marginLeft: 4, cursor: 'pointer', fontSize: 9, opacity: 0.8 }}>{col.avg ? '★' : '☆'}</span>
                             {g.columns.length > 1 && (
-                              <button onClick={() => removeColumn(gi, ci)} title="Remove column"
+                              <button onClick={() => removeColumn(gi, ci)} title={t('Remove column')}
                                 style={{ position: 'absolute', top: -7, right: -6, background: '#ef4444', color: '#fff', borderRadius: 999, width: 14, height: 14, fontSize: 9, lineHeight: '14px', cursor: 'pointer' }}>×</button>
                             )}
                           </th>
                         )).concat(
-                          <th key={`add-${g.id}`} style={{ ...thBase, background: '#fafafa', width: 22, cursor: 'pointer', color: '#16a34a' }} onClick={() => addColumn(gi)} title="Add column">+</th>
+                          <th key={`add-${g.id}`} style={{ ...thBase, background: '#fafafa', width: 22, cursor: 'pointer', color: '#16a34a' }} onClick={() => addColumn(gi)} title={t('Add column')}>+</th>
                         ))}
                       </tr>
                     </thead>
@@ -246,13 +249,13 @@ export default function ClassListDesignPage() {
                           )).concat(<td key={`pad-${g.id}`} style={tdBase} />))}
                         </tr>
                       ))}
-                      <tr><td colSpan={2 + (c.showId ? 1 : 0)} style={{ ...tdBase, color: '#bbb', textAlign: 'left', paddingLeft: 6 }}>+ {c.blankRows} blank rows</td>
+                      <tr><td colSpan={2 + (c.showId ? 1 : 0)} style={{ ...tdBase, color: '#bbb', textAlign: 'left', paddingLeft: 6 }}>+ {c.blankRows} {t('blank rows')}</td>
                         {c.groups.map(g => g.columns.map(col => <td key={col.id} style={tdBase} />).concat(<td key={`bp-${g.id}`} style={tdBase} />))}</tr>
                     </tbody>
                   </table>
-                  <button onClick={addGroup} title="Add column group"
+                  <button onClick={addGroup} title={t('Add column group')}
                     className="flex-shrink-0 mt-7 flex items-center gap-1 text-xs font-semibold text-green-600 border border-green-200 rounded-lg px-2 py-1 hover:bg-green-50">
-                    <Plus size={13} /> Group
+                    <Plus size={13} /> {t('Group')}
                   </button>
                 </div>
 
@@ -266,7 +269,7 @@ export default function ClassListDesignPage() {
                   ))}
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">Click a title/heading/column to rename · ☆ toggles an average column · × removes · “+ Group” adds a term/semester. Mark cells print blank.</p>
+              <p className="text-xs text-muted-foreground mt-2">{t('Click a title/heading/column to rename · ☆ toggles an average column · × removes · “+ Group” adds a term/semester. Mark cells print blank.')}</p>
             </div>
           </div>
         )}

@@ -14,13 +14,14 @@ import DesktopOnly from '@/components/ui/DesktopOnly'
 import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
 import { printClassList } from '@/lib/classListDocument'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
+import { useT } from '@/lib/i18n'
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
   grade: string; remarks: string; subject: { id: string; name: string }
 }
 interface RawRC {
-  id: string; status: string; remarks?: string; average?: number | null; position?: number | null
+  id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
   term: { id: string; name: string; session: string }
   entries: RawEntry[]
@@ -85,6 +86,7 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 
 // ── Teacher/Admin class-based view ────────────────────────────────────────────────
 function TeacherClassesView() {
+  const tr = useT()
   const router = useRouter()
   const { school, user } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
@@ -140,7 +142,7 @@ function TeacherClassesView() {
         ))
       }
     } catch {
-      showToast('Failed to bulk publish. Try again.', 'error')
+      showToast(tr('Failed to bulk publish. Try again.'), 'error')
     } finally {
       setBulkPublishing(null)
     }
@@ -180,8 +182,8 @@ function TeacherClassesView() {
           }
         }))
       } catch (err: any) {
-        if (err?.response?.status === 404) setError('No active term set. Please set a current term first.')
-        else setError('Failed to load classes.')
+        if (err?.response?.status === 404) setError(tr('No active term set. Please set a current term first.'))
+        else setError(tr('Failed to load classes.'))
       } finally { setLoading(false) }
     }
     load()
@@ -198,14 +200,14 @@ function TeacherClassesView() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Classes</h2>
+          <h2 className="text-2xl font-bold text-foreground">{tr('Classes')}</h2>
           {term && <p className="text-muted-foreground text-sm mt-1">{term.name} — {term.session}</p>}
         </div>
       </div>
 
       {classes.length === 0 ? (
         <div className="text-center py-16 bg-card rounded-xl border border-border">
-          <p className="text-muted-foreground text-sm">No classes found. Add students first.</p>
+          <p className="text-muted-foreground text-sm">{tr('No classes found. Add students first.')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -220,7 +222,7 @@ function TeacherClassesView() {
                   </div>
                   <div>
                     <p className="font-bold text-foreground">{c.classLevel}</p>
-                    <p className="text-xs text-muted-foreground">{c.total} students{isClassMaster ? ` · ${c.published} published` : ''}</p>
+                    <p className="text-xs text-muted-foreground">{c.total} {tr('students')}{isClassMaster ? ` · ${c.published} ${tr('published')}` : ''}</p>
                   </div>
                 </div>
                 {c.hasSubjects && (
@@ -229,31 +231,31 @@ function TeacherClassesView() {
                       <div className="bg-primary/100 h-1.5 rounded-full transition-all" style={{ width: `${pct}%` }} />
                     </div>
                     <div className="flex gap-3 text-xs mb-4">
-                      <span className="text-primary font-semibold">{c.filled} filled</span>
-                      {pending > 0 && <span className="text-amber-600 font-semibold">{pending} pending</span>}
+                      <span className="text-primary font-semibold">{c.filled} {tr('filled')}</span>
+                      {pending > 0 && <span className="text-amber-600 font-semibold">{pending} {tr('pending')}</span>}
                     </div>
                   </>
                 )}
                 <div className="flex gap-2 flex-wrap">
                   <button onClick={() => router.push(`/report-cards/class/${encodeURIComponent(c.classLevel)}?termId=${term?.id}&termName=${encodeURIComponent(term?.name ?? '')}`)}
                     className="flex-1 text-xs border border-border text-muted-foreground py-1.5 rounded-lg hover:bg-muted transition">
-                    View Class
+                    {tr('View Class')}
                   </button>
                   {isAdmin && c.filled > c.published && (
                     <button
                       onClick={() => handleBulkPublish(c.classLevel)}
                       disabled={bulkPublishing === c.classLevel}
                       className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg transition disabled:opacity-50"
-                      title="Publish all eligible report cards for this class">
+                      title={tr('Publish all eligible report cards for this class')}>
                       <Send size={11} />
-                      {bulkPublishing === c.classLevel ? 'Publishing…' : 'Publish All'}
+                      {bulkPublishing === c.classLevel ? tr('Publishing…') : tr('Publish All')}
                     </button>
                   )}
                   {isAdmin && c.published > 0 && (
                     <button onClick={() => handleClassPrint(c.classLevel, term?.id ?? '')} disabled={printing}
                       className="flex items-center gap-1.5 text-xs border border-border text-foreground px-3 py-1.5 rounded-lg hover:bg-muted transition disabled:opacity-50"
-                      title={`Print all ${c.published} published cards`}>
-                      <Printer size={12} /> {printing ? 'Loading...' : `Print (${c.published})`}
+                      title={`${tr('Print all')} ${c.published} ${tr('published cards')}`}>
+                      <Printer size={12} /> {printing ? tr('Loading...') : `${tr('Print')} (${c.published})`}
                     </button>
                   )}
                 </div>
@@ -274,6 +276,7 @@ function TeacherClassesView() {
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))}
                 entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
+                generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
                 config={printJob.config}
@@ -291,7 +294,7 @@ function TeacherClassesView() {
               {bulkResult.published > 0
                 ? <CheckCircle size={22} className="text-green-600" />
                 : <AlertTriangle size={22} className="text-amber-500" />}
-              <h3 className="text-lg font-bold text-foreground">Publish All — {bulkResult.classLevel}</h3>
+              <h3 className="text-lg font-bold text-foreground">{tr('Publish All —')} {bulkResult.classLevel}</h3>
             </div>
             <div className="flex gap-4 mb-4">
               <div className="flex-1 bg-green-50 border border-green-100 rounded-xl p-3 text-center">
@@ -305,7 +308,7 @@ function TeacherClassesView() {
             </div>
             {bulkResult.issues.length > 0 && (
               <div className="bg-muted dark:bg-card rounded-xl border border-border max-h-52 overflow-y-auto mb-4">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 pt-3 pb-2">Issues</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 pt-3 pb-2">{tr('Issues')}</p>
                 {bulkResult.issues.map((issue, i) => (
                   <div key={i} className="px-4 py-2 border-t border-gray-100 first:border-0">
                     <p className="text-sm font-medium text-foreground">{issue.student}</p>
@@ -328,6 +331,7 @@ function TeacherClassesView() {
 }
 
 export default function ReportCardsPage() {
+  const tr = useT()
   const router = useRouter()
   const { isAuthenticated, user, school } = useAuthStore()
 
@@ -360,7 +364,7 @@ export default function ReportCardsPage() {
       setBulkResult({ classLevel, ...result })
       fetchReportCards(filterTermId || undefined)
     } catch {
-      showToast('Failed to bulk publish', 'error')
+      showToast(tr('Failed to bulk publish'), 'error')
     } finally { setBulkPublishing(null) }
   }
 
@@ -392,7 +396,7 @@ export default function ReportCardsPage() {
         config: mergeClassListConfig(tpl.config, school?.type),
       })
     } catch {
-      showToast('Failed to load class list', 'error')
+      showToast(tr('Failed to load class list'), 'error')
     } finally {
       setPrinting(false)
     }
@@ -406,13 +410,13 @@ export default function ReportCardsPage() {
         getTemplateApi().catch(() => ({ config: {} })),
       ])
       const published: RawRC[] = (rcData.reportCards as RawRC[]).filter((rc: RawRC) => rc.status === 'PUBLISHED')
-      if (!published.length) { showToast('No published cards for this class', 'error'); setPrinting(false); return }
+      if (!published.length) { showToast(tr('No published cards for this class'), 'error'); setPrinting(false); return }
       const saved = tplData.config as Partial<TemplateConfig> | undefined
       const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
       const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
       setPrintJob({ cards: published, config })
     } catch {
-      showToast('Failed to load cards for printing', 'error')
+      showToast(tr('Failed to load cards for printing'), 'error')
       setPrinting(false)
     }
   }
@@ -438,7 +442,7 @@ export default function ReportCardsPage() {
         getClassReadinessApi(currentId).then(d => setClassReadiness(d.readiness)).catch(() => {})
       }
     } catch {
-      showToast('Failed to load data', 'error')
+      showToast(tr('Failed to load data'), 'error')
     } finally {
       setLoading(false)
     }
@@ -468,15 +472,15 @@ export default function ReportCardsPage() {
       setForm({ studentId: '', termId: '' })
       fetchReportCards(filterTermId || undefined)
       if (data.alreadyExists) {
-        showToast('Report card already exists — opening it')
+        showToast(tr('Report card already exists — opening it'))
         router.push(`/report-cards/${data.reportCard.id}`)
       } else {
-        showToast('Report card created successfully')
+        showToast(tr('Report card created successfully'))
         router.push(`/report-cards/${data.reportCard.id}`)
       }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
-      setError(e.response?.data?.message || 'Failed to create report card')
+      setError(e.response?.data?.message || tr('Failed to create report card'))
     } finally {
       setSaving(false)
     }
@@ -488,9 +492,9 @@ export default function ReportCardsPage() {
       await deleteReportCardApi(deleteTarget)
       setDeleteTarget(null)
       fetchReportCards(filterTermId || undefined)
-      showToast('Report card deleted')
+      showToast(tr('Report card deleted'))
     } catch {
-      showToast('Failed to delete report card', 'error')
+      showToast(tr('Failed to delete report card'), 'error')
     }
   }
 
@@ -510,9 +514,9 @@ export default function ReportCardsPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Report Cards</h2>
+          <h2 className="text-2xl font-bold text-foreground">{tr('Report Cards')}</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {currentTerm ? `Current term: ${currentTerm.name} — ${currentTerm.session}` : 'No current term set'}
+            {currentTerm ? `${tr('Current term:')} ${currentTerm.name} — ${currentTerm.session}` : tr('No current term set')}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -534,12 +538,12 @@ export default function ReportCardsPage() {
                     : 'bg-green-600 hover:bg-green-700 text-white'
                 }`}>
                 <Send size={14} />
-                {bulkPublishing ? 'Publishing…' : 'Publish Class'}
+                {bulkPublishing ? tr('Publishing…') : tr('Publish Class')}
                 <ChevronDown size={13} className={`transition-transform duration-200 ${openDropdown === 'bulkPublish' ? 'rotate-180' : ''}`} />
               </button>
               {openDropdown === 'bulkPublish' && (
                 <div className="absolute right-0 top-[calc(100%+4px)] bg-card border border-border rounded-xl shadow-xl z-30 py-1.5 min-w-[220px] overflow-hidden">
-                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Select class</p>
+                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{tr('Select class')}</p>
                   {unpublishedClasses.map(cl => {
                     const r = classReadiness[cl]
                     const ready = !r || r.ready
@@ -561,22 +565,22 @@ export default function ReportCardsPage() {
                               <div className="flex flex-wrap gap-1 mt-0.5">
                                 {noSubjects && (
                                   <span className="text-[10px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
-                                    No subjects assigned
+                                    {tr('No subjects assigned')}
                                   </span>
                                 )}
                                 {missingSeqs > 0 && (
                                   <span className="text-[10px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
-                                    {missingSeqs} missing seqs
+                                    {missingSeqs} {tr('missing seqs')}
                                   </span>
                                 )}
                                 {missingRemarks > 0 && (
                                   <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
-                                    {missingRemarks} no remarks
+                                    {missingRemarks} {tr('no remarks')}
                                   </span>
                                 )}
                                 {nothingToPublish && (
                                   <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">
-                                    Nothing to publish
+                                    {tr('Nothing to publish')}
                                   </span>
                                 )}
                               </div>
@@ -603,12 +607,12 @@ export default function ReportCardsPage() {
                     : 'border-border text-foreground hover:bg-muted'
                 }`}>
                 <List size={14} />
-                {printing ? 'Loading…' : 'Class List'}
+                {printing ? tr('Loading…') : tr('Class List')}
                 <ChevronDown size={13} className={`transition-transform duration-200 ${openDropdown === 'classList' ? 'rotate-180' : ''}`} />
               </button>
               {openDropdown === 'classList' && (
                 <div className="absolute right-0 top-[calc(100%+4px)] bg-card border border-border rounded-xl shadow-xl z-30 py-1.5 min-w-[160px] overflow-hidden">
-                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Select class</p>
+                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{tr('Select class')}</p>
                   {[...new Set([...unpublishedClasses, ...publishedClasses])].sort().map(cl => (
                     <button key={cl} onClick={() => { handlePrintClassList(cl, activeTerm.id); setOpenDropdown(null) }}
                       className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition text-foreground flex items-center gap-2">
@@ -633,12 +637,12 @@ export default function ReportCardsPage() {
                     : 'border-border text-foreground hover:bg-muted'
                 }`}>
                 <Printer size={14} />
-                {printing ? 'Loading…' : 'Print Class'}
+                {printing ? tr('Loading…') : tr('Print Class')}
                 <ChevronDown size={13} className={`transition-transform duration-200 ${openDropdown === 'printClass' ? 'rotate-180' : ''}`} />
               </button>
               {openDropdown === 'printClass' && (
                 <div className="absolute right-0 top-[calc(100%+4px)] bg-card border border-border rounded-xl shadow-xl z-30 py-1.5 min-w-[160px] overflow-hidden">
-                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Select class</p>
+                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{tr('Select class')}</p>
                   {publishedClasses.map(cl => (
                     <button key={cl} onClick={() => { handleClassPrint(cl, activeTerm.id); setOpenDropdown(null) }}
                       className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition text-foreground flex items-center gap-2">
@@ -655,7 +659,7 @@ export default function ReportCardsPage() {
             onClick={() => { setShowModal(true); setForm({ studentId: '', termId: currentTerm?.id || '' }) }}
             className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition"
           >
-            <Plus size={16} /> Create Report Card
+            <Plus size={16} /> {tr('Create Report Card')}
           </button>
         </div>
       </div>
@@ -664,35 +668,35 @@ export default function ReportCardsPage() {
         <button
           onClick={() => handleFilterChange('')}
           className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!filterTermId ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}
-        >All Terms</button>
+        >{tr('All Terms')}</button>
         {terms.map(term => (
           <button key={term.id} onClick={() => handleFilterChange(term.id)}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filterTermId === term.id ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}
           >
-            {term.name} {term.session} {term.isCurrent ? '(Current)' : ''}
+            {term.name} {term.session} {term.isCurrent ? tr('(Current)') : ''}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-muted-foreground text-sm">Loading...</div>
+        <div className="text-center py-12 text-muted-foreground text-sm">{tr('Loading...')}</div>
       ) : reportCards.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <FileText size={32} className="mx-auto mb-2 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">No report cards yet.</p>
+          <p className="text-muted-foreground text-sm">{tr('No report cards yet.')}</p>
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
           <div className="overflow-x-auto"><table className="w-full min-w-[760px]">
             <thead className="bg-muted border-b border-border">
               <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Student</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Class</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Term</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Subjects</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Average</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Actions</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Student')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Class')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Term')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Subjects')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Average')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Status')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -711,27 +715,27 @@ export default function ReportCardsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.student.classLevel}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.term.name} — {rc.term.session}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{rc.entries.length} subjects</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">{rc.entries.length} {tr('subjects')}</td>
                   <td className="px-4 py-3 text-sm font-medium text-foreground">{rc.average != null ? rc.average.toFixed(1) : '—'}</td>
                   <td className="px-4 py-3">
                     {rc.status === 'PUBLISHED' ? (
                       <span className="flex items-center gap-1 text-xs text-green-700 bg-green-100 px-2 py-1 rounded-full w-fit">
-                        <CheckCircle size={10} /> Published
+                        <CheckCircle size={10} /> {tr('Published')}
                       </span>
                     ) : (
                       <span className="flex items-center gap-1 text-xs text-yellow-700 bg-yellow-100 px-2 py-1 rounded-full w-fit">
-                        <Clock size={10} /> Draft
+                        <Clock size={10} /> {tr('Draft')}
                       </span>
                     )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <button onClick={() => router.push(`/report-cards/${rc.id}`)}
-                        className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title="View / Print">
+                        className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('View / Print')}>
                         <Eye size={14} />
                       </button>
                       <button onClick={() => setDeleteTarget(rc.id)}
-                        className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition" title="Delete">
+                        className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition" title={tr('Delete')}>
                         <Trash2 size={14} />
                       </button>
                     </div>
@@ -747,7 +751,7 @@ export default function ReportCardsPage() {
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl w-full border border-transparent dark:border-zinc-800 w-full max-w-sm p-6">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold text-foreground text-lg">Create Report Card</h3>
+              <h3 className="font-semibold text-foreground text-lg">{tr('Create Report Card')}</h3>
               <button onClick={() => { setShowModal(false); setError('') }} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
                 <X size={20} />
               </button>
@@ -755,29 +759,29 @@ export default function ReportCardsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Student</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Student')}</label>
                 <select value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="">Select student...</option>
+                  <option value="">{tr('Select student...')}</option>
                   {students.map(s => <option key={s.id} value={s.id}>{s.name} — {s.classLevel}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Term</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Term')}</label>
                 <select value={form.termId} onChange={(e) => setForm({ ...form, termId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="">Select term...</option>
+                  <option value="">{tr('Select term...')}</option>
                   {terms.map(t => <option key={t.id} value={t.id}>{t.name} — {t.session}</option>)}
                 </select>
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => { setShowModal(false); setError('') }}
                   className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">
-                  Cancel
+                  {tr('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? 'Creating...' : 'Create'}
+                  {saving ? tr('Creating...') : tr('Create')}
                 </button>
               </div>
             </form>
@@ -787,9 +791,9 @@ export default function ReportCardsPage() {
 
       <ConfirmModal
         isOpen={!!deleteTarget}
-        title="Delete Report Card"
-        message="Are you sure you want to delete this report card? This action cannot be undone."
-        confirmLabel="Delete"
+        title={tr('Delete Report Card')}
+        message={tr('Are you sure you want to delete this report card? This action cannot be undone.')}
+        confirmLabel={tr('Delete')}
         confirmColor="red"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}
@@ -802,21 +806,21 @@ export default function ReportCardsPage() {
           <div className="bg-card rounded-2xl w-full max-w-lg p-6">
             <div className="flex items-center gap-3 mb-4">
               {bulkResult.published > 0 ? <CheckCircle size={22} className="text-green-600" /> : <AlertTriangle size={22} className="text-amber-500" />}
-              <h3 className="text-lg font-bold text-foreground">Publish All — {bulkResult.classLevel}</h3>
+              <h3 className="text-lg font-bold text-foreground">{tr('Publish All —')} {bulkResult.classLevel}</h3>
             </div>
             <div className="flex gap-4 mb-4">
               <div className="flex-1 bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-800 rounded-xl p-3 text-center">
                 <p className="text-2xl font-bold text-green-600">{bulkResult.published}</p>
-                <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">Published</p>
+                <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">{tr('Published')}</p>
               </div>
               <div className="flex-1 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800 rounded-xl p-3 text-center">
                 <p className="text-2xl font-bold text-amber-600">{bulkResult.skipped}</p>
-                <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">Skipped</p>
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">{tr('Skipped')}</p>
               </div>
             </div>
             {bulkResult.issues.length > 0 && (
               <div className="bg-muted dark:bg-card rounded-xl border border-border max-h-52 overflow-y-auto mb-4">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 pt-3 pb-2">Issues</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 pt-3 pb-2">{tr('Issues')}</p>
                 {bulkResult.issues.map((issue, i) => (
                   <div key={i} className="px-4 py-2 border-t border-gray-100 dark:border-border">
                     <p className="text-sm font-medium text-foreground dark:text-foreground">{issue.student}</p>
@@ -825,7 +829,7 @@ export default function ReportCardsPage() {
                 ))}
               </div>
             )}
-            <button onClick={() => setBulkResult(null)} className="w-full bg-muted hover:bg-muted/80 text-white py-2.5 rounded-xl text-sm font-medium transition">Close</button>
+            <button onClick={() => setBulkResult(null)} className="w-full bg-muted hover:bg-muted/80 text-white py-2.5 rounded-xl text-sm font-medium transition">{tr('Close')}</button>
           </div>
         </div>
       )}
@@ -841,6 +845,7 @@ export default function ReportCardsPage() {
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))}
                 entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
+                generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
                 config={printJob.config}

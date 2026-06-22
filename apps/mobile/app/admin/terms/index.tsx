@@ -8,6 +8,7 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { getTerms, createTerm, setCurrentTerm, deleteTerm, Term } from '@/lib/api/terms'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -120,6 +121,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function TermsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const tr = useT()
   const [terms, setTerms] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -134,7 +136,7 @@ export default function TermsScreen() {
       const data = await getTerms()
       setTerms(data.terms)
     } catch {
-      Alert.alert('Error', 'Failed to load terms.')
+      Alert.alert(tr('Error'), tr('Failed to load terms.'))
     }
   }, [])
 
@@ -150,7 +152,7 @@ export default function TermsScreen() {
 
   const handleCreate = async () => {
     if (!termName.trim() || !session.trim()) {
-      Alert.alert('Validation', 'Term name and session are required.')
+      Alert.alert(tr('Validation'), tr('Term name and session are required.'))
       return
     }
     setCreating(true)
@@ -161,7 +163,7 @@ export default function TermsScreen() {
       setSession('')
       await fetchTerms()
     } catch (err: any) {
-      Alert.alert('Error', err?.response?.data?.message ?? 'Failed to create term.')
+      Alert.alert(tr('Error'), err?.response?.data?.message ?? tr('Failed to create term.'))
     } finally {
       setCreating(false)
     }
@@ -169,19 +171,19 @@ export default function TermsScreen() {
 
   const handleSetCurrent = async (term: Term) => {
     Alert.alert(
-      'Set Current Term',
-      `Set "${term.name} (${term.session})" as the current active term?`,
+      tr('Set Current Term'),
+      `"${term.name} (${term.session})" ${tr('as the current active term?')}`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: tr('Cancel'), style: 'cancel' },
         {
-          text: 'Set Current',
+          text: tr('Set Current'),
           onPress: async () => {
             setSettingCurrent(term.id)
             try {
               await setCurrentTerm(term.id)
               await fetchTerms()
             } catch {
-              Alert.alert('Error', 'Failed to set current term.')
+              Alert.alert(tr('Error'), tr('Failed to set current term.'))
             } finally {
               setSettingCurrent(null)
             }
@@ -193,19 +195,19 @@ export default function TermsScreen() {
 
   const handleDelete = (term: Term) => {
     Alert.alert(
-      'Delete Term',
-      `Delete "${term.name} (${term.session})"?`,
+      tr('Delete Term'),
+      `${tr('Delete')} "${term.name} (${term.session})"?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: tr('Cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: tr('Delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteTerm(term.id)
               setTerms((prev) => prev.filter((t) => t.id !== term.id))
             } catch {
-              Alert.alert('Error', 'Failed to delete term.')
+              Alert.alert(tr('Error'), tr('Failed to delete term.'))
             }
           },
         },
@@ -228,8 +230,8 @@ export default function TermsScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="calendar-outline" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>No terms yet</Text>
-            <Text style={styles.emptySubText}>Tap + to add a term</Text>
+            <Text style={styles.emptyText}>{tr('No terms yet')}</Text>
+            <Text style={styles.emptySubText}>{tr('Tap + to add a term')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -244,7 +246,7 @@ export default function TermsScreen() {
                   {item.isCurrent && (
                     <View style={styles.currentBadge}>
                       <Ionicons name="checkmark-circle" size={12} color="#16a34a" />
-                      <Text style={styles.currentBadgeText}>Current</Text>
+                      <Text style={styles.currentBadgeText}>{tr('Current')}</Text>
                     </View>
                   )}
                 </View>
@@ -260,7 +262,7 @@ export default function TermsScreen() {
                 >
                   {settingCurrent === item.id
                     ? <ActivityIndicator size="small" color="#F03E2F" />
-                    : <Text style={styles.setCurrentText}>Set as Current</Text>}
+                    : <Text style={styles.setCurrentText}>{tr('Set as Current')}</Text>}
                 </TouchableOpacity>
               )}
               {!item.isCurrent && (
@@ -282,28 +284,28 @@ export default function TermsScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Term</Text>
+              <Text style={styles.modalTitle}>{tr('Add Term')}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={22} color="#6b7280" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>Term Name</Text>
+            <Text style={styles.label}>{tr('Term Name')}</Text>
             <TextInput
               style={styles.input}
               value={termName}
               onChangeText={setTermName}
-              placeholder="e.g. First Term"
+              placeholder={tr('e.g. First Term')}
               placeholderTextColor="#9ca3af"
               autoFocus
             />
 
-            <Text style={styles.label}>Session</Text>
+            <Text style={styles.label}>{tr('Session')}</Text>
             <TextInput
               style={styles.input}
               value={session}
               onChangeText={setSession}
-              placeholder="e.g. 2024/2025"
+              placeholder={tr('e.g. 2024/2025')}
               placeholderTextColor="#9ca3af"
             />
 
@@ -314,7 +316,7 @@ export default function TermsScreen() {
             >
               {creating
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={styles.createBtnText}>Create Term</Text>}
+                : <Text style={styles.createBtnText}>{tr('Create Term')}</Text>}
             </TouchableOpacity>
           </View>
         </View>

@@ -4,11 +4,14 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { ArrowLeft, BookOpen } from 'lucide-react'
 import { seqFull } from '@/lib/sequences'
+import { useT, useLang } from '@/lib/i18n'
 
 interface Subject { id: string; name: string; classLevel: string }
 
 export default function ClassSubjectsPage() {
   const router = useRouter()
+  const t = useT()
+  const lang = useLang()
   const params = useParams()
   const searchParams = useSearchParams()
   const classLevel = decodeURIComponent(String(params.classLevel))
@@ -35,13 +38,13 @@ export default function ClassSubjectsPage() {
         </button>
         <div>
           <h2 className="text-xl font-bold text-foreground">{classLevel}</h2>
-          <p className="text-sm text-muted-foreground">Select a sequence and subject to enter marks</p>
+          <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
         </div>
       </div>
 
       {/* Sequence selector */}
       <div className="bg-card rounded-xl border border-border p-5 mb-5">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Select Sequence</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">{t('Select Sequence')}</p>
         <div className="flex gap-3">
           {[0, 1].map((i) => (
             <button key={i} onClick={() => setSelectedSeq(i)}
@@ -50,7 +53,7 @@ export default function ClassSubjectsPage() {
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground hover:border-border'
               }`}>
-              {seqFull(termName, i)}
+              {seqFull(termName, i, lang)}
             </button>
           ))}
         </div>
@@ -59,13 +62,13 @@ export default function ClassSubjectsPage() {
       {/* Subject list */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 bg-muted">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Subjects</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Subjects')}</p>
         </div>
         {loading ? (
-          <div className="text-center py-8 text-muted-foreground text-sm">Loading subjects...</div>
+          <div className="text-center py-8 text-muted-foreground text-sm">{t('Loading subjects...')}</div>
         ) : subjects.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            No subjects found for {classLevel}
+            {t('No subjects for')} {classLevel}
           </div>
         ) : (
           <div className="divide-y divide-border">

@@ -7,6 +7,7 @@ import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown } from '
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { useT } from '@/lib/i18n'
 
 const emptyForm = { name: '', hasStream: false, maxScore: '20' }
 
@@ -14,6 +15,7 @@ export default function ClassesPage() {
   const router = useRouter()
   const { isAuthenticated } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
   const [classes, setClasses] = useState<ClassLevel[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -65,16 +67,16 @@ export default function ClassesPage() {
     try {
       if (editing) {
         await updateClassLevelApi(editing.id, { ...form, maxScore: Number(form.maxScore) })
-        showToast('Class updated')
+        showToast(t('Class updated'))
       } else {
         await createClassLevelApi({ ...form, maxScore: Number(form.maxScore), order: classes.length })
-        showToast('Class added')
+        showToast(t('Class added'))
       }
       closeModal()
       fetchClasses()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
-      setError(e.response?.data?.message || 'Failed to save class')
+      setError(e.response?.data?.message || t('Failed to save class'))
     } finally { setSaving(false) }
   }
 
@@ -84,9 +86,9 @@ export default function ClassesPage() {
       await deleteClassLevelApi(deleteTarget.id)
       setDeleteTarget(null)
       fetchClasses()
-      showToast('Class deleted')
+      showToast(t('Class deleted'))
     } catch {
-      showToast('Failed to delete class', 'error')
+      showToast(t('Failed to delete class'), 'error')
     }
   }
 
@@ -110,32 +112,32 @@ export default function ClassesPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Classes</h2>
-          <p className="text-muted-foreground text-sm mt-1">{classes.length} class{classes.length !== 1 ? 'es' : ''} defined</p>
+          <h2 className="text-2xl font-bold text-foreground">{t('Classes')}</h2>
+          <p className="text-muted-foreground text-sm mt-1">{classes.length} {classes.length !== 1 ? t('classes defined') : t('class defined')}</p>
         </div>
         <button onClick={openAdd}
           className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
-          <Plus size={16} /> Add Class
+          <Plus size={16} /> {t('Add Class')}
         </button>
       </div>
 
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {loading ? (
-          <div className="text-center py-12 text-muted-foreground text-sm">Loading...</div>
+          <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading...')}</div>
         ) : classes.length === 0 ? (
           <div className="text-center py-12">
             <GraduationCap size={32} className="mx-auto mb-2 text-muted-foreground" />
-            <p className="text-muted-foreground text-sm">No classes yet. Add your first class to get started.</p>
+            <p className="text-muted-foreground text-sm">{t('No classes yet. Add your first class to get started.')}</p>
           </div>
         ) : (
           <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Order</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Class Name</th>
-                <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Max Score</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Stream</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Actions</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Order')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Class Name')}</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Max Score')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -167,7 +169,7 @@ export default function ClassesPage() {
                   <td className="px-4 py-3">
                     {cls.hasStream ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
-                        Arts / Science
+                        {t('Arts')} / {t('Science')}
                       </span>
                     ) : (
                       <span className="text-muted-foreground text-sm">—</span>
@@ -196,7 +198,7 @@ export default function ClassesPage() {
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl w-full border border-transparent dark:border-zinc-800 w-full max-w-sm p-6">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold text-foreground text-lg">{editing ? 'Edit Class' : 'Add Class'}</h3>
+              <h3 className="font-semibold text-foreground text-lg">{editing ? t('Edit Class') : t('Add Class')}</h3>
               <button onClick={closeModal} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
                 <X size={20} />
               </button>
@@ -204,7 +206,7 @@ export default function ClassesPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Class Name</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Class Name')}</label>
                 <input type="text" placeholder="e.g. Form 3, Class 5, Lower Sixth"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -212,9 +214,9 @@ export default function ClassesPage() {
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Max Score per Subject</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Max Score per Subject')}</label>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">out of</span>
+                  <span className="text-sm text-muted-foreground">{t('out of')}</span>
                   <input
                     type="number" min="1" max="1000" placeholder="20"
                     value={form.maxScore}
@@ -223,7 +225,7 @@ export default function ClassesPage() {
                     className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">All subjects in this class will use this as their maximum mark.</p>
+                <p className="text-xs text-muted-foreground mt-1">{t('All subjects in this class will use this as their maximum mark.')}</p>
               </div>
               <div>
                 <label className="flex items-center gap-3 cursor-pointer">
@@ -233,17 +235,17 @@ export default function ClassesPage() {
                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.hasStream ? 'translate-x-5' : 'translate-x-1'}`} />
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-foreground">Has stream (Arts / Science)</p>
-                    <p className="text-xs text-muted-foreground">Students in this class must choose a stream</p>
+                    <p className="text-sm font-medium text-foreground">{t('Has stream (Arts / Science)')}</p>
+                    <p className="text-xs text-muted-foreground">{t('Students in this class must choose a stream')}</p>
                   </div>
                 </label>
               </div>
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">Cancel</button>
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{t('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? 'Saving...' : editing ? 'Save Changes' : 'Add Class'}
+                  {saving ? t('Saving...') : editing ? t('Save Changes') : t('Add Class')}
                 </button>
               </div>
             </form>
@@ -253,9 +255,9 @@ export default function ClassesPage() {
 
       <ConfirmModal
         isOpen={!!deleteTarget}
-        title="Delete Class"
-        message={`Delete "${deleteTarget?.name}"? Students already assigned to this class won't be affected, but it will no longer appear in the class list.`}
-        confirmLabel="Delete"
+        title={t('Delete Class')}
+        message={`${t('Are you sure you want to delete')} "${deleteTarget?.name}"? ${t('This cannot be undone.')}`}
+        confirmLabel={t('Delete')}
         confirmColor="red"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}

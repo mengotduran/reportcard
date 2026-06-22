@@ -10,6 +10,7 @@ import { getDashboardStats, getWeeklyStats, getTeacherChartStats, WeeklyStats, T
 import { getOverview, OverviewData } from '@/lib/api/superadmin'
 import { getMeApi } from '@/lib/api/auth'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT, useLocaleCode } from '@/lib/i18n'
 import { API_BASE } from '@/lib/config'
 
 interface Stats { students: number; teachers: number; reportCards: number; subjects: number }
@@ -116,12 +117,14 @@ function MiniBarChart({ data, color }: { data: number[]; color: string }) {
 
 function TeacherHome() {
   const { colors } = useTheme()
+  const t = useT()
+  const locale = useLocaleCode()
   const ts = makeTsStyles(colors)
   const { user, school } = useAuthStore()
   const router = useRouter()
   const [chartStats, setChartStats] = useState<TeacherChartStats | null>(null)
   const [chartLoading, setChartLoading] = useState(true)
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  const today = new Date().toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
   const roleLabel = user?.role?.replace('_', ' ') ?? ''
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
   const sliderImages = (school?.coverImages?.length ? school.coverImages : school?.coverImage ? [school.coverImage] : []).map(u => `${API_BASE}${u}`)
@@ -187,7 +190,7 @@ function TeacherHome() {
 
         <TouchableOpacity style={[ts.classesBtn, user?.role === 'CLASS_MASTER' && ts.classesBtnMaster]} onPress={() => router.push('/(tabs)/report-cards')} activeOpacity={0.85}>
           <Ionicons name={user?.role === 'CLASS_MASTER' ? 'chatbubble-ellipses-outline' : 'school-outline'} size={20} color="#fff" />
-          <Text style={ts.classesBtnText}>{user?.role === 'CLASS_MASTER' ? 'Manage Remarks' : 'Enter My Classes'}</Text>
+          <Text style={ts.classesBtnText}>{user?.role === 'CLASS_MASTER' ? t('Manage Remarks') : t('Enter My Classes')}</Text>
           <Ionicons name="arrow-forward-outline" size={18} color="rgba(255,255,255,0.7)" />
         </TouchableOpacity>
         <Text style={ts.hint}>{user?.role === 'CLASS_MASTER' ? 'Tap to select a class and add general remarks' : 'Tap to select a class and start entering marks'}</Text>
@@ -208,6 +211,7 @@ function WeeklyChartCard({ meta, weekData, total, statsLoading }: {
   meta: typeof CHART_META[0]; weekData: number[]; total: number; statsLoading: boolean
 }) {
   const { colors } = useTheme()
+  const t = useT()
   const adm = makeAdmStyles(colors)
   const lastWeek = weekData[weekData.length - 1] ?? 0
   const prevWeek = weekData[weekData.length - 2] ?? 0
@@ -230,15 +234,17 @@ function WeeklyChartCard({ meta, weekData, total, statsLoading }: {
       {statsLoading
         ? <View style={{ width: 36, height: 22, backgroundColor: colors.bgSecondary, borderRadius: 5, marginBottom: 2 }} />
         : <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 2 }}>{total.toLocaleString()}</Text>}
-      <Text style={{ fontSize: 10, color: colors.textMuted, marginBottom: 8 }}>{meta.label}</Text>
+      <Text style={{ fontSize: 10, color: colors.textMuted, marginBottom: 8 }}>{t(meta.label)}</Text>
       <MiniBarChart data={weekData} color={meta.color} />
-      <Text style={{ fontSize: 9, color: colors.textMuted, marginTop: 4, textAlign: 'right' }}>8 wks</Text>
+      <Text style={{ fontSize: 9, color: colors.textMuted, marginTop: 4, textAlign: 'right' }}>{t('8 wks')}</Text>
     </View>
   )
 }
 
 function AdminHome() {
   const { colors } = useTheme()
+  const t = useT()
+  const locale = useLocaleCode()
   const adm = makeAdmStyles(colors)
   const { user, school } = useAuthStore()
   const [stats, setStats] = useState<Stats | null>(null)
@@ -246,7 +252,7 @@ function AdminHome() {
   const [loading, setLoading] = useState(true)
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
   const sliderImages = (school?.coverImages?.length ? school.coverImages : school?.coverImage ? [school.coverImage] : []).map(u => `${API_BASE}${u}`)
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  const today = new Date().toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
 
   useEffect(() => {
     Promise.all([getDashboardStats(), getWeeklyStats()])
@@ -279,18 +285,18 @@ function AdminHome() {
           )}
           <Text style={adm.schoolName}>{school?.name}</Text>
           <View style={adm.typeBadge}>
-            <Text style={adm.typeText}>{school?.type ? `${school.type} SCHOOL` : ''}</Text>
+            <Text style={adm.typeText}>{school?.type ? `${t(school.type)} ${t('SCHOOL')}` : ''}</Text>
           </View>
           <View style={adm.divider} />
           <Text style={adm.greeting}>
-            {getGreeting()},{' '}
+            {t(getGreeting())},{' '}
             <Text style={{ fontWeight: '700', color: colors.text }}>{user?.name?.split(' ')[0]}</Text>
           </Text>
           <Text style={adm.dateText}>{today}</Text>
         </View>
 
         {/* Weekly trend charts */}
-        <Text style={adm.sectionLabel}>WEEKLY TRENDS</Text>
+        <Text style={adm.sectionLabel}>{t('WEEKLY TRENDS')}</Text>
         <View style={adm.chartsGrid}>
           {CHART_META.map((meta) => (
             <WeeklyChartCard

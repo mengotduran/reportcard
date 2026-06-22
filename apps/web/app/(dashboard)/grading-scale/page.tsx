@@ -7,6 +7,7 @@ import { gradeFromPercent } from '@/lib/grading'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, Pencil, X, ChevronUp, ChevronDown } from 'lucide-react'
+import { useT } from '@/lib/i18n'
 
 const emptyRange = (): GradeRange => ({
   id: `r_${Date.now()}`,
@@ -18,6 +19,7 @@ export default function GradingScalePage() {
   const router = useRouter()
   const { isAuthenticated } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
+  const t = useT()
   const [ranges, setRanges] = useState<GradeRange[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -64,14 +66,14 @@ export default function GradingScalePage() {
     setSaving(true)
     try {
       await saveGradingScaleApi(ranges)
-      showToast('Grading scale saved')
+      showToast(t('Grading scale saved'))
     } catch {
-      showToast('Failed to save', 'error')
+      showToast(t('Failed to save'), 'error')
     } finally { setSaving(false) }
   }
 
   const resetToDefault = () => {
-    if (confirm('Reset to default grading scale? This will overwrite your current scale.')) {
+    if (confirm(t('Reset to default grading scale? This will overwrite your current scale.'))) {
       setRanges(DEFAULT_RANGES.map(r => ({ ...r, id: `r_${Date.now()}_${r.grade}` })))
     }
   }
@@ -83,32 +85,32 @@ export default function GradingScalePage() {
   const covered = new Array(101).fill(false)
   sorted.forEach(r => {
     for (let i = r.minScore; i <= Math.min(r.maxScore, 100); i++) {
-      if (covered[i]) warnings.push(`Overlap detected around ${i}%`)
+      if (covered[i]) warnings.push(`${t('Overlap detected around')} ${i}%`)
       covered[i] = true
     }
   })
   const gaps = covered.slice(0, 101).map((c, i) => !c ? i : null).filter(v => v !== null)
-  if (gaps.length > 0 && gaps.length < 10) warnings.push(`Gaps at: ${gaps.join(', ')}%`)
-  else if (gaps.length >= 10) warnings.push(`${gaps.length} percentage points not covered by any grade range`)
+  if (gaps.length > 0 && gaps.length < 10) warnings.push(`${t('Gaps at:')} ${gaps.join(', ')}%`)
+  else if (gaps.length >= 10) warnings.push(`${gaps.length} ${t('percentage points not covered by any grade range')}`)
   const uniqueWarnings = [...new Set(warnings)].slice(0, 3)
 
-  if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
+  if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
 
   return (
     <div className="max-w-2xl mx-auto">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground tracking-tight">Grading Scale</h2>
-          <p className="text-muted-foreground text-sm mt-1">Define grade ranges — grades are calculated automatically from these</p>
+          <h2 className="text-2xl font-bold text-foreground tracking-tight">{t('Grading Scale')}</h2>
+          <p className="text-muted-foreground text-sm mt-1">{t('Define grade ranges — grades are calculated automatically from these')}</p>
         </div>
         <div className="flex gap-2 flex-shrink-0">
           <button onClick={resetToDefault} className="text-xs text-muted-foreground border border-border px-3 py-1.5 rounded-lg hover:bg-muted transition-colors">
-            Reset to default
+            {t('Reset to default')}
           </button>
           <button onClick={handleSave} disabled={saving}
             className="flex items-center gap-1.5 bg-primary text-primary-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#d63429] disabled:opacity-50 transition-colors">
             <Save size={13} />
-            {saving ? 'Saving…' : 'Save Scale'}
+            {saving ? t('Saving…') : t('Save Scale')}
           </button>
         </div>
       </div>
@@ -125,20 +127,20 @@ export default function GradingScalePage() {
       {/* Grade ranges table */}
       <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
         <div className="flex items-center justify-between px-4 py-3 bg-muted border-b border-border">
-          <span className="text-sm font-semibold text-foreground">Grade Ranges</span>
+          <span className="text-sm font-semibold text-foreground">{t('Grade Ranges')}</span>
           <button onClick={openAdd} className="flex items-center gap-1 text-sm text-green-500 hover:text-green-400 font-medium transition-colors">
-            <Plus size={14} /> Add Range
+            <Plus size={14} /> {t('Add Range')}
           </button>
         </div>
         <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
           <thead>
             <tr className="border-b border-gray-100 dark:border-border">
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Grade</th>
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Score Range (%)</th>
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Remark</th>
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Color</th>
-              <th className="px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Order</th>
-              <th className="px-4 py-2 text-xs font-medium text-muted-foreground uppercase">Actions</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Grade')}</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Score Range (%)')}</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Remark')}</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Color')}</th>
+              <th className="px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Order')}</th>
+              <th className="px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -184,7 +186,7 @@ export default function GradingScalePage() {
               </tr>
             ))}
             {sorted.length === 0 && (
-              <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">No ranges defined. Add one above.</td></tr>
+              <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">{t('No ranges defined. Add one above.')}</td></tr>
             )}
           </tbody>
         </table></div>
@@ -192,12 +194,12 @@ export default function GradingScalePage() {
 
       {/* Live tester */}
       <div className="bg-card rounded-xl border border-border p-4">
-        <h3 className="text-sm font-semibold text-foreground mb-3">Test the Scale</h3>
+        <h3 className="text-sm font-semibold text-foreground mb-3">{t('Test the Scale')}</h3>
         <div className="flex items-center gap-3">
           <div className="relative flex-1">
             <input type="number" min="0" max="100" value={testScore}
               onChange={e => setTestScore(e.target.value)}
-              placeholder="Enter a score (0–100%)"
+              placeholder={t('Enter a score (0–100%)')}
               className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">%</span>
           </div>
@@ -222,46 +224,46 @@ export default function GradingScalePage() {
           <div className="bg-card rounded-2xl w-full border border-transparent dark:border-zinc-800 w-full max-w-sm p-6">
             <div className="flex items-center justify-between mb-5">
               <h3 className="font-semibold text-foreground text-lg">
-                {editingId === '__new__' ? 'Add Grade Range' : 'Edit Grade Range'}
+                {editingId === '__new__' ? t('Add Grade Range') : t('Edit Grade Range')}
               </h3>
               <button onClick={closeEdit} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground"><X size={20} /></button>
             </div>
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Min Score (%)</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Min Score (%)')}</label>
                   <input type="number" min="0" max="100" value={editForm.minScore}
                     onChange={e => setEditForm(f => ({ ...f, minScore: Number(e.target.value) }))}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Max Score (%)</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Max Score (%)')}</label>
                   <input type="number" min="0" max="100" value={editForm.maxScore}
                     onChange={e => setEditForm(f => ({ ...f, maxScore: Number(e.target.value) }))}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Grade Letter</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Grade Letter')}</label>
                 <input type="text" placeholder="e.g. A+, A, B, C, D, F" value={editForm.grade}
                   onChange={e => setEditForm(f => ({ ...f, grade: e.target.value }))}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Remark</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Remark')}</label>
                 <input type="text" placeholder="e.g. Excellent, Good, Fail" value={editForm.remark}
                   onChange={e => setEditForm(f => ({ ...f, remark: e.target.value }))}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Badge Color</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Badge Color')}</label>
                 <div className="flex items-center gap-2">
                   <input type="color" value={editForm.color}
                     onChange={e => setEditForm(f => ({ ...f, color: e.target.value }))}
                     className="w-8 h-8 rounded border border-border cursor-pointer" />
                   <span className="text-sm font-mono text-muted-foreground"
                     style={{ padding: '2px 10px', borderRadius: 20, backgroundColor: `${editForm.color}20`, color: editForm.color, fontWeight: 'bold' }}>
-                    {editForm.grade || 'Preview'}
+                    {editForm.grade || t('Preview')}
                   </span>
                 </div>
               </div>
@@ -269,11 +271,11 @@ export default function GradingScalePage() {
             <div className="flex gap-3 pt-4">
               <button onClick={closeEdit}
                 className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">
-                Cancel
+                {t('Cancel')}
               </button>
               <button onClick={saveEdit} disabled={!editForm.grade.trim()}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                {editingId === '__new__' ? 'Add' : 'Save'}
+                {editingId === '__new__' ? t('Add') : t('Save')}
               </button>
             </div>
           </div>

@@ -2,10 +2,10 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getReportCardApi, saveEntriesApi, publishReportCardApi, unpublishReportCardApi, grantEditPermissionApi, revokeEditPermissionApi, updateRemarksApi, getReadinessDetailApi, ReadinessDetail } from '@/lib/api/reportcards'
+import { getReportCardApi, saveEntriesApi, publishReportCardApi, unpublishReportCardApi, grantEditPermissionApi, revokeEditPermissionApi, updateRemarksApi, generateRemarksApi, remarkSourceLabel, getReadinessDetailApi, ReadinessDetail } from '@/lib/api/reportcards'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTeachersApi } from '@/lib/api/teachers'
-import { ArrowLeft, Save, Send, CheckCircle, Printer } from 'lucide-react'
+import { ArrowLeft, Save, Send, CheckCircle, Printer, Sparkles } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -14,6 +14,7 @@ import { getTemplateApi, TemplateConfig, TemplateName, DEFAULT_CONFIG } from '@/
 import { getGradingScaleApi, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { gradeFromScore, gradeFromPercent } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
+import { useT } from '@/lib/i18n'
 
 interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number }
 interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string }
@@ -24,11 +25,13 @@ interface ReportCard {
   average: number | null
   position: number | null
   remarks: string | null
+  remarksFr: string | null
+  remarksSource: string | null
   marksEditGrantedTo: string | null
   remarksEditGrantedTo: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string }
   term: { id: string; name: string; session: string }
-  school: { name: string; type: string; logo?: string | null }
+  school: { name: string; type: string; language?: string; logo?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
 
@@ -47,10 +50,13 @@ export default function ReportCardDetailPage() {
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const { toast, showToast, hideToast } = useToast()
+  const tr = useT()
   const [reportCard, setReportCard] = useState<ReportCard | null>(null)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [entries, setEntries] = useState<Entry[]>([])
   const [generalRemarks, setGeneralRemarks] = useState('')
+  const [generalRemarksFr, setGeneralRemarksFr] = useState('')
+  const [generatingRemarks, setGeneratingRemarks] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -137,6 +143,7 @@ export default function ReportCardDetailPage() {
       }
       setReportCard(rc)
       setGeneralRemarks(rc.remarks || '')
+      setGeneralRemarksFr(rc.remarksFr || '')
       if (isAdmin) getReadinessDetailApi(String(params.id)).then(setReadiness).catch(() => {})
       const classSubjects = subjectData.subjects.filter(
         (s: Subject) => s.classLevel === rc.student.classLevel
@@ -155,7 +162,7 @@ export default function ReportCardDetailPage() {
       })
       setEntries(existingEntries)
     } catch {
-      showToast('Failed to load report card', 'error')
+      showToast(tr('Failed to load report card'), 'error')
     } finally {
       setLoading(false)
     }
@@ -184,16 +191,31 @@ export default function ReportCardDetailPage() {
     setSaving(true)
     try {
       if (isClassMaster || canAdminEditRemarks) {
-        await updateRemarksApi(String(params.id), generalRemarks)
+        if (reportCard?.school.language === 'FR') await updateRemarksApi(String(params.id), undefined, generalRemarksFr)
+        else await updateRemarksApi(String(params.id), generalRemarks)
       } else {
         await saveEntriesApi(String(params.id), { entries })
       }
-      showToast('Saved successfully')
+      showToast(tr('Saved successfully'))
       fetchData()
     } catch {
-      showToast('Failed to save', 'error')
+      showToast(tr('Failed to save'), 'error')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleGenerateRemarks = async () => {
+    setGeneratingRemarks(true)
+    try {
+      const result = await generateRemarksApi(String(params.id))
+      setGeneralRemarks(result.remarks || '')
+      setGeneralRemarksFr(result.remarksFr || '')
+      showToast(result.aiAvailable ? tr('AI draft ready — review and edit before saving') : tr('AI unavailable — inserted a default you can edit'), result.aiAvailable ? 'success' : 'error')
+    } catch {
+      showToast(tr('Failed to generate remarks'), 'error')
+    } finally {
+      setGeneratingRemarks(false)
     }
   }
 
@@ -202,10 +224,10 @@ export default function ReportCardDetailPage() {
     setPublishing(true)
     try {
       await publishReportCardApi(String(params.id))
-      showToast('Report card published successfully!')
+      showToast(tr('Report card published successfully!'))
       fetchData()
     } catch {
-      showToast('Failed to publish report card', 'error')
+      showToast(tr('Failed to publish report card'), 'error')
     } finally {
       setPublishing(false)
     }
@@ -216,10 +238,10 @@ export default function ReportCardDetailPage() {
     setUnpublishing(true)
     try {
       await unpublishReportCardApi(String(params.id))
-      showToast('Report card unpublished — teachers can now edit marks.')
+      showToast(tr('Report card unpublished — teachers can now edit marks.'))
       fetchData()
     } catch {
-      showToast('Failed to unpublish report card', 'error')
+      showToast(tr('Failed to unpublish report card'), 'error')
     } finally {
       setUnpublishing(false)
     }
@@ -227,26 +249,26 @@ export default function ReportCardDetailPage() {
 
   const handleGrantPermission = async (type: 'marks' | 'remarks') => {
     const userId = type === 'marks' ? grantMarksUserId : grantRemarksUserId
-    if (!userId) { showToast('Please select a teacher first', 'error'); return }
+    if (!userId) { showToast(tr('Please select a teacher first'), 'error'); return }
     try {
       await grantEditPermissionApi(String(params.id), type, userId)
       const name = teachers.find(t => t.id === userId)?.name ?? 'teacher'
-      showToast(`Edit permission granted to ${name}.`)
+      showToast(`${tr('Edit permission granted to')} ${name}.`)
       if (type === 'marks') setGrantMarksUserId('')
       else setGrantRemarksUserId('')
       fetchData()
     } catch {
-      showToast('Failed to grant permission', 'error')
+      showToast(tr('Failed to grant permission'), 'error')
     }
   }
 
   const handleRevokePermission = async (type: 'marks' | 'remarks') => {
     try {
       await revokeEditPermissionApi(String(params.id), type)
-      showToast('Permission revoked.')
+      showToast(tr('Permission revoked.'))
       fetchData()
     } catch {
-      showToast('Failed to revoke permission', 'error')
+      showToast(tr('Failed to revoke permission'), 'error')
     }
   }
 
@@ -296,7 +318,7 @@ export default function ReportCardDetailPage() {
             <div className="flex items-center gap-2">
               {/* Status badge */}
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 bg-green-500/10 border border-green-500/20 px-2.5 py-1.5 rounded-md">
-                <CheckCircle size={12} /> Published
+                <CheckCircle size={12} /> {tr('Published')}
               </span>
 
               {isAdmin && (
@@ -306,7 +328,7 @@ export default function ReportCardDetailPage() {
                     disabled={unpublishing}
                     className="text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-md hover:bg-muted hover:text-foreground disabled:opacity-50 transition-colors"
                   >
-                    {unpublishing ? 'Unpublishing…' : 'Unpublish'}
+                    {unpublishing ? tr('Unpublishing…') : tr('Unpublish')}
                   </button>
 
                   {/* Grant permissions */}
@@ -314,7 +336,7 @@ export default function ReportCardDetailPage() {
                     {/* Marks */}
                     {reportCard.marksEditGrantedTo ? (
                       <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 rounded-md px-2.5 py-1.5">
-                        <span className="text-xs text-primary font-medium">Marks → {teachers.find(t => t.id === reportCard.marksEditGrantedTo)?.name?.split(' ')[0]}</span>
+                        <span className="text-xs text-primary font-medium">{tr('Marks')} → {teachers.find(t => t.id === reportCard.marksEditGrantedTo)?.name?.split(' ')[0]}</span>
                         <button onClick={() => handleRevokePermission('marks')} className="text-primary/60 hover:text-destructive text-xs leading-none">✕</button>
                       </div>
                     ) : (
@@ -324,13 +346,13 @@ export default function ReportCardDetailPage() {
                             compact
                             value={grantMarksUserId}
                             onChange={setGrantMarksUserId}
-                            placeholder="Marks to…"
-                            options={teachers.filter(t => ['CLASS_TEACHER','CLASS_MASTER'].includes(t.role)).map(t => ({ value: t.id, label: t.name, sub: t.role === 'CLASS_MASTER' ? 'Class Master' : 'Class Teacher' }))}
+                            placeholder={tr('Marks to…')}
+                            options={teachers.filter(t => ['CLASS_TEACHER','CLASS_MASTER'].includes(t.role)).map(t => ({ value: t.id, label: t.name, sub: t.role === 'CLASS_MASTER' ? tr('Class Master') : tr('Class Teacher') }))}
                           />
                         </div>
                         <button onClick={() => handleGrantPermission('marks')} disabled={!grantMarksUserId}
                           className="text-xs bg-primary hover:bg-[#d63429] disabled:opacity-40 text-primary-foreground px-2 py-1 rounded-md transition-colors whitespace-nowrap">
-                          Grant
+                          {tr('Grant')}
                         </button>
                       </div>
                     )}
@@ -338,7 +360,7 @@ export default function ReportCardDetailPage() {
                     {/* Remarks */}
                     {reportCard.remarksEditGrantedTo ? (
                       <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 rounded-md px-2.5 py-1.5">
-                        <span className="text-xs text-primary font-medium">Remarks → {teachers.find(t => t.id === reportCard.remarksEditGrantedTo)?.name?.split(' ')[0]}</span>
+                        <span className="text-xs text-primary font-medium">{tr('Remarks')} → {teachers.find(t => t.id === reportCard.remarksEditGrantedTo)?.name?.split(' ')[0]}</span>
                         <button onClick={() => handleRevokePermission('remarks')} className="text-primary/60 hover:text-destructive text-xs leading-none">✕</button>
                       </div>
                     ) : (
@@ -348,13 +370,13 @@ export default function ReportCardDetailPage() {
                             compact
                             value={grantRemarksUserId}
                             onChange={setGrantRemarksUserId}
-                            placeholder="Remarks to…"
-                            options={teachers.filter(t => t.role === 'CLASS_MASTER').map(t => ({ value: t.id, label: t.name, sub: 'Class Master' }))}
+                            placeholder={tr('Remarks to…')}
+                            options={teachers.filter(t => t.role === 'CLASS_MASTER').map(t => ({ value: t.id, label: t.name, sub: tr('Class Master') }))}
                           />
                         </div>
                         <button onClick={() => handleGrantPermission('remarks')} disabled={!grantRemarksUserId}
                           className="text-xs bg-primary hover:bg-[#d63429] disabled:opacity-40 text-primary-foreground px-2 py-1 rounded-md transition-colors whitespace-nowrap">
-                          Grant
+                          {tr('Grant')}
                         </button>
                       </div>
                     )}
@@ -366,7 +388,7 @@ export default function ReportCardDetailPage() {
                   onClick={handlePrint}
                   className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
                 >
-                  <Printer size={14} /> Print / Save PDF
+                  <Printer size={14} /> {tr('Print / Save PDF')}
                 </button>
               )}
             </div>
@@ -379,7 +401,7 @@ export default function ReportCardDetailPage() {
                   className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted disabled:opacity-50 transition"
                 >
                   <Save size={14} />
-                  {saving ? 'Saving...' : 'Save Remarks'}
+                  {saving ? tr('Saving...') : tr('Save Remarks')}
                 </button>
               )}
               {isAdmin && (
@@ -390,7 +412,7 @@ export default function ReportCardDetailPage() {
                     className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     <Send size={14} />
-                    {publishing ? 'Publishing...' : 'Publish'}
+                    {publishing ? tr('Publishing...') : tr('Publish')}
                   </button>
                   {/* Readiness checklist — only shown when button is blocked */}
                   {!canPublish && (
@@ -398,12 +420,12 @@ export default function ReportCardDetailPage() {
                       <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
                         allSeqsFilled ? 'bg-green-100 text-green-700' : 'bg-destructive/10 text-destructive'
                       }`}>
-                        {allSeqsFilled ? '✓' : '✗'} Sequences
+                        {allSeqsFilled ? '✓' : '✗'} {tr('Sequences')}
                       </span>
                       <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
                         hasRemarks ? 'bg-green-100 text-green-700' : 'bg-destructive/10 text-destructive'
                       }`}>
-                        {hasRemarks ? '✓' : '✗'} Remarks
+                        {hasRemarks ? '✓' : '✗'} {tr('Remarks')}
                       </span>
                     </div>
                   )}
@@ -417,19 +439,19 @@ export default function ReportCardDetailPage() {
       <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="bg-card rounded-xl border border-border p-4 text-center">
           <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
-          <p className="text-xs text-muted-foreground mt-1">Subjects</p>
+          <p className="text-xs text-muted-foreground mt-1">{tr('Subjects')}</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4 text-center">
           <p className="text-2xl font-bold text-foreground">{average.toFixed(1)}</p>
-          <p className="text-xs text-muted-foreground mt-1">Terms Average</p>
+          <p className="text-xs text-muted-foreground mt-1">{tr('Terms Average')}</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4 text-center">
           <p className="text-2xl font-bold text-foreground">{gradeFromScore(average, avgMaxScore, gradingRanges).grade}</p>
-          <p className="text-xs text-muted-foreground mt-1">Overall Grade</p>
+          <p className="text-xs text-muted-foreground mt-1">{tr('Overall Grade')}</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4 text-center">
           <p className="text-2xl font-bold text-foreground">{reportCard.position != null ? ordinal(reportCard.position) : '—'}</p>
-          <p className="text-xs text-muted-foreground mt-1">Class Position</p>
+          <p className="text-xs text-muted-foreground mt-1">{tr('Class Position')}</p>
         </div>
       </div>
 
@@ -437,26 +459,26 @@ export default function ReportCardDetailPage() {
       {subjects.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <p className="text-muted-foreground text-sm">
-            No subjects found for <strong>{reportCard.student.classLevel}</strong>.
+            {tr('No subjects for')} <strong>{reportCard.student.classLevel}</strong>.
           </p>
           <button onClick={() => router.push('/subjects')} className="mt-3 text-primary text-sm hover:underline">
-            Go to Subjects →
+            {tr('Go to Subjects →')}
           </button>
         </div>
       ) : (
         <>
           <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
             <div className="px-4 py-3 bg-muted border-b border-border">
-              <h3 className="text-sm font-semibold text-foreground">Subject Scores</h3>
+              <h3 className="text-sm font-semibold text-foreground">{tr('Subject Scores')}</h3>
             </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
               <thead className="border-b border-gray-100 dark:border-border">
                 <tr>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Subject</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Score</th>
-                  <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">Coeff</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Grade</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Remarks</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Subject')}</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Score')}</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Coeff')}</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Grade')}</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Remarks')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -501,13 +523,13 @@ export default function ReportCardDetailPage() {
           {/* Admin attribution panel — who is blocking this card */}
           {isAdmin && readiness && (readiness.missingSubjects.length > 0 || readiness.missingRemarks) && (
             <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-4 space-y-2">
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Action Required</p>
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">{tr('Action Required')}</p>
               {readiness.missingSubjects.map(s => (
                 <div key={s.subjectId} className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
                   {s.teacher
-                    ? <span className="text-foreground"><span className="font-medium">{s.teacher.name}</span> has not filled marks for <span className="font-medium">{s.subjectName}</span></span>
-                    : <span className="text-foreground"><span className="font-medium">{s.subjectName}</span> has no teacher assigned</span>
+                    ? <span className="text-foreground"><span className="font-medium">{s.teacher.name}</span> {tr('has not filled marks for')} <span className="font-medium">{s.subjectName}</span></span>
+                    : <span className="text-foreground"><span className="font-medium">{s.subjectName}</span> {tr('has no teacher assigned')}</span>
                   }
                 </div>
               ))}
@@ -515,8 +537,8 @@ export default function ReportCardDetailPage() {
                 <div className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
                   {readiness.classMaster
-                    ? <span className="text-foreground">Class Master <span className="font-medium">{readiness.classMaster.name}</span> has not written general remarks</span>
-                    : <span className="text-foreground">General remarks have not been written yet — <span className="font-medium">admin / vice-principal</span> can add them below</span>
+                    ? <span className="text-foreground">{tr('Class Master')} <span className="font-medium">{readiness.classMaster.name}</span> {tr('has not written general remarks')}</span>
+                    : <span className="text-foreground">{tr('General remarks have not been written yet —')} <span className="font-medium">{tr('admin / vice-principal')}</span> {tr('can add them below')}</span>
                   }
                 </div>
               )}
@@ -524,35 +546,64 @@ export default function ReportCardDetailPage() {
           )}
 
           <div className="bg-card rounded-xl border border-border p-4">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-foreground">General Remarks</label>
-              <span className="text-xs text-muted-foreground italic">{noClassMaster ? 'No class master — set by admin / VP' : 'Set by class master'}</span>
+            <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+              <label className="block text-sm font-medium text-foreground">{tr('General Remarks')}</label>
+              <div className="flex items-center gap-2">
+                {(() => {
+                  const prov = remarkSourceLabel(reportCard.remarksSource)
+                  if (!prov) return null
+                  const tone = prov.tone === 'ai'
+                    ? 'text-violet-700 bg-violet-100 border-violet-200'
+                    : prov.tone === 'edited'
+                      ? 'text-blue-700 bg-blue-100 border-blue-200'
+                      : 'text-emerald-700 bg-emerald-100 border-emerald-200'
+                  return (
+                    <span className={`inline-flex items-center gap-1 text-[11px] border px-2 py-0.5 rounded-full whitespace-nowrap ${tone}`} title={tr('How this remark was produced')}>
+                      {prov.tone !== 'manual' && <Sparkles size={10} />}{tr(prov.text)}
+                    </span>
+                  )
+                })()}
+                <span className="text-xs text-muted-foreground italic">{noClassMaster ? tr('No class master — set by admin / VP') : tr('Set by class master')}</span>
+              </div>
             </div>
-            {(canEditRemarks || canAdminEditRemarks) ? (
-              <textarea
-                rows={3}
-                placeholder="Overall remarks about the student's performance..."
-                value={generalRemarks}
-                onChange={(e) => setGeneralRemarks(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-              />
+            {(() => { const isFr = reportCard.school.language === 'FR'; return (canEditRemarks || canAdminEditRemarks) ? (
+              <>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <span className="text-xs text-muted-foreground">{tr('Average:')} {reportCard.average != null ? reportCard.average.toFixed(1) : '—'}/20 · {tr('Language:')} {isFr ? tr('French') : tr('English')}</span>
+                  <button
+                    onClick={handleGenerateRemarks}
+                    disabled={generatingRemarks || reportCard.average == null}
+                    title={reportCard.average == null ? tr('Average not computed yet — fill all sequences first') : tr('Generate a draft from the average')}
+                    className="flex items-center gap-1.5 text-xs border border-primary/30 text-primary px-3 py-1.5 rounded-lg hover:bg-primary/10 disabled:opacity-50 transition">
+                    <Sparkles size={12} /> {generatingRemarks ? tr('Generating…') : tr('Generate with AI')}
+                  </button>
+                </div>
+                <textarea
+                  rows={3}
+                  placeholder={isFr ? "Appréciation générale sur les résultats de l'élève..." : "Overall remarks about the student's performance..."}
+                  value={isFr ? generalRemarksFr : generalRemarks}
+                  onChange={(e) => isFr ? setGeneralRemarksFr(e.target.value) : setGeneralRemarks(e.target.value)}
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <p className="text-[11px] text-muted-foreground mt-2">{tr('AI drafts are a starting point — review and edit before saving.')}</p>
+              </>
             ) : isClassMaster && !allSeqsFilled ? (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <p className="text-sm text-amber-700 font-medium">Cannot add remarks yet</p>
-                <p className="text-xs text-amber-600 mt-0.5">All subject sequences must be filled before you can add general remarks.</p>
+                <p className="text-sm text-amber-700 font-medium">{tr('Cannot add remarks yet')}</p>
+                <p className="text-xs text-amber-600 mt-0.5">{tr('All subject sequences must be filled before you can add general remarks.')}</p>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">{reportCard.remarks || <span className="italic">No remarks yet</span>}</p>
-            )}
+              <p className="text-sm text-muted-foreground">{(isFr ? reportCard.remarksFr : reportCard.remarks) || <span className="italic">{tr('No remarks yet')}</span>}</p>
+            ) })()}
           </div>
         </>
       )}
 
       <ConfirmModal
         isOpen={showPublishModal}
-        title="Publish Report Card"
-        message={`Are you sure you want to publish ${reportCard.student.name}'s report card? This will make it visible to students and parents.`}
-        confirmLabel="Yes, Publish"
+        title={tr('Publish Report Card')}
+        message={`${tr('Are you sure you want to publish this report card? It will become visible to students and parents.')}`}
+        confirmLabel={tr('Yes, Publish')}
         confirmColor="green"
         onConfirm={handlePublishConfirm}
         onCancel={() => setShowPublishModal(false)}
@@ -560,9 +611,9 @@ export default function ReportCardDetailPage() {
 
       <ConfirmModal
         isOpen={showUnpublishModal}
-        title="Unpublish Report Card"
-        message={`This will unlock ${reportCard.student.name}'s report card so teachers can edit marks and remarks again. Continue?`}
-        confirmLabel="Yes, Unpublish"
+        title={tr('Unpublish Report Card')}
+        message={`${tr('This will unlock the report card so teachers can edit marks and remarks again. Continue?')}`}
+        confirmLabel={tr('Yes, Unpublish')}
         confirmColor="red"
         onConfirm={handleUnpublishConfirm}
         onCancel={() => setShowUnpublishModal(false)}
@@ -579,6 +630,7 @@ export default function ReportCardDetailPage() {
           subjects={subjects}
           entries={entries}
           generalRemarks={generalRemarks}
+          generalRemarksFr={generalRemarksFr}
           average={average}
           position={reportCard.position}
           config={templateConfig}

@@ -10,6 +10,7 @@ import { getSubjects, Subject } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { seqFull } from '@/lib/sequences'
+import { useT, useLang } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -73,6 +74,8 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function ClassScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
+  const lang = useLang()
   const { classLevel, termId, termName } = useLocalSearchParams<{ classLevel: string; termId: string; termName: string }>()
   const router = useRouter()
   const navigation = useNavigation()
@@ -114,14 +117,14 @@ export default function ClassScreen() {
           activeOpacity={0.8}
         >
           <Ionicons name="chatbubble-ellipses-outline" size={16} color="#7c3aed" />
-          <Text style={styles.remarksBarText}>Add / Edit General Remarks for {decodedClass}</Text>
+          <Text style={styles.remarksBarText}>{t('Add / Edit General Remarks for')} {decodedClass}</Text>
           <Ionicons name="chevron-forward" size={15} color="#7c3aed" />
         </TouchableOpacity>
       )}
 
       {/* Sequence selector */}
       <View style={styles.seqContainer}>
-        <Text style={styles.seqLabel}>Select Sequence</Text>
+        <Text style={styles.seqLabel}>{t('Select Sequence')}</Text>
         <View style={styles.seqRow}>
           {[0, 1].map((i) => (
             <TouchableOpacity
@@ -131,7 +134,7 @@ export default function ClassScreen() {
               activeOpacity={0.7}
             >
               <Text style={[styles.seqBtnText, selectedSeq === i && styles.seqBtnTextActive]}>
-                {seqFull(termName, i)}
+                {seqFull(termName, i, lang)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -146,7 +149,7 @@ export default function ClassScreen() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="book-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No subjects found for {decodedClass}</Text>
+            <Text style={styles.emptyText}>{t('No subjects found for')} {decodedClass}</Text>
           </View>
         }
         renderItem={({ item }) => (

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { API_BASE } from '@/lib/config'
+import { useT } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -104,6 +105,7 @@ function SettingRow({ label, value }: { label: string; value: string | null | un
 export default function SettingsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const { school } = useAuthStore()
 
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
@@ -121,24 +123,24 @@ export default function SettingsScreen() {
         <Text style={styles.schoolName}>{school?.name ?? '—'}</Text>
         {school?.type && (
           <View style={styles.typeBadge}>
-            <Text style={styles.typeText}>{school.type} SCHOOL</Text>
+            <Text style={styles.typeText}>{t(school.type)} {t('SCHOOL')}</Text>
           </View>
         )}
       </View>
 
-      <Text style={styles.sectionLabel}>SCHOOL INFORMATION</Text>
+      <Text style={styles.sectionLabel}>{t('SCHOOL INFORMATION')}</Text>
       <View style={styles.card}>
-        <SettingRow label="School Name" value={school?.name} />
+        <SettingRow label={t('School Name')} value={school?.name} />
         <View style={styles.divider} />
-        <SettingRow label="School Type" value={school?.type} />
+        <SettingRow label={t('School Type')} value={school?.type ? t(school.type) : school?.type} />
       </View>
 
       <View style={styles.webNote}>
         <Ionicons name="desktop-outline" size={18} color="#F03E2F" />
         <View style={{ flex: 1 }}>
-          <Text style={styles.webNoteTitle}>Full Settings on Web</Text>
+          <Text style={styles.webNoteTitle}>{t('Full Settings on Web')}</Text>
           <Text style={styles.webNoteText}>
-            To manage school logo, cover image, subdomain, contact info, and more, visit the web dashboard on your computer.
+            {t('To manage school logo, cover image, subdomain, contact info, and more, visit the web dashboard on your computer.')}
           </Text>
         </View>
       </View>

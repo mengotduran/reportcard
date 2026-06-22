@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { getSubjects, createSubject, deleteSubject, Subject } from '@/lib/api/subjects'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 interface SectionData { title: string; data: Subject[] }
 
@@ -141,6 +142,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function SubjectsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const [sections, setSections] = useState<SectionData[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
   const [loading, setLoading] = useState(true)
@@ -167,7 +169,7 @@ export default function SubjectsScreen() {
       setClassList(clData.classLevels.sort((a, b) => a.order - b.order))
       setSections(buildSections(subData.subjects))
     } catch {
-      Alert.alert('Error', 'Failed to load subjects.')
+      Alert.alert(t('Error'), t('Failed to load subjects.'))
     }
   }, [])
 
@@ -183,7 +185,7 @@ export default function SubjectsScreen() {
 
   const handleCreate = async () => {
     if (!subjectName.trim() || !classLevel) {
-      Alert.alert('Validation', 'Subject name and class level are required.')
+      Alert.alert(t('Validation'), t('Subject name and class level are required.'))
       return
     }
     setCreating(true)
@@ -199,7 +201,7 @@ export default function SubjectsScreen() {
       setCoefficient('1')
       await fetchData()
     } catch (err: any) {
-      Alert.alert('Error', err?.response?.data?.message ?? 'Failed to create subject.')
+      Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to create subject.'))
     } finally {
       setCreating(false)
     }
@@ -207,19 +209,19 @@ export default function SubjectsScreen() {
 
   const handleDelete = (subject: Subject) => {
     Alert.alert(
-      'Delete Subject',
-      `Delete "${subject.name}"?`,
+      t('Delete Subject'),
+      `${t('Delete')} "${subject.name}"?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('Cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('Delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteSubject(subject.id)
               await fetchData()
             } catch {
-              Alert.alert('Error', 'Failed to delete subject.')
+              Alert.alert(t('Error'), t('Failed to delete subject.'))
             }
           },
         },
@@ -242,8 +244,8 @@ export default function SubjectsScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="book-outline" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>No subjects yet</Text>
-            <Text style={styles.emptySubText}>Tap + to add a subject</Text>
+            <Text style={styles.emptyText}>{t('No subjects yet')}</Text>
+            <Text style={styles.emptySubText}>{t('Tap + to add a subject')}</Text>
           </View>
         }
         renderSectionHeader={({ section }) => (
@@ -258,7 +260,7 @@ export default function SubjectsScreen() {
             </View>
             <View style={styles.info}>
               <Text style={styles.subjectName}>{item.name}</Text>
-              <Text style={styles.meta}>Max: {item.maxScore} · Coeff: {item.coefficient}</Text>
+              <Text style={styles.meta}>{t('Max:')} {item.maxScore} · {t('Coeff:')} {item.coefficient}</Text>
             </View>
             <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
               <Ionicons name="trash-outline" size={17} color="#ef4444" />
@@ -276,26 +278,26 @@ export default function SubjectsScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Subject</Text>
+              <Text style={styles.modalTitle}>{t('Add Subject')}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={22} color="#6b7280" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>Subject Name</Text>
+            <Text style={styles.label}>{t('Subject Name')}</Text>
             <TextInput
               style={styles.input}
               value={subjectName}
               onChangeText={setSubjectName}
-              placeholder="e.g. Mathematics"
+              placeholder={t('e.g. Mathematics')}
               placeholderTextColor="#9ca3af"
               autoFocus
             />
 
-            <Text style={styles.label}>Class Level</Text>
+            <Text style={styles.label}>{t('Class Level')}</Text>
             <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
               <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>
-                {classLevel || 'Select class level'}
+                {classLevel || t('Select class level')}
               </Text>
               <Ionicons name="chevron-down" size={16} color="#6b7280" />
             </TouchableOpacity>
@@ -316,7 +318,7 @@ export default function SubjectsScreen() {
             )}
 
             <View>
-              <Text style={styles.label}>Coefficient</Text>
+              <Text style={styles.label}>{t('Coefficient')}</Text>
               <TextInput
                 style={styles.input}
                 value={coefficient}
@@ -333,7 +335,7 @@ export default function SubjectsScreen() {
             >
               {creating
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={styles.createBtnText}>Add Subject</Text>}
+                : <Text style={styles.createBtnText}>{t('Add Subject')}</Text>}
             </TouchableOpacity>
           </View>
         </View>

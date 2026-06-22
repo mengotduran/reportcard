@@ -5,6 +5,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getSubjectsApi, createSubjectApi, deleteSubjectApi, updateSubjectApi } from '@/lib/api/subjects'
 import { getClassLevelsApi, ClassLevel as ClassLevelOption } from '@/lib/api/classLevels'
 import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight } from 'lucide-react'
+import { useT } from '@/lib/i18n'
 
 interface Subject {
   id: string
@@ -17,6 +18,7 @@ interface Subject {
 export default function SubjectsPage() {
   const router = useRouter()
   const { isAuthenticated } = useAuthStore()
+  const t = useT()
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<ClassLevelOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -77,7 +79,7 @@ export default function SubjectsPage() {
       setShowModal(false)
       fetchSubjects()
     } catch (err: any) {
-      setFormError(err.response?.data?.message || 'Failed to create subject')
+      setFormError(err.response?.data?.message || t('Failed to create subject'))
     } finally {
       setSaving(false)
     }
@@ -111,7 +113,7 @@ export default function SubjectsPage() {
   }
 
   if (loading) {
-    return <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
+    return <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
   }
 
   // ── Class picker ─────────────────────────────────────────────────────────
@@ -119,16 +121,16 @@ export default function SubjectsPage() {
     return (
       <div>
         <div className="mb-6">
-          <h2 className="text-2xl font-bold text-foreground">Subjects</h2>
-          <p className="text-muted-foreground text-sm mt-1">Select a class to manage its subjects</p>
+          <h2 className="text-2xl font-bold text-foreground">{t('Subjects')}</h2>
+          <p className="text-muted-foreground text-sm mt-1">{t('Select a class to manage its subjects')}</p>
         </div>
 
         {classLevels.length === 0 ? (
           <div className="bg-card rounded-xl border border-border text-center py-12">
             <BookOpen size={32} className="mx-auto mb-2 text-muted-foreground" />
-            <p className="text-muted-foreground text-sm">No classes found.</p>
+            <p className="text-muted-foreground text-sm">{t('No classes found.')}</p>
             <button onClick={() => router.push('/classes')} className="mt-3 text-primary text-sm hover:underline">
-              Go to Classes →
+              {t('Go to Classes →')}
             </button>
           </div>
         ) : (
@@ -149,9 +151,9 @@ export default function SubjectsPage() {
                   </div>
                   <p className="font-semibold text-foreground">{cl.name}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {count === 0 ? 'No subjects yet' : `${count} subject${count !== 1 ? 's' : ''}`}
+                    {count === 0 ? t('No subjects yet') : `${count} ${count !== 1 ? t('subjects') : t('subject')}`}
                   </p>
-                  <p className="text-xs text-primary font-medium mt-1">Max score: / {cl.maxScore ?? 20}</p>
+                  <p className="text-xs text-primary font-medium mt-1">{t('Max score:')} / {cl.maxScore ?? 20}</p>
                 </button>
               )
             })}
@@ -177,14 +179,14 @@ export default function SubjectsPage() {
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold text-foreground">{selectedClass}</h2>
           <p className="text-muted-foreground text-sm mt-0.5">
-            {classSubjects.length} subject{classSubjects.length !== 1 ? 's' : ''}
+            {classSubjects.length} {classSubjects.length !== 1 ? t('subjects') : t('subject')}
           </p>
         </div>
         <button
           onClick={openModal}
           className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition"
         >
-          <Plus size={16} /> Add Subject
+          <Plus size={16} /> {t('Add Subject')}
         </button>
       </div>
 
@@ -192,10 +194,10 @@ export default function SubjectsPage() {
       {classSubjects.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-14">
           <BookOpen size={32} className="mx-auto mb-3 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm mb-4">No subjects for <strong>{selectedClass}</strong> yet.</p>
+          <p className="text-muted-foreground text-sm mb-4">{t('No subjects for')} <strong>{selectedClass}</strong> {t('yet.')}</p>
           <button onClick={openModal}
             className="inline-flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
-            <Plus size={15} /> Add First Subject
+            <Plus size={15} /> {t('Add First Subject')}
           </button>
         </div>
       ) : (
@@ -203,11 +205,11 @@ export default function SubjectsPage() {
           <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Subject</th>
+                <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Subject')}</th>
                 <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32">
-                  Max Score <span className="font-bold text-primary normal-case">/ {classMaxScore}</span>
+                  {t('Max Score')} <span className="font-bold text-primary normal-case">/ {classMaxScore}</span>
                 </th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28">Coefficient</th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28">{t('Coefficient')}</th>
                 <th className="px-4 py-3 w-24"></th>
               </tr>
             </thead>
@@ -260,22 +262,22 @@ export default function SubjectsPage() {
                       {editingId === s.id ? (
                         <>
                           <button onClick={() => handleEdit(s.id)}
-                            className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition" title="Save">
+                            className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition" title={t('Save')}>
                             <Check size={15} />
                           </button>
                           <button onClick={() => setEditingId(null)}
-                            className="p-1.5 text-muted-foreground hover:bg-muted rounded-lg transition" title="Cancel">
+                            className="p-1.5 text-muted-foreground hover:bg-muted rounded-lg transition" title={t('Cancel')}>
                             <X size={15} />
                           </button>
                         </>
                       ) : (
                         <>
                           <button onClick={() => openEdit(s)}
-                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition" title="Edit">
+                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition" title={t('Edit')}>
                             <Pencil size={14} />
                           </button>
                           <button onClick={() => setDeleteTarget(s)}
-                            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition" title="Delete">
+                            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition" title={t('Delete')}>
                             <Trash2 size={14} />
                           </button>
                         </>
@@ -295,8 +297,8 @@ export default function SubjectsPage() {
           <div className="bg-card rounded-2xl border border-border w-full max-w-sm p-6">
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h3 className="font-semibold text-foreground text-lg">Add Subject</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Class: <span className="font-semibold text-foreground">{selectedClass}</span></p>
+                <h3 className="font-semibold text-foreground text-lg">{t('Add Subject')}</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">{t('Class:')} <span className="font-semibold text-foreground">{selectedClass}</span></p>
               </div>
               <button onClick={() => setShowModal(false)} className="text-muted-foreground hover:text-foreground">
                 <X size={20} />
@@ -309,7 +311,7 @@ export default function SubjectsPage() {
 
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Subject Name</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Subject Name')}</label>
                 <input
                   type="text" placeholder="e.g. Mathematics"
                   value={form.name}
@@ -320,7 +322,7 @@ export default function SubjectsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Coefficient</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Coefficient')}</label>
                 <input
                   type="number" min="1" max="10" placeholder="1"
                   value={form.coefficient}
@@ -328,17 +330,17 @@ export default function SubjectsPage() {
                   required
                   className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                 />
-                <p className="text-xs text-muted-foreground mt-1">Weight of this subject in the final average. Max score is inherited from the class.</p>
+                <p className="text-xs text-muted-foreground mt-1">{t('Weight of this subject in the final average. Max score is inherited from the class.')}</p>
               </div>
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowModal(false)}
                   className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition">
-                  Cancel
+                  {t('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? 'Saving…' : 'Add Subject'}
+                  {saving ? t('Saving…') : t('Add Subject')}
                 </button>
               </div>
             </form>
@@ -355,21 +357,21 @@ export default function SubjectsPage() {
                 <AlertTriangle size={20} className="text-destructive" />
               </div>
               <div>
-                <h3 className="font-semibold text-foreground">Delete Subject</h3>
-                <p className="text-xs text-muted-foreground">This cannot be undone.</p>
+                <h3 className="font-semibold text-foreground">{t('Delete Subject')}</h3>
+                <p className="text-xs text-muted-foreground">{t('This cannot be undone.')}</p>
               </div>
             </div>
             <p className="text-sm text-foreground mb-5">
-              Delete <span className="font-semibold">"{deleteTarget.name}"</span>? All report entries for this subject will also be removed.
+              {t('Are you sure you want to delete')} <span className="font-semibold">"{deleteTarget.name}"</span>? {t('All report entries for this subject will also be removed.')}
             </p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteTarget(null)} disabled={deleting}
                 className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition disabled:opacity-50">
-                Cancel
+                {t('Cancel')}
               </button>
               <button onClick={handleDelete} disabled={deleting}
                 className="flex-1 bg-destructive text-white py-2.5 rounded-lg text-sm font-medium hover:bg-red-700 transition disabled:opacity-50">
-                {deleting ? 'Deleting…' : 'Delete'}
+                {deleting ? t('Deleting…') : t('Delete')}
               </button>
             </div>
           </div>

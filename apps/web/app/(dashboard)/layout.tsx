@@ -6,6 +6,8 @@ import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, S
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
+import { useT } from '@/lib/i18n'
+import { getMeApi } from '@/lib/api/auth'
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
@@ -41,7 +43,15 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, school, logout } = useAuthStore()
+  const { user, school, logout, updateSchool } = useAuthStore()
+  const t = useT()
+
+  // Refresh school once so persisted pre-i18n sessions pick up `language`.
+  useEffect(() => {
+    if (!user || isSuperAdmin) return
+    if (school?.language) return
+    getMeApi().then((me) => { if (me.school) updateSchool(me.school) }).catch(() => {})
+  }, [user])
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
@@ -100,7 +110,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </span>
               </div>
               <span className="text-[10px] font-semibold tracking-widest uppercase text-muted-foreground">
-                {isSuperAdmin ? 'Superadmin' : (school?.type || '')}
+                {isSuperAdmin ? 'Superadmin' : (school?.type ? t(school.type) : '')}
               </span>
             </div>
             {/* Close button — mobile only */}
@@ -124,7 +134,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   }`}
                 >
                   <item.icon size={14} className={isActive ? 'text-primary' : ''} />
-                  {item.label}
+                  {t(item.label)}
                 </button>
               )
             })}
@@ -138,12 +148,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[13px] font-medium text-foreground truncate">{user?.name}</p>
-                <p className="text-[11px] text-muted-foreground truncate">{user?.role?.replace(/_/g, ' ')}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{user?.role ? t(user.role.replace(/_/g, ' ')) : ''}</p>
               </div>
             </div>
 
             <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
-              <span className="text-[13px] text-muted-foreground">Appearance</span>
+              <span className="text-[13px] text-muted-foreground">{t('Appearance')}</span>
               <ThemeToggle compact />
             </div>
 
@@ -151,7 +161,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               onClick={() => { logout(); router.push('/login') }}
               className="w-full flex items-center gap-2 px-3 py-[7px] text-[13px] text-muted-foreground hover:text-destructive hover:bg-muted rounded-md transition-colors"
             >
-              <LogOut size={13} /> Logout
+              <LogOut size={13} /> {t('Logout')}
             </button>
           </div>
         </aside>

@@ -15,9 +15,11 @@ export interface ReportCardDetail {
   average: number | null
   position: number | null
   remarks: string | null
+  remarksFr: string | null
+  remarksSource: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string }
   term: { id: string; name: string; session: string }
-  school: { name: string; type: string }
+  school: { name: string; type: string; language?: string }
   entries: { id: string; score: number | null; seq1Score?: number | null; seq2Score?: number | null; grade: string | null; remarks: string; subject: { id: string; name: string; maxScore: number; coefficient: number } }[]
 }
 
@@ -98,9 +100,34 @@ export const publishReportCard = async (id: string) => {
   return res.data
 }
 
-export const updateRemarks = async (id: string, remarks: string) => {
-  const res = await api.put(`/report-cards/${id}/remarks`, { remarks })
+export const updateRemarks = async (id: string, remarks?: string, remarksFr?: string) => {
+  const res = await api.put(`/report-cards/${id}/remarks`, { remarks, remarksFr })
   return res.data
+}
+
+export interface GenerateRemarksResult {
+  message: string
+  aiAvailable: boolean
+  language: 'EN' | 'FR'
+  remarks: string | null
+  remarksFr: string | null
+}
+
+// Generate an AI remark draft in the school section's language. Editable — not
+// saved as final until the user saves via updateRemarks.
+export const generateRemarks = async (id: string): Promise<GenerateRemarksResult> => {
+  const res = await api.post(`/report-cards/${id}/generate-remarks`)
+  return res.data
+}
+
+// Provenance label for admin display.
+export const remarkSourceLabel = (source: string | null | undefined): { text: string; color: string } | null => {
+  switch (source) {
+    case 'AI': return { text: 'AI-generated', color: '#7c3aed' }
+    case 'AI_EDITED': return { text: 'AI · edited by teacher', color: '#2563eb' }
+    case 'MANUAL': return { text: 'Written by teacher', color: '#059669' }
+    default: return null
+  }
 }
 
 export const unpublishReportCard = async (id: string) => {

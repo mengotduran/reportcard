@@ -6,6 +6,7 @@ export interface SchoolSection {
   id: string
   name: string
   type: string
+  language: string
   email: string
   subdomain: string
   phone: string | null
@@ -46,7 +47,7 @@ export const toggleParentSchoolActiveApi = async (id: string) => {
 
 export const createStandaloneSchoolApi = async (data: {
   schoolName: string; schoolType: string; schoolEmail: string; subdomain: string
-  adminName: string; adminEmail: string; adminPassword: string; phone?: string; city?: string
+  adminName: string; adminEmail: string; adminPassword: string; phone?: string; city?: string; language?: string
 }) => {
   const res = await api.post('/superadmin/schools', data)
   return res.data
@@ -54,21 +55,21 @@ export const createStandaloneSchoolApi = async (data: {
 
 export const createParentSchoolApi = async (data: {
   name: string; city?: string; country?: string
-  sections: { type: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string }[]
+  sections: { type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string }[]
 }) => {
   const res = await api.post('/superadmin/parent-schools', data)
   return res.data
 }
 
 export const addSectionToSchoolApi = async (id: string, data: {
-  type: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string
+  type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string
 }) => {
   const res = await api.post(`/superadmin/schools/${id}/sections`, data)
   return res.data
 }
 
 export const updateSchoolApi = async (id: string, data: {
-  name?: string; email?: string; phone?: string; address?: string; subdomain?: string; type?: string
+  name?: string; email?: string; phone?: string; address?: string; subdomain?: string; type?: string; language?: string
 }) => {
   const res = await api.put(`/superadmin/schools/${id}`, data)
   return res.data
@@ -80,7 +81,7 @@ export const deleteSchoolApi = async (id: string) => {
 }
 
 export const addSectionToParentApi = async (parentId: string, data: {
-  type: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string
+  type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string
 }) => {
   const res = await api.post(`/superadmin/parent-schools/${parentId}/sections`, data)
   return res.data

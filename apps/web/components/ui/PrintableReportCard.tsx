@@ -1,4 +1,5 @@
 import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec } from '@/lib/api/reportCardTemplate'
+import { useT } from '@/lib/i18n'
 
 export interface PrintEntry {
   subjectId: string
@@ -18,6 +19,7 @@ export interface PrintableReportCardProps {
   subjects: PrintSubject[]
   entries: PrintEntry[]
   generalRemarks: string
+  generalRemarksFr?: string
   average: number
   position?: number | null
   config?: Partial<TemplateConfig>
@@ -68,7 +70,8 @@ function Logo({ url, size, color }: { url?: string | null; size: number; color: 
 }
 
 // ─── Classic ─────────────────────────────────────────────────────────────────
-function Classic({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
+  const t = useT()
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -82,7 +85,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
       <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       <div style={{ textAlign: 'center', borderBottom: `3px solid ${cfg.primaryColor}`, paddingBottom: '16px', marginBottom: '20px' }}>
         {school.logo && <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Logo url={school.logo} size={60} color={cfg.primaryColor} /></div>}
-        {cfg.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase' }}>{school.type} SCHOOL</p>}
+        {cfg.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase' }}>{t(school.type)} {t('SCHOOL')}</p>}
         <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px', color: cfg.primaryColor }}>{school.name}</h1>
         {cfg.schoolSubtitle && <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#555' }}>{cfg.schoolSubtitle}</p>}
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '10px 0 0', letterSpacing: '3px', color: cfg.primaryColor }}>{cfg.reportTitle}</h2>
@@ -90,19 +93,19 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '20px', backgroundColor: `rgba(${rgb},0.05)`, padding: '12px', border: `1px solid rgba(${rgb},0.3)` }}>
         {[['Student Name', student.name], ['Student ID', student.studentId], ['Class', student.classLevel], ['Guardian', student.guardianName || '—'], ['Term', term.name], ['Session', term.session]].map(([k, v]) => (
-          <div key={k}><span style={{ fontWeight: 'bold' }}>{k}:</span> {v}</div>
+          <div key={k}><span style={{ fontWeight: 'bold' }}>{t(k)}:</span> {v}</div>
         ))}
       </div>
 
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '20px', fontSize: '12px' }}>
         <thead>
           <tr style={{ backgroundColor: cfg.primaryColor, color: '#fff' }}>
-            <th style={{ padding: '8px 10px', textAlign: 'left' }}>Subject</th>
-            {cfg.showSeq1 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>Seq. 1</th>}
-            {cfg.showSeq2 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>Seq. 2</th>}
-            <th style={{ padding: '8px 10px', textAlign: 'center' }}>Score</th>
-            {cfg.showGrade && <th style={{ padding: '8px 10px', textAlign: 'center' }}>Grade</th>}
-            {cfg.showRemarks && <th style={{ padding: '8px 10px', textAlign: 'left' }}>Remarks</th>}
+            <th style={{ padding: '8px 10px', textAlign: 'left' }}>{t('Subject')}</th>
+            {cfg.showSeq1 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Seq. 1')}</th>}
+            {cfg.showSeq2 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Seq. 2')}</th>}
+            <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Score')}</th>
+            {cfg.showGrade && <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Grade')}</th>}
+            {cfg.showRemarks && <th style={{ padding: '8px 10px', textAlign: 'left' }}>{t('Remarks')}</th>}
           </tr>
         </thead>
         <tbody>
@@ -130,15 +133,15 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
         ].filter(Boolean).map((item: any) => (
           <div key={item.label} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '10px', textAlign: 'center' }}>
             <div style={{ fontSize: '20px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.value}</div>
-            <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>{item.label}</div>
+            <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>{t(item.label)}</div>
           </div>
         ))}
       </div>
 
       {cfg.showGeneralRemarks && (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '12px', marginBottom: '28px' }}>
-          <div style={{ fontWeight: 'bold', marginBottom: '5px', color: cfg.primaryColor }}>General Remarks</div>
-          <div style={{ color: '#444', minHeight: '36px' }}>{generalRemarks || '—'}</div>
+          <div style={{ fontWeight: 'bold', marginBottom: '5px', color: cfg.primaryColor }}>{t('General Remarks')}</div>
+          <div style={{ color: '#444', minHeight: '36px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )}
 
@@ -161,7 +164,8 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
 }
 
 // ─── Bilingual ────────────────────────────────────────────────────────────────
-function Bilingual({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
+  const t = useT()
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -177,7 +181,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
         {cfg.schoolSubtitle && <p style={{ margin: '0 0 4px', fontSize: '11px', letterSpacing: '1px', opacity: 0.85 }}>{cfg.schoolSubtitle}</p>}
         {school.logo && <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Logo url={school.logo} size={56} color={cfg.primaryColor} /></div>}
         <h1 style={{ fontSize: '22px', fontWeight: 'bold', margin: '0 0 6px' }}>{school.name}</h1>
-        {cfg.showSchoolType && <p style={{ margin: '0 0 10px', fontSize: '11px', opacity: 0.8 }}>{school.type} SCHOOL / ÉCOLE {school.type}</p>}
+        {cfg.showSchoolType && <p style={{ margin: '0 0 10px', fontSize: '11px', opacity: 0.8 }}>{t(school.type)} {t('SCHOOL')} / ÉCOLE {school.type}</p>}
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.4)', paddingTop: '10px' }}>
           <h2 style={{ fontSize: '13px', fontWeight: 'bold', margin: 0, letterSpacing: '1px' }}>{cfg.reportTitle}</h2>
         </div>
@@ -185,7 +189,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', marginBottom: '16px', border: `1px solid ${cfg.primaryColor}`, padding: '10px' }}>
         {[['Nom / Name', student.name], ['Matricule / ID', student.studentId], ['Classe / Class', student.classLevel], ['Tuteur / Guardian', student.guardianName || '—'], ['Terme / Term', term.name], ['Session / Year', term.session]].map(([k, v]) => (
-          <div key={k} style={{ padding: '2px 0' }}><span style={{ fontWeight: 'bold' }}>{k}:</span> {v}</div>
+          <div key={k} style={{ padding: '2px 0' }}><span style={{ fontWeight: 'bold' }}>{t(k)}:</span> {v}</div>
         ))}
       </div>
 
@@ -233,7 +237,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
       {cfg.showGeneralRemarks && (
         <div style={{ border: `1px solid ${cfg.primaryColor}`, padding: '10px', marginBottom: '24px' }}>
           <div style={{ fontWeight: 'bold', marginBottom: '4px', color: cfg.primaryColor }}>Observations / General Remarks</div>
-          <div style={{ minHeight: '32px' }}>{generalRemarks || '—'}</div>
+          <div style={{ minHeight: '32px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )}
 
@@ -258,7 +262,8 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
 }
 
 // ─── Modern ───────────────────────────────────────────────────────────────────
-function Modern({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
+  const t = useT()
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -299,12 +304,12 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '20px' }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${cfg.primaryColor}` }}>
-              <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Subject</th>
-              {cfg.showSeq1 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Seq 1</th>}
-              {cfg.showSeq2 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Seq 2</th>}
-              <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Score</th>
-              {cfg.showGrade && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Grade</th>}
-              {cfg.showRemarks && <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Remarks</th>}
+              <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Subject')}</th>
+              {cfg.showSeq1 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Seq 1')}</th>}
+              {cfg.showSeq2 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Seq 2')}</th>}
+              <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Score')}</th>
+              {cfg.showGrade && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Grade')}</th>}
+              {cfg.showRemarks && <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Remarks')}</th>}
             </tr>
           </thead>
           <tbody>
@@ -334,15 +339,15 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
           ].filter(Boolean).map((item: any) => (
             <div key={item.label} style={{ backgroundColor: `rgba(${rgb},0.08)`, borderRadius: '8px', padding: '14px', textAlign: 'center' }}>
               <div style={{ fontSize: '22px', fontWeight: '800', color: cfg.primaryColor }}>{item.value}</div>
-              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{item.label}</div>
+              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{t(item.label)}</div>
             </div>
           ))}
         </div>
 
         {cfg.showGeneralRemarks && (
           <div style={{ backgroundColor: 'transparent', borderRadius: '8px', padding: '14px', marginBottom: '24px', borderLeft: `3px solid ${cfg.primaryColor}` }}>
-            <div style={{ fontWeight: '600', marginBottom: '5px', color: cfg.primaryColor, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>General Remarks</div>
-            <div style={{ color: '#374151', minHeight: '28px' }}>{generalRemarks || '—'}</div>
+            <div style={{ fontWeight: '600', marginBottom: '5px', color: cfg.primaryColor, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>{t('General Remarks')}</div>
+            <div style={{ color: '#374151', minHeight: '28px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
           </div>
         )}
 
@@ -366,7 +371,8 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
 }
 
 // ─── Official ─────────────────────────────────────────────────────────────────
-function Official({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
+  const t = useT()
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const border = `2px solid ${cfg.primaryColor}`
@@ -409,12 +415,12 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '16px', border }}>
         <thead>
           <tr style={{ backgroundColor: cfg.primaryColor, color: '#fff' }}>
-            <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>Subject</th>
-            {cfg.showSeq1 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Seq. 1</th>}
-            {cfg.showSeq2 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Seq. 2</th>}
-            <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Score</th>
-            {cfg.showGrade && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Grade</th>}
-            {cfg.showRemarks && <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>Remarks</th>}
+            <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Subject')}</th>
+            {cfg.showSeq1 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Seq. 1')}</th>}
+            {cfg.showSeq2 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Seq. 2')}</th>}
+            <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Score')}</th>
+            {cfg.showGrade && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Grade')}</th>}
+            {cfg.showRemarks && <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Remarks')}</th>}
           </tr>
         </thead>
         <tbody>
@@ -454,7 +460,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
       {cfg.showGeneralRemarks && (
         <div style={{ border, padding: '10px', marginBottom: '24px' }}>
           <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '1px' }}>General Remarks / Observations Générales</div>
-          <div style={{ minHeight: '36px' }}>{generalRemarks || '—'}</div>
+          <div style={{ minHeight: '36px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )}
 
@@ -480,7 +486,8 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
 
 // ─── Sections-based renderer ─────────────────────────────────────────────────
 function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfig }) {
-  const { school, student, term, subjects, entries, generalRemarks, average, position, cfg } = props
+  const t = useT()
+  const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg } = props
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
   const rgb = hexToRgb(color)
@@ -515,7 +522,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
       const textBlock = (
         <div style={{ flex: 1 }}>
-          {s.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: 11, color: s.schoolTypeColor || '#666', letterSpacing: 2, textTransform: 'uppercase' }}>{school.type} SCHOOL</p>}
+          {s.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: 11, color: s.schoolTypeColor || '#666', letterSpacing: 2, textTransform: 'uppercase' }}>{t(school.type)} {t('SCHOOL')}</p>}
           <h1 style={{ fontSize: 22, fontWeight: 'bold', margin: '0 0 4px', color: s.schoolNameColor || color }}>{school.name}</h1>
           {s.subtitle && <p style={{ margin: '0 0 6px', fontSize: 12, color: '#555' }} dangerouslySetInnerHTML={{ __html: s.subtitle }} />}
           <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '8px 0 0', letterSpacing: 3, color }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />
@@ -618,7 +625,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       return (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 12, marginBottom: 16 }}>
           <div style={{ fontWeight: 'bold', marginBottom: 5, color }} dangerouslySetInnerHTML={{ __html: s.label }} />
-          <div style={{ minHeight: 36, color: '#444' }}>{generalRemarks || '—'}</div>
+          <div style={{ minHeight: 36, color: '#444' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )
     }

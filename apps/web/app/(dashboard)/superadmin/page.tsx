@@ -24,8 +24,8 @@ const TYPE_COLORS: Record<string, string> = {
 
 const SCHOOL_TYPES = ['PRIMARY', 'SECONDARY', 'UNIVERSITY']
 
-const emptySectionForm = { type: 'PRIMARY', subdomain: '', schoolEmail: '', adminName: '', adminEmail: '', adminPassword: '' }
-const emptyStandaloneForm = { schoolName: '', schoolType: 'PRIMARY', schoolEmail: '', subdomain: '', adminName: '', adminEmail: '', adminPassword: '', phone: '', city: '' }
+const emptySectionForm = { type: 'PRIMARY', language: 'EN', subdomain: '', schoolEmail: '', adminName: '', adminEmail: '', adminPassword: '' }
+const emptyStandaloneForm = { schoolName: '', schoolType: 'PRIMARY', language: 'EN', schoolEmail: '', subdomain: '', adminName: '', adminEmail: '', adminPassword: '', phone: '', city: '' }
 const emptyParentForm = { name: '', city: '', country: '' }
 
 // ─── Section form row ───────────────────────────────────────────────────────
@@ -35,11 +35,13 @@ function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes }:
   onRemove: (idx: number) => void; canRemove: boolean; usedTypes: string[]
 }) {
   const [showPw, setShowPw] = useState(false)
-  const available = SCHOOL_TYPES.filter((t) => t === data.type || !usedTypes.includes(t))
+  // All types selectable — a type may repeat as long as the language differs.
+  // The backend rejects duplicate type+language combos.
+  void usedTypes
   return (
     <div className="border border-border rounded-xl p-4 space-y-3 bg-muted">
       <div className="flex items-center justify-between">
-        <span className={`text-xs font-bold px-2 py-1 rounded-full ${TYPE_COLORS[data.type]}`}>{data.type}</span>
+        <span className={`text-xs font-bold px-2 py-1 rounded-full ${TYPE_COLORS[data.type]}`}>{data.type} · {data.language === 'FR' ? 'FR' : 'EN'}</span>
         {canRemove && <button type="button" onClick={() => onRemove(idx)} className="text-muted-foreground hover:text-destructive"><X size={14} /></button>}
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -47,7 +49,15 @@ function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes }:
           <label className="block text-xs font-medium text-muted-foreground mb-1">Section Type</label>
           <select value={data.type} onChange={(e) => onChange(idx, 'type', e.target.value)}
             className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-            {available.map((t) => <option key={t} value={t}>{t}</option>)}
+            {SCHOOL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Language</label>
+          <select value={data.language} onChange={(e) => onChange(idx, 'language', e.target.value)}
+            className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+            <option value="EN">English</option>
+            <option value="FR">French</option>
           </select>
         </div>
         <div>
@@ -95,7 +105,7 @@ export default function SuperAdminPage() {
   const [toggleTarget, setToggleTarget] = useState<{ id: string; name: string; isActive: boolean; kind: 'school' | 'parent' } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; students: number; reportCards: number } | null>(null)
   const [editTarget, setEditTarget] = useState<SchoolSection | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', address: '', subdomain: '', type: '' })
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', address: '', subdomain: '', type: '', language: 'EN' })
   const [showAddSectionInEdit, setShowAddSectionInEdit] = useState(false)
   const [editSectionForm, setEditSectionForm] = useState({ ...emptySectionForm })
   const [savingSection, setSavingSection] = useState(false)
@@ -195,7 +205,7 @@ export default function SuperAdminPage() {
 
   const openEdit = (school: SchoolSection) => {
     setEditTarget(school)
-    setEditForm({ name: school.name, email: school.email, phone: school.phone ?? '', address: '', subdomain: school.subdomain, type: school.type })
+    setEditForm({ name: school.name, email: school.email, phone: school.phone ?? '', address: '', subdomain: school.subdomain, type: school.type, language: school.language === 'FR' ? 'FR' : 'EN' })
     setShowAddSectionInEdit(false)
     setFormError('')
     // Find siblings from current data
@@ -370,7 +380,7 @@ export default function SuperAdminPage() {
                       <div key={section.id} className={`flex items-center gap-3 px-4 py-3 ${i < parent.sections.length - 1 ? 'border-b border-gray-100' : ''} hover:bg-muted`}>
                         <div className="w-6 ml-3 text-muted-foreground text-xs font-mono flex-shrink-0">└</div>
                         <span className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${TYPE_COLORS[section.type] ?? 'bg-muted text-muted-foreground'}`}>
-                          {section.type}
+                          {section.type} · {section.language === 'FR' ? 'FR' : 'EN'}
                         </span>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm text-foreground font-medium">{section.email}</p>
@@ -454,7 +464,7 @@ export default function SuperAdminPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs font-medium px-2 py-1 rounded-full ${TYPE_COLORS[school.type] ?? 'bg-muted text-muted-foreground'}`}>{school.type}</span>
+                      <span className={`text-xs font-medium px-2 py-1 rounded-full ${TYPE_COLORS[school.type] ?? 'bg-muted text-muted-foreground'}`}>{school.type} · {school.language === 'FR' ? 'FR' : 'EN'}</span>
                     </td>
                     <td className="px-4 py-3 text-sm text-muted-foreground">{school.subdomain}</td>
                     <td className="px-4 py-3 text-sm text-muted-foreground">{school._count.students}</td>
@@ -536,6 +546,14 @@ export default function SuperAdminPage() {
                   <select value={standaloneForm.schoolType} onChange={(e) => setStandaloneForm({ ...standaloneForm, schoolType: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                     {SCHOOL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Language</label>
+                  <select value={standaloneForm.language} onChange={(e) => setStandaloneForm({ ...standaloneForm, language: e.target.value })}
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="EN">English</option>
+                    <option value="FR">French</option>
                   </select>
                 </div>
               </div>
@@ -697,9 +715,15 @@ export default function SuperAdminPage() {
                   <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Type</label>
                   <select value={editForm.type} onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                    {SCHOOL_TYPES.filter((t) => t === editForm.type || !siblings.map((s) => s.type).includes(t)).map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
+                    {SCHOOL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Language (AI remarks)</label>
+                  <select value={editForm.language} onChange={(e) => setEditForm({ ...editForm, language: e.target.value })}
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="EN">English</option>
+                    <option value="FR">French</option>
                   </select>
                 </div>
               </div>
@@ -720,7 +744,7 @@ export default function SuperAdminPage() {
                 <div className="space-y-2 mb-3">
                   {[editTarget!, ...siblings].map((s) => (
                     <div key={s.id} className="flex items-center gap-3 p-2.5 bg-muted rounded-lg border border-border">
-                      <span className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${TYPE_COLORS[s.type] ?? 'bg-muted text-muted-foreground'}`}>{s.type}</span>
+                      <span className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${TYPE_COLORS[s.type] ?? 'bg-muted text-muted-foreground'}`}>{s.type} · {s.language === 'FR' ? 'FR' : 'EN'}</span>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium text-foreground truncate">{s.email}</p>
                         <p className="text-xs text-muted-foreground">{s.subdomain}</p>
