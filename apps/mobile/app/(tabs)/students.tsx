@@ -8,9 +8,12 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { getStudents, createStudent, updateStudent, deleteStudent, Student } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
+import { getSubjects } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { shareCsv } from '@/lib/csv'
+import StudentFeesModal from '@/components/StudentFeesModal'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
@@ -23,6 +26,9 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     borderWidth: 1, borderColor: colors.border, paddingHorizontal: 12,
   },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 14, color: colors.text, backgroundColor: 'transparent' },
+  exportBar: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, marginBottom: 4 },
+  exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  exportText: { fontSize: 12, fontWeight: '600', color: '#F03E2F' },
   list: { paddingHorizontal: 16, paddingBottom: 100 },
   row: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card,
@@ -74,6 +80,12 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     backgroundColor: '#FEF2F1', borderRadius: 12, paddingVertical: 13,
   },
   editBtnText: { fontSize: 14, fontWeight: '600', color: '#F03E2F' },
+  feesBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: '#f0fdf4', borderRadius: 12, paddingVertical: 13, marginBottom: 10,
+    borderWidth: 1, borderColor: '#bbf7d0',
+  },
+  feesBtnText: { fontSize: 14, fontWeight: '600', color: '#16a34a' },
   deleteActionBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     backgroundColor: '#fee2e2', borderRadius: 12, paddingVertical: 13,
@@ -103,12 +115,14 @@ function StudentDetailModal({
   onClose,
   onDelete,
   onEdit,
+  onFees,
 }: {
   student: Student | null
   visible: boolean
   onClose: () => void
   onDelete: (id: string) => void
   onEdit: (student: Student) => void
+  onFees: (student: Student) => void
 }) {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
@@ -149,6 +163,10 @@ function StudentDetailModal({
               </View>
             </View>
           </View>
+          <TouchableOpacity style={styles.feesBtn} onPress={() => onFees(student)}>
+            <Ionicons name="wallet-outline" size={16} color="#16a34a" />
+            <Text style={styles.feesBtnText}>{t('School Fees')}</Text>
+          </TouchableOpacity>
           <View style={styles.detailActions}>
             <TouchableOpacity style={styles.editBtn} onPress={() => onEdit(student)}>
               <Ionicons name="create-outline" size={16} color="#F03E2F" />
@@ -269,17 +287,27 @@ export default function StudentsScreen() {
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
   const [detailVisible, setDetailVisible] = useState(false)
   const [createVisible, setCreateVisible] = useState(false)
+  const [feesStudent, setFeesStudent] = useState<Student | null>(null)
+  const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
 
   const fetchStudents = useCallback(async () => {
     try {
-      const [sData, clData] = await Promise.all([
+      const [sData, clData, subData] = await Promise.all([
         getStudents(),
         isAdmin ? getClasses() : Promise.resolve({ classLevels: [] }),
+        isAdmin ? getSubjects() : Promise.resolve({ subjects: [] }),
       ])
       setStudents(sData.students)
-      if (isAdmin) setClassList((clData as { classLevels: ClassLevel[] }).classLevels.sort((a, b) => a.order - b.order))
+      if (isAdmin) {
+        setClassList((clData as { classLevels: ClassLevel[] }).classLevels.sort((a, b) => a.order - b.order))
+        const map: Record<string, string[]> = {}
+        for (const s of (subData as { subjects: { name: string; classLevel: string }[] }).subjects) {
+          (map[s.classLevel] ??= []).push(s.name)
+        }
+        setSubjectsByClass(map)
+      }
     } catch {
       setError(t('Failed to load students'))
     }
@@ -337,6 +365,20 @@ export default function StudentsScreen() {
     Alert.alert(t('Edit'), t('Full edit is available on the web dashboard for now.'))
   }
 
+  const handleExport = async () => {
+    if (filtered.length === 0) return
+    try {
+      await shareCsv('students', filtered, [
+        { label: t('Name'), value: (s) => s.name },
+        { label: t('Student ID'), value: (s) => s.studentId },
+        { label: t('Class'), value: (s) => s.classLevel },
+        { label: t('Subjects'), value: (s) => (subjectsByClass[s.classLevel] || []).join(', ') },
+        { label: t('Guardian'), value: (s) => s.guardianName || '' },
+        { label: t('Status'), value: (s) => (s.isActive ? t('Active') : t('Inactive')) },
+      ])
+    } catch { /* user dismissed the share sheet */ }
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.searchWrap}>
@@ -349,6 +391,15 @@ export default function StudentsScreen() {
           placeholderTextColor="#9ca3af"
         />
       </View>
+
+      {isAdmin && filtered.length > 0 && (
+        <View style={styles.exportBar}>
+          <TouchableOpacity style={styles.exportBtn} onPress={handleExport}>
+            <Ionicons name="download-outline" size={15} color="#F03E2F" />
+            <Text style={styles.exportText}>{t('Export CSV')}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color="#F03E2F" /></View>
@@ -404,7 +455,17 @@ export default function StudentsScreen() {
         onClose={() => setDetailVisible(false)}
         onDelete={handleDeleteStudent}
         onEdit={handleEditStudent}
+        onFees={(s) => { setDetailVisible(false); setFeesStudent(s) }}
       />
+
+      {feesStudent && (
+        <StudentFeesModal
+          studentId={feesStudent.id}
+          studentName={feesStudent.name}
+          visible={!!feesStudent}
+          onClose={() => setFeesStudent(null)}
+        />
+      )}
 
       <CreateStudentModal
         visible={createVisible}

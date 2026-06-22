@@ -4,7 +4,9 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getTermsApi, createTermApi, updateTermApi, setCurrentTermApi, deleteTermApi } from '@/lib/api/terms'
 import { Calendar, Plus, Trash2, Pencil, X, CheckCircle } from 'lucide-react'
+import Pagination from '@/components/ui/Pagination'
 import { useT } from '@/lib/i18n'
+import { usePagination } from '@/lib/usePagination'
 
 interface Term {
   id: string
@@ -105,6 +107,8 @@ export default function TermsPage() {
     fetchTerms()
   }
 
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(terms, 15)
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -127,7 +131,7 @@ export default function TermsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {terms.map((term) => (
+          {pageItems.map((term) => (
             <div key={term.id}
               className={`bg-card rounded-xl border p-5 ${term.isCurrent ? 'border-primary/40 ring-2 ring-primary/20 dark:border-primary ring-ring/20' : 'border-border'}`}>
               <div className="flex items-start justify-between mb-3">
@@ -161,6 +165,9 @@ export default function TermsPage() {
               </div>
             </div>
           ))}
+          <div className="md:col-span-2 lg:col-span-3">
+            <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
+          </div>
         </div>
       )}
 

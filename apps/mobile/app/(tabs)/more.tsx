@@ -12,6 +12,7 @@ const MENU_ITEMS = [
   { label: 'Classes', icon: 'school-outline' as const, route: '/admin/classes' },
   { label: 'Subjects', icon: 'book-outline' as const, route: '/admin/subjects' },
   { label: 'Terms', icon: 'calendar-outline' as const, route: '/admin/terms' },
+  { label: 'School Fees', icon: 'wallet-outline' as const, route: '/admin/fees' },
   { label: 'Grading Scale', icon: 'stats-chart-outline' as const, route: '/admin/grading' },
   { label: 'Settings', icon: 'settings-outline' as const, route: '/admin/settings' },
   { label: 'Report Card Design', icon: 'laptop-outline' as const, route: '/admin/report-card-design' },

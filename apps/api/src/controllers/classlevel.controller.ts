@@ -19,7 +19,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
 export const createClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, hasStream, order, maxScore } = req.body
+    const { name, hasStream, order, maxScore, feeAmount } = req.body
 
     if (!name?.trim()) {
       res.status(400).json({ message: 'Class name is required' })
@@ -40,6 +40,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         hasStream: hasStream ?? false,
         order: order ?? 0,
         maxScore: maxScore ? Number(maxScore) : 20,
+        feeAmount: feeAmount != null ? Math.max(0, Math.round(Number(feeAmount)) || 0) : 0,
       },
     })
     res.status(201).json({ message: 'Class created', classLevel: level })
@@ -53,7 +54,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, hasStream, order, maxScore } = req.body
+    const { name, hasStream, order, maxScore, feeAmount } = req.body
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) {
@@ -78,6 +79,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         ...(hasStream !== undefined ? { hasStream } : {}),
         ...(order !== undefined ? { order } : {}),
         ...(maxScore !== undefined ? { maxScore: Number(maxScore) } : {}),
+        ...(feeAmount !== undefined ? { feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0) } : {}),
       },
     })
     res.json({ message: 'Class updated', classLevel: updated })

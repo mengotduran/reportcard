@@ -5,6 +5,8 @@ export interface ClassLevel {
   name: string
   hasStream: boolean
   order: number
+  maxScore?: number
+  feeAmount?: number
 }
 
 export const getClasses = async (): Promise<{ classLevels: ClassLevel[] }> => {
@@ -12,7 +14,7 @@ export const getClasses = async (): Promise<{ classLevels: ClassLevel[] }> => {
   return res.data
 }
 
-export const createClass = async (data: { name: string; hasStream?: boolean; order?: number; maxScore?: number }) => {
+export const createClass = async (data: { name: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }

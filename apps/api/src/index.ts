@@ -16,6 +16,7 @@ import reportCardTemplateRoutes from './routes/reportcardtemplate.routes'
 import classListTemplateRoutes from './routes/classlisttemplate.routes'
 import gradingScaleRoutes from './routes/gradingscale.routes'
 import demoRoutes from './routes/demo.routes'
+import feesRoutes from './routes/fees.routes'
 import { UPLOAD_DIR } from './config/uploads'
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') })
@@ -44,6 +45,7 @@ app.use('/api/class-levels', classLevelRoutes)
 app.use('/api/report-card-template', reportCardTemplateRoutes)
 app.use('/api/class-list-template', classListTemplateRoutes)
 app.use('/api/grading-scale', gradingScaleRoutes)
+app.use('/api/fees', feesRoutes)
 app.use('/api/demo', demoRoutes)
 
 app.listen(PORT, () => {

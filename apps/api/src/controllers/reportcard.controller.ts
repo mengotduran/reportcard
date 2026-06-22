@@ -31,6 +31,68 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// Marks export — per-student subject scores for a term (drives the CSV broadsheet).
+// classLevel optional: omit for the whole school, provide for one class.
+export const getMarksExport = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const termId = String(req.query.termId || '')
+    const classLevel = req.query.classLevel ? String(req.query.classLevel) : undefined
+
+    if (!termId) {
+      res.status(400).json({ message: 'A term is required' })
+      return
+    }
+
+    const term = await prisma.term.findFirst({ where: { id: termId, schoolId } })
+    if (!term) {
+      res.status(404).json({ message: 'Term not found' })
+      return
+    }
+
+    // Column set: subjects configured for the school (or the one class), ordered.
+    const subjectRows = await prisma.subject.findMany({
+      where: { schoolId, ...(classLevel ? { classLevel } : {}) },
+      orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
+      select: { name: true },
+    })
+    const subjects = Array.from(new Set(subjectRows.map((s) => s.name)))
+
+    // Base on the report cards OF THIS TERM — so the export matches exactly the
+    // students shown when the table is filtered to that term (a student only
+    // "belongs" to a term once they have a report card in it).
+    const cards = await prisma.reportCard.findMany({
+      where: { schoolId, termId, ...(classLevel ? { student: { classLevel } } : {}) },
+      include: { student: true, entries: { include: { subject: true } } },
+      orderBy: [{ student: { classLevel: 'asc' } }, { position: 'asc' }, { student: { name: 'asc' } }],
+    })
+
+    const students = cards.map((rc) => {
+      const scores: Record<string, number | null> = {}
+      for (const e of rc.entries) scores[e.subject.name] = e.score
+      return {
+        studentId: rc.studentId,
+        name: rc.student.name,
+        studentIdCode: rc.student.studentId,
+        classLevel: rc.student.classLevel,
+        average: rc.average,
+        position: rc.position,
+        scores,
+      }
+    })
+
+    res.json({
+      term: { id: term.id, name: term.name, session: term.session },
+      classLevel: classLevel ?? null,
+      subjects,
+      students,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 // Get single report card
 export const getReportCard = async (req: AuthRequest, res: Response) => {
   try {

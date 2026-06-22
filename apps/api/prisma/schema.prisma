@@ -67,6 +67,7 @@ model School {
   reportCardTemplate  ReportCardTemplate?
   classListTemplate   ClassListTemplate?
   gradingScale        GradingScale?
+  feePayments         FeePayment[]
 }
 
 model GradingScale {
@@ -103,6 +104,7 @@ model ClassLevel {
   hasStream Boolean  @default(false)
   order     Int      @default(0)
   maxScore  Int      @default(20)
+  feeAmount Int      @default(0) // total fee for this class per academic session, in XAF
   createdAt DateTime @default(now())
 
   school School @relation(fields: [schoolId], references: [id])
@@ -142,8 +144,26 @@ model Student {
 
   school      School       @relation(fields: [schoolId], references: [id])
   reportCards ReportCard[]
+  feePayments FeePayment[]
 
   @@unique([schoolId, studentId])
+}
+
+model FeePayment {
+  id         String   @id @default(uuid())
+  schoolId   String
+  studentId  String
+  session    String   // academic session this payment counts toward, e.g. "2026/2027"
+  amount     Int      // installment amount paid, in XAF
+  paidOn     DateTime // date the payment was made
+  note       String?
+  recordedBy String?  // id of the user who recorded the payment
+  createdAt  DateTime @default(now())
+
+  school  School  @relation(fields: [schoolId], references: [id])
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, session])
 }
 
 model Subject {

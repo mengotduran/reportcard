@@ -6,9 +6,11 @@ import { getClassLevelsApi } from '@/lib/api/classLevels'
 import { School, Plus, Trash2, X, Eye, EyeOff, BookOpen, Info, Pencil, KeyRound } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
+import Pagination from '@/components/ui/Pagination'
 import { useToast } from '@/lib/useToast'
 import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
+import { usePagination } from '@/lib/usePagination'
 
 interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string }
 interface Subject { id: string; name: string; classLevel: string }
@@ -198,6 +200,8 @@ export default function TeachersPage() {
     return acc
   }, {})
 
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(teachers, 15)
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -232,7 +236,7 @@ export default function TeachersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {teachers.map((t) => (
+              {pageItems.map((t) => (
                 <tr key={t.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
@@ -279,6 +283,7 @@ export default function TeachersPage() {
             </tbody>
           </table></div>
         )}
+        <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
       </div>
 
       {/* Add Teacher Modal */}

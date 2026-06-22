@@ -6,10 +6,13 @@ import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClas
 import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
+import Pagination from '@/components/ui/Pagination'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import { usePagination } from '@/lib/usePagination'
+import { formatXAF } from '@/lib/api/fees'
 
-const emptyForm = { name: '', hasStream: false, maxScore: '20' }
+const emptyForm = { name: '', hasStream: false, maxScore: '20', feeAmount: '150000' }
 
 export default function ClassesPage() {
   const router = useRouter()
@@ -48,7 +51,7 @@ export default function ClassesPage() {
 
   const openEdit = (cls: ClassLevel) => {
     setEditing(cls)
-    setForm({ name: cls.name, hasStream: cls.hasStream, maxScore: String(cls.maxScore ?? 20) })
+    setForm({ name: cls.name, hasStream: cls.hasStream, maxScore: String(cls.maxScore ?? 20), feeAmount: String(cls.feeAmount ?? 0) })
     setError('')
     setShowModal(true)
   }
@@ -66,10 +69,10 @@ export default function ClassesPage() {
     setSaving(true)
     try {
       if (editing) {
-        await updateClassLevelApi(editing.id, { ...form, maxScore: Number(form.maxScore) })
+        await updateClassLevelApi(editing.id, { ...form, maxScore: Number(form.maxScore), feeAmount: Number(form.feeAmount) || 0 })
         showToast(t('Class updated'))
       } else {
-        await createClassLevelApi({ ...form, maxScore: Number(form.maxScore), order: classes.length })
+        await createClassLevelApi({ ...form, maxScore: Number(form.maxScore), feeAmount: Number(form.feeAmount) || 0, order: classes.length })
         showToast(t('Class added'))
       }
       closeModal()
@@ -108,6 +111,8 @@ export default function ClassesPage() {
     }
   }
 
+  const { page, setPage, totalPages, pageItems, total, pageSize, start } = usePagination(classes, 15)
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -136,12 +141,15 @@ export default function ClassesPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Order')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Class Name')}</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Max Score')}</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Fee')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {classes.map((cls, i) => (
+              {pageItems.map((cls, idx) => {
+                const i = start + idx
+                return (
                 <tr key={cls.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
@@ -166,6 +174,11 @@ export default function ClassesPage() {
                   <td className="px-4 py-3 text-center">
                     <span className="text-sm font-semibold text-primary">/ {cls.maxScore ?? 20}</span>
                   </td>
+                  <td className="px-4 py-3 text-right">
+                    {cls.feeAmount > 0
+                      ? <span className="text-sm font-medium text-foreground">{formatXAF(cls.feeAmount)}</span>
+                      : <span className="text-muted-foreground text-sm">—</span>}
+                  </td>
                   <td className="px-4 py-3">
                     {cls.hasStream ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
@@ -188,10 +201,12 @@ export default function ClassesPage() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table></div>
         )}
+        <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
       </div>
 
       {showModal && (
@@ -226,6 +241,16 @@ export default function ClassesPage() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">{t('All subjects in this class will use this as their maximum mark.')}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('School Fee (XAF)')}</label>
+                <input
+                  type="number" min="0" step="any" placeholder="150000"
+                  value={form.feeAmount}
+                  onChange={(e) => setForm({ ...form, feeAmount: e.target.value })}
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('Total fee for this class per academic year. Record each student’s payments from the Students page.')}</p>
               </div>
               <div>
                 <label className="flex items-center gap-3 cursor-pointer">

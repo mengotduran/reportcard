@@ -27,6 +27,7 @@ export default function RootLayout() {
       <Stack.Screen name="admin/classes/index" options={{ title: t('Classes'), headerBackTitle: '' }} />
       <Stack.Screen name="admin/subjects/index" options={{ title: t('Subjects'), headerBackTitle: '' }} />
       <Stack.Screen name="admin/terms/index" options={{ title: t('Terms'), headerBackTitle: '' }} />
+      <Stack.Screen name="admin/fees/index" options={{ title: t('School Fees'), headerBackTitle: '' }} />
       <Stack.Screen name="admin/grading/index" options={{ title: t('Grading Scale'), headerBackTitle: '' }} />
       <Stack.Screen name="admin/settings/index" options={{ title: t('Settings'), headerBackTitle: '' }} />
       <Stack.Screen name="admin/report-card-design" options={{ title: t('Card Design'), headerBackTitle: '' }} />

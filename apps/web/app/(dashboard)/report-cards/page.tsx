@@ -2,10 +2,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness } from '@/lib/api/reportcards'
+import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
 import { getStudentsApi } from '@/lib/api/students'
+import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, ChevronDown } from 'lucide-react'
+import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
+import { downloadZip } from '@/lib/zip'
+import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, ChevronDown, Download } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -353,6 +356,7 @@ export default function ReportCardsPage() {
   const [bulkResult, setBulkResult] = useState<{ classLevel: string; published: number; skipped: number; issues: { student: string; reason: string }[] } | null>(null)
   const [openDropdown, setOpenDropdown] = useState<'classList' | 'printClass' | 'bulkPublish' | null>(null)
   const [classReadiness, setClassReadiness] = useState<Record<string, ClassReadiness>>({})
+  const [exporting, setExporting] = useState(false)
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
 
@@ -500,6 +504,85 @@ export default function ReportCardsPage() {
 
   const currentTerm = terms.find(t => t.isCurrent)
   const activeTerm = terms.find(t => t.id === filterTermId) ?? currentTerm
+
+  // Active term chip, or every term when "All Terms" is selected.
+  const exportTargetTerms = () => (filterTermId ? terms.filter((t) => t.id === filterTermId) : terms)
+
+  type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null }
+
+  // Roster export (no marks). The students who have a report card in the target
+  // term — i.e. exactly what the table shows when filtered to that term. One file per term.
+  const handleExportSchool = async () => {
+    const targets = exportTargetTerms()
+    if (targets.length === 0) { showToast(tr('No current term set'), 'error'); return }
+    setExporting(true)
+    try {
+      const subData = await getSubjectsApi()
+      const subjectsByClass: Record<string, string[]> = {}
+      for (const s of (subData.subjects as { name: string; classLevel: string }[])) {
+        (subjectsByClass[s.classLevel] ??= []).push(s.name)
+      }
+      const cols = [
+        { label: tr('Name'), value: (s: ExportStudent) => s.name },
+        { label: tr('Student ID'), value: (s: ExportStudent) => s.studentId },
+        { label: tr('Class'), value: (s: ExportStudent) => s.classLevel },
+        { label: tr('Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
+        { label: tr('Guardian'), value: (s: ExportStudent) => s.guardianName || '' },
+        { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
+        { label: tr('Guardian Email'), value: (s: ExportStudent) => s.guardianEmail || '' },
+      ]
+      const files: { name: string; content: string }[] = []
+      for (const term of targets) {
+        const res = await getReportCardsApi({ termId: term.id })
+        const seen = new Set<string>()
+        const students: ExportStudent[] = []
+        for (const rc of (res.reportCards as { student: ExportStudent }[])) {
+          if (rc.student && !seen.has(rc.student.id)) { seen.add(rc.student.id); students.push(rc.student) }
+        }
+        if (students.length === 0) continue
+        files.push({ name: datedFilename(`school-students-${term.name}`), content: buildCsv(students, cols) })
+      }
+      if (files.length === 0) { showToast(tr('Nothing to export'), 'error'); return }
+      if (files.length === 1) saveCsv(files[0].name, files[0].content)
+      else downloadZip(datedFilename('school-students-all-terms', 'zip'), files)
+      showToast(tr('Export started'))
+    } catch {
+      showToast(tr('Failed to export'), 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // Whole-school master sheet WITH marks, one file per target term.
+  const handleExportSchoolMarks = async () => {
+    const targets = exportTargetTerms()
+    if (targets.length === 0) { showToast(tr('No current term set'), 'error'); return }
+    setExporting(true)
+    try {
+      const files: { name: string; content: string }[] = []
+      for (const term of targets) {
+        const data = await getMarksExportApi(term.id)
+        if (data.students.length === 0) continue
+        const csv = buildCsv(data.students, [
+          { label: tr('Class'), value: (s) => s.classLevel },
+          { label: tr('Name'), value: (s) => s.name },
+          { label: tr('Student ID'), value: (s) => s.studentIdCode },
+          ...data.subjects.map((subj) => ({ label: subj, value: (s: MarksExportStudent) => s.scores[subj] ?? '' })),
+          { label: tr('Average'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
+          { label: tr('Rank'), value: (s) => s.position ?? '' },
+        ])
+        files.push({ name: datedFilename(`school-marks-${data.term.name}`), content: csv })
+      }
+      if (files.length === 0) { showToast(tr('Nothing to export'), 'error'); return }
+      if (files.length === 1) saveCsv(files[0].name, files[0].content)
+      else downloadZip(datedFilename('school-marks-all-terms', 'zip'), files)
+      showToast(tr('Export started'))
+    } catch {
+      showToast(tr('Failed to export'), 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const publishedClasses = [...new Set(
     reportCards.filter(rc => rc.status === 'PUBLISHED').map(rc => rc.student.classLevel)
@@ -677,6 +760,22 @@ export default function ReportCardsPage() {
           </button>
         ))}
       </div>
+
+      {isAdmin && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <span className="text-xs text-muted-foreground">
+            {tr('Export')} · {filterTermId && activeTerm ? `${activeTerm.name} ${activeTerm.session}` : `${tr('All Terms')} — ${tr('one file each')}`}:
+          </span>
+          <button onClick={handleExportSchool} disabled={exporting || terms.length === 0}
+            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-muted disabled:opacity-50 transition">
+            <Download size={14} /> {tr('Export school data')}
+          </button>
+          <button onClick={handleExportSchoolMarks} disabled={exporting || terms.length === 0}
+            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-muted disabled:opacity-50 transition">
+            <Download size={14} /> {tr('Export school data (with marks)')}
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">{tr('Loading...')}</div>

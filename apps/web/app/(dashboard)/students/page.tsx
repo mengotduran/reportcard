@@ -4,11 +4,19 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, deleteStudentApi } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
-import { Users, Plus, Search, Trash2, Pencil, X } from 'lucide-react'
+import { getSubjectsApi } from '@/lib/api/subjects'
+import { getTermsApi } from '@/lib/api/terms'
+import { Users, Plus, Search, Trash2, Pencil, X, Wallet, Download } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
+import Pagination from '@/components/ui/Pagination'
+import StudentFeesModal from '@/components/ui/StudentFeesModal'
+import { usePagination } from '@/lib/usePagination'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import { getFeesOverviewApi, formatXAF, FeeOverviewRow } from '@/lib/api/fees'
+import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
+import { downloadZip } from '@/lib/zip'
 
 interface Student {
   id: string; name: string; studentId: string
@@ -35,6 +43,12 @@ export default function StudentsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  const [feesTarget, setFeesTarget] = useState<{ id: string; name: string } | null>(null)
+  const [feesByStudent, setFeesByStudent] = useState<Record<string, FeeOverviewRow>>({})
+  const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
+  const [exporting, setExporting] = useState(false)
+  const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
+  const [activeTermId, setActiveTermId] = useState<string>('')
 
   useEffect(() => {
     if (!isAuthenticated) router.push('/login')
@@ -42,8 +56,38 @@ export default function StudentsPage() {
       fetchStudents()
       fetchFilterClasses()
       fetchDefinedClasses()
+      fetchFeesOverview()
+      fetchSubjects()
+      fetchTerms()
     }
   }, [isAuthenticated])
+
+  const fetchTerms = async () => {
+    try {
+      const data = await getTermsApi()
+      setTerms(data.terms)
+    } catch { /* term filter is optional */ }
+  }
+
+  const fetchSubjects = async () => {
+    try {
+      const data = await getSubjectsApi()
+      const map: Record<string, string[]> = {}
+      for (const s of (data.subjects as { name: string; classLevel: string }[])) {
+        (map[s.classLevel] ??= []).push(s.name)
+      }
+      setSubjectsByClass(map)
+    } catch { /* subjects column is optional */ }
+  }
+
+  const fetchFeesOverview = async () => {
+    try {
+      const data = await getFeesOverviewApi()
+      const map: Record<string, FeeOverviewRow> = {}
+      for (const row of data.students) map[row.studentId] = row
+      setFeesByStudent(map)
+    } catch { /* ignore — fees badge is optional */ }
+  }
 
   const fetchFilterClasses = async () => {
     try {
@@ -59,7 +103,10 @@ export default function StudentsPage() {
     } catch { /* ignore */ }
   }
 
-  const fetchStudents = async (classFilter?: string, searchVal?: string) => {
+  // The table shows the (active) student roster filtered by class + search. The
+  // term chips don't change the roster (a class's students are the same across
+  // terms) — they choose how the EXPORT is split into per-term files.
+  const fetchStudents = async (classFilter = activeClass, searchVal = search) => {
     try {
       setLoading(true)
       const params: { classLevel?: string; search?: string } = {}
@@ -74,8 +121,10 @@ export default function StudentsPage() {
   const handleClassFilter = (cls: string) => {
     setActiveClass(cls)
     setSearch('')
-    fetchStudents(cls)
+    fetchStudents(cls, '')
   }
+
+  const handleTermFilter = (termId: string) => setActiveTermId(termId)
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value)
@@ -158,6 +207,74 @@ export default function StudentsPage() {
     }
   }
 
+  const feeLabel = (status?: string): string => {
+    switch (status) {
+      case 'COMPLETE': return t('Complete')
+      case 'PARTIAL': return t('Partly paid')
+      case 'UNPAID': return t('Not paid')
+      default: return ''
+    }
+  }
+
+  // Export = one CSV per (class × term) from the on-screen filters:
+  //   - terms   = the active term chip, or every term on "All Terms"
+  //   - classes = the active class chip, or every current class (the class chips)
+  // Each file holds that class's roster. One file downloads as .csv; several are
+  // zipped. Data-driven, so it scales to any number of classes/terms; orphan
+  // classes (deleted/inactive, like a removed "Grade 3") never appear because the
+  // roster + class chips are active-only.
+  const handleExport = async () => {
+    const targetTerms = activeTermId ? terms.filter((tm) => tm.id === activeTermId) : terms
+    if (targetTerms.length === 0) { showToast(t('No term selected'), 'error'); return }
+    const targetClasses = activeClass !== 'all' ? [activeClass] : filterClasses
+    if (targetClasses.length === 0) { showToast(t('Nothing to export'), 'error'); return }
+    const cols = [
+      { label: t('Name'), value: (s: Student) => s.name },
+      { label: t('Student ID'), value: (s: Student) => s.studentId },
+      { label: t('Class'), value: (s: Student) => s.classLevel },
+      { label: t('Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
+      { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
+      { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
+      { label: t('Guardian Email'), value: (s: Student) => s.guardianEmail || '' },
+      { label: t('Total fee'), value: (s: Student) => feesByStudent[s.id]?.due ?? '' },
+      { label: t('Paid'), value: (s: Student) => feesByStudent[s.id]?.paid ?? '' },
+      { label: t('Balance'), value: (s: Student) => feesByStudent[s.id]?.balance ?? '' },
+      { label: t('Fees'), value: (s: Student) => feeLabel(feesByStudent[s.id]?.status) },
+    ]
+    const safe = (x: string) => x.replace(/[\\/]+/g, '-').trim()
+    setExporting(true)
+    try {
+      // Active roster grouped by class.
+      const data = await getStudentsApi()
+      const byClass = new Map<string, Student[]>()
+      for (const s of (data.students as Student[])) {
+        if (!byClass.has(s.classLevel)) byClass.set(s.classLevel, [])
+        byClass.get(s.classLevel)!.push(s)
+      }
+      const files: { name: string; content: string }[] = []
+      for (const term of targetTerms) {
+        for (const cls of targetClasses) {
+          const rows = byClass.get(cls) || []
+          if (rows.length === 0) continue
+          files.push({
+            name: datedFilename(`students-${safe(`${term.name} ${term.session}`)}-${safe(cls)}`),
+            content: buildCsv(rows, cols),
+          })
+        }
+      }
+      if (files.length === 0) { showToast(t('Nothing to export'), 'error'); return }
+      if (files.length === 1) saveCsv(files[0].name, files[0].content)
+      else downloadZip(datedFilename('students-export', 'zip'), files)
+      showToast(`${t('Export started')} (${files.length})`)
+    } catch {
+      showToast(t('Failed to export'), 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(students, 15, `${activeClass}|${search}`)
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -167,10 +284,16 @@ export default function StudentsPage() {
             {students.length} {activeClass !== 'all' ? `${t('in')} ${activeClass}` : t('total students')}
           </p>
         </div>
-        <button onClick={openAdd}
-          className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
-          <Plus size={16} /> {t('Add Student')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleExport} disabled={exporting}
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
+            <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
+          </button>
+          <button onClick={openAdd}
+            className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
+            <Plus size={16} /> {t('Add Student')}
+          </button>
+        </div>
       </div>
 
       {filterClasses.length > 0 && (
@@ -184,6 +307,22 @@ export default function StudentsPage() {
             <button key={cls} onClick={() => handleClassFilter(cls)}
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === cls ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
               {cls}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {terms.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <span className="text-xs text-muted-foreground mr-1">{t('Export by term')}:</span>
+          <button onClick={() => handleTermFilter('')}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!activeTermId ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
+            {t('All Terms')}
+          </button>
+          {terms.map((tm) => (
+            <button key={tm.id} onClick={() => handleTermFilter(tm.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeTermId === tm.id ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
+              {tm.name} {tm.session}{tm.isCurrent ? ` (${t('Current')})` : ''}
             </button>
           ))}
         </div>
@@ -212,11 +351,12 @@ export default function StudentsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Student ID')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Class')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Fees')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {students.map((s) => (
+              {pageItems.map((s) => (
                 <tr key={s.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
@@ -230,7 +370,20 @@ export default function StudentsPage() {
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.classLevel}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.guardianName || '—'}</td>
                   <td className="px-4 py-3">
+                    {(() => {
+                      const f = feesByStudent[s.id]
+                      if (!f || f.status === 'NONE') return <span className="text-muted-foreground text-sm">—</span>
+                      if (f.status === 'COMPLETE') return <span className="inline-flex px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">{t('Complete')}</span>
+                      const cls = f.status === 'UNPAID' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                      return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
+                    })()}
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
+                      <button onClick={() => setFeesTarget({ id: s.id, name: s.name })} title={t('School Fees')}
+                        className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 rounded transition">
+                        <Wallet size={14} />
+                      </button>
                       <button onClick={() => openEdit(s)}
                         className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
                         <Pencil size={14} />
@@ -247,6 +400,7 @@ export default function StudentsPage() {
           </table>
           </div>
         )}
+        <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
       </div>
 
       {showModal && (
@@ -332,6 +486,15 @@ export default function StudentsPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {feesTarget && (
+        <StudentFeesModal
+          studentId={feesTarget.id}
+          studentName={feesTarget.name}
+          onClose={() => setFeesTarget(null)}
+          onChanged={fetchFeesOverview}
+        />
       )}
 
       <ConfirmModal

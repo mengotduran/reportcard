@@ -2,9 +2,13 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { getSubjectsApi } from '@/lib/api/subjects'
-import { ArrowLeft, BookOpen } from 'lucide-react'
+import { getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
+import { ArrowLeft, BookOpen, Download } from 'lucide-react'
 import { seqFull } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
+import { downloadCsv, datedFilename } from '@/lib/csv'
+import Toast from '@/components/ui/Toast'
+import { useToast } from '@/lib/useToast'
 
 interface Subject { id: string; name: string; classLevel: string }
 
@@ -21,12 +25,39 @@ export default function ClassSubjectsPage() {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [selectedSeq, setSelectedSeq] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
+  const { toast, showToast, hideToast } = useToast()
 
   useEffect(() => {
     getSubjectsApi()
       .then((data) => setSubjects(data.subjects.filter((s: Subject) => s.classLevel === classLevel)))
       .finally(() => setLoading(false))
   }, [classLevel])
+
+  const handleExportMarks = async () => {
+    if (!termId) { showToast(t('No term selected'), 'error'); return }
+    setExporting(true)
+    try {
+      const data = await getMarksExportApi(termId, classLevel)
+      if (data.students.length === 0) { showToast(t('Nothing to export'), 'error'); return }
+      downloadCsv(
+        datedFilename(`marks-${classLevel}-${data.term.name}`),
+        data.students,
+        [
+          { label: t('Name'), value: (s) => s.name },
+          { label: t('Student ID'), value: (s) => s.studentIdCode },
+          ...data.subjects.map((subj) => ({ label: subj, value: (s: MarksExportStudent) => s.scores[subj] ?? '' })),
+          { label: t('Average'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
+          { label: t('Rank'), value: (s) => s.position ?? '' },
+        ],
+      )
+      showToast(t('Export started'))
+    } catch {
+      showToast(t('Failed to export'), 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <div>
@@ -36,10 +67,14 @@ export default function ClassSubjectsPage() {
           className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition">
           <ArrowLeft size={20} />
         </button>
-        <div>
+        <div className="flex-1">
           <h2 className="text-xl font-bold text-foreground">{classLevel}</h2>
           <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
         </div>
+        <button onClick={handleExportMarks} disabled={exporting}
+          className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
+          <Download size={16} /> {exporting ? t('Exporting...') : t('Export marks')}
+        </button>
       </div>
 
       {/* Sequence selector */}
@@ -88,6 +123,8 @@ export default function ClassSubjectsPage() {
           </div>
         )}
       </div>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>
   )
 }

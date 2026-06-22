@@ -39,6 +39,28 @@ export const getReportCardApi = async (id: string) => {
   return res.data
 }
 
+export interface MarksExportStudent {
+  studentId: string
+  name: string
+  studentIdCode: string
+  classLevel: string
+  average: number | null
+  position: number | null
+  scores: Record<string, number | null>
+}
+
+export interface MarksExport {
+  term: { id: string; name: string; session: string }
+  classLevel: string | null
+  subjects: string[]
+  students: MarksExportStudent[]
+}
+
+export const getMarksExportApi = async (termId: string, classLevel?: string): Promise<MarksExport> => {
+  const res = await api.get('/report-cards/marks-export', { params: { termId, ...(classLevel ? { classLevel } : {}) } })
+  return res.data
+}
+
 export const createReportCardApi = async (data: { studentId: string; termId: string }) => {
   const res = await api.post('/report-cards', data)
   return res.data
