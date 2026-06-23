@@ -2,7 +2,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -11,6 +11,7 @@ import { getMeApi } from '@/lib/api/auth'
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
+  { icon: CalendarRange,   label: 'Academic Year', href: '/academic-year' },
   { icon: Users,           label: 'Students',     href: '/students' },
   { icon: GraduationCap,   label: 'Classes',      href: '/classes' },
   { icon: BookOpen,        label: 'Subjects',     href: '/subjects' },

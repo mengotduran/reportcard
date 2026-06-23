@@ -5,6 +5,7 @@ export interface Student {
   name: string
   studentId: string
   classLevel: string
+  gender: string | null
   guardianName: string | null
   isActive: boolean
 }
@@ -14,7 +15,7 @@ export const getStudents = async (): Promise<{ students: Student[] }> => {
   return res.data
 }
 
-export const createStudent = async (data: { name: string; classLevel: string; guardianName?: string }) => {
+export const createStudent = async (data: { name: string; classLevel: string; gender: string; guardianName?: string }) => {
   const res = await api.post('/students', data)
   return res.data
 }

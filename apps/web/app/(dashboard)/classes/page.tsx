@@ -66,6 +66,10 @@ export default function ClassesPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (form.feeAmount.trim() === '' || isNaN(Number(form.feeAmount)) || Number(form.feeAmount) < 0) {
+      setError(t('Enter the class fee (use 0 if there is none).'))
+      return
+    }
     setSaving(true)
     try {
       if (editing) {
@@ -243,9 +247,9 @@ export default function ClassesPage() {
                 <p className="text-xs text-muted-foreground mt-1">{t('All subjects in this class will use this as their maximum mark.')}</p>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('School Fee (XAF)')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('School Fee (XAF)')} <span className="text-destructive">*</span></label>
                 <input
-                  type="number" min="0" step="any" placeholder="150000"
+                  type="number" min="0" step="any" placeholder="150000" required
                   value={form.feeAmount}
                   onChange={(e) => setForm({ ...form, feeAmount: e.target.value })}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"

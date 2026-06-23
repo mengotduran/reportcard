@@ -1,8 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getDashboardStatsApi, getWeeklyStatsApi, getTeacherChartStatsApi, WeeklyStats, TeacherChartStats } from '@/lib/api/dashboard'
+import { getDashboardStatsApi, getWeeklyStatsApi, getTeacherChartStatsApi, getAcademicYearsApi, WeeklyStats, TeacherChartStats, AcademicYear } from '@/lib/api/dashboard'
 import { Users, BookOpen, FileText, School, GraduationCap, ArrowRight, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import ImageSlider from '@/components/ui/ImageSlider'
 import { useT, useLocaleCode } from '@/lib/i18n'
@@ -237,6 +237,10 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [weeklyStats, setWeeklyStats] = useState<WeeklyStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [years, setYears] = useState<AcademicYear[]>([])
+  const [session, setSession] = useState<string>('')
+  const searchParams = useSearchParams()
+  const yearParam = searchParams.get('year')
 
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
@@ -244,11 +248,25 @@ export default function DashboardPage() {
   // to /superadmin by layout, but useEffect fires before that redirect completes)
   useEffect(() => {
     if (!isAdminRole) { setLoading(false); return }
-    Promise.all([getDashboardStatsApi(), getWeeklyStatsApi()])
-      .then(([s, w]) => { setStats(s); setWeeklyStats(w) })
+    Promise.all([getWeeklyStatsApi(), getAcademicYearsApi()])
+      .then(([w, y]) => {
+        setWeeklyStats(w)
+        setYears(y.academicYears)
+        const fromUrl = yearParam && y.academicYears.some((a) => a.session === yearParam) ? yearParam : null
+        setSession(fromUrl ?? y.academicYears.find((a) => a.current)?.session ?? y.academicYears[0]?.session ?? '')
+      })
+      .catch(console.error)
+  }, [isAdminRole])
+
+  // Stats follow the selected academic year.
+  useEffect(() => {
+    if (!isAdminRole || !session) return
+    setLoading(true)
+    getDashboardStatsApi(session)
+      .then(setStats)
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [isAdminRole])
+  }, [isAdminRole, session])
 
   if (TEACHER_ROLES.includes(user?.role ?? '')) return <TeacherHome />
   if (!isAdminRole) return null  // superadmin: render nothing while redirect is in flight
@@ -299,6 +317,19 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Academic year selector */}
+      {years.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">{t('Academic Year')}:</span>
+          {years.map((y) => (
+            <button key={y.session} onClick={() => setSession(y.session)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${session === y.session ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
+              {y.session}{y.current ? ` (${t('Current')})` : ''}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

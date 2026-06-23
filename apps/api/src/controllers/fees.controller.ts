@@ -23,6 +23,26 @@ function feeStatus(due: number, paid: number): FeeStatus {
   return 'UNPAID'
 }
 
+interface ClassFeeInfo { name: string; feeAmount: number; hasStream: boolean }
+
+/**
+ * Resolve a student's classLevel to its class fee. A streamed class is stored as
+ * "Form 4" while its students are "Form 4 Arts"/"Form 4 Science", so an exact
+ * name match misses them — fall back to the streamed base class.
+ */
+function makeFeeResolver(classes: ClassFeeInfo[]) {
+  return (classLevel: string): number => {
+    const exact = classes.find((c) => c.name === classLevel)
+    if (exact) return exact.feeAmount
+    const streamed = classes.find((c) => c.hasStream && classLevel.startsWith(`${c.name} `))
+    return streamed ? streamed.feeAmount : 0
+  }
+}
+
+async function loadClassFees(schoolId: string): Promise<ClassFeeInfo[]> {
+  return prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, feeAmount: true, hasStream: true } })
+}
+
 /** GET /api/fees/student/:studentId — ledger + balance for the current session. */
 export const getStudentFees = async (req: AuthRequest, res: Response) => {
   try {
@@ -36,11 +56,7 @@ export const getStudentFees = async (req: AuthRequest, res: Response) => {
     }
 
     const session = await currentSession(schoolId)
-    const cls = await prisma.classLevel.findUnique({
-      where: { schoolId_name: { schoolId, name: student.classLevel } },
-      select: { feeAmount: true },
-    })
-    const due = cls?.feeAmount ?? 0
+    const due = makeFeeResolver(await loadClassFees(schoolId))(student.classLevel)
 
     const payments = session
       ? await prisma.feePayment.findMany({
@@ -149,14 +165,17 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
     const classLevel = decodeURIComponent(String(req.params.classLevel))
     const session = await currentSession(schoolId)
 
-    const cls = await prisma.classLevel.findUnique({
-      where: { schoolId_name: { schoolId, name: classLevel } },
-      select: { feeAmount: true },
-    })
-    const feeAmount = cls?.feeAmount ?? 0
+    const classes = await loadClassFees(schoolId)
+    const cls = classes.find((c) => c.name === classLevel)
+    const feeAmount = cls ? cls.feeAmount : makeFeeResolver(classes)(classLevel)
+
+    // For a streamed class ("Form 4") the students are "Form 4 Arts"/"Form 4 Science".
+    const studentWhere = cls?.hasStream
+      ? { schoolId, isActive: true, OR: [{ classLevel }, { classLevel: { startsWith: `${classLevel} ` } }] }
+      : { schoolId, isActive: true, classLevel }
 
     const students = await prisma.student.findMany({
-      where: { schoolId, classLevel, isActive: true },
+      where: studentWhere,
       select: { id: true, name: true, studentId: true },
       orderBy: { name: 'asc' },
     })
@@ -270,10 +289,10 @@ export const getFeesOverview = async (req: AuthRequest, res: Response) => {
         where: { schoolId, isActive: true },
         select: { id: true, classLevel: true },
       }),
-      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, feeAmount: true } }),
+      loadClassFees(schoolId),
     ])
 
-    const feeByClass = new Map(classes.map((c) => [c.name, c.feeAmount]))
+    const feeFor = makeFeeResolver(classes)
 
     const paidByStudent = new Map<string, number>()
     if (session) {
@@ -286,7 +305,7 @@ export const getFeesOverview = async (req: AuthRequest, res: Response) => {
     }
 
     const result = students.map((s) => {
-      const due = feeByClass.get(s.classLevel) ?? 0
+      const due = feeFor(s.classLevel)
       const paid = paidByStudent.get(s.id) ?? 0
       return { studentId: s.id, due, paid, balance: Math.max(0, due - paid), status: feeStatus(due, paid) }
     })

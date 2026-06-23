@@ -104,6 +104,10 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   dropdownList: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.card, marginBottom: 14, overflow: 'hidden' },
   dropdownItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
   dropdownItemText: { fontSize: 14, color: colors.text },
+  genderBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center', backgroundColor: colors.inputBg },
+  genderBtnActive: { borderColor: '#F03E2F', backgroundColor: '#FEF2F1' },
+  genderBtnText: { fontSize: 14, fontWeight: '600', color: colors.textSecondary },
+  genderBtnTextActive: { color: '#F03E2F' },
   createBtn: { backgroundColor: '#F03E2F', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
   createBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   disabled: { opacity: 0.5 },
@@ -147,6 +151,11 @@ function StudentDetailModal({
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>{t('Class Level')}</Text>
               <Text style={styles.detailValue}>{student.classLevel}</Text>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>{t('Gender')}</Text>
+              <Text style={styles.detailValue}>{student.gender ? t(student.gender) : '—'}</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.detailRow}>
@@ -199,12 +208,13 @@ function CreateStudentModal({
   const t = useT()
   const [name, setName] = useState('')
   const [classLevel, setClassLevel] = useState('')
+  const [gender, setGender] = useState('')
   const [guardianName, setGuardianName] = useState('')
   const [creating, setCreating] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
 
   const reset = () => {
-    setName(''); setClassLevel(''); setGuardianName('')
+    setName(''); setClassLevel(''); setGender(''); setGuardianName('')
   }
 
   const handleCreate = async () => {
@@ -212,9 +222,13 @@ function CreateStudentModal({
       Alert.alert(t('Validation'), t('Name and Class Level are required.'))
       return
     }
+    if (gender !== 'Male' && gender !== 'Female') {
+      Alert.alert(t('Validation'), t('Please select the student\'s gender.'))
+      return
+    }
     setCreating(true)
     try {
-      await createStudent({ name: name.trim(), classLevel, guardianName: guardianName.trim() || undefined })
+      await createStudent({ name: name.trim(), classLevel, gender, guardianName: guardianName.trim() || undefined })
       reset()
       onClose()
       onCreated()
@@ -254,6 +268,16 @@ function CreateStudentModal({
                   ))}
                 </View>
               )}
+
+              <Text style={styles.formLabel}>{t('Gender')} *</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+                {['Male', 'Female'].map((g) => (
+                  <TouchableOpacity key={g} onPress={() => setGender(g)}
+                    style={[styles.genderBtn, gender === g && styles.genderBtnActive]}>
+                    <Text style={[styles.genderBtnText, gender === g && styles.genderBtnTextActive]}>{t(g)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
               <Text style={styles.formLabel}>{t('Guardian Name (optional)')}</Text>
               <TextInput style={styles.formInput} value={guardianName} onChangeText={setGuardianName} placeholder={t('e.g. Mrs. Jane Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />

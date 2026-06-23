@@ -256,8 +256,10 @@ export default function AdminReportCardDetail() {
       setReportCard(rc)
       setTeachers(teacherData.teachers)
       if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
-      // Show ALL class subjects, not just those with entries
-      const classSubjects = subjectData.subjects.filter((s) => s.classLevel === rc.student.classLevel)
+      // Compulsory subjects + optional ones the student actually took (has an entry).
+      const classSubjects = subjectData.subjects.filter((s) =>
+        s.classLevel === rc.student.classLevel
+        && (s.compulsory !== false || rc.entries.some((e: any) => e.subject.id === s.id)))
       setSubjects(classSubjects)
       // Fetch attribution (which teacher / class master is blocking)
       getReadinessDetail(id).then(setReadiness).catch(() => {})

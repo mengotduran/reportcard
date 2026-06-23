@@ -16,7 +16,7 @@ import { gradeFromScore, gradeFromPercent } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
 
-interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number }
+interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number; compulsory?: boolean }
 interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string }
 interface ReportCard {
   id: string
@@ -145,8 +145,11 @@ export default function ReportCardDetailPage() {
       setGeneralRemarks(rc.remarks || '')
       setGeneralRemarksFr(rc.remarksFr || '')
       if (isAdmin) getReadinessDetailApi(String(params.id)).then(setReadiness).catch(() => {})
+      // Show compulsory subjects + optional ones only when the student took them
+      // (i.e. a report-card entry exists). Optional-not-taken are omitted.
       const classSubjects = subjectData.subjects.filter(
         (s: Subject) => s.classLevel === rc.student.classLevel
+          && (s.compulsory !== false || rc.entries.some((e: any) => e.subject.id === s.id))
       )
       setSubjects(classSubjects)
       const existingEntries = classSubjects.map((s: Subject) => {

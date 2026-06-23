@@ -151,6 +151,10 @@ export default function ClassesScreen() {
 
   const handleCreate = async () => {
     if (!newName.trim()) return
+    if (feeAmount.trim() === '' || isNaN(Number(feeAmount)) || Number(feeAmount) < 0) {
+      Alert.alert(t('Validation'), t('Enter the class fee (use 0 if there is none).'))
+      return
+    }
     setCreating(true)
     try {
       await createClass({ name: newName.trim(), hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0 })
@@ -277,7 +281,7 @@ export default function ClassesScreen() {
               keyboardType="numeric"
             />
 
-            <Text style={styles.label}>{t('School Fee (XAF)')}</Text>
+            <Text style={styles.label}>{t('School Fee (XAF)')} *</Text>
             <TextInput
               style={styles.input}
               value={feeAmount}

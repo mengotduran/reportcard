@@ -133,6 +133,7 @@ model Student {
   id            String   @id @default(uuid())
   schoolId      String
   name          String
+  gender        String?  // 'Male' | 'Female'
   studentId     String
   classLevel    String
   guardianName  String?
@@ -173,6 +174,7 @@ model Subject {
   classLevel  String
   maxScore    Int      @default(20)
   coefficient Int      @default(1)
+  compulsory  Boolean  @default(true) // optional subjects: a student may not take them
   createdAt   DateTime @default(now())
 
   school          School           @relation(fields: [schoolId], references: [id])

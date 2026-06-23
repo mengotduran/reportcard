@@ -626,6 +626,15 @@ const FR: Record<string, string> = {
   'one file each': 'un fichier chacun',
   'All terms': 'Tous les trimestres',
   'Export by term': 'Exporter par trimestre',
+  'Enter the class fee (use 0 if there is none).': 'Saisissez les frais de la classe (mettez 0 s\'il n\'y en a pas).',
+  'Academic Year': 'Année scolaire',
+  'Pick a year to view its dashboard and statistics.': 'Choisissez une année pour voir son tableau de bord et ses statistiques.',
+  'No academic years yet. Add terms to get started.': 'Aucune année scolaire pour l\'instant. Ajoutez des trimestres pour commencer.',
+  'View dashboard': 'Voir le tableau de bord',
+  'Gender': 'Sexe',
+  'Male': 'Masculin',
+  'Female': 'Féminin',
+  'Please select the student\'s gender.': 'Veuillez sélectionner le sexe de l\'élève.',
   'marks': 'notes',
 }
 

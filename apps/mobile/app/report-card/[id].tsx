@@ -171,7 +171,9 @@ export default function ReportCardDetailScreen() {
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
     setReportCard(rc)
     setRemarks(rc.remarks || '')
-    const classSubjects = subjectData.subjects.filter((s) => s.classLevel === rc.student.classLevel)
+    const classSubjects = subjectData.subjects.filter((s) =>
+      s.classLevel === rc.student.classLevel
+      && (s.compulsory !== false || rc.entries.some((e) => e.subject.id === s.id)))
     setSubjects(classSubjects)
     setEntries(
       classSubjects.map((s) => {

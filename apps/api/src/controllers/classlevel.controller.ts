@@ -26,6 +26,11 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    if (feeAmount === undefined || feeAmount === null || feeAmount === '' || !Number.isFinite(Number(feeAmount)) || Number(feeAmount) < 0) {
+      res.status(400).json({ message: 'A fee amount is required for the class (use 0 if there is none)' })
+      return
+    }
+
     const existing = await prisma.classLevel.findUnique({
       where: { schoolId_name: { schoolId, name: name.trim() } },
     })
@@ -40,7 +45,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         hasStream: hasStream ?? false,
         order: order ?? 0,
         maxScore: maxScore ? Number(maxScore) : 20,
-        feeAmount: feeAmount != null ? Math.max(0, Math.round(Number(feeAmount)) || 0) : 0,
+        feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0),
       },
     })
     res.status(201).json({ message: 'Class created', classLevel: level })

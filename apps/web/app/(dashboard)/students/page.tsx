@@ -20,11 +20,11 @@ import { downloadZip } from '@/lib/zip'
 
 interface Student {
   id: string; name: string; studentId: string
-  classLevel: string; guardianName?: string
+  classLevel: string; gender?: string; guardianName?: string
   guardianPhone?: string; guardianEmail?: string
 }
 
-const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', guardianName: '', guardianPhone: '', guardianEmail: '' }
+const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '' }
 
 export default function StudentsPage() {
   const router = useRouter()
@@ -152,6 +152,7 @@ export default function StudentsPage() {
       studentId: s.studentId,
       classLevel: baseClass,
       stream,
+      gender: s.gender || '',
       guardianName: s.guardianName || '',
       guardianPhone: s.guardianPhone || '',
       guardianEmail: s.guardianEmail || '',
@@ -172,6 +173,10 @@ export default function StudentsPage() {
     setError('')
     if (needsStream && !form.stream) {
       setError(t('Please select a stream (Arts or Science)'))
+      return
+    }
+    if (form.gender !== 'Male' && form.gender !== 'Female') {
+      setError(t('Please select the student\'s gender.'))
       return
     }
     setSaving(true)
@@ -350,6 +355,7 @@ export default function StudentsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Name')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Student ID')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Class')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Gender')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Fees')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Actions')}</th>
@@ -368,6 +374,7 @@ export default function StudentsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.classLevel}</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">{s.gender ? t(s.gender) : '—'}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.guardianName || '—'}</td>
                   <td className="px-4 py-3">
                     {(() => {
@@ -445,6 +452,20 @@ export default function StudentsPage() {
                     {t('No classes defined yet — go to the Classes page to add them.')}
                   </div>
                 )}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-2">{t('Gender')} <span className="text-destructive">*</span></label>
+                <div className="flex gap-6">
+                  {['Male', 'Female'].map((g) => (
+                    <label key={g} className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="gender" value={g} required
+                        checked={form.gender === g}
+                        onChange={() => setForm({ ...form, gender: g })}
+                        className="accent-primary" />
+                      <span className="text-sm text-foreground">{t(g)}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
               {needsStream && (
                 <div>

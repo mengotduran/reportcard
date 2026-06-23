@@ -700,6 +700,11 @@ const FR: Record<string, string> = {
   'e.g. Form 1, Grade 7': 'ex. Form 1, Grade 7',
   'e.g. Form 3A, 3B, 3C': 'ex. Form 3A, 3B, 3C',
   'Create Class': 'Créer la classe',
+  'Enter the class fee (use 0 if there is none).': 'Saisissez les frais de la classe (mettez 0 s\'il n\'y en a pas).',
+  'Gender': 'Sexe',
+  'Male': 'Masculin',
+  'Female': 'Féminin',
+  'Please select the student\'s gender.': 'Veuillez sélectionner le sexe de l\'élève.',
 
   // ── Mobile admin subjects ──
   'Failed to load subjects.': 'Échec du chargement des matières.',

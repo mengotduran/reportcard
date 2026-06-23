@@ -13,6 +13,7 @@ export const getStudentsApi = async (params?: { classLevel?: string; search?: st
 export const createStudentApi = async (data: {
   name: string
   classLevel: string
+  gender: string
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string
@@ -24,6 +25,7 @@ export const createStudentApi = async (data: {
 export const updateStudentApi = async (id: string, data: {
   name?: string
   classLevel?: string
+  gender?: string
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string

@@ -102,7 +102,12 @@ async function generateStudentId(schoolId: string): Promise<string> {
 export const createStudent = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, guardianName, guardianPhone, guardianEmail } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail } = req.body
+
+    if (gender !== 'Male' && gender !== 'Female') {
+      res.status(400).json({ message: 'Gender (Male or Female) is required' })
+      return
+    }
 
     const limit = await demoLimitBlock(schoolId, 'students')
     if (limit) { res.status(403).json({ message: limit }); return }
@@ -110,7 +115,7 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
     const studentId = await generateStudentId(schoolId)
 
     const student = await prisma.student.create({
-      data: { schoolId, name, studentId, classLevel, guardianName, guardianPhone, guardianEmail }
+      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail }
     })
 
     res.status(201).json({ message: 'Student created', student })
@@ -124,7 +129,7 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, guardianName, guardianPhone, guardianEmail } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail } = req.body
 
     const student = await prisma.student.findFirst({ where: { id, schoolId } })
     if (!student) {
@@ -134,7 +139,7 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
 
     const updated = await prisma.student.update({
       where: { id },
-      data: { name, classLevel, guardianName, guardianPhone, guardianEmail }
+      data: { name, classLevel, ...(gender !== undefined ? { gender } : {}), guardianName, guardianPhone, guardianEmail }
     })
 
     res.json({ message: 'Student updated', student: updated })
