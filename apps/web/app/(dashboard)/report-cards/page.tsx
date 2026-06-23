@@ -8,14 +8,15 @@ import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
 import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
-import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, ChevronDown, Download } from 'lucide-react'
+import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 import DesktopOnly from '@/components/ui/DesktopOnly'
 import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
-import { printClassList } from '@/lib/classListDocument'
+import { printClassLists } from '@/lib/classListDocument'
+import ClassPickerModal, { ClassOption } from '@/components/ui/ClassPickerModal'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
 import Pagination from '@/components/ui/Pagination'
 import { usePagination } from '@/lib/usePagination'
@@ -275,7 +276,7 @@ function TeacherClassesView() {
           {printJob.cards.map((rc) => (
             <div key={rc.id} id={`rc-print-${rc.id}`}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))}
@@ -356,22 +357,69 @@ export default function ReportCardsPage() {
   const [printing, setPrinting] = useState(false)
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
   const [bulkResult, setBulkResult] = useState<{ classLevel: string; published: number; skipped: number; issues: { student: string; reason: string }[] } | null>(null)
-  const [openDropdown, setOpenDropdown] = useState<'classList' | 'printClass' | 'bulkPublish' | null>(null)
+  const [classPicker, setClassPicker] = useState<'publish' | 'classList' | 'printClass' | null>(null)
+  const [pickerBusy, setPickerBusy] = useState(false)
   const [classReadiness, setClassReadiness] = useState<Record<string, ClassReadiness>>({})
   const [exporting, setExporting] = useState(false)
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
 
-  const handleBulkPublish = async (classLevel: string) => {
-    if (!activeTerm) return
-    setBulkPublishing(classLevel)
+  // Publish several classes at once.
+  const handleBulkPublishMany = async (classes: string[]) => {
+    if (!activeTerm || classes.length === 0) return
+    setPickerBusy(true)
+    let published = 0, skipped = 0
+    const issues: { student: string; reason: string }[] = []
     try {
-      const result = await bulkPublishApi(classLevel, activeTerm.id)
-      setBulkResult({ classLevel, ...result })
+      for (const cl of classes) {
+        const r = await bulkPublishApi(cl, activeTerm.id)
+        published += r.published; skipped += r.skipped
+        for (const i of r.issues ?? []) issues.push(i)
+      }
+      setBulkResult({ classLevel: classes.length === 1 ? classes[0] : `${classes.length} ${tr('classes')}`, published, skipped, issues })
       fetchReportCards(filterTermId || undefined)
     } catch {
       showToast(tr('Failed to bulk publish'), 'error')
-    } finally { setBulkPublishing(null) }
+    } finally { setPickerBusy(false); setClassPicker(null) }
+  }
+
+  // Print the class list for several classes as one document.
+  const handlePrintClassListMany = async (classes: string[]) => {
+    if (!activeTerm || classes.length === 0) return
+    setPickerBusy(true)
+    try {
+      const tpl = await getClassListTemplateApi().catch(() => ({ config: {} }))
+      const config = mergeClassListConfig(tpl.config, school?.type)
+      const logoUrl = school?.logo ? window.location.origin + school.logo : null
+      const docs = await Promise.all(classes.map(async (cl) => {
+        const overview = await getClassOverviewApi(activeTerm.id, cl)
+        return {
+          students: overview.students.map((s: any) => ({ name: s.name, studentId: s.studentId })),
+          classLevel: cl, schoolName: school?.name ?? '', schoolType: school?.type ?? '', logoUrl, config,
+        }
+      }))
+      printClassLists(docs)
+    } catch {
+      showToast(tr('Failed to load class list'), 'error')
+    } finally { setPickerBusy(false); setClassPicker(null) }
+  }
+
+  // Print the published report cards of several classes in one job.
+  const handleClassPrintMany = async (classes: string[]) => {
+    if (!activeTerm || classes.length === 0) return
+    setPickerBusy(true)
+    try {
+      const tplData = await getTemplateApi().catch(() => ({ config: {} }))
+      const saved = tplData.config as Partial<TemplateConfig> | undefined
+      const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
+      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
+      const lists = await Promise.all(classes.map((cl) => getReportCardsApi({ termId: activeTerm.id, classLevel: cl })))
+      const cards: RawRC[] = lists.flatMap((d) => (d.reportCards as RawRC[]).filter((rc) => rc.status === 'PUBLISHED'))
+      if (!cards.length) { showToast(tr('No published cards for this class'), 'error'); return }
+      setPrintJob({ cards, config })
+    } catch {
+      showToast(tr('Failed to print'), 'error')
+    } finally { setPickerBusy(false); setClassPicker(null) }
   }
 
   useEffect(() => {
@@ -383,49 +431,6 @@ export default function ReportCardsPage() {
     }, 600)
     return () => clearTimeout(timer)
   }, [printJob])
-
-  const handlePrintClassList = async (classLevel: string, termId: string) => {
-    setPrinting(true)
-    try {
-      const [overview, tpl] = await Promise.all([
-        getClassOverviewApi(termId, classLevel),
-        getClassListTemplateApi().catch(() => ({ config: {} })),
-      ])
-      const students = overview.students.map((s: any) => ({ name: s.name, studentId: s.studentId }))
-      const logoUrl = school?.logo ? window.location.origin + school.logo : null
-      printClassList({
-        students,
-        classLevel,
-        schoolName: school?.name ?? '',
-        schoolType: school?.type ?? '',
-        logoUrl,
-        config: mergeClassListConfig(tpl.config, school?.type),
-      })
-    } catch {
-      showToast(tr('Failed to load class list'), 'error')
-    } finally {
-      setPrinting(false)
-    }
-  }
-
-  const handleClassPrint = async (classLevel: string, termId: string) => {
-    setPrinting(true)
-    try {
-      const [rcData, tplData] = await Promise.all([
-        getReportCardsApi({ termId, classLevel }),
-        getTemplateApi().catch(() => ({ config: {} })),
-      ])
-      const published: RawRC[] = (rcData.reportCards as RawRC[]).filter((rc: RawRC) => rc.status === 'PUBLISHED')
-      if (!published.length) { showToast(tr('No published cards for this class'), 'error'); setPrinting(false); return }
-      const saved = tplData.config as Partial<TemplateConfig> | undefined
-      const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
-      setPrintJob({ cards: published, config })
-    } catch {
-      showToast(tr('Failed to load cards for printing'), 'error')
-      setPrinting(false)
-    }
-  }
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
@@ -615,138 +620,37 @@ export default function ReportCardsPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
 
-          {/* Transparent overlay — clicking outside any open dropdown closes it */}
-          {openDropdown && (
-            <div className="fixed inset-0 z-20" onClick={() => setOpenDropdown(null)} />
-          )}
-
-          {/* Publish Class dropdown */}
+          {/* Publish Class — opens a multi-select picker (with the readiness check) */}
           {isAdmin && unpublishedClasses.length > 0 && activeTerm && (
-            <div className="relative z-30">
-              <button
-                disabled={!!bulkPublishing}
-                onClick={() => setOpenDropdown(v => v === 'bulkPublish' ? null : 'bulkPublish')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 ${
-                  openDropdown === 'bulkPublish'
-                    ? 'bg-green-700 text-white'
-                    : 'bg-green-600 hover:bg-green-700 text-white'
-                }`}>
-                <Send size={14} />
-                {bulkPublishing ? tr('Publishing…') : tr('Publish Class')}
-                <ChevronDown size={13} className={`transition-transform duration-200 ${openDropdown === 'bulkPublish' ? 'rotate-180' : ''}`} />
-              </button>
-              {openDropdown === 'bulkPublish' && (
-                <div className="absolute right-0 top-[calc(100%+4px)] bg-card border border-border rounded-xl shadow-xl z-30 py-1.5 min-w-[220px] overflow-hidden">
-                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{tr('Select class')}</p>
-                  {unpublishedClasses.map(cl => {
-                    const r = classReadiness[cl]
-                    const ready = !r || r.ready
-                    const missingSeqs = r?.missingSeqs ?? 0
-                    const missingRemarks = r?.missingRemarks ?? 0
-                    const noSubjects = r?.noSubjects ?? false
-                    const nothingToPublish = !!r && !r.noSubjects && (r.total ?? 0) === 0
-                    return (
-                      <div key={cl} className="px-1">
-                        <button
-                          disabled={!ready || bulkPublishing === cl}
-                          onClick={() => { handleBulkPublish(cl); setOpenDropdown(null) }}
-                          className="w-full text-left px-3 py-2 text-sm rounded-lg transition flex items-start gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-muted enabled:hover:bg-muted"
-                        >
-                          <span className={`mt-0.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${ready ? 'bg-green-500' : 'bg-destructive'}`} />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-foreground">{cl}</p>
-                            {!ready && (
-                              <div className="flex flex-wrap gap-1 mt-0.5">
-                                {noSubjects && (
-                                  <span className="text-[10px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
-                                    {tr('No subjects assigned')}
-                                  </span>
-                                )}
-                                {missingSeqs > 0 && (
-                                  <span className="text-[10px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
-                                    {missingSeqs} {tr('missing seqs')}
-                                  </span>
-                                )}
-                                {missingRemarks > 0 && (
-                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
-                                    {missingRemarks} {tr('no remarks')}
-                                  </span>
-                                )}
-                                {nothingToPublish && (
-                                  <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">
-                                    {tr('Nothing to publish')}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </button>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+            <button
+              disabled={!!bulkPublishing || pickerBusy}
+              onClick={() => setClassPicker('publish')}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 bg-green-600 hover:bg-green-700 text-white">
+              <Send size={14} />
+              {bulkPublishing ? tr('Publishing…') : tr('Publish Class')}
+            </button>
           )}
 
-          {/* Class List dropdown */}
+          {/* Class List — opens a multi-select picker */}
           {activeTerm && (
-            <div className="relative z-30">
-              <button
-                disabled={printing}
-                onClick={() => setOpenDropdown(v => v === 'classList' ? null : 'classList')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border ${
-                  openDropdown === 'classList'
-                    ? 'bg-muted border-border text-foreground'
-                    : 'border-border text-foreground hover:bg-muted'
-                }`}>
-                <List size={14} />
-                {printing ? tr('Loading…') : tr('Class List')}
-                <ChevronDown size={13} className={`transition-transform duration-200 ${openDropdown === 'classList' ? 'rotate-180' : ''}`} />
-              </button>
-              {openDropdown === 'classList' && (
-                <div className="absolute right-0 top-[calc(100%+4px)] bg-card border border-border rounded-xl shadow-xl z-30 py-1.5 min-w-[160px] overflow-hidden">
-                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{tr('Select class')}</p>
-                  {[...new Set([...unpublishedClasses, ...publishedClasses])].sort().map(cl => (
-                    <button key={cl} onClick={() => { handlePrintClassList(cl, activeTerm.id); setOpenDropdown(null) }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition text-foreground flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
-                      {cl}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              disabled={printing || pickerBusy}
+              onClick={() => setClassPicker('classList')}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border border-border text-foreground hover:bg-muted">
+              <List size={14} />
+              {printing ? tr('Loading…') : tr('Class List')}
+            </button>
           )}
 
-          {/* Print Class dropdown */}
+          {/* Print Class — opens a multi-select picker */}
           {publishedClasses.length > 0 && activeTerm && (
-            <div className="relative z-30">
-              <button
-                disabled={printing}
-                onClick={() => setOpenDropdown(v => v === 'printClass' ? null : 'printClass')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border ${
-                  openDropdown === 'printClass'
-                    ? 'bg-muted border-border text-foreground'
-                    : 'border-border text-foreground hover:bg-muted'
-                }`}>
-                <Printer size={14} />
-                {printing ? tr('Loading…') : tr('Print Class')}
-                <ChevronDown size={13} className={`transition-transform duration-200 ${openDropdown === 'printClass' ? 'rotate-180' : ''}`} />
-              </button>
-              {openDropdown === 'printClass' && (
-                <div className="absolute right-0 top-[calc(100%+4px)] bg-card border border-border rounded-xl shadow-xl z-30 py-1.5 min-w-[160px] overflow-hidden">
-                  <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{tr('Select class')}</p>
-                  {publishedClasses.map(cl => (
-                    <button key={cl} onClick={() => { handleClassPrint(cl, activeTerm.id); setOpenDropdown(null) }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition text-foreground flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground flex-shrink-0" />
-                      {cl}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              disabled={printing || pickerBusy}
+              onClick={() => setClassPicker('printClass')}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border border-border text-foreground hover:bg-muted">
+              <Printer size={14} />
+              {printing ? tr('Loading…') : tr('Print Class')}
+            </button>
           )}
 
           <button
@@ -912,6 +816,38 @@ export default function ReportCardsPage() {
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
 
+      <ClassPickerModal
+        open={classPicker === 'publish'}
+        title={tr('Publish report cards')}
+        subtitle={tr('Select the class(es) to publish for this term.')}
+        options={unpublishedClasses.map((cl): ClassOption => ({ classLevel: cl, readiness: classReadiness[cl] }))}
+        showReadiness
+        confirmLabel={tr('Publish')}
+        busy={pickerBusy}
+        onClose={() => setClassPicker(null)}
+        onConfirm={handleBulkPublishMany}
+      />
+      <ClassPickerModal
+        open={classPicker === 'classList'}
+        title={tr('Print class list')}
+        subtitle={tr('Select the class(es) to print.')}
+        options={[...new Set([...unpublishedClasses, ...publishedClasses])].sort().map((cl): ClassOption => ({ classLevel: cl }))}
+        confirmLabel={tr('Print')}
+        busy={pickerBusy}
+        onClose={() => setClassPicker(null)}
+        onConfirm={handlePrintClassListMany}
+      />
+      <ClassPickerModal
+        open={classPicker === 'printClass'}
+        title={tr('Print report cards')}
+        subtitle={tr('Select the class(es) to print.')}
+        options={publishedClasses.map((cl): ClassOption => ({ classLevel: cl }))}
+        confirmLabel={tr('Print')}
+        busy={pickerBusy}
+        onClose={() => setClassPicker(null)}
+        onConfirm={handleClassPrintMany}
+      />
+
       {bulkResult && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl w-full max-w-lg p-6">
@@ -950,7 +886,7 @@ export default function ReportCardsPage() {
           {printJob.cards.map((rc) => (
             <div key={rc.id} id={`rc-print-${rc.id}`}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))}

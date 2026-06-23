@@ -13,7 +13,47 @@ export interface ClassListDocOptions {
 }
 
 /** Build the full printable Class List HTML document from the saved design config. */
-export function buildClassListHtml({ students, classLevel, schoolName, schoolType, logoUrl, config }: ClassListDocOptions): string {
+function classListStyles(c: ClassListDocOptions['config']): string {
+  return `
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Arial', sans-serif; padding: 14px; color: #111; }
+  .class-page { page-break-after: always; }
+  .class-page:last-child { page-break-after: auto; }
+  .header { text-align: center; border-bottom: 3px double #111; padding-bottom: 10px; margin-bottom: 12px; }
+  .brand { display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .logo { width: 52px; height: 52px; object-fit: contain; }
+  .school-name { font-size: 20px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; }
+  .school-type { font-size: 12px; color: #555; margin-top: 2px; text-transform: uppercase; letter-spacing: 2px; }
+  .subtitle { font-size: 11px; color: #444; margin-top: 3px; }
+  .doc-title { font-size: 14px; font-weight: bold; margin-top: 8px; text-transform: uppercase; letter-spacing: 1.5px; border: 2px solid ${c.headerColor}; color: ${c.headerColor}; display: inline-block; padding: 3px 18px; }
+  .meta { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 10px; gap: 8px; }
+  .meta-item { display: flex; align-items: center; gap: 4px; }
+  .fill-line { display: inline-block; border-bottom: 1px solid #555; min-width: 90px; height: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { border: 1px solid #333; padding: 4px 3px; text-align: center; font-weight: bold; }
+  td { border: 1px solid #888; padding: 0 3px; height: 22px; text-align: center; }
+  .name { text-align: left; padding-left: 6px; min-width: 140px; }
+  .sid { color: #666; font-size: 10px; min-width: 55px; }
+  .num { width: 26px; font-size: 10px; color: #555; }
+  .score { min-width: 40px; }
+  .avg { min-width: 40px; background: ${c.accentColor}14; font-weight: bold; }
+  .term-hd { background: ${c.headerColor}; color: #fff; font-size: 11px; letter-spacing: 0.5px; }
+  .sub-hd { background: #ddd; font-size: 10px; }
+  .avg-hd { background: ${c.accentColor}; color: #fff; }
+  .col-hd { background: #f5f5f5; font-size: 10px; }
+  tr:nth-child(even) td { background: #fafafa; }
+  tr:nth-child(even) td.avg { background: ${c.accentColor}22; }
+  .blank-row td { background: #fff !important; }
+  .footer { margin-top: 20px; display: flex; justify-content: space-between; font-size: 11px; gap: 16px; border-top: 1px solid #ccc; padding-top: 14px; }
+  .footer-field { flex: 1; }
+  .footer-label { color: #444; margin-bottom: 4px; }
+  .footer-line { border-bottom: 1px solid #111; height: 18px; }
+  @page { size: A4 ${c.orientation}; margin: 8mm; }
+  @media print { body { padding: 0; } th, td, .term-hd, .avg-hd, .avg { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }`
+}
+
+/** One class's section (header + roster table + footer), wrapped for page breaks. */
+function classListBody({ students, classLevel, schoolName, schoolType, logoUrl, config }: ClassListDocOptions): string {
   const c = config
   const groups = (c.groups ?? []).filter(g => g.columns.length > 0)
   const totalMarkCols = groups.reduce((n, g) => n + g.columns.length, 0)
@@ -60,45 +100,7 @@ export function buildClassListHtml({ students, classLevel, schoolName, schoolTyp
       <div class="footer-line"></div>
     </div>`).join('')
 
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Class List — ${esc(classLevel)} | ${esc(schoolName)}</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Arial', sans-serif; padding: 14px; color: #111; }
-  .header { text-align: center; border-bottom: 3px double #111; padding-bottom: 10px; margin-bottom: 12px; }
-  .brand { display: flex; align-items: center; justify-content: center; gap: 12px; }
-  .logo { width: 52px; height: 52px; object-fit: contain; }
-  .school-name { font-size: 20px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; }
-  .school-type { font-size: 12px; color: #555; margin-top: 2px; text-transform: uppercase; letter-spacing: 2px; }
-  .subtitle { font-size: 11px; color: #444; margin-top: 3px; }
-  .doc-title { font-size: 14px; font-weight: bold; margin-top: 8px; text-transform: uppercase; letter-spacing: 1.5px; border: 2px solid ${c.headerColor}; color: ${c.headerColor}; display: inline-block; padding: 3px 18px; }
-  .meta { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 10px; gap: 8px; }
-  .meta-item { display: flex; align-items: center; gap: 4px; }
-  .fill-line { display: inline-block; border-bottom: 1px solid #555; min-width: 90px; height: 14px; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th { border: 1px solid #333; padding: 4px 3px; text-align: center; font-weight: bold; }
-  td { border: 1px solid #888; padding: 0 3px; height: 22px; text-align: center; }
-  .name { text-align: left; padding-left: 6px; min-width: 140px; }
-  .sid { color: #666; font-size: 10px; min-width: 55px; }
-  .num { width: 26px; font-size: 10px; color: #555; }
-  .score { min-width: 40px; }
-  .avg { min-width: 40px; background: ${c.accentColor}14; font-weight: bold; }
-  .term-hd { background: ${c.headerColor}; color: #fff; font-size: 11px; letter-spacing: 0.5px; }
-  .sub-hd { background: #ddd; font-size: 10px; }
-  .avg-hd { background: ${c.accentColor}; color: #fff; }
-  .col-hd { background: #f5f5f5; font-size: 10px; }
-  tr:nth-child(even) td { background: #fafafa; }
-  tr:nth-child(even) td.avg { background: ${c.accentColor}22; }
-  .blank-row td { background: #fff !important; }
-  .footer { margin-top: 20px; display: flex; justify-content: space-between; font-size: 11px; gap: 16px; border-top: 1px solid #ccc; padding-top: 14px; }
-  .footer-field { flex: 1; }
-  .footer-label { color: #444; margin-bottom: 4px; }
-  .footer-line { border-bottom: 1px solid #111; height: 18px; }
-  @page { size: A4 ${c.orientation}; margin: 8mm; }
-  @media print { body { padding: 0; } th, td, .term-hd, .avg-hd, .avg { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-</style></head>
-<body>
+  return `<div class="class-page">
   <div class="header">
     <div class="brand">
       ${c.showLogo && logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="logo">` : ''}
@@ -127,7 +129,19 @@ export function buildClassListHtml({ students, classLevel, schoolName, schoolTyp
   </table>
 
   <div class="footer">${footer}</div>
-</body></html>`
+</div>`
+}
+
+function classListDoc(title: string, styleConfig: ClassListDocOptions['config'], bodies: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>${esc(title)}</title>
+<style>${classListStyles(styleConfig)}</style></head>
+<body>${bodies}</body></html>`
+}
+
+export function buildClassListHtml(opts: ClassListDocOptions): string {
+  return classListDoc(`Class List — ${opts.classLevel} | ${opts.schoolName}`, opts.config, classListBody(opts))
 }
 
 /** Open a popup and print the class list built from the config. */
@@ -135,6 +149,19 @@ export function printClassList(opts: ClassListDocOptions) {
   const pw = window.open('', '_blank', 'width=1200,height=800')
   if (!pw) { alert('Allow popups to print the class list.'); return }
   pw.document.write(buildClassListHtml(opts))
+  pw.document.close()
+  pw.focus()
+  setTimeout(() => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }, 350)
+}
+
+/** Print several classes' lists as one document (a page break between each). */
+export function printClassLists(list: ClassListDocOptions[]) {
+  if (list.length === 0) return
+  if (list.length === 1) return printClassList(list[0])
+  const pw = window.open('', '_blank', 'width=1200,height=800')
+  if (!pw) { alert('Allow popups to print the class lists.'); return }
+  const bodies = list.map((opts) => classListBody(opts)).join('\n')
+  pw.document.write(classListDoc(`Class Lists | ${list[0].schoolName}`, list[0].config, bodies))
   pw.document.close()
   pw.focus()
   setTimeout(() => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }, 350)
