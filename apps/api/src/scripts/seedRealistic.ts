@@ -14,6 +14,7 @@
  *    Third (the current term) only partially filled, DRAFT, some remarks blank.
  */
 import { randomUUID } from 'crypto'
+import bcrypt from 'bcryptjs'
 import prisma from '../config/prisma'
 
 interface SubjectDef { name: string; coeff: number; optional?: boolean }
@@ -61,6 +62,40 @@ const CLASSES: ClassDef[] = [
     c('History',5),c('Geography',5),c('Economics',5),o('Mathematics',5) ] },
   { name: 'Upper Sixth Arts A3', fee: 100000, girls: 9, boys: 6, subjects: [
     c('History',5),c('Literature',5),c('Economics',5),o('Mathematics',5) ] },
+]
+
+// ---- teachers: who teaches which subjects across which classes ----
+const LOWER = ['Form 1', 'Form 2', 'Form 3']
+const MID = ['Form 4 Science', 'Form 4 Arts', 'Form 5 Science', 'Form 5 Arts']
+const SIXTH_SCI = ['Lower Sixth Science S1', 'Lower Sixth Science S2', 'Lower Sixth Science S3', 'Upper Sixth Science S1', 'Upper Sixth Science S2', 'Upper Sixth Science S3']
+const SIXTH_ARTS = ['Lower Sixth Arts A1', 'Lower Sixth Arts A2', 'Lower Sixth Arts A3', 'Upper Sixth Arts A1', 'Upper Sixth Arts A2', 'Upper Sixth Arts A3']
+
+interface TeacherDef { subjects: string[]; classes: string[]; master?: string }
+const TEACHERS: TeacherDef[] = [
+  { subjects: ['Mathematics', 'Physics'], classes: LOWER, master: 'Form 1' },        // multi-subject, junior
+  { subjects: ['Mathematics', 'Physics'], classes: ['Form 4 Science', 'Form 5 Science'] },
+  { subjects: ['Mathematics'], classes: ['Form 4 Arts', 'Form 5 Arts', ...SIXTH_ARTS] },
+  { subjects: ['Mathematics'], classes: SIXTH_SCI },
+  { subjects: ['Physics'], classes: SIXTH_SCI },
+  { subjects: ['Further Mathematics'], classes: ['Lower Sixth Science S1', 'Upper Sixth Science S1'] }, // single
+  { subjects: ['Chemistry', 'Biology'], classes: LOWER, master: 'Form 2' },
+  { subjects: ['Chemistry', 'Biology'], classes: ['Form 4 Science', 'Form 5 Science'], master: 'Form 4 Science' },
+  { subjects: ['Chemistry'], classes: SIXTH_SCI },
+  { subjects: ['Biology'], classes: SIXTH_SCI },
+  { subjects: ['Geology'], classes: ['Lower Sixth Science S3', 'Upper Sixth Science S3'] },              // single
+  { subjects: ['English'], classes: LOWER, master: 'Form 3' },
+  { subjects: ['English'], classes: MID },
+  { subjects: ['French'], classes: [...LOWER, 'Lower Sixth Arts A1', 'Upper Sixth Arts A1'] },
+  { subjects: ['French'], classes: MID },
+  { subjects: ['History', 'Geography'], classes: LOWER },
+  { subjects: ['History'], classes: ['Form 4 Arts', 'Form 5 Arts', ...SIXTH_ARTS], master: 'Form 4 Arts' },
+  { subjects: ['Geography'], classes: ['Form 4 Science', 'Form 4 Arts', 'Form 5 Science', 'Form 5 Arts', 'Lower Sixth Arts A2', 'Upper Sixth Arts A2'] },
+  { subjects: ['Economics'], classes: ['Form 3', ...MID, ...SIXTH_ARTS] },
+  { subjects: ['Literature'], classes: [...LOWER, 'Form 4 Arts', 'Form 5 Arts', 'Lower Sixth Arts A1', 'Lower Sixth Arts A3', 'Upper Sixth Arts A1', 'Upper Sixth Arts A3'] },
+  { subjects: ['Computer Science'], classes: [...LOWER, ...MID, 'Lower Sixth Science S2', 'Upper Sixth Science S2'] },
+  { subjects: ['Religious Studies'], classes: [...LOWER, ...MID] },                                       // single
+  { subjects: ['Citizenship'], classes: [...LOWER, ...MID] },                                             // single
+  { subjects: ['Sports'], classes: [...LOWER, ...MID, 'Lower Sixth Science S1', 'Lower Sixth Science S2', 'Lower Sixth Science S3', 'Lower Sixth Arts A1', 'Lower Sixth Arts A2', 'Lower Sixth Arts A3'] }, // single
 ]
 
 const SESSIONS = [
@@ -120,6 +155,7 @@ async function main() {
   await prisma.student.deleteMany({ where: { schoolId } })
   await prisma.term.deleteMany({ where: { schoolId } })
   await prisma.classLevel.deleteMany({ where: { schoolId } })
+  await prisma.user.deleteMany({ where: { schoolId, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] } } })
   console.log('Wiped existing data.')
 
   // ---- classes ----
@@ -139,6 +175,31 @@ async function main() {
   }
   await chunked(prisma.subject, subjectRows)
   console.log(`Created ${CLASSES.length} classes, ${subjectRows.length} subjects.`)
+
+  // ---- teachers + their subject assignments ----
+  const pwHash = await bcrypt.hash('teacher1234', 10)
+  const teacherRows: { id: string; schoolId: string; name: string; email: string; password: string; role: 'CLASS_TEACHER' | 'CLASS_MASTER'; masterClassLevel: string | null }[] = []
+  const teacherSubjectRows: { id: string; userId: string; subjectId: string }[] = []
+  let tIdx = 0
+  for (const def of TEACHERS) {
+    tIdx++
+    const male = Math.random() < 0.5
+    const first = pick(male ? FIRST_M : FIRST_F), last = pick(LAST)
+    const uid = randomUUID()
+    teacherRows.push({
+      id: uid, schoolId, name: `${male ? 'Mr.' : 'Mrs.'} ${first} ${last}`,
+      email: `${first}.${last}.${tIdx}@greenfield.cm`.toLowerCase(), password: pwHash,
+      role: def.master ? 'CLASS_MASTER' : 'CLASS_TEACHER', masterClassLevel: def.master ?? null,
+    })
+    for (const s of subjectRows) {
+      if (def.subjects.includes(s.name) && def.classes.includes(s.classLevel)) {
+        teacherSubjectRows.push({ id: randomUUID(), userId: uid, subjectId: s.id })
+      }
+    }
+  }
+  await chunked(prisma.user, teacherRows)
+  await chunked(prisma.teacherSubject, teacherSubjectRows)
+  console.log(`Created ${teacherRows.length} teachers, ${teacherSubjectRows.length} subject assignments.`)
 
   // ---- terms ----
   const termsBySession: Record<string, { id: string; index: number }[]> = {}
@@ -164,7 +225,10 @@ async function main() {
       const subs = subjectsOf[cl.name]
       const compulsory = subs.filter((s) => !s.optional)
       const optional = subs.filter((s) => s.optional)
-      const genders = shuffle([...Array(cl.girls).fill('Female'), ...Array(cl.boys).fill('Male')])
+      // 2025/2026 is a different (mostly larger) intake than 2024/2025 — the populations differ.
+      const girls = sess.current ? Math.max(4, cl.girls + rnd(11) - 2) : cl.girls
+      const boys = sess.current ? Math.max(3, cl.boys + rnd(9) - 2) : cl.boys
+      const genders = shuffle([...Array(girls).fill('Female'), ...Array(boys).fill('Male')])
       const cardsByTerm: Record<string, { card: any; average: number }[]> = {}
 
       for (const gender of genders) {
