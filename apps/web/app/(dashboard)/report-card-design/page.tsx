@@ -26,7 +26,32 @@ const SD = {
   seq2: [16,14,18,12,19],
   grades: ['B','C','A','D','A+'],
   remarks: ['Good','Satisfactory','Excellent','Needs improvement','Outstanding'],
-  total: 74, average: 74, position: 3,
+  position: 3,
+}
+// Weighted-average preview: average = Σ(score × coeff) / Σ(coeff), out of 20.
+// The sample subjects carry no coefficient, so each weighs 1.
+const SD_TOTAL = SD.entries.reduce((a, b) => a + b, 0)        // Σ(score × coeff) = 74
+const SD_AVG = SD.entries.length ? SD_TOTAL / SD.entries.length : 0  // 14.8 / 20
+
+// Bilingual labels are authored "Français / English"; show only the school's language.
+function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
+  if (typeof label !== 'string' || !label.includes(' / ')) return label
+  const [fr, en] = label.split(' / ')
+  return (lang === 'FR' ? fr : en).trim()
+}
+function localizeLayout<T extends { sections?: any[] }>(layout: T, lang: 'EN' | 'FR'): T {
+  if (!layout?.sections) return layout
+  const loc = (s: string) => localizeLabel(s, lang)
+  return {
+    ...layout,
+    sections: layout.sections.map((s: any) => {
+      if (s.type === 'student_info' && s.rows) return { ...s, rows: s.rows.map((r: any) => ({ ...r, label: loc(r.label) })) }
+      if (s.type === 'summary' && s.boxes) return { ...s, boxes: s.boxes.map((b: any) => ({ ...b, label: loc(b.label) })) }
+      if (s.type === 'remarks' && s.label) return { ...s, label: loc(s.label) }
+      if (s.type === 'signatures' && s.lines) return { ...s, lines: s.lines.map((l: any) => ({ ...l, label: loc(l.label) })) }
+      return s
+    }),
+  }
 }
 
 function resolveField(field: string, schoolName: string) {
@@ -43,9 +68,9 @@ function resolveField(field: string, schoolName: string) {
 }
 
 function resolveSummary(field: string) {
-  if (field === 'total')    return '74'
-  if (field === 'average')  return '74.0%'
-  if (field === 'position') return '3'
+  if (field === 'total')    return String(SD_TOTAL)
+  if (field === 'average')  return SD_AVG.toFixed(1)
+  if (field === 'position') return String(SD.position)
   if (field === 'grade')    return 'B'
   return '—'
 }
@@ -743,23 +768,26 @@ export default function ReportCardDesignPage() {
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
+    // Labels follow the school's language (the model is one language per section,
+    // never bilingual) — collapse any "Français / English" labels to that language.
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     getTemplateApi().then(({ config: saved }) => {
       if (saved && (saved as any).sections?.length > 0) {
         const base = getDefaultLayout((saved.template as TemplateName) || 'classic')
-        const merged = { ...base, ...saved } as any
+        const merged = localizeLayout({ ...base, ...saved } as any, lang)
         setConfig(merged)
         setColorText(merged.primaryColor)
         setBgText(merged.bgColor || '#ffffff')
       } else if (saved && Object.keys(saved).length > 0) {
         const tpl = (saved.template as TemplateName) || 'classic'
         const layout = getDefaultLayout(tpl)
-        const merged = { ...layout, ...saved, sections: layout.sections } as any
+        const merged = localizeLayout({ ...layout, ...saved, sections: layout.sections } as any, lang)
         setConfig(merged)
         setColorText(merged.primaryColor)
         setBgText(merged.bgColor || '#ffffff')
       } else {
         // No saved design yet → start from the section-type default
-        const layout = getDefaultLayoutForType(school?.type)
+        const layout = localizeLayout(getDefaultLayoutForType(school?.type), lang)
         setConfig(layout)
         setColorText(layout.primaryColor)
         setBgText(layout.bgColor || '#ffffff')

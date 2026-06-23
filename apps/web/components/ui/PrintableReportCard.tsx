@@ -13,7 +13,7 @@ export interface PrintEntry {
 interface PrintSubject { id: string; name: string }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null }
+  school: { name: string; type: string; logo?: string | null; language?: string }
   student: { name: string; studentId: string; classLevel: string; guardianName?: string }
   term: { name: string; session: string }
   subjects: PrintSubject[]
@@ -29,6 +29,13 @@ function ordinalPos(n: number): string {
   const s = ['th', 'st', 'nd', 'rd']
   const v = n % 100
   return n + (s[(v - 20) % 10] || s[v] || s[0])
+}
+
+// Labels are authored "Français / English"; a school is one language, so show that side.
+function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
+  if (typeof label !== 'string' || !label.includes(' / ')) return label
+  const [fr, en] = label.split(' / ')
+  return (lang === 'FR' ? fr : en).trim()
 }
 
 function hexToRgb(hex: string) {
@@ -488,6 +495,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
 function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfig }) {
   const t = useT()
   const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg } = props
+  const lang: 'EN' | 'FR' = school.language === 'FR' ? 'FR' : 'EN'
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
   const rgb = hexToRgb(color)
@@ -553,7 +561,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.columns}, 1fr)`, gap: '5px 12px', background: `rgba(${rgb},0.05)`, padding: 12, border: `1px solid rgba(${rgb},0.25)`, marginBottom: 16, fontSize: 12 }}>
           {s.rows.map(row => (
             <div key={row.id}>
-              <span style={{ fontWeight: 'bold' }} dangerouslySetInnerHTML={{ __html: row.label + ':' }} />
+              <span style={{ fontWeight: 'bold' }} dangerouslySetInnerHTML={{ __html: localizeLabel(row.label, lang) + ':' }} />
               {' '}<span style={{ color: row.valueColor ?? undefined }}>{resolveField(row.field)}</span>
             </div>
           ))}
@@ -613,7 +621,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           {s.boxes.map(box => (
             <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
               <div style={{ fontSize: 20, fontWeight: 'bold', color: s.valueColor || color }}>{resolveStat(box.field)}</div>
-              <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: box.label }} />
+              <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: localizeLabel(box.label, lang) }} />
             </div>
           ))}
         </div>
@@ -624,7 +632,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       const s = sec as RemarksSec
       return (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 12, marginBottom: 16 }}>
-          <div style={{ fontWeight: 'bold', marginBottom: 5, color }} dangerouslySetInnerHTML={{ __html: s.label }} />
+          <div style={{ fontWeight: 'bold', marginBottom: 5, color }} dangerouslySetInnerHTML={{ __html: localizeLabel(s.label, lang) }} />
           <div style={{ minHeight: 36, color: '#444' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )
@@ -638,7 +646,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           {s.lines.map(line => (
             <div key={line.id} style={{ textAlign: 'center' }}>
               <div style={{ borderBottom: '1px solid #111', height: 40, marginBottom: 5 }} />
-              <div style={{ fontSize: 11, color: '#555' }} dangerouslySetInnerHTML={{ __html: line.label }} />
+              <div style={{ fontSize: 11, color: '#555' }} dangerouslySetInnerHTML={{ __html: localizeLabel(line.label, lang) }} />
             </div>
           ))}
         </div>
