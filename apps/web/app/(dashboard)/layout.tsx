@@ -8,6 +8,7 @@ import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import { useT } from '@/lib/i18n'
 import { getMeApi } from '@/lib/api/auth'
+import { getAcademicYearsApi } from '@/lib/api/dashboard'
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
@@ -45,7 +46,7 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, school, logout, updateSchool } = useAuthStore()
+  const { user, school, logout, updateSchool, activeSession, setActiveSession } = useAuthStore()
   const t = useT()
 
   // Refresh school once so persisted pre-i18n sessions pick up `language`.
@@ -53,6 +54,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (!user || isSuperAdmin) return
     if (school?.language) return
     getMeApi().then((me) => { if (me.school) updateSchool(me.school) }).catch(() => {})
+  }, [user])
+
+  // Make sure the app-wide active academic year is set to a valid year
+  // (defaults to the live/current one). Persisted, so an activated year sticks.
+  useEffect(() => {
+    if (!user || isSuperAdmin) return
+    getAcademicYearsApi().then(({ academicYears }) => {
+      const live = academicYears.find((y) => y.current)?.session ?? academicYears[0]?.session
+      if (live && (!activeSession || !academicYears.some((y) => y.session === activeSession))) setActiveSession(live)
+    }).catch(() => {})
   }, [user])
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'

@@ -7,12 +7,13 @@ import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 export const getReportCards = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { termId, classLevel } = req.query
+    const { termId, classLevel, session } = req.query
 
     const reportCards = await prisma.reportCard.findMany({
       where: {
         schoolId,
         ...(termId ? { termId: String(termId) } : {}),
+        ...(session ? { term: { session: String(session) } } : {}),
         ...(classLevel ? { student: { classLevel: String(classLevel) } } : {})
       },
       include: {

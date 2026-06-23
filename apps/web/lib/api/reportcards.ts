@@ -29,7 +29,7 @@ export const saveEntriesWithSeqApi = async (id: string, data: {
   return res.data
 }
 
-export const getReportCardsApi = async (params?: { termId?: string; classLevel?: string }) => {
+export const getReportCardsApi = async (params?: { termId?: string; classLevel?: string; session?: string }) => {
   const res = await api.get('/report-cards', { params })
   return res.data
 }

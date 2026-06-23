@@ -5,7 +5,7 @@ export const getStudentClassLevelsApi = async () => {
   return res.data
 }
 
-export const getStudentsApi = async (params?: { classLevel?: string; search?: string }) => {
+export const getStudentsApi = async (params?: { classLevel?: string; search?: string; session?: string }) => {
   const res = await api.get('/students', { params })
   return res.data
 }

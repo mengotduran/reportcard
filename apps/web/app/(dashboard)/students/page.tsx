@@ -28,7 +28,7 @@ const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender:
 
 export default function StudentsPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, activeSession } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const [students, setStudents] = useState<Student[]>([])
@@ -109,14 +109,29 @@ export default function StudentsPage() {
   const fetchStudents = async (classFilter = activeClass, searchVal = search) => {
     try {
       setLoading(true)
-      const params: { classLevel?: string; search?: string } = {}
+      const params: { classLevel?: string; search?: string; session?: string } = {}
       if (classFilter && classFilter !== 'all') params.classLevel = classFilter
       if (searchVal) params.search = searchVal
+      if (activeSession) params.session = activeSession
       const data = await getStudentsApi(params)
       setStudents(data.students)
     } catch { console.error('Failed to fetch students') }
     finally { setLoading(false) }
   }
+
+  // Re-pull the roster + fee badges whenever the active academic year changes.
+  useEffect(() => {
+    if (!isAuthenticated || !activeSession) return
+    fetchStudents()
+    fetchFeesOverview()
+  }, [activeSession])
+
+  // The terms shown belong only to the active academic year.
+  const visibleTerms = terms.filter((tm) => tm.session === activeSession)
+  // If the selected term isn't in the active year, fall back to "All Terms".
+  useEffect(() => {
+    if (activeTermId && !visibleTerms.some((tm) => tm.id === activeTermId)) setActiveTermId('')
+  }, [activeSession, terms])
 
   const handleClassFilter = (cls: string) => {
     setActiveClass(cls)
@@ -229,7 +244,7 @@ export default function StudentsPage() {
   // classes (deleted/inactive, like a removed "Grade 3") never appear because the
   // roster + class chips are active-only.
   const handleExport = async () => {
-    const targetTerms = activeTermId ? terms.filter((tm) => tm.id === activeTermId) : terms
+    const targetTerms = activeTermId ? visibleTerms.filter((tm) => tm.id === activeTermId) : visibleTerms
     if (targetTerms.length === 0) { showToast(t('No term selected'), 'error'); return }
     const targetClasses = activeClass !== 'all' ? [activeClass] : filterClasses
     if (targetClasses.length === 0) { showToast(t('Nothing to export'), 'error'); return }
@@ -317,17 +332,17 @@ export default function StudentsPage() {
         </div>
       )}
 
-      {terms.length > 0 && (
+      {visibleTerms.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <span className="text-xs text-muted-foreground mr-1">{t('Export by term')}:</span>
           <button onClick={() => handleTermFilter('')}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!activeTermId ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
             {t('All Terms')}
           </button>
-          {terms.map((tm) => (
+          {visibleTerms.map((tm) => (
             <button key={tm.id} onClick={() => handleTermFilter(tm.id)}
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeTermId === tm.id ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
-              {tm.name} {tm.session}{tm.isCurrent ? ` (${t('Current')})` : ''}
+              {tm.name}{tm.isCurrent ? ` (${t('Current')})` : ''}
             </button>
           ))}
         </div>

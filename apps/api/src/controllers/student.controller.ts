@@ -23,11 +23,24 @@ export const getStudents = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const { classLevel, search } = req.query
+    const session = req.query.session ? String(req.query.session) : null
+
+    // Year-aware roster: for the live academic year (or no session) show the active
+    // roster; for a past year show the students who have report cards that session.
+    let liveSession: string | null = null
+    if (session) {
+      const cur = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { session: true } })
+      liveSession = cur?.session ?? null
+    }
+    const yearScope =
+      !session || session === liveSession
+        ? { isActive: true }
+        : { reportCards: { some: { term: { session } } } }
 
     const students = await prisma.student.findMany({
       where: {
         schoolId,
-        isActive: true,
+        ...yearScope,
         ...(classLevel ? { classLevel: String(classLevel) } : {}),
         ...(search ? { name: { contains: String(search), mode: 'insensitive' } } : {})
       },

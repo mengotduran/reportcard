@@ -17,6 +17,8 @@ import DesktopOnly from '@/components/ui/DesktopOnly'
 import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
 import { printClassList } from '@/lib/classListDocument'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
+import Pagination from '@/components/ui/Pagination'
+import { usePagination } from '@/lib/usePagination'
 import { useT } from '@/lib/i18n'
 
 interface RawEntry {
@@ -336,7 +338,7 @@ function TeacherClassesView() {
 export default function ReportCardsPage() {
   const tr = useT()
   const router = useRouter()
-  const { isAuthenticated, user, school } = useAuthStore()
+  const { isAuthenticated, user, school, activeSession } = useAuthStore()
 
   if (TEACHER_ROLES.includes(user?.role ?? '') || user?.role === 'CLASS_MASTER') return <TeacherClassesView />
   const { toast, showToast, hideToast } = useToast()
@@ -426,20 +428,24 @@ export default function ReportCardsPage() {
   }
 
   useEffect(() => {
-    if (!isAuthenticated) router.push('/login')
-    else fetchAll()
-  }, [isAuthenticated])
+    if (!isAuthenticated) { router.push('/login'); return }
+    fetchAll()
+  }, [isAuthenticated, activeSession])
 
   const fetchAll = async () => {
     try {
       setLoading(true)
-      const [stuData, termData] = await Promise.all([getStudentsApi(), getTermsApi()])
+      const [stuData, termData] = await Promise.all([
+        getStudentsApi(activeSession ? { session: activeSession } : undefined),
+        getTermsApi(),
+      ])
       setStudents(stuData.students)
       setTerms(termData.terms)
-      const current = termData.terms.find((t: Term) => t.isCurrent)
-      const currentId = current?.id || ''
+      // Default to the active year's live term, else "All Terms" of that year.
+      const yearTerms = termData.terms.filter((t: Term) => t.session === activeSession)
+      const currentId = yearTerms.find((t: Term) => t.isCurrent)?.id || ''
       setFilterTermId(currentId)
-      const rcData = await getReportCardsApi(currentId ? { termId: currentId } : {})
+      const rcData = await getReportCardsApi(currentId ? { termId: currentId } : { session: activeSession ?? undefined })
       setReportCards(rcData.reportCards)
       // Fetch publish readiness for all classes in the current term
       if (currentId) {
@@ -453,7 +459,7 @@ export default function ReportCardsPage() {
   }
 
   const fetchReportCards = async (termId?: string) => {
-    const data = await getReportCardsApi(termId ? { termId } : {})
+    const data = await getReportCardsApi(termId ? { termId } : { session: activeSession ?? undefined })
     setReportCards(data.reportCards)
     // Refresh readiness when data changes
     if (termId) {
@@ -502,11 +508,16 @@ export default function ReportCardsPage() {
     }
   }
 
-  const currentTerm = terms.find(t => t.isCurrent)
-  const activeTerm = terms.find(t => t.id === filterTermId) ?? currentTerm
+  // Only the active academic year's terms are shown/exported.
+  const visibleTerms = terms.filter(t => t.session === activeSession)
+  const currentTerm = visibleTerms.find(t => t.isCurrent)
+  const activeTerm = visibleTerms.find(t => t.id === filterTermId) ?? currentTerm
 
-  // Active term chip, or every term when "All Terms" is selected.
-  const exportTargetTerms = () => (filterTermId ? terms.filter((t) => t.id === filterTermId) : terms)
+  // Active term chip, or every term of the active year when "All Terms" is selected.
+  const exportTargetTerms = () => (filterTermId ? visibleTerms.filter((t) => t.id === filterTermId) : visibleTerms)
+
+  // Paginate the table; reset to page 1 when the year or term filter changes.
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(reportCards, 15, `${activeSession}|${filterTermId}`)
 
   type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null }
 
@@ -752,11 +763,11 @@ export default function ReportCardsPage() {
           onClick={() => handleFilterChange('')}
           className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!filterTermId ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}
         >{tr('All Terms')}</button>
-        {terms.map(term => (
+        {visibleTerms.map(term => (
           <button key={term.id} onClick={() => handleFilterChange(term.id)}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filterTermId === term.id ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}
           >
-            {term.name} {term.session} {term.isCurrent ? tr('(Current)') : ''}
+            {term.name} {term.isCurrent ? tr('(Current)') : ''}
           </button>
         ))}
       </div>
@@ -799,7 +810,7 @@ export default function ReportCardsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {reportCards.map((rc) => (
+              {pageItems.map((rc) => (
                 <tr key={rc.id} className="hover:bg-muted dark:hover:bg-muted transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
@@ -843,6 +854,7 @@ export default function ReportCardsPage() {
               ))}
             </tbody>
           </table></div>
+          <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
         </div>
       )}
 
@@ -870,7 +882,7 @@ export default function ReportCardsPage() {
                 <select value={form.termId} onChange={(e) => setForm({ ...form, termId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="">{tr('Select term...')}</option>
-                  {terms.map(t => <option key={t.id} value={t.id}>{t.name} — {t.session}</option>)}
+                  {visibleTerms.map(t => <option key={t.id} value={t.id}>{t.name} — {t.session}</option>)}
                 </select>
               </div>
               <div className="flex gap-3 pt-2">

@@ -26,12 +26,15 @@ interface AuthState {
   token: string | null
   isAuthenticated: boolean
   lastActivity: number
+  /** The academic year (session, e.g. "2025/2026") the whole app is currently viewing. */
+  activeSession: string | null
   _hasHydrated: boolean
   setHasHydrated: (val: boolean) => void
   setAuth: (user: User, school: School | null, token: string) => void
   updateActivity: () => void
   updateSchool: (school: School) => void
   updateUser: (updates: Partial<User>) => void
+  setActiveSession: (session: string) => void
   logout: () => void
 }
 
@@ -45,6 +48,7 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       isAuthenticated: false,
       lastActivity: Date.now(),
+      activeSession: null,
       _hasHydrated: false,
       setHasHydrated: (val) => set({ _hasHydrated: val }),
       setAuth: (user, school, token) => {
@@ -65,9 +69,10 @@ export const useAuthStore = create<AuthState>()(
       },
       updateSchool: (school) => set({ school }),
       updateUser: (updates) => set(state => ({ user: state.user ? { ...state.user, ...updates } : null })),
+      setActiveSession: (session) => set({ activeSession: session }),
       logout: () => {
         localStorage.removeItem('token')
-        set({ user: null, school: null, token: null, isAuthenticated: false })
+        set({ user: null, school: null, token: null, isAuthenticated: false, activeSession: null })
       },
     }),
     {
@@ -79,6 +84,7 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         isAuthenticated: state.isAuthenticated,
         lastActivity: state.lastActivity,
+        activeSession: state.activeSession,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true)

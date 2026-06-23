@@ -142,24 +142,38 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       session = cur?.session ?? null
     }
 
-    const teachers = await prisma.user.count({
-      where: { schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] } },
-    })
-    const subjects = await prisma.subject.count({ where: { schoolId } })
-
     if (!session) {
-      // No terms yet — fall back to the live roster.
-      const students = await prisma.student.count({ where: { schoolId, isActive: true } })
+      // No terms yet — fall back to the live roster + school-wide counts.
+      const [students, teachers, subjects] = await Promise.all([
+        prisma.student.count({ where: { schoolId, isActive: true } }),
+        prisma.user.count({ where: { schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] } } }),
+        prisma.subject.count({ where: { schoolId } }),
+      ])
       res.json({ students, teachers, reportCards: 0, subjects, session: null })
       return
     }
 
-    const [studentRows, reportCards] = await Promise.all([
-      prisma.reportCard.findMany({ where: { schoolId, term: { session } }, select: { studentId: true }, distinct: ['studentId'] }),
+    // Everything is scoped to the chosen academic year. A "year" is defined by the
+    // classes that actually ran it (the classes of students who have report cards
+    // that session); subjects + teachers are limited to those classes.
+    const yearStudents = await prisma.student.findMany({
+      where: { schoolId, reportCards: { some: { term: { session } } } },
+      select: { classLevel: true },
+    })
+    const classLevels = [...new Set(yearStudents.map((s) => s.classLevel))]
+
+    const [reportCards, subjects, teachers] = await Promise.all([
       prisma.reportCard.count({ where: { schoolId, term: { session } } }),
+      prisma.subject.count({ where: { schoolId, classLevel: { in: classLevels } } }),
+      prisma.user.count({
+        where: {
+          schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] },
+          teacherSubjects: { some: { subject: { classLevel: { in: classLevels } } } },
+        },
+      }),
     ])
 
-    res.json({ students: studentRows.length, teachers, reportCards, subjects, session })
+    res.json({ students: yearStudents.length, teachers, reportCards, subjects, session })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

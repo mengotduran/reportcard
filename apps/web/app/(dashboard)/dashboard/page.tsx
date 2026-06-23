@@ -1,9 +1,9 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getDashboardStatsApi, getWeeklyStatsApi, getTeacherChartStatsApi, getAcademicYearsApi, WeeklyStats, TeacherChartStats, AcademicYear } from '@/lib/api/dashboard'
-import { Users, BookOpen, FileText, School, GraduationCap, ArrowRight, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Users, BookOpen, FileText, School, GraduationCap, ArrowRight, TrendingUp, TrendingDown, Minus, CalendarRange } from 'lucide-react'
 import ImageSlider from '@/components/ui/ImageSlider'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import {
@@ -231,16 +231,15 @@ function TeacherHome() {
 
 // ── Admin / VP dashboard ─────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const { user, school } = useAuthStore()
+  const { user, school, activeSession } = useAuthStore()
+  const router = useRouter()
   const t = useT()
   const locale = useLocaleCode()
   const [stats, setStats] = useState<Stats | null>(null)
   const [weeklyStats, setWeeklyStats] = useState<WeeklyStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [years, setYears] = useState<AcademicYear[]>([])
-  const [session, setSession] = useState<string>('')
-  const searchParams = useSearchParams()
-  const yearParam = searchParams.get('year')
+  const session = activeSession ?? ''
 
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
@@ -249,16 +248,11 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isAdminRole) { setLoading(false); return }
     Promise.all([getWeeklyStatsApi(), getAcademicYearsApi()])
-      .then(([w, y]) => {
-        setWeeklyStats(w)
-        setYears(y.academicYears)
-        const fromUrl = yearParam && y.academicYears.some((a) => a.session === yearParam) ? yearParam : null
-        setSession(fromUrl ?? y.academicYears.find((a) => a.current)?.session ?? y.academicYears[0]?.session ?? '')
-      })
+      .then(([w, y]) => { setWeeklyStats(w); setYears(y.academicYears) })
       .catch(console.error)
   }, [isAdminRole])
 
-  // Stats follow the selected academic year.
+  // Stats follow the app-wide active academic year.
   useEffect(() => {
     if (!isAdminRole || !session) return
     setLoading(true)
@@ -318,16 +312,21 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Academic year selector */}
-      {years.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">{t('Academic Year')}:</span>
-          {years.map((y) => (
-            <button key={y.session} onClick={() => setSession(y.session)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${session === y.session ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
-              {y.session}{y.current ? ` (${t('Current')})` : ''}
-            </button>
-          ))}
+      {/* Active academic year — read-only; switch on the Academic Year page */}
+      {session && (
+        <div className="flex items-center justify-between gap-3 flex-wrap bg-card border border-border rounded-xl px-4 py-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <CalendarRange size={18} className="text-primary flex-shrink-0" />
+            <span className="text-sm text-muted-foreground">{t('Showing data for academic year')}</span>
+            <span className="text-sm font-bold text-foreground">{session}</span>
+            {years.find((y) => y.session === session)?.current && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">{t('Current')}</span>
+            )}
+          </div>
+          <button onClick={() => router.push('/academic-year')}
+            className="text-sm text-primary font-medium hover:underline flex items-center gap-1 flex-shrink-0">
+            {t('Change year')} <ArrowRight size={14} />
+          </button>
         </div>
       )}
 

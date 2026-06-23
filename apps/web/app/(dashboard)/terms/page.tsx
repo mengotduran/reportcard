@@ -21,7 +21,7 @@ const emptyForm = { name: '', session: '', startDate: '', endDate: '' }
 
 export default function TermsPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, activeSession } = useAuthStore()
   const t = useT()
   const [terms, setTerms] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
@@ -52,7 +52,7 @@ export default function TermsPage() {
 
   const openAdd = () => {
     setEditingId(null)
-    setForm(emptyForm)
+    setForm({ ...emptyForm, session: activeSession ?? '' })
     setError('')
     setShowModal(true)
   }
@@ -107,7 +107,9 @@ export default function TermsPage() {
     fetchTerms()
   }
 
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(terms, 15)
+  // Only show the active academic year's terms (switch years on the Academic Year page).
+  const visibleTerms = terms.filter((tm) => tm.session === activeSession)
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(visibleTerms, 15)
 
   return (
     <div>
@@ -124,7 +126,7 @@ export default function TermsPage() {
 
       {loading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading...')}</div>
-      ) : terms.length === 0 ? (
+      ) : visibleTerms.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <Calendar size={32} className="mx-auto mb-2 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">{t('No terms yet. Add your first term.')}</p>
