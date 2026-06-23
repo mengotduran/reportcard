@@ -10,8 +10,8 @@ export interface Student {
   isActive: boolean
 }
 
-export const getStudents = async (): Promise<{ students: Student[] }> => {
-  const res = await api.get('/students')
+export const getStudents = async (params?: { classLevel?: string; search?: string; session?: string }): Promise<{ students: Student[] }> => {
+  const res = await api.get('/students', { params })
   return res.data
 }
 

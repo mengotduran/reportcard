@@ -299,7 +299,7 @@ export default function StudentsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
-  const { user } = useAuthStore()
+  const { user, activeSession } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
 
   const [students, setStudents] = useState<Student[]>([])
@@ -319,7 +319,7 @@ export default function StudentsScreen() {
   const fetchStudents = useCallback(async () => {
     try {
       const [sData, clData, subData] = await Promise.all([
-        getStudents(),
+        getStudents(activeSession ? { session: activeSession } : undefined),
         isAdmin ? getClasses() : Promise.resolve({ classLevels: [] }),
         isAdmin ? getSubjects() : Promise.resolve({ subjects: [] }),
       ])
@@ -335,7 +335,7 @@ export default function StudentsScreen() {
     } catch {
       setError(t('Failed to load students'))
     }
-  }, [isAdmin])
+  }, [isAdmin, activeSession])
 
   useEffect(() => {
     if (isSuperAdmin) { setLoading(false); return }

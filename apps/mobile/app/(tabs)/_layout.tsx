@@ -1,8 +1,10 @@
 import { Tabs, Redirect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { TouchableOpacity, View } from 'react-native'
+import { useEffect } from 'react'
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { getAcademicYears } from '@/lib/api/dashboard'
 import { useTheme } from '@/lib/useTheme'
 import ThemeToggle from '@/components/ThemeToggle'
 import { useT } from '@/lib/i18n'
@@ -11,10 +13,19 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
 export default function TabsLayout() {
-  const { isAuthenticated, _hasHydrated, user, logout } = useAuthStore()
+  const { isAuthenticated, _hasHydrated, user, logout, activeSession, setActiveSession } = useAuthStore()
   const { colors, isDark } = useTheme()
   const router = useRouter()
   const t = useT()
+
+  // Keep the app-wide active academic year valid (defaults to the live year).
+  useEffect(() => {
+    if (!isAuthenticated || user?.role === 'SUPERADMIN') return
+    getAcademicYears().then(({ academicYears }) => {
+      const live = academicYears.find((y) => y.current)?.session ?? academicYears[0]?.session
+      if (live && (!activeSession || !academicYears.some((y) => y.session === activeSession))) setActiveSession(live)
+    }).catch(() => {})
+  }, [isAuthenticated, user?.role])
 
   if (!_hasHydrated) return null
   if (!isAuthenticated) return <Redirect href="/login" />

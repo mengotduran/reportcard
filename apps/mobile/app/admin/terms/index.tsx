@@ -7,6 +7,7 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getTerms, createTerm, setCurrentTerm, deleteTerm, Term } from '@/lib/api/terms'
+import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -122,6 +123,7 @@ export default function TermsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const tr = useT()
+  const { activeSession } = useAuthStore()
   const [terms, setTerms] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -223,7 +225,7 @@ export default function TermsScreen() {
         </View>
       ) : (
       <FlatList
-        data={terms}
+        data={terms.filter((tm) => tm.session === activeSession)}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -276,7 +278,7 @@ export default function TermsScreen() {
       />
       )}
 
-      <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.fab} onPress={() => { setSession(activeSession ?? ''); setModalVisible(true) }} activeOpacity={0.85}>
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
 

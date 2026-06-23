@@ -1,5 +1,5 @@
 // app/(tabs)/report-cards.tsx
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, FlatList, TouchableOpacity,
@@ -222,6 +222,7 @@ function AdminReportCards() {
   const styles = makeStylesStyles(colors)
   const t = useT()
   const router = useRouter()
+  const { activeSession } = useAuthStore()
   const [reportCards, setReportCards] = useState<AdminReportCard[]>([])
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
   const [selectedTermId, setSelectedTermId] = useState<string | null>(null)
@@ -231,36 +232,47 @@ function AdminReportCards() {
   const [error, setError] = useState('')
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
 
+  // Only the active academic year's terms.
+  const visibleTerms = terms.filter((tm) => tm.session === activeSession)
+
   const fetchData = useCallback(async (termId?: string | null) => {
     try {
       setError('')
       const [rcData, termData] = await Promise.all([
-        getAllReportCards(termId ? { termId } : {}),
+        getAllReportCards(termId ? { termId } : { session: activeSession ?? undefined }),
         getTerms(),
       ])
       setReportCards(rcData.reportCards as AdminReportCard[])
       setTerms(termData.terms)
-      if (!selectedTermId) {
-        const current = termData.terms.find(t => t.isCurrent)
-        if (current) setSelectedTermId(current.id)
-      }
     } catch {
       setError(t('Failed to load report cards.'))
     }
-  }, [])
+  }, [activeSession])
+
+  // Default the selected term to the active year's live term — once per year, so
+  // a manual "All Terms" choice isn't reset every refresh.
+  const initializedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeSession || !terms.length) return
+    const yearTerms = terms.filter((tm) => tm.session === activeSession)
+    if (selectedTermId && !yearTerms.some((tm) => tm.id === selectedTermId)) {
+      setSelectedTermId(null); initializedFor.current = null; return
+    }
+    if (initializedFor.current !== activeSession) {
+      initializedFor.current = activeSession
+      setSelectedTermId(yearTerms.find((tm) => tm.isCurrent)?.id ?? null)
+    }
+  }, [activeSession, terms])
 
   useEffect(() => {
     fetchData(selectedTermId).finally(() => setLoading(false))
-  }, [fetchData])
+  }, [fetchData, selectedTermId])
 
   useFocusEffect(useCallback(() => {
     fetchData(selectedTermId)
   }, [fetchData, selectedTermId]))
 
-  const handleTermSelect = (id: string) => {
-    setSelectedTermId(id)
-    fetchData(id)
-  }
+  const handleTermSelect = (id: string) => setSelectedTermId(id || null)
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -311,17 +323,25 @@ function AdminReportCards() {
 
   return (
     <View style={styles.container}>
-      {/* Term filter */}
-      {terms.length > 0 && (
+      {/* Term filter (active academic year only) */}
+      {visibleTerms.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
           style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}>
-          {terms.map(t => (
-            <TouchableOpacity key={t.id} onPress={() => handleTermSelect(t.id)}
+          <TouchableOpacity onPress={() => handleTermSelect('')}
+            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+              borderColor: !selectedTermId ? '#F03E2F' : colors.border,
+              backgroundColor: !selectedTermId ? '#FEF2F1' : colors.card }}>
+            <Text style={{ fontSize: 12, fontWeight: '600', color: !selectedTermId ? '#F03E2F' : colors.textSecondary }}>
+              {t('All Terms')}
+            </Text>
+          </TouchableOpacity>
+          {visibleTerms.map(tm => (
+            <TouchableOpacity key={tm.id} onPress={() => handleTermSelect(tm.id)}
               style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
-                borderColor: selectedTermId === t.id ? '#F03E2F' : colors.border,
-                backgroundColor: selectedTermId === t.id ? '#FEF2F1' : colors.card }}>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: selectedTermId === t.id ? '#F03E2F' : colors.textSecondary }}>
-                {t.name}
+                borderColor: selectedTermId === tm.id ? '#F03E2F' : colors.border,
+                backgroundColor: selectedTermId === tm.id ? '#FEF2F1' : colors.card }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: selectedTermId === tm.id ? '#F03E2F' : colors.textSecondary }}>
+                {tm.name}
               </Text>
             </TouchableOpacity>
           ))}

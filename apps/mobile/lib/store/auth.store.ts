@@ -26,11 +26,14 @@ interface AuthState {
   user: User | null
   school: School | null
   isAuthenticated: boolean
+  /** The academic year (session, e.g. "2025/2026") the whole app is currently viewing. */
+  activeSession: string | null
   _hasHydrated: boolean
   login: (token: string, user: User, school: School | null) => void
   logout: () => void
   setHasHydrated: (v: boolean) => void
   setSchool: (school: School) => void
+  setActiveSession: (session: string) => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -40,11 +43,13 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       school: null,
       isAuthenticated: false,
+      activeSession: null,
       _hasHydrated: false,
       login: (token, user, school) => set({ token, user, school, isAuthenticated: true }),
-      logout: () => set({ token: null, user: null, school: null, isAuthenticated: false }),
+      logout: () => set({ token: null, user: null, school: null, isAuthenticated: false, activeSession: null }),
       setHasHydrated: (v) => set({ _hasHydrated: v }),
       setSchool: (school) => set({ school }),
+      setActiveSession: (session) => set({ activeSession: session }),
     }),
     {
       name: 'auth-storage',

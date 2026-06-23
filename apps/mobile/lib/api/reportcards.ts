@@ -73,8 +73,8 @@ export const createReportCard = async (data: {
   return res.data
 }
 
-export const getReportCards = async (): Promise<{ reportCards: ReportCardSummary[] }> => {
-  const res = await api.get('/report-cards')
+export const getReportCards = async (params?: { termId?: string; classLevel?: string; session?: string }): Promise<{ reportCards: ReportCardSummary[] }> => {
+  const res = await api.get('/report-cards', { params })
   return res.data
 }
 
@@ -163,7 +163,7 @@ export const bulkPublish = async (classLevel: string, termId: string) => {
   return res.data as { published: number; skipped: number; issues: { student: string; reason: string }[] }
 }
 
-export const getAllReportCards = async (params?: { termId?: string; classLevel?: string }) => {
+export const getAllReportCards = async (params?: { termId?: string; classLevel?: string; session?: string }) => {
   const res = await api.get('/report-cards', { params })
   return res.data as { reportCards: (ReportCardSummary & { marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null })[]; total: number }
 }

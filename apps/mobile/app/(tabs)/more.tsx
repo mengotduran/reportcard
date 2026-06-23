@@ -8,6 +8,7 @@ import { useT } from '@/lib/i18n'
 import ThemeToggle from '@/components/ThemeToggle'
 
 const MENU_ITEMS = [
+  { label: 'Academic Year', icon: 'calendar-number-outline' as const, route: '/admin/academic-year' },
   { label: 'Teachers', icon: 'people-outline' as const, route: '/admin/teachers' },
   { label: 'Classes', icon: 'school-outline' as const, route: '/admin/classes' },
   { label: 'Subjects', icon: 'book-outline' as const, route: '/admin/subjects' },

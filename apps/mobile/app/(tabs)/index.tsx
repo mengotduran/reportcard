@@ -246,7 +246,8 @@ function AdminHome() {
   const t = useT()
   const locale = useLocaleCode()
   const adm = makeAdmStyles(colors)
-  const { user, school } = useAuthStore()
+  const { user, school, activeSession } = useAuthStore()
+  const router = useRouter()
   const [stats, setStats] = useState<Stats | null>(null)
   const [weeklyStats, setWeeklyStats] = useState<WeeklyStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -255,17 +256,15 @@ function AdminHome() {
   const today = new Date().toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
 
   useEffect(() => {
-    Promise.all([getDashboardStats(), getWeeklyStats()])
+    Promise.all([getDashboardStats(activeSession ?? undefined), getWeeklyStats()])
       .then(([s, w]) => { setStats(s); setWeeklyStats(w) })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [])
+  }, [activeSession])
 
   useFocusEffect(useCallback(() => {
-    Promise.all([getDashboardStats(), getWeeklyStats()])
-      .then(([s, w]) => { setStats(s); setWeeklyStats(w) })
-      .catch(console.error)
-  }, []))
+    getDashboardStats(activeSession ?? undefined).then(setStats).catch(console.error)
+  }, [activeSession]))
 
   const emptyWeek = new Array(8).fill(0)
 
@@ -294,6 +293,21 @@ function AdminHome() {
           </Text>
           <Text style={adm.dateText}>{today}</Text>
         </View>
+
+        {/* Active academic year */}
+        {activeSession ? (
+          <TouchableOpacity
+            onPress={() => router.push('/admin/academic-year' as any)}
+            activeOpacity={0.7}
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.card, borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: colors.border }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+              <Ionicons name="calendar-number-outline" size={18} color="#F03E2F" />
+              <Text style={{ fontSize: 13, color: colors.textSecondary }}>{t('Academic Year')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>{activeSession}</Text>
+            </View>
+            <Text style={{ fontSize: 13, color: '#F03E2F', fontWeight: '600' }}>{t('Change year')}</Text>
+          </TouchableOpacity>
+        ) : null}
 
         {/* Weekly trend charts */}
         <Text style={adm.sectionLabel}>{t('WEEKLY TRENDS')}</Text>
