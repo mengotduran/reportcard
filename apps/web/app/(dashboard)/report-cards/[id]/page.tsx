@@ -299,9 +299,10 @@ export default function ReportCardDetailPage() {
   const canPublish = allSeqsFilled && hasRemarks
   // Class master can only give remarks once ALL sequences for this report card are filled
   const canEditRemarks = isClassMaster && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
-  // When a class has NO class master, admin / VP write the general remarks themselves.
+  // Admin / VP can also write the general remarks — once every offered subject is
+  // marked (same gate as the class master).
   const noClassMaster = readiness ? !readiness.classMaster : false
-  const canAdminEditRemarks = isAdmin && noClassMaster && reportCard.status === 'DRAFT'
+  const canAdminEditRemarks = isAdmin && allSeqsFilled && reportCard.status === 'DRAFT'
 
   return (
     <div>
@@ -590,7 +591,7 @@ export default function ReportCardDetailPage() {
                 />
                 <p className="text-[11px] text-muted-foreground mt-2">{tr('AI drafts are a starting point — review and edit before saving.')}</p>
               </>
-            ) : isClassMaster && !allSeqsFilled ? (
+            ) : (isClassMaster || isAdmin) && !allSeqsFilled && reportCard.status === 'DRAFT' ? (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm text-amber-700 font-medium">{tr('Cannot add remarks yet')}</p>
                 <p className="text-xs text-amber-600 mt-0.5">{tr('All subject sequences must be filled before you can add general remarks.')}</p>

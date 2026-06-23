@@ -3,13 +3,14 @@ import { useEffect, useState, useCallback } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, Modal, FlatList, RefreshControl,
+  ActivityIndicator, Alert, Modal, FlatList, RefreshControl, TextInput,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getReportCard,
   getSubjects,
+  updateRemarks,
   publishReportCard,
   unpublishReportCard,
   grantEditPermission,
@@ -126,6 +127,9 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 
   // Remarks section
   remarksText: { fontSize: 14, color: colors.text, lineHeight: 22 },
+  remarksInput: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 14, color: colors.text, minHeight: 80, textAlignVertical: 'top', backgroundColor: colors.inputBg },
+  saveRemarksBtn: { backgroundColor: '#F03E2F', borderRadius: 10, paddingVertical: 11, alignItems: 'center', marginTop: 10 },
+  saveRemarksText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   emptyText: { fontSize: 13, color: colors.textMuted, textAlign: 'center', paddingVertical: 8 },
   disabled: { opacity: 0.5 },
 
@@ -244,6 +248,8 @@ export default function AdminReportCardDetail() {
   const [revokingRemarks, setRevokingRemarks] = useState(false)
   const [marksPickerVisible, setMarksPickerVisible] = useState(false)
   const [remarksPickerVisible, setRemarksPickerVisible] = useState(false)
+  const [remarksDraft, setRemarksDraft] = useState('')
+  const [savingRemarks, setSavingRemarks] = useState(false)
 
   const fetchData = useCallback(async () => {
     try {
@@ -254,6 +260,7 @@ export default function AdminReportCardDetail() {
         getSubjects(),
       ])
       setReportCard(rc)
+      setRemarksDraft(((rc.school?.language === 'FR' ? (rc as any).remarksFr : rc.remarks) as string) || '')
       setTeachers(teacherData.teachers)
       if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
       // Compulsory subjects + optional ones the student actually took (has an entry).
@@ -407,6 +414,21 @@ export default function AdminReportCardDetail() {
     reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null)
   const hasRemarks = !!reportCard.remarks?.trim()
   const canPublish = allSeqsFilled && hasRemarks
+  const isFr = reportCard.school?.language === 'FR'
+  // Admin can write the general remarks once every offered subject is marked.
+  const canAdminEditRemarks = isDraft && allSeqsFilled
+
+  const handleSaveRemarks = async () => {
+    setSavingRemarks(true)
+    try {
+      await updateRemarks(id, isFr ? undefined : remarksDraft, isFr ? remarksDraft : undefined)
+      const rc = await getReportCard(id)
+      setReportCard(rc)
+      Alert.alert(tr('Saved'), tr('General remarks saved.'))
+    } catch (e: any) {
+      Alert.alert(tr('Error'), e?.response?.data?.message || tr('Failed to save remarks.'))
+    } finally { setSavingRemarks(false) }
+  }
 
   const marksGrantedTo = (reportCard as any).marksEditGrantedTo
   const remarksGrantedTo = (reportCard as any).remarksEditGrantedTo
@@ -660,9 +682,33 @@ export default function AdminReportCardDetail() {
             <Text style={{ fontSize: 12, color: colors.textMuted, marginBottom: 8 }}>{tr('Set by class master')}</Text>
           )
         })()}
-        <Text style={styles.remarksText}>
-          {(reportCard.school?.language === 'FR' ? (reportCard as any).remarksFr : reportCard.remarks) || '—'}
-        </Text>
+        {canAdminEditRemarks ? (
+          <>
+            <TextInput
+              style={styles.remarksInput}
+              value={remarksDraft}
+              onChangeText={setRemarksDraft}
+              placeholder={tr('Overall remarks about the student...')}
+              placeholderTextColor={colors.textMuted}
+              multiline
+            />
+            <TouchableOpacity
+              style={[styles.saveRemarksBtn, savingRemarks && { opacity: 0.6 }]}
+              onPress={handleSaveRemarks}
+              disabled={savingRemarks}>
+              {savingRemarks ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveRemarksText}>{tr('Save Remarks')}</Text>}
+            </TouchableOpacity>
+          </>
+        ) : isDraft && !allSeqsFilled ? (
+          <View style={{ backgroundColor: '#FEF3C7', borderColor: '#FDE68A', borderWidth: 1, borderRadius: 10, padding: 12 }}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#92400E' }}>{tr('Cannot add remarks yet')}</Text>
+            <Text style={{ fontSize: 12, color: '#B45309', marginTop: 2 }}>{tr('All subject sequences must be filled before you can add general remarks.')}</Text>
+          </View>
+        ) : (
+          <Text style={styles.remarksText}>
+            {(reportCard.school?.language === 'FR' ? (reportCard as any).remarksFr : reportCard.remarks) || '—'}
+          </Text>
+        )}
       </View>
 
       <TeacherPickerModal

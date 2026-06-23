@@ -707,6 +707,8 @@ const FR: Record<string, string> = {
   'Currently viewing': 'En cours de consultation',
   'Live term': 'Trimestre en cours',
   'Change year': 'Changer d\'année',
+  'Overall remarks about the student...': 'Appréciation générale sur l\'élève...',
+  'General remarks saved.': 'Appréciation générale enregistrée.',
   'Gender': 'Sexe',
   'Male': 'Masculin',
   'Female': 'Féminin',

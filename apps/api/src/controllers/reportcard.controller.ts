@@ -437,6 +437,25 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
 // Update the general remarks (English + French) for Class Master / Admin.
 // Recomputes provenance (AI / AI_EDITED / MANUAL) by comparing the saved text
 // to the stored AI draft.
+/**
+ * General remarks may only be written once every subject the student offers is
+ * marked: all compulsory subjects + any optional subject they have an entry for.
+ * Mirrors the report-card screen's "all sequences filled" gate.
+ */
+async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string): Promise<boolean> {
+  const rc = await prisma.reportCard.findFirst({
+    where: { id: reportCardId }, select: { student: { select: { classLevel: true } } },
+  })
+  if (!rc) return false
+  const [classSubjects, entries] = await Promise.all([
+    prisma.subject.findMany({ where: { schoolId, classLevel: rc.student.classLevel }, select: { id: true, compulsory: true } }),
+    prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true } }),
+  ])
+  const scoreBy = new Map(entries.map((e) => [e.subjectId, e.score]))
+  const offered = classSubjects.filter((s) => s.compulsory !== false || scoreBy.has(s.id))
+  return offered.length > 0 && offered.every((s) => scoreBy.get(s.id) != null)
+}
+
 export const updateRemarks = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
@@ -445,6 +464,11 @@ export const updateRemarks = async (req: AuthRequest, res: Response) => {
 
     const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
     if (!reportCard) { res.status(404).json({ message: 'Report card not found' }); return }
+
+    if (!(await offeredSubjectsAllMarked(schoolId, id))) {
+      res.status(400).json({ message: "Enter marks for all of the student's subjects before writing the general remark." })
+      return
+    }
 
     const role = req.user!.role
     const userId = req.user!.id
@@ -494,8 +518,8 @@ export const generateRemarks = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    if (reportCard.average === null || reportCard.average === undefined) {
-      res.status(400).json({ message: 'Cannot generate remarks yet — the term average has not been computed (fill all sequences first).' })
+    if (!(await offeredSubjectsAllMarked(schoolId, id)) || reportCard.average == null) {
+      res.status(400).json({ message: "Enter marks for all of the student's subjects before generating the general remark." })
       return
     }
 
