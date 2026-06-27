@@ -14,7 +14,9 @@ import {
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
-import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor } from 'lucide-react'
+import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor, LayoutTemplate } from 'lucide-react'
+import { PrintableTranscript } from '@/components/ui/PrintableTranscript'
+import type { StudentTranscript } from '@/lib/api/reportcards'
 import { useT } from '@/lib/i18n'
 import { DEFAULT_UNIVERSITY_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import {
@@ -77,6 +79,37 @@ const SD_UNI = {
   remarks:     ['Very Good', 'Good', 'Excellent', 'Fairly Good', 'Very Good'],
   juryDecisions: ['VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED'],
   position:    3,
+}
+
+// ── Mock StudentTranscript for transcript template canvas preview ─────────────
+const MOCK_TRANSCRIPT: StudentTranscript = {
+  student: {
+    id: 'mock', name: SD_UNI.student.name, studentId: SD_UNI.student.studentId,
+    classLevel: SD_UNI.student.classLevel, gender: SD_UNI.student.gender,
+  },
+  school: { name: 'Your University Name', logo: null, type: 'UNIVERSITY', language: 'EN' },
+  session: SD_UNI.term.session,
+  reportCards: [
+    {
+      id: 'mock-1',
+      term: { id: 'mock-1', name: 'First Semester', session: SD_UNI.term.session },
+      entries: SD_UNI.subjects.map((name, i) => ({
+        id: `me-${i}`, score: SD_UNI.entries[i], seq1Score: SD_UNI.seq1[i], seq2Score: SD_UNI.seq2[i],
+        subject: { id: `ms-${i}`, name, code: SD_UNI.codes[i], credit: U_CREDITS[i], term: 'First Semester', classLevel: SD_UNI.student.classLevel },
+      })),
+    },
+    {
+      id: 'mock-2',
+      term: { id: 'mock-2', name: 'Second Semester', session: SD_UNI.term.session },
+      entries: SD_UNI.subjects.map((name, i) => ({
+        id: `me2-${i}`, score: Math.max(40, SD_UNI.entries[i] - 5), seq1Score: SD_UNI.seq1[i] - 3, seq2Score: SD_UNI.seq2[i] - 2,
+        subject: { id: `ms-${i}`, name, code: SD_UNI.codes[i], credit: U_CREDITS[i], term: 'Second Semester', classLevel: SD_UNI.student.classLevel },
+      })),
+    },
+  ],
+  maxScore: 100,
+  gradingScale: DEFAULT_UNIVERSITY_RANGES,
+  classificationBands: DEFAULT_CLASSIFICATION_BANDS,
 }
 
 // Bilingual labels are authored "Français / English"; show only the school's language.
@@ -1180,6 +1213,10 @@ export default function ReportCardDesignPage() {
   const schoolName = school?.name || 'Your School Name'
   const schoolType = school?.type || 'SECONDARY'
   const schoolLogo = school?.logo ?? null
+  const isTranscript = schoolType === 'UNIVERSITY' && config.layoutType === 'transcript'
+  const tc = config.transcriptConfig ?? {}
+  const setTc = (patch: Partial<NonNullable<typeof config.transcriptConfig>>) =>
+    setConfig(c => ({ ...c, transcriptConfig: { ...c.transcriptConfig, ...patch } }))
   const watermark = config.watermark ?? { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null, size: 240, rotation: -45 }
   const setWatermark = (patch: Partial<typeof watermark>) =>
     setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
@@ -1297,16 +1334,18 @@ export default function ReportCardDesignPage() {
           <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
         </div>
 
-        {/* Template picker */}
-        <div className="flex gap-1 ml-2">
-          {TEMPLATES.map(t => (
-            <button key={t.id} onClick={() => loadTemplate(t.id)} title={tr(t.label)}
-              className="px-3 py-1 rounded text-xs font-medium border transition"
-              style={{ borderColor: config.template === t.id ? t.color : '#e5e7eb', background: config.template === t.id ? t.color : 'white', color: config.template === t.id ? 'white' : '#374151' }}>
-              {tr(t.label)}
-            </button>
-          ))}
-        </div>
+        {/* Template picker — hidden in transcript mode (fixed layout) */}
+        {!isTranscript && (
+          <div className="flex gap-1 ml-2">
+            {TEMPLATES.map(t => (
+              <button key={t.id} onClick={() => loadTemplate(t.id)} title={tr(t.label)}
+                className="px-3 py-1 rounded text-xs font-medium border transition"
+                style={{ borderColor: config.template === t.id ? t.color : '#e5e7eb', background: config.template === t.id ? t.color : 'white', color: config.template === t.id ? 'white' : '#374151' }}>
+                {tr(t.label)}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Primary color */}
         <div className="flex items-center gap-2 ml-2">
@@ -1476,16 +1515,18 @@ export default function ReportCardDesignPage() {
 
         <div className="flex-1" />
 
-        {/* Add section */}
-        <button ref={addMenuBtnRef}
-          onClick={() => {
-            if (addMenuCoords) { setAddMenuCoords(null); return }
-            const r = addMenuBtnRef.current?.getBoundingClientRect()
-            if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
-          }}
-          className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
-          <Plus size={14} /> {tr('Add Section')}
-        </button>
+        {/* Add section — hidden in transcript mode */}
+        {!isTranscript && (
+          <button ref={addMenuBtnRef}
+            onClick={() => {
+              if (addMenuCoords) { setAddMenuCoords(null); return }
+              const r = addMenuBtnRef.current?.getBoundingClientRect()
+              if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
+            }}
+            className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
+            <Plus size={14} /> {tr('Add Section')}
+          </button>
+        )}
 
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
@@ -1515,8 +1556,12 @@ export default function ReportCardDesignPage() {
       {/* ── Canvas ── */}
       <TextColorToolbar canvasRef={canvasRef} />
       <SheetCtx.Provider value={sheetCtxValue}>
-      <div className="max-w-3xl mx-auto">
-        <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>
+      <div className="flex gap-5 items-start justify-center">
+
+      {/* Main canvas column */}
+      <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
+        {!isTranscript && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>}
+        {isTranscript && <p className="text-xs text-muted-foreground text-center mb-4">Customize color and toggle sections on the right · The layout is fixed for the transcript style</p>}
 
         <div ref={canvasRef} className="shadow-sm border border-[#e4e4e7] rounded-xl p-10 pl-14" style={{
           fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#111',
@@ -1543,7 +1588,21 @@ export default function ReportCardDesignPage() {
             }
             return <div style={{ ...base, fontSize: watermark.size ?? 72, fontWeight: 'bold', opacity, color: watermark.color, whiteSpace: 'nowrap' }}>{watermark.text || schoolName}</div>
           })()}
-          {sections.map((sec, i) => (
+          {/* Transcript canvas preview */}
+          {isTranscript && (
+            <PrintableTranscript
+              data={{ ...MOCK_TRANSCRIPT, school: { ...MOCK_TRANSCRIPT.school, name: schoolName, logo: schoolLogo } }}
+              primaryColor={config.primaryColor}
+              showGradeSystem={tc.showGradeSystem ?? true}
+              showClassification={tc.showClassification ?? true}
+              showLegend={tc.showLegend ?? true}
+              deanLabel={tc.deanLabel}
+              registrarLabel={tc.registrarLabel}
+            />
+          )}
+
+          {/* Standard section-based canvas */}
+          {!isTranscript && sections.map((sec, i) => (
             <SectionWrap key={sec.id} index={i} total={sections.length}
               onMove={d => moveSection(i, d)} onDelete={() => deleteSection(i)}
               onDragStart={() => setDragIndex(i)}
@@ -1580,14 +1639,140 @@ export default function ReportCardDesignPage() {
             </SectionWrap>
           ))}
 
-          {sections.length === 0 && (
+          {!isTranscript && sections.length === 0 && (
             <div className="text-center py-16 text-muted-foreground">
               <p className="text-sm">No sections yet.</p>
               <p className="text-xs mt-1">Choose a template above or use "Add Section" to start.</p>
             </div>
           )}
         </div>
-      </div>
+      </div>{/* end canvas column */}
+
+      {/* ── Right sidebar: Layout switcher (university only) ── */}
+      {schoolType === 'UNIVERSITY' && (
+        <div className="flex-shrink-0 sticky" style={{ width: 168, top: 110 }}>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
+            <LayoutTemplate size={12} /> Layout
+          </p>
+
+          {/* Standard thumbnail */}
+          <button
+            onClick={() => setConfig(c => ({ ...c, layoutType: 'standard' }))}
+            className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: !isTranscript ? config.primaryColor : '#e5e7eb', background: !isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+          >
+            {/* Mini visual */}
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 40, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, marginBottom: 3 }}>
+                {[0,1,2,3].map(i => <div key={i} style={{ height: 4, background: '#e5e7eb', borderRadius: 1 }} />)}
+              </div>
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: `${config.primaryColor}22` }}>
+                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                </div>
+                {[0,1,2,3].map(i => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 3, display: 'flex', gap: 2 }}>
+                {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${config.primaryColor}30`, borderRadius: 2 }} />)}
+              </div>
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: !isTranscript ? config.primaryColor : '#6b7280' }}>
+              Standard
+            </div>
+          </button>
+
+          {/* Transcript thumbnail */}
+          <button
+            onClick={() => setConfig(c => ({ ...c, layoutType: 'transcript' }))}
+            className="w-full rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+          >
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 50, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              <div style={{ fontSize: 5, fontWeight: 'bold', color: config.primaryColor, marginBottom: 2 }}>FIRST SEMESTER</div>
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr 1fr', background: `${config.primaryColor}22` }}>
+                  {['CD','Title','Cr','Mk','Gr'].map(l => <div key={l} style={{ fontSize: 4, color: config.primaryColor, fontWeight: 'bold', padding: '1px 1px', borderRight: '1px solid #e5e7eb', whiteSpace: 'nowrap' }}>{l}</div>)}
+                </div>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
+                    {[0,1,2,3,4].map(j => <div key={j} style={{ height: 4, margin: '1px 1px', background: '#e5e7eb', borderRadius: 1 }} />)}
+                  </div>
+                ))}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr 1fr', borderTop: '1px solid #ccc', background: '#f5f5f5' }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', padding: '1px 2px', gridColumn: '1/4' }}>TOTAL</div>
+                  <div style={{ height: 4, margin: '2px 1px', background: '#ccc', borderRadius: 1 }} />
+                  <div style={{ height: 4, margin: '2px 1px', background: '#ccc', borderRadius: 1 }} />
+                </div>
+              </div>
+              <div style={{ marginTop: 3, display: 'flex', gap: 2 }}>
+                <div style={{ flex: 1, height: 14, background: '#f0f0f0', borderRadius: 2, border: '1px solid #e5e7eb' }} />
+                <div style={{ width: 44, height: 14, border: `1px solid ${config.primaryColor}55`, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold' }}>3.25</div>
+                </div>
+              </div>
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? config.primaryColor : '#6b7280' }}>
+              Transcript
+            </div>
+          </button>
+
+          {/* Transcript-specific settings */}
+          {isTranscript && (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Sections</p>
+              {([
+                ['showGradeSystem', 'Grade System'],
+                ['showClassification', 'Classification'],
+                ['showLegend', 'Legend'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-xs text-foreground cursor-pointer select-none">
+                  <input type="checkbox"
+                    checked={tc[key] ?? true}
+                    onChange={e => setTc({ [key]: e.target.checked })}
+                    className="rounded border-border"
+                  />
+                  {label}
+                </label>
+              ))}
+              <div className="pt-2 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Labels</p>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Dean</p>
+                  <input type="text"
+                    value={tc.deanLabel ?? ''}
+                    onChange={e => setTc({ deanLabel: e.target.value })}
+                    placeholder="Dean of Studies' Signature"
+                    className="w-full border border-border rounded px-2 py-1 text-xs text-foreground bg-background"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Registrar</p>
+                  <input type="text"
+                    value={tc.registrarLabel ?? ''}
+                    onChange={e => setTc({ registrarLabel: e.target.value })}
+                    placeholder="Registrar's Signature"
+                    className="w-full border border-border rounded px-2 py-1 text-xs text-foreground bg-background"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      </div>{/* end flex wrapper */}
       </SheetCtx.Provider>
 
       {/* Add-section dropdown — fixed-position so it floats above the sidebar */}

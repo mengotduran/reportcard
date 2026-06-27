@@ -27,6 +27,16 @@ export interface TemplateConfig {
   bgColor?: string
   // watermark
   watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number }
+  // top-level layout type — 'standard' (section-based designer) or 'transcript' (annual transcript style, university only)
+  layoutType?: 'standard' | 'transcript'
+  // settings for the transcript layout
+  transcriptConfig?: {
+    showGradeSystem?: boolean
+    showClassification?: boolean
+    showLegend?: boolean
+    deanLabel?: string
+    registrarLabel?: string
+  }
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
