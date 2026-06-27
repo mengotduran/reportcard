@@ -406,34 +406,90 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
           {t('Show school type')}
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!sec.officialHeader} onChange={e => update({ ...sec, officialHeader: e.target.checked })} />
+          <input type="checkbox" checked={!!sec.officialHeader}
+            onChange={e => {
+              const on = e.target.checked
+              const patch: Partial<HeaderSec> = { officialHeader: on }
+              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF TECHNOLOGY AND MANAGEMENT\n${schoolName}\nINSTITUT SUPERIEUR EN TECHNOLOGIE ET EN GESTION`
+              if (on && !sec.rightText) patch.rightText = `REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\nREPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTRY OF HIGHER EDUCATION\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR`
+              update({ ...sec, ...patch })
+            }} />
           {t('Official (logo center)')}
         </label>
       </div>
 
       {/* Rendered header */}
       {sec.officialHeader ? (
-        /* Three-column: left text | logo | right text */
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'center', marginBottom: 6 }}>
-            <textarea
-              value={sec.leftText ?? ''}
-              onChange={e => update({ ...sec, leftText: e.target.value })}
-              placeholder={schoolName}
-              rows={4}
-              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 11, color: '#111', fontFamily: 'inherit', lineHeight: 1.5, padding: 0 }}
-            />
-            <div style={{ textAlign: 'center' }}>{LogoEl}</div>
-            <textarea
-              value={sec.rightText ?? ''}
-              onChange={e => update({ ...sec, rightText: e.target.value })}
-              placeholder={'Republic of Cameroon\nPeace-Work-Fatherhood\nMinistry of Higher Education'}
-              rows={4}
-              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 11, color: '#111', fontFamily: 'inherit', lineHeight: 1.5, padding: 0, textAlign: 'right' }}
-            />
-          </div>
-          <div style={{ textAlign: 'center' }}>{SubtitleEls}</div>
-        </>
+        /* Three-column official layout: left text | logo | right text */
+        (() => {
+          const leftLines  = (sec.leftText  ?? '').split('\n')
+          const rightLines = (sec.rightText ?? '').split('\n')
+          // Detect the acronym line in leftText: short, all-caps
+          const isAcronym  = (l: string) => /^[A-Z0-9\s.]{1,10}$/.test(l.trim()) && l.trim().length > 0 && l.trim().length <= 10
+          // Detect the "ministry block" in rightText: lines after the first blank separator
+          const blankIdx   = rightLines.findIndex(l => l.trim() === '')
+          const renderLeft = () => (
+            <div style={{ textAlign: 'left' }}>
+              {leftLines.map((line, i) => (
+                <div key={i} style={{ lineHeight: 1.35, minHeight: line.trim() ? undefined : 6,
+                  fontSize: isAcronym(line) ? 13 : 9.5,
+                  fontWeight: 'bold',
+                  letterSpacing: isAcronym(line) ? 1 : 0,
+                }}>
+                  {line || ''}
+                </div>
+              ))}
+            </div>
+          )
+          const renderRight = () => (
+            <div style={{ textAlign: 'right' }}>
+              {rightLines.map((line, i) => {
+                const inMinistryBlock = blankIdx >= 0 && i > blankIdx
+                const isMotto = /[a-z]/.test(line)
+                return (
+                  <div key={i} style={{ lineHeight: 1.35, minHeight: line.trim() ? undefined : 6,
+                    fontSize: inMinistryBlock ? 8.5 : 9.5,
+                    fontWeight: inMinistryBlock ? 'normal' : 'bold',
+                    fontStyle: isMotto ? 'italic' : 'normal',
+                  }}>
+                    {line || ''}
+                  </div>
+                )
+              })}
+            </div>
+          )
+          return (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 12, alignItems: 'center', marginBottom: 4 }}>
+                {/* Left editable block */}
+                <div style={{ position: 'relative' }}>
+                  {renderLeft()}
+                  <textarea value={sec.leftText ?? ''} onChange={e => update({ ...sec, leftText: e.target.value })}
+                    style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'text', resize: 'none', background: 'transparent', border: 'none', outline: 'none' }} />
+                </div>
+                {/* Center logo */}
+                <div style={{ textAlign: 'center' }}>{LogoEl}</div>
+                {/* Right editable block */}
+                <div style={{ position: 'relative' }}>
+                  {renderRight()}
+                  <textarea value={sec.rightText ?? ''} onChange={e => update({ ...sec, rightText: e.target.value })}
+                    style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'text', resize: 'none', background: 'transparent', border: 'none', outline: 'none' }} />
+                </div>
+              </div>
+              {/* Contact line: subtitle */}
+              <div style={{ textAlign: 'center', fontSize: 8.5, color: '#444', borderTop: `1px solid ${color}22`, paddingTop: 3, marginTop: 2 }}>
+                <ET value={sec.subtitle} onChange={v => update({ ...sec, subtitle: v })}
+                  placeholder="Email: school@mail.com  |  WEB: www.school.com  |  TEL: 000000000  |  P.O.Box 000 City, Country"
+                  style={{ display: 'block', fontSize: 8.5, color: '#444' }} />
+              </div>
+              {/* Report title */}
+              <div style={{ textAlign: 'center', marginTop: 4 }}>
+                <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
+                  style={{ display: 'block', fontSize: 14, fontWeight: 'bold', color, letterSpacing: 3, textTransform: 'uppercase' }} />
+              </div>
+            </>
+          )
+        })()
       ) : sec.showLogo && sec.logoPosition === 'center' ? (
         <div style={{ textAlign: 'center' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>{LogoEl}</div>
@@ -1123,7 +1179,7 @@ export default function ReportCardDesignPage() {
 
   // ── Add-section dropdown (fixed-position to clear sidebar) ────────────────
   const addMenuBtnRef   = useRef<HTMLButtonElement>(null)
-  const [addMenuCoords, setAddMenuCoords] = useState<{ top: number; right: number } | null>(null)
+  const [addMenuCoords, setAddMenuCoords] = useState<{ top: number; left: number } | null>(null)
 
   const schoolName = school?.name || 'Your School Name'
   const schoolType = school?.type || 'SECONDARY'
@@ -1429,7 +1485,7 @@ export default function ReportCardDesignPage() {
           onClick={() => {
             if (addMenuCoords) { setAddMenuCoords(null); return }
             const r = addMenuBtnRef.current?.getBoundingClientRect()
-            if (r) setAddMenuCoords({ top: r.bottom + 6, right: window.innerWidth - r.left })
+            if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
           }}
           className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
           <Plus size={14} /> {tr('Add Section')}
@@ -1545,7 +1601,7 @@ export default function ReportCardDesignPage() {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setAddMenuCoords(null)} />
           <div className="fixed z-50 bg-card border border-border rounded-xl shadow-lg py-1 w-max"
-            style={{ top: addMenuCoords.top, right: addMenuCoords.right }}>
+            style={{ top: addMenuCoords.top, left: addMenuCoords.left }}>
             {ADD_OPTIONS.map(o => (
               <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
                 className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition">
