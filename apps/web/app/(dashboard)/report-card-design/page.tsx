@@ -7,13 +7,20 @@ import {
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
-  RemarksSec, SignaturesSec, TextBlockSec, DividerSec,
+  RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
+  DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
+  SpreadsheetTable, SheetRow, seedMarksTableSection,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor } from 'lucide-react'
 import { useT } from '@/lib/i18n'
+import { DEFAULT_UNIVERSITY_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
+import {
+  SpreadsheetGrid, SpreadsheetToolbar, ensureSpreadsheet, makeEmptySpreadsheet,
+  SHEET_FIELD_OPTIONS, SheetRange,
+} from '@/components/ui/SpreadsheetEditor'
 
 // ── Sample data for canvas preview ──────────────────────────────────────────
 const SD = {
@@ -32,6 +39,44 @@ const SD = {
 // The sample subjects carry no coefficient, so each weighs 1.
 const SD_TOTAL = SD.entries.reduce((a, b) => a + b, 0)        // Σ(score × coeff) = 74
 const SD_AVG = SD.entries.length ? SD_TOTAL / SD.entries.length : 0  // 14.8 / 20
+
+// ── University sample data (scores /100, GPA derived from DEFAULT_UNIVERSITY_RANGES) ──
+const U_SEQ1    = [23, 19, 25, 17, 21]         // CA /30
+const U_SEQ2    = [53, 43, 58, 39, 50]         // Exam /70
+const U_SCORES  = U_SEQ1.map((s, i) => s + U_SEQ2[i])  // [76, 62, 83, 56, 71]
+const U_CREDITS = [3, 3, 3, 3, 4]
+function _gpForScore(score: number) {
+  const sorted = [...DEFAULT_UNIVERSITY_RANGES].sort((a, b) => b.minScore - a.minScore)
+  const r = sorted.find(x => score >= x.minScore && score <= x.maxScore)
+  return { grade: r?.grade ?? 'F', gp: r?.gradePoint ?? 0 }
+}
+const U_GP     = U_SCORES.map(_gpForScore)
+const U_WP     = U_GP.map((g, i) => g.gp * U_CREDITS[i])  // [10.5, 9.0, 12.0, 7.5, 14.0]
+const U_TOT_CR = U_CREDITS.reduce((a, b) => a + b, 0)      // 16
+const U_TOT_WP = U_WP.reduce((a, b) => a + b, 0)           // 53.0
+const U_GPA    = U_TOT_CR > 0 ? U_TOT_WP / U_TOT_CR : 0   // 3.3125
+const U_CLASS  = [...DEFAULT_CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
+                   .find(b => U_GPA >= b.min && U_GPA <= b.max)?.label ?? 'Fail'
+
+const SD_UNI = {
+  student: {
+    name: 'Nguemo Alice',
+    studentId: 'UNI/2025/HND/3/COMP1/042',
+    classLevel: 'HND Computer Science - Level 1',
+    guardianName: '—',
+    gender: 'F',
+  },
+  term:        { name: 'First Semester', session: '2024/2025' },
+  subjects:    ['Introduction to Programming', 'Mathematics for Computing', 'Computer Architecture', 'Database Management', 'Operating Systems'],
+  codes:       ['CS101', 'MA101', 'CS102', 'DB201', 'CS201'],
+  entries:     U_SCORES,
+  seq1:        U_SEQ1,
+  seq2:        U_SEQ2,
+  grades:      U_GP.map(g => g.grade),
+  remarks:     ['Very Good', 'Good', 'Excellent', 'Fairly Good', 'Very Good'],
+  juryDecisions: ['VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED'],
+  position:    3,
+}
 
 // Bilingual labels are authored "Français / English"; show only the school's language.
 function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
@@ -54,20 +99,30 @@ function localizeLayout<T extends { sections?: any[] }>(layout: T, lang: 'EN' | 
   }
 }
 
-function resolveField(field: string, schoolName: string) {
+function resolveField(field: string, schoolName: string, schoolType?: string) {
+  const isUni = schoolType === 'UNIVERSITY'
+  const stu  = isUni ? SD_UNI.student : SD.student
+  const term = isUni ? SD_UNI.term    : SD.term
   const map: Record<string, string> = {
-    'student.name': SD.student.name,
-    'student.studentId': SD.student.studentId,
-    'student.classLevel': SD.student.classLevel,
-    'student.guardianName': SD.student.guardianName,
-    'term.name': SD.term.name,
-    'term.session': SD.term.session,
-    'school.name': schoolName,
+    'student.name':        stu.name,
+    'student.studentId':   stu.studentId,
+    'student.classLevel':  stu.classLevel,
+    'student.guardianName': stu.guardianName,
+    'student.gender':      isUni ? SD_UNI.student.gender : '—',
+    'term.name':           term.name,
+    'term.session':        term.session,
+    'school.name':         schoolName,
   }
   return map[field] ?? field
 }
 
-function resolveSummary(field: string) {
+function resolveSummary(field: string, schoolType?: string) {
+  if (schoolType === 'UNIVERSITY') {
+    if (field === 'credits')        return String(U_TOT_CR)
+    if (field === 'gpa')            return U_GPA.toFixed(2)
+    if (field === 'cgpa')           return U_GPA.toFixed(2)
+    if (field === 'classification') return U_CLASS
+  }
   if (field === 'total')    return String(SD_TOTAL)
   if (field === 'average')  return SD_AVG.toFixed(1)
   if (field === 'position') return String(SD.position)
@@ -370,7 +425,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
   )
 }
 
-function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInfoSec; color: string; schoolName: string; update: (s: StudentInfoSec) => void }) {
+function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec: StudentInfoSec; color: string; schoolName: string; schoolType?: string; update: (s: StudentInfoSec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
   const FIELD_OPTIONS = [
@@ -436,7 +491,7 @@ function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInf
             <span style={{ color: '#9ca3af' }}>:</span>
             {/* Colorable value — select text and pick color to style all values */}
             <ColorableCell
-              sampleText={resolveField(row.field, schoolName)}
+              sampleText={resolveField(row.field, schoolName, schoolType)}
               color={row.valueColor ?? currentValueColor}
               onColorChange={c => syncValueColor(c)}
               style={{ flex: 1, minWidth: 0 }}
@@ -468,111 +523,82 @@ function RenderStudentInfo({ sec, color, schoolName, update }: { sec: StudentInf
   )
 }
 
-function RenderMarksTable({ sec, color, update }: { sec: MarksTableSec; color: string; update: (s: MarksTableSec) => void }) {
-  const t = useT()
-  const toggleCols = [
-    { key: 'showSeq1' as const, label: 'Seq 1' },
-    { key: 'showSeq2' as const, label: 'Seq 2' },
-    { key: 'showGrade' as const, label: 'Grade' },
-    { key: 'showRemarks' as const, label: 'Remarks' },
-  ]
+function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableSec; color: string; schoolType?: string; update: (s: MarksTableSec) => void }) {
+  const isUni = schoolType === 'UNIVERSITY'
 
-  const hdrs = sec.headers || {}
-  const cc   = sec.colColors || {}
-  const hColor = sec.headerColor  // shared color for ALL headers
-
-  // All headers are ONE category — syncing one syncs all
-  const syncHeaderColor = (c: string) =>
-    update({ ...sec, headerColor: c })
-  const setHeaderText = (col: string, val: string) => {
-    const c = extractColor(val)
-    update({ ...sec, headers: { ...hdrs, [col]: val }, ...(c ? { headerColor: c } : {}) })
+  // Preview value for each m:* field key (shows row 0 of sample data)
+  const resolveMarksPreviewField = (field: string): string => {
+    if (!field.startsWith('m:')) return ''
+    const k = field.slice(2)
+    if (k === 'sn') return '1'
+    if (isUni) {
+      switch (k) {
+        case 'subject':      return SD_UNI.subjects[0] ?? ''
+        case 'code':         return SD_UNI.codes[0]    ?? ''
+        case 'seq1':         return String(SD_UNI.seq1[0])
+        case 'seq2':         return String(SD_UNI.seq2[0])
+        case 'score':        return String(SD_UNI.entries[0])
+        case 'grade':        return SD_UNI.grades[0]   ?? ''
+        case 'gradePoint':   return U_GP[0] ? U_GP[0].gp.toFixed(1) : '—'
+        case 'weighted':     return U_WP[0] != null ? U_WP[0].toFixed(1) : '—'
+        case 'credit':       return String(U_CREDITS[0])
+        case 'evaluation':   return SD_UNI.remarks[0]  ?? '—'
+        case 'juryDecision': return 'VALIDATED'
+        default:             return `[${k}]`
+      }
+    }
+    switch (k) {
+      case 'subject': return SD.subjects[0] ?? ''
+      case 'coef':    return '1'
+      case 'seq1':    return String(SD.seq1[0])
+      case 'seq2':    return String(SD.seq2[0])
+      case 'score':   return String(SD.entries[0])
+      case 'grade':   return SD.grades[0]   ?? ''
+      case 'remarks': return SD.remarks[0]  ?? ''
+      case 'min':     return '10.0'
+      case 'avg':     return '13.5'
+      case 'max':     return '18.0'
+      default:        return `[${k}]`
+    }
   }
-  const setColColor = (col: string, c: string) =>
-    update({ ...sec, colColors: { ...cc, [col]: c } })
 
-  const hStyle = (align: 'left'|'center', pad: string): React.CSSProperties => ({
-    padding: pad, textAlign: align, color: hColor || '#fff', fontWeight: 'bold',
-  })
+  const seedMarksTable = () => update({ ...sec, template: seedMarksTableSection(sec, color, schoolType) })
+  // sec.template is guaranteed by ensureMarksTables() at load + newSection()
+  const tpl: SpreadsheetTable = sec.template ?? seedMarksTableSection(sec, color, schoolType)
+
+  const smallBtn: React.CSSProperties = {
+    fontSize: 10, padding: '2px 8px', border: '1px solid #e5e7eb',
+    borderRadius: 3, background: '#fff', color: '#374151', cursor: 'pointer',
+  }
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
-        {toggleCols.map(c => (
-          <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer' }}>
-            <input type="checkbox" checked={sec[c.key]} onChange={e => update({ ...sec, [c.key]: e.target.checked })} />
-            {t(c.label)}
-          </label>
-        ))}
+      <SpreadsheetGrid
+        table={tpl}
+        onChange={t => update({ ...sec, template: t })}
+        resolveField={resolveMarksPreviewField}
+        color={color}
+        marksKeyMode
+        marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef'))}
+      />
+      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap' }}>
+        <span>Highlighted row repeats per subject. Double-click any data cell to choose its key.</span>
+        <button style={smallBtn} onClick={seedMarksTable}>↺ Reseed from defaults</button>
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-        <thead>
-          <tr style={{ backgroundColor: color }}>
-            <th style={hStyle('left', '6px 10px')}>
-              <ET value={hdrs.subject ?? t('Subject')} onChange={v => setHeaderText('subject', v)}
-                onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
-            </th>
-            {sec.showSeq1 && <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.seq1 ?? t('Seq 1')} onChange={v => setHeaderText('seq1', v)}
-                onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
-            </th>}
-            {sec.showSeq2 && <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.seq2 ?? t('Seq 2')} onChange={v => setHeaderText('seq2', v)}
-                onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
-            </th>}
-            <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.score ?? t('Score')} onChange={v => setHeaderText('score', v)}
-                onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
-            </th>
-            {sec.showGrade && <th style={hStyle('center', '6px 8px')}>
-              <ET value={hdrs.grade ?? t('Grade')} onChange={v => setHeaderText('grade', v)}
-                onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
-            </th>}
-            {sec.showRemarks && <th style={hStyle('left', '6px 10px')}>
-              <ET value={hdrs.remarks ?? t('Remarks')} onChange={v => setHeaderText('remarks', v)}
-                onColorApplied={syncHeaderColor} style={{ color: hColor || '#fff', fontWeight: 'bold' }} />
-            </th>}
-          </tr>
-        </thead>
-        <tbody>
-          {SD.subjects.map((subj, i) => (
-            <tr key={subj} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(0,0,0,0.025)', borderBottom: '1px solid #e5e7eb' }}>
-              <td style={{ padding: '5px 10px' }}>
-                <ColorableCell sampleText={subj} color={cc.subject}
-                  onColorChange={c => setColColor('subject', c)} />
-              </td>
-              {sec.showSeq1 && <td style={{ padding: '5px 8px', textAlign: 'center' }}>
-                <ColorableCell sampleText={String(SD.seq1[i])} color={cc.seq1}
-                  onColorChange={c => setColColor('seq1', c)} />
-              </td>}
-              {sec.showSeq2 && <td style={{ padding: '5px 8px', textAlign: 'center' }}>
-                <ColorableCell sampleText={String(SD.seq2[i])} color={cc.seq2}
-                  onColorChange={c => setColColor('seq2', c)} />
-              </td>}
-              <td style={{ padding: '5px 8px', textAlign: 'center', fontWeight: 'bold' }}>
-                <ColorableCell sampleText={String(SD.entries[i])} color={cc.score || color}
-                  onColorChange={c => setColColor('score', c)} />
-              </td>
-              {sec.showGrade && <td style={{ padding: '5px 8px', textAlign: 'center', fontWeight: 'bold' }}>
-                <ColorableCell sampleText={SD.grades[i]} color={cc.grade}
-                  onColorChange={c => setColColor('grade', c)} />
-              </td>}
-              {sec.showRemarks && <td style={{ padding: '5px 10px' }}>
-                <ColorableCell sampleText={SD.remarks[i]} color={cc.remarks}
-                  onColorChange={c => setColColor('remarks', c)} />
-              </td>}
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   )
 }
 
-function RenderSummary({ sec, color, update }: { sec: SummarySec; color: string; update: (s: SummarySec) => void }) {
+function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; color: string; schoolType?: string; update: (s: SummarySec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
-  const FIELD_OPTIONS = [
+  const isUni = schoolType === 'UNIVERSITY'
+  const FIELD_OPTIONS = isUni ? [
+    { label: 'Total Credits',  value: 'credits' },
+    { label: 'Semester GPA',   value: 'gpa' },
+    { label: 'Cumulative GPA', value: 'cgpa' },
+    { label: 'Classification', value: 'classification' },
+  ] : [
     { label: 'Total Score', value: 'total' },
     { label: 'Average',     value: 'average' },
     { label: 'Position',    value: 'position' },
@@ -600,7 +626,7 @@ function RenderSummary({ sec, color, update }: { sec: SummarySec; color: string;
           <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', position: 'relative' }}>
             <button onClick={() => deleteBox(box.id)} style={{ position: 'absolute', top: 2, right: 4, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
             <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-              <ColorableCell sampleText={resolveSummary(box.field)} color={sec.valueColor || color}
+              <ColorableCell sampleText={resolveSummary(box.field, schoolType)} color={sec.valueColor || color}
                 onColorChange={syncBoxValueColor} style={{ fontWeight: 'bold' }} />
             </div>
             <ET value={box.label} onChange={v => updateBox(box.id, { label: v })} onColorApplied={syncBoxLabelColor}
@@ -706,6 +732,312 @@ function hexRgb(hex: string) {
   return r ? `${parseInt(r[1],16)}, ${parseInt(r[2],16)}, ${parseInt(r[3],16)}` : '30,58,95'
 }
 
+const LEGEND_ROWS_STATIC = [
+  { abbr: 'I',    meaning: 'Incomplete' },
+  { abbr: 'X',    meaning: 'Absent' },
+  { abbr: '*',    meaning: 'After resit' },
+  { abbr: 'GP',   meaning: 'Grade Point' },
+  { abbr: 'GPA',  meaning: 'Grade Pt Average' },
+  { abbr: 'CGPA', meaning: 'Cumulative GPA' },
+  { abbr: 'WP',   meaning: 'Credit × GP' },
+]
+
+const MINI_FIELD_OPTIONS = [
+  { label: 'Credits Earned', value: 'credits' },
+  { label: 'Semester GPA',   value: 'gpa' },
+  { label: 'Cumulative GPA', value: 'cgpa' },
+  { label: 'Classification', value: 'classification' },
+  { label: 'Total Score',    value: 'total' },
+  { label: 'Average',        value: 'average' },
+  { label: 'Position',       value: 'position' },
+  { label: 'Grade',          value: 'grade' },
+]
+
+function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; color: string; update: (s: GradingLegendSec) => void }) {
+  const t = useT()
+  const rgb = hexRgb(color)
+  const gradeRows = [...DEFAULT_UNIVERSITY_RANGES].sort((a, b) => b.minScore - a.minScore)
+  const bandRows  = [...DEFAULT_CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
+  const maxRows   = Math.max(
+    sec.showGradeSystem    ? gradeRows.length          : 0,
+    sec.showClassification ? bandRows.length           : 0,
+    sec.showLegend         ? LEGEND_ROWS_STATIC.length : 0,
+  )
+  const sepR:  React.CSSProperties = { borderRight: '2px solid #9ca3af' }
+  const cell:  React.CSSProperties = { padding: '2px 6px', fontSize: 10, borderBottom: '1px solid #eef2f7', borderRight: '1px solid #e5e7eb', textAlign: 'center' }
+  const cellL: React.CSSProperties = { ...cell, textAlign: 'left' }
+  const hdr:   React.CSSProperties = { ...cell,  fontWeight: 'bold', backgroundColor: `rgba(${rgb},0.08)` }
+  const hdrL:  React.CSSProperties = { ...cellL, fontWeight: 'bold', backgroundColor: `rgba(${rgb},0.08)` }
+  const colX:  React.CSSProperties = { background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontSize: 9, padding: '0 1px', lineHeight: 1, verticalAlign: 'middle' }
+  const rowX:  React.CSSProperties = { background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 10, padding: '0 2px', lineHeight: 1 }
+
+  // ── SpreadsheetTable CRUD for left/right sides ──────────────────────────
+  const [activeTableId, setActiveTableId] = useState<string | null>(null)
+  const selMapRef = useRef<Record<string, SheetRange | null>>({})
+  const [, setTick] = useState(0)
+  const forceUpdate = () => setTick(n => n + 1)
+
+  const makeSpreadCrud = (side: 'leftTables' | 'rightTables', layoutKey: 'leftLayout' | 'rightLayout') => {
+    const raw: any[] = (sec as any)[side] ?? []
+    const ts: SpreadsheetTable[] = raw.map(ensureSpreadsheet)
+    const upd = (patch: Partial<GradingLegendSec>) => update({ ...sec, ...patch })
+    const setTables = (next: SpreadsheetTable[]) => upd({ [side]: next } as any)
+    return {
+      tables: ts,
+      layout: ((sec as any)[layoutKey] ?? 'columns') as 'columns' | 'rows',
+      setLayout:   (l: 'columns' | 'rows') => upd({ [layoutKey]: l } as any),
+      setTable:    (nt: SpreadsheetTable) => setTables(ts.map(x => x.id === nt.id ? nt : x)),
+      deleteTable: (id: string) => setTables(ts.filter(x => x.id !== id)),
+      addTable:    () => setTables([...ts, makeEmptySpreadsheet()]),
+    }
+  }
+  const L = makeSpreadCrud('leftTables',  'leftLayout')
+  const R = makeSpreadCrud('rightTables', 'rightLayout')
+
+  type TableEntry = { table: SpreadsheetTable; setTable: (nt: SpreadsheetTable) => void }
+  const builtinEntry: TableEntry | null = sec.builtinTable
+    ? { table: sec.builtinTable, setTable: (nt) => update({ ...sec, builtinTable: nt }) }
+    : null
+  const allEntries: TableEntry[] = [
+    ...(builtinEntry ? [builtinEntry] : []),
+    ...L.tables.map(st => ({ table: st, setTable: (nt: SpreadsheetTable) => L.setTable(nt) })),
+    ...R.tables.map(st => ({ table: st, setTable: (nt: SpreadsheetTable) => R.setTable(nt) })),
+  ]
+  const activeEntry = allEntries.find(e => e.table.id === activeTableId) ?? null
+  const activeSel   = activeTableId ? (selMapRef.current[activeTableId] ?? null) : null
+
+  const makeGridProps = (entry: TableEntry) => ({
+    sel:           activeTableId === entry.table.id ? (selMapRef.current[entry.table.id] ?? null) : null,
+    onSelChange:   (r: SheetRange | null) => { selMapRef.current[entry.table.id] = r; if (activeTableId === entry.table.id) forceUpdate() },
+    onFocusGained: () => { if (activeTableId !== entry.table.id) setActiveTableId(entry.table.id) },
+  })
+
+  // Seed built-in grade system table as an editable SpreadsheetTable
+  const seedBuiltin = () => {
+    const headers = [
+      ...(sec.showGradeSystem    ? ['Grade', 'Mark', 'GP'] : []),
+      ...(sec.showClassification ? ['Classification'] : []),
+      ...(sec.showLegend         ? ['Legend'] : []),
+    ]
+    if (!headers.length) return
+    const ts = Date.now()
+    const hRow: SheetRow = {
+      id: `rbh_${ts}`,
+      cells: headers.map(h => ({ text: h, bold: true, align: 'center' as const, bgColor: color, textColor: '#fff' })),
+    }
+    const dataRows: SheetRow[] = Array.from({ length: maxRows }, (_, i) => {
+      const gr = gradeRows[i], br = bandRows[i], lr = LEGEND_ROWS_STATIC[i]
+      return {
+        id: `rbd_${ts}_${i}`,
+        cells: [
+          ...(sec.showGradeSystem ? [
+            { text: gr?.grade ?? '', bold: true, textColor: gr?.color },
+            { text: gr ? `${gr.minScore}–${gr.maxScore}` : '', align: 'center' as const },
+            { text: gr ? (gr.gradePoint ?? 0).toFixed(1) : '', align: 'center' as const },
+          ] : []),
+          ...(sec.showClassification ? [
+            { text: br ? `${br.min.toFixed(2)}–${br.max.toFixed(2)} / ${br.label}` : '' },
+          ] : []),
+          ...(sec.showLegend ? [
+            { text: lr ? `${lr.abbr} = ${lr.meaning}` : '' },
+          ] : []),
+        ],
+      }
+    })
+    update({ ...sec, builtinTable: { id: `builtin_${ts}`, title: t('Grade System'), colCount: headers.length, rows: [hRow, ...dataRows] } })
+  }
+
+  // Hidden cols/rows for the static built-in table
+  const bHidCols = sec.hiddenCols ?? []
+  const bHidRows = sec.hiddenRowIndices ?? []
+  const vGrade   = ['grade','mark','gp'].filter(c => !bHidCols.includes(c))
+  const showGS   = sec.showGradeSystem    && vGrade.length > 0
+  const showCL   = sec.showClassification && !bHidCols.includes('classification')
+  const showLE   = sec.showLegend         && !bHidCols.includes('legend')
+  const lastGCol = vGrade[vGrade.length - 1] ?? ''
+  const hideBuiltinCol = (key: string) => update({ ...sec, hiddenCols: [...bHidCols, key] })
+  const showBuiltinCol = (key: string) => update({ ...sec, hiddenCols: bHidCols.filter(c => c !== key) })
+  const hideBuiltinRow = (idx: number) => update({ ...sec, hiddenRowIndices: [...bHidRows, idx] })
+  const restorableCols = bHidCols.filter(c =>
+    (sec.showGradeSystem    && ['grade','mark','gp'].includes(c)) ||
+    (sec.showClassification && c === 'classification') ||
+    (sec.showLegend         && c === 'legend'),
+  )
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {/* Checkboxes */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6, alignItems: 'center' }}>
+        {([['showGradeSystem','Grade system'],['showClassification','Classification'],['showLegend','Legend']] as const).map(([k, lbl]) => (
+          <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer' }}>
+            <input type="checkbox" checked={sec[k]} onChange={e => update({ ...sec, [k]: e.target.checked })} />
+            {t(lbl)}
+          </label>
+        ))}
+      </div>
+
+      {/* Shared spreadsheet toolbar */}
+      <div style={{ marginBottom: 8 }}>
+        <SpreadsheetToolbar
+          table={activeEntry?.table ?? null}
+          sel={activeSel}
+          onChange={activeEntry ? (nt => activeEntry.setTable(nt)) : null}
+          onSelChange={activeEntry ? (r => { selMapRef.current[activeEntry.table.id] = r; forceUpdate() }) : null}
+          color={color}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+
+        {/* LEFT — grade system table + optional extra spreadsheet tables */}
+        <div style={{ flex: '1.6', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {((maxRows > 0 && L.tables.length > 0) || L.tables.length > 1) && (
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: '#94a3b8' }}>Left layout:</span>
+              {(['columns', 'rows'] as const).map(l => (
+                <button key={l} onClick={() => L.setLayout(l)}
+                  style={{ padding: '1px 6px', fontSize: 9, border: '1px solid', borderColor: L.layout === l ? color : '#d1d5db', background: L.layout === l ? color : 'white', color: L.layout === l ? 'white' : '#374151', borderRadius: 3, cursor: 'pointer' }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: L.layout === 'rows' ? 'column' : 'row', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            {/* Built-in table */}
+            {maxRows > 0 && (
+              sec.builtinTable ? (
+                <div style={{ flex: 1, minWidth: 220, border: `1px solid rgba(${rgb},0.25)`, borderRadius: 4, padding: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                    <div style={{ flex: 1, fontWeight: 'bold', fontSize: 10, color, background: `rgba(${rgb},0.08)`, padding: '2px 6px', borderRadius: 3 }}>
+                      <ET value={sec.builtinTable.title} onChange={v => update({ ...sec, builtinTable: { ...sec.builtinTable!, title: v } })} style={{ fontSize: 10, fontWeight: 'bold', color }} />
+                    </div>
+                    <button title="Reset to static" onClick={() => update({ ...sec, builtinTable: undefined })} style={{ fontSize: 9, color: '#94a3b8', border: '1px solid #e5e7eb', background: 'none', borderRadius: 3, padding: '1px 5px', cursor: 'pointer' }}>↺ reset</button>
+                    <button title="Re-seed from grading scale" onClick={seedBuiltin} style={{ fontSize: 9, color, border: `1px solid ${color}`, background: 'none', borderRadius: 3, padding: '1px 5px', cursor: 'pointer' }}>↺ reseed</button>
+                  </div>
+                  <SpreadsheetGrid table={sec.builtinTable} onChange={nt => update({ ...sec, builtinTable: nt })} color={color} {...makeGridProps(builtinEntry!)} />
+                </div>
+              ) : (
+                <div style={{ flex: 1 }}>
+                  {(showGS || showCL || showLE) && (
+                    <table style={{ borderCollapse: 'collapse', border: `1px solid rgba(${rgb},0.3)`, width: '100%' }}>
+                      <thead>
+                        <tr>
+                          {showGS && <th colSpan={vGrade.length} style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center', ...((showCL || showLE) ? sepR : {}) }}>Grade System</th>}
+                          {showCL && <th style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center', ...(showLE ? sepR : {}) }}>Classification</th>}
+                          {showLE && <th style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'left' }}>Legend</th>}
+                          <th style={{ backgroundColor: color, width: 16 }} />
+                        </tr>
+                        <tr>
+                          {showGS && vGrade.includes('grade') && <th style={{ ...hdr, ...(lastGCol === 'grade' && (showCL || showLE) ? sepR : {}) }}>Grade <button style={colX} onClick={() => hideBuiltinCol('grade')}>×</button></th>}
+                          {showGS && vGrade.includes('mark')  && <th style={{ ...hdr, ...(lastGCol === 'mark'  && (showCL || showLE) ? sepR : {}) }}>Mark  <button style={colX} onClick={() => hideBuiltinCol('mark')}>×</button></th>}
+                          {showGS && vGrade.includes('gp')    && <th style={{ ...hdr, ...(lastGCol === 'gp'    && (showCL || showLE) ? sepR : {}) }}>GP    <button style={colX} onClick={() => hideBuiltinCol('gp')}>×</button></th>}
+                          {showCL && <th style={{ ...hdrL, ...(showLE ? sepR : {}) }}>GPA / Remark <button style={colX} onClick={() => hideBuiltinCol('classification')}>×</button></th>}
+                          {showLE && <th style={hdrL}>Legend <button style={colX} onClick={() => hideBuiltinCol('legend')}>×</button></th>}
+                          <th style={{ ...hdr, background: 'transparent', border: 'none', width: 16 }} />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from({ length: maxRows }, (_, i) => i)
+                          .filter(i => !bHidRows.includes(i))
+                          .map(i => {
+                            const gr = gradeRows[i], br = bandRows[i], lr = LEGEND_ROWS_STATIC[i]
+                            return (
+                              <tr key={i}>
+                                {showGS && vGrade.includes('grade') && <td style={{ ...cell, color: gr?.color ?? 'inherit', fontWeight: gr ? 'bold' : 'normal', ...(lastGCol === 'grade' && (showCL || showLE) ? sepR : {}) }}>{gr?.grade ?? ''}</td>}
+                                {showGS && vGrade.includes('mark')  && <td style={{ ...cell, ...(lastGCol === 'mark' && (showCL || showLE) ? sepR : {}) }}>{gr ? `${gr.minScore}–${gr.maxScore}` : ''}</td>}
+                                {showGS && vGrade.includes('gp')    && <td style={{ ...cell, ...(lastGCol === 'gp'   && (showCL || showLE) ? sepR : {}) }}>{gr ? (gr.gradePoint ?? 0).toFixed(1) : ''}</td>}
+                                {showCL && <td style={{ ...cellL, ...(showLE ? sepR : {}) }}>{br ? <>{br.min.toFixed(2)}–{br.max.toFixed(2)} / <strong>{br.label}</strong></> : ''}</td>}
+                                {showLE && <td style={cellL}>{lr ? <><strong style={{ minWidth: 28, display: 'inline-block' }}>{lr.abbr}</strong> = {lr.meaning}</> : ''}</td>}
+                                <td style={{ padding: '1px', borderBottom: '1px solid #eef2f7', textAlign: 'center', width: 16 }}>
+                                  <button style={rowX} onClick={() => hideBuiltinRow(i)}>×</button>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                      </tbody>
+                    </table>
+                  )}
+                  {(restorableCols.length > 0 || bHidRows.length > 0) && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
+                      {restorableCols.map(c => (
+                        <button key={c} onClick={() => showBuiltinCol(c)} style={{ fontSize: 9, padding: '1px 5px', border: `1px solid ${color}`, background: 'none', color, borderRadius: 3, cursor: 'pointer' }}>+{c}</button>
+                      ))}
+                      {bHidRows.length > 0 && (
+                        <button onClick={() => update({ ...sec, hiddenRowIndices: [] })} style={{ fontSize: 9, padding: '1px 5px', border: '1px solid #9ca3af', background: 'none', color: '#6b7280', borderRadius: 3, cursor: 'pointer' }}>
+                          restore {bHidRows.length} row{bHidRows.length > 1 ? 's' : ''}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <button onClick={seedBuiltin} style={{ marginTop: 4, fontSize: 9, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 8px', borderRadius: 3, cursor: 'pointer' }}>
+                    ✎ Make editable (spreadsheet)
+                  </button>
+                </div>
+              )
+            )}
+
+            {/* Extra left spreadsheet tables */}
+            {L.tables.map(st => {
+              const entry: TableEntry = { table: st, setTable: (nt) => L.setTable(nt) }
+              return (
+                <div key={st.id} style={{ flex: 1, minWidth: 180, border: `1px solid rgba(${rgb},0.25)`, borderRadius: 4, padding: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                    <div style={{ flex: 1, fontWeight: 'bold', fontSize: 10, color, background: `rgba(${rgb},0.08)`, padding: '2px 6px', borderRadius: 3 }}>
+                      <ET value={st.title} onChange={v => L.setTable({ ...st, title: v })} style={{ fontSize: 10, fontWeight: 'bold', color }} />
+                    </div>
+                    <button onClick={() => L.deleteTable(st.id)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
+                  </div>
+                  <SpreadsheetGrid table={st} onChange={nt => L.setTable(nt)} color={color} {...makeGridProps(entry)} />
+                </div>
+              )
+            })}
+          </div>
+
+          <button onClick={L.addTable} style={{ fontSize: 10, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer', alignSelf: 'flex-start' }}>
+            + Add Table
+          </button>
+        </div>
+
+        {/* RIGHT — configurable spreadsheet tables (university) or empty placeholder */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {R.tables.length > 1 && (
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: '#94a3b8' }}>Right layout:</span>
+              {(['columns', 'rows'] as const).map(l => (
+                <button key={l} onClick={() => R.setLayout(l)}
+                  style={{ padding: '1px 6px', fontSize: 9, border: '1px solid', borderColor: R.layout === l ? color : '#d1d5db', background: R.layout === l ? color : 'white', color: R.layout === l ? 'white' : '#374151', borderRadius: 3, cursor: 'pointer' }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: R.layout === 'rows' ? 'column' : 'row', gap: 8, flexWrap: 'wrap' }}>
+            {R.tables.map(st => {
+              const entry: TableEntry = { table: st, setTable: (nt) => R.setTable(nt) }
+              return (
+                <div key={st.id} style={{ flex: 1, minWidth: 180, border: `1px solid rgba(${rgb},0.25)`, borderRadius: 4, padding: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                    <div style={{ flex: 1, fontWeight: 'bold', fontSize: 10, color, background: `rgba(${rgb},0.08)`, padding: '2px 6px', borderRadius: 3 }}>
+                      <ET value={st.title} onChange={v => R.setTable({ ...st, title: v })} style={{ fontSize: 10, fontWeight: 'bold', color }} />
+                    </div>
+                    <button onClick={() => R.deleteTable(st.id)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
+                  </div>
+                  <SpreadsheetGrid table={st} onChange={nt => R.setTable(nt)} color={color} {...makeGridProps(entry)} />
+                </div>
+              )
+            })}
+          </div>
+          <button onClick={R.addTable} style={{ fontSize: 10, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer', alignSelf: 'flex-start' }}>
+            + Add Table
+          </button>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
 // ── Templates gallery ─────────────────────────────────────────────────────────
 const TEMPLATES = [
   { id: 'classic'  as TemplateName, label: 'Classic GCE',  color: '#1e3a5f' },
@@ -720,11 +1052,12 @@ const ADD_OPTIONS = [
   { type: 'remarks'    as const, label: '💬 Remarks' },
   { type: 'signatures' as const, label: '✍ Signatures' },
   { type: 'summary'    as const, label: '📊 Summary Boxes' },
-  { type: 'student_info' as const, label: '👤 Student Info' },
-  { type: 'marks_table'  as const, label: '📋 Marks Table' },
+  { type: 'student_info'   as const, label: '👤 Student Info' },
+  { type: 'marks_table'    as const, label: '📋 Marks Table' },
+  { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
 ]
 
-function newSection(type: LayoutSection['type'], color: string): LayoutSection {
+function newSection(type: LayoutSection['type'], color: string, schoolType?: string): LayoutSection {
   const id = `sec_${Date.now()}`
   if (type === 'text_block')   return { id, type, content: 'New text block', align: 'left' }
   if (type === 'divider')      return { id, type, style: 'solid' }
@@ -732,8 +1065,27 @@ function newSection(type: LayoutSection['type'], color: string): LayoutSection {
   if (type === 'signatures')   return { id, type, lines: [{ id: `s_${Date.now()}`, label: 'Signature' }] }
   if (type === 'summary')      return { id, type, boxes: [{ id: `b_${Date.now()}`, label: 'Total Score', field: 'total' }] }
   if (type === 'student_info') return { id, type, columns: 2, rows: [{ id: `r_${Date.now()}`, label: 'Student Name', field: 'student.name' }] }
-  if (type === 'marks_table')  return { id, type, showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true }
+  if (type === 'marks_table') {
+    const sec: MarksTableSec = { id, type, showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true }
+    return { ...sec, template: seedMarksTableSection(sec, color, schoolType) }
+  }
+  if (type === 'grading_legend') return { id, type, showGradeSystem: true, showClassification: true, showLegend: true, legendText: DEFAULT_TRANSCRIPT_LEGEND }
   return { id, type: 'header', reportTitle: 'REPORT CARD', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' as const }
+}
+
+// Ensure every marks_table section has a seeded SpreadsheetTable template.
+function ensureMarksTables(
+  cfg: TemplateConfig & { sections: LayoutSection[] },
+  schoolType: string,
+): typeof cfg {
+  return {
+    ...cfg,
+    sections: cfg.sections.map(sec =>
+      sec.type === 'marks_table' && !sec.template
+        ? { ...sec, template: seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
+        : sec
+    ),
+  }
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -768,26 +1120,25 @@ export default function ReportCardDesignPage() {
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
-    // Labels follow the school's language (the model is one language per section,
-    // never bilingual) — collapse any "Français / English" labels to that language.
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    const sType = school?.type || 'SECONDARY'
+    const ensure = (cfg: any) => ensureMarksTables(cfg, sType)
     getTemplateApi().then(({ config: saved }) => {
       if (saved && (saved as any).sections?.length > 0) {
         const base = getDefaultLayout((saved.template as TemplateName) || 'classic')
-        const merged = localizeLayout({ ...base, ...saved } as any, lang)
+        const merged = ensure(localizeLayout({ ...base, ...saved } as any, lang))
         setConfig(merged)
         setColorText(merged.primaryColor)
         setBgText(merged.bgColor || '#ffffff')
       } else if (saved && Object.keys(saved).length > 0) {
         const tpl = (saved.template as TemplateName) || 'classic'
         const layout = getDefaultLayout(tpl)
-        const merged = localizeLayout({ ...layout, ...saved, sections: layout.sections } as any, lang)
+        const merged = ensure(localizeLayout({ ...layout, ...saved, sections: layout.sections } as any, lang))
         setConfig(merged)
         setColorText(merged.primaryColor)
         setBgText(merged.bgColor || '#ffffff')
       } else {
-        // No saved design yet → start from the section-type default
-        const layout = localizeLayout(getDefaultLayoutForType(school?.type), lang)
+        const layout = ensure(localizeLayout(getDefaultLayoutForType(school?.type), lang))
         setConfig(layout)
         setColorText(layout.primaryColor)
         setBgText(layout.bgColor || '#ffffff')
@@ -815,7 +1166,7 @@ export default function ReportCardDesignPage() {
   }
 
   const addSection = (type: LayoutSection['type']) => {
-    const sec = newSection(type, config.primaryColor)
+    const sec = newSection(type, config.primaryColor, schoolType)
     setConfig(c => ({ ...c, sections: [...c.sections, sec] }))
     setShowAddMenu(false)
   }
@@ -1116,13 +1467,13 @@ export default function ReportCardDesignPage() {
                 <RenderHeader sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} update={s => updateSection(i, s)} />
               )}
               {sec.type === 'student_info' && (
-                <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} update={s => updateSection(i, s)} />
+                <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} update={s => updateSection(i, s)} />
               )}
               {sec.type === 'marks_table' && (
-                <RenderMarksTable sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
+                <RenderMarksTable sec={sec} color={config.primaryColor} schoolType={schoolType} update={s => updateSection(i, s)} />
               )}
               {sec.type === 'summary' && (
-                <RenderSummary sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
+                <RenderSummary sec={sec} color={config.primaryColor} schoolType={schoolType} update={s => updateSection(i, s)} />
               )}
               {sec.type === 'remarks' && (
                 <RenderRemarks sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
@@ -1135,6 +1486,9 @@ export default function ReportCardDesignPage() {
               )}
               {sec.type === 'divider' && (
                 <RenderDivider sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
+              )}
+              {sec.type === 'grading_legend' && (
+                <RenderGradingLegend sec={sec as GradingLegendSec} color={config.primaryColor} update={s => updateSection(i, s)} />
               )}
             </SectionWrap>
           ))}
