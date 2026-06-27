@@ -144,6 +144,7 @@ model Subject {
   id              String           @id @default(uuid())
   schoolId        String
   name            String
+  code            String?
   classLevel      String
   createdAt       DateTime         @default(now())
   maxScore        Int              @default(20)

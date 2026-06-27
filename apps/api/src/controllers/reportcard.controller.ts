@@ -3,29 +3,80 @@ import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 
+// A subject scoped to one term (university courses) only counts for that term;
+// a subject with no term (primary/secondary, and any non-term-scoped subject)
+// always counts. Matched by term NAME, same reasoning as Subject.classLevel
+// matching ClassLevel.name — see the comment on Subject.term in schema.prisma.
+const subjectTermFilter = (termName: string) => ({ OR: [{ term: null }, { term: termName }] })
+
 // Get all report cards for the school
 export const getReportCards = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const { termId, classLevel, session } = req.query
 
-    const reportCards = await prisma.reportCard.findMany({
-      where: {
-        schoolId,
-        ...(termId ? { termId: String(termId) } : {}),
-        ...(session ? { term: { session: String(session) } } : {}),
-        ...(classLevel ? { student: { classLevel: String(classLevel) } } : {})
-      },
-      include: {
-        student: true,
-        term: true,
-        entries: { include: { subject: true } },
-        createdBy: { select: { id: true, name: true } }
-      },
-      orderBy: { createdAt: 'desc' }
-    })
+    const [reportCards, school] = await Promise.all([
+      prisma.reportCard.findMany({
+        where: {
+          schoolId,
+          ...(termId ? { termId: String(termId) } : {}),
+          ...(session ? { term: { session: String(session) } } : {}),
+          ...(classLevel ? { student: { classLevel: String(classLevel) } } : {})
+        },
+        include: {
+          student: true,
+          term: true,
+          entries: { include: { subject: true } },
+          createdBy: { select: { id: true, name: true } }
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
+    ])
 
-    res.json({ reportCards, total: reportCards.length })
+    // For university schools, compute CGPA per student in one batch query.
+    let cgpaByStudent: Record<string, number> = {}
+    if (school?.type === 'UNIVERSITY' && reportCards.length > 0) {
+      const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
+      const rawRanges: any[] = gradingScale?.ranges
+        ? (Array.isArray((gradingScale.ranges as any).ranges)
+            ? (gradingScale.ranges as any).ranges
+            : gradingScale.ranges as any)
+        : []
+      const uniRanges = rawRanges.filter((r: any) => r.gradePoint != null)
+
+      const studentIds = [...new Set(reportCards.map(rc => rc.studentId))]
+      const allEntries = await prisma.reportEntry.findMany({
+        where: {
+          reportCard: { studentId: { in: studentIds }, schoolId, status: 'PUBLISHED' },
+          score: { not: null },
+        },
+        include: { subject: { select: { credit: true } }, reportCard: { select: { studentId: true } } },
+      })
+
+      const wpMap: Record<string, { wp: number; cr: number }> = {}
+      for (const e of allEntries) {
+        if (e.score == null) continue
+        const studentId = (e.reportCard as any).studentId
+        const credit = (e.subject as any).credit ?? 0
+        const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
+        const match = sorted.find((r: any) => e.score! >= r.minScore && e.score! <= r.maxScore)
+        if (match == null) continue
+        if (!wpMap[studentId]) wpMap[studentId] = { wp: 0, cr: 0 }
+        wpMap[studentId].wp += match.gradePoint * credit
+        wpMap[studentId].cr += credit
+      }
+      for (const [sid, { wp, cr }] of Object.entries(wpMap)) {
+        if (cr > 0) cgpaByStudent[sid] = wp / cr
+      }
+    }
+
+    const result = reportCards.map(rc => ({
+      ...rc,
+      cgpa: cgpaByStudent[rc.studentId] ?? null,
+    }))
+
+    res.json({ reportCards: result, total: result.length })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -53,7 +104,7 @@ export const getMarksExport = async (req: AuthRequest, res: Response) => {
 
     // Column set: subjects configured for the school (or the one class), ordered.
     const subjectRows = await prisma.subject.findMany({
-      where: { schoolId, ...(classLevel ? { classLevel } : {}) },
+      where: { schoolId, ...(classLevel ? { classLevel } : {}), ...subjectTermFilter(term.name) },
       orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
       select: { name: true },
     })
@@ -61,9 +112,11 @@ export const getMarksExport = async (req: AuthRequest, res: Response) => {
 
     // Base on the report cards OF THIS TERM — so the export matches exactly the
     // students shown when the table is filtered to that term (a student only
-    // "belongs" to a term once they have a report card in it).
+    // "belongs" to a term once they have a report card in it). Disabled/Dismissed
+    // students are excluded — this drives bulk CSV exports, same rule as bulk
+    // report-card printing (see Student.status in schema.prisma).
     const cards = await prisma.reportCard.findMany({
-      where: { schoolId, termId, ...(classLevel ? { student: { classLevel } } : {}) },
+      where: { schoolId, termId, student: { isActive: true, ...(classLevel ? { classLevel } : {}) } },
       include: { student: true, entries: { include: { subject: true } } },
       orderBy: [{ student: { classLevel: 'asc' } }, { position: 'asc' }, { student: { name: 'asc' } }],
     })
@@ -116,7 +169,66 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    res.json(reportCard)
+    // Compute class-wide min / avg / max per subject for the same class + term.
+    // One extra query; results are keyed by subjectId so the print renderer can
+    // look them up without looping over all entries.
+    const classEntries = await prisma.reportEntry.findMany({
+      where: {
+        reportCard: { termId: reportCard.termId, student: { classLevel: reportCard.student.classLevel } },
+        score: { not: null },
+      },
+      select: { subjectId: true, score: true },
+    })
+    const bySubject: Record<string, number[]> = {}
+    for (const ce of classEntries) {
+      if (ce.score == null) continue
+      if (!bySubject[ce.subjectId]) bySubject[ce.subjectId] = []
+      bySubject[ce.subjectId].push(ce.score)
+    }
+    const subjectStats: Record<string, { min: number; avg: number; max: number }> = {}
+    for (const [sid, scores] of Object.entries(bySubject)) {
+      const sum = scores.reduce((a, b) => a + b, 0)
+      subjectStats[sid] = {
+        min: Math.min(...scores),
+        max: Math.max(...scores),
+        avg: sum / scores.length,
+      }
+    }
+
+    // Compute CGPA for university schools: Σ(GP×credit) / Σ(credit) across ALL
+    // published terms for this student (current term included).
+    let cgpa: number | null = null
+    if (reportCard.school.type === 'UNIVERSITY') {
+      const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
+      const rawRanges: any[] = gradingScale?.ranges
+        ? (Array.isArray((gradingScale.ranges as any).ranges)
+            ? (gradingScale.ranges as any).ranges
+            : gradingScale.ranges as any)
+        : []
+      const uniRanges = rawRanges.filter((r: any) => r.gradePoint != null)
+
+      const allEntries = await prisma.reportEntry.findMany({
+        where: {
+          reportCard: { studentId: reportCard.studentId, schoolId, status: 'PUBLISHED' },
+          score: { not: null },
+        },
+        include: { subject: { select: { credit: true } } },
+      })
+
+      let totalWP = 0, totalCredits = 0
+      for (const e of allEntries) {
+        if (e.score == null) continue
+        const credit = (e.subject as any).credit ?? 0
+        const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
+        const match = sorted.find((r: any) => e.score! >= r.minScore && e.score! <= r.maxScore)
+        if (match == null) continue
+        totalWP += match.gradePoint * credit
+        totalCredits += credit
+      }
+      if (totalCredits > 0) cgpa = totalWP / totalCredits
+    }
+
+    res.json({ ...reportCard, subjectStats, cgpa })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -165,6 +277,9 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    const isUniversity = school?.type === 'UNIVERSITY'
+
     const role = req.user!.role
     const userId = req.user!.id
     if (reportCard.status === 'PUBLISHED' && (role === 'CLASS_TEACHER' || role === 'CLASS_MASTER')) {
@@ -187,40 +302,58 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // Fetch grading scale — drives BOTH the letter grade and the auto-remark
     // so report cards reflect the school's grading design.
     const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
-    const gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string }[] =
+    let gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string }[] =
       gradingScale?.ranges ? (gradingScale.ranges as any) : []
+    // For secondary schools, discard any stale 0–100 percent-scale ranges (boundary > 20).
+    // University ranges are intentionally 0–100 and must NOT be stripped.
+    if (!isUniversity && gradeRanges.some(r => Number(r?.maxScore) > 20 || Number(r?.minScore) > 20)) gradeRanges = []
 
-    const DEFAULT_API_RANGES = [
-      { minScore: 90, maxScore: 100, grade: 'A+', remark: 'Excellent' },
-      { minScore: 75, maxScore: 89,  grade: 'A',  remark: 'Very Good' },
-      { minScore: 60, maxScore: 74,  grade: 'B',  remark: 'Good' },
-      { minScore: 50, maxScore: 59,  grade: 'C',  remark: 'Average' },
-      { minScore: 40, maxScore: 49,  grade: 'D',  remark: 'Below Average' },
-      { minScore: 0,  maxScore: 39,  grade: 'F',  remark: 'Fail' },
-    ]
+    // Secondary fallback (0–20 scale); university defaults are 0–100.
+    const DEFAULT_API_RANGES = isUniversity
+      ? [
+          { minScore: 80, maxScore: 100, grade: 'A',  remark: 'Excellent' },
+          { minScore: 70, maxScore: 79,  grade: 'B+', remark: 'Very Good' },
+          { minScore: 60, maxScore: 69,  grade: 'B',  remark: 'Good' },
+          { minScore: 55, maxScore: 59,  grade: 'C+', remark: 'Fairly Good' },
+          { minScore: 50, maxScore: 54,  grade: 'C',  remark: 'Average' },
+          { minScore: 45, maxScore: 49,  grade: 'D',  remark: 'Poor' },
+          { minScore: 0,  maxScore: 44,  grade: 'F',  remark: 'Fail' },
+        ]
+      : [
+          { minScore: 18, maxScore: 20, grade: 'A+', remark: 'Excellent' },
+          { minScore: 16, maxScore: 18, grade: 'A',  remark: 'Very Good' },
+          { minScore: 14, maxScore: 16, grade: 'B',  remark: 'Good' },
+          { minScore: 12, maxScore: 14, grade: 'C',  remark: 'Fairly Good' },
+          { minScore: 10, maxScore: 12, grade: 'D',  remark: 'Average' },
+          { minScore: 0,  maxScore: 10, grade: 'F',  remark: 'Fail' },
+        ]
     const effectiveRanges = gradeRanges.length > 0 ? gradeRanges : DEFAULT_API_RANGES
-    const matchRange = (pct: number) => {
+    // A boundary mark goes to the higher grade (sorted by min desc).
+    const matchRange = (score: number) => {
       const sorted = [...effectiveRanges].sort((a, b) => b.minScore - a.minScore)
-      return sorted.find(r => pct >= r.minScore && pct <= r.maxScore)
+      return sorted.find(r => score >= r.minScore && score <= r.maxScore)
     }
-    const getAutoRemark = (pct: number): string => matchRange(pct)?.remark ?? ''
-    const getGradeLetter = (pct: number): string => matchRange(pct)?.grade ?? calculateGrade(pct)
+    const getAutoRemark = (score: number): string => matchRange(score)?.remark ?? ''
+    const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade(isUniversity ? score : (score / 20) * 100)
 
     const createdEntries = await Promise.all(
       entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; grade?: string; remarks?: string }) => {
         const seq1 = entry.seq1Score ?? null
         const seq2 = entry.seq2Score ?? null
-        // Only compute score when BOTH sequences are filled — null means "not entered yet"
+        // University: TOTAL = CA + EXAM (direct sum, both components on their own scale).
+        // Secondary: TOTAL = average of the two sequences.
         const finalScore: number | null = entry.score !== undefined
           ? entry.score
           : seq1 !== null && seq2 !== null
-            ? (seq1 + seq2) / 2
+            ? isUniversity ? seq1 + seq2 : (seq1 + seq2) / 2
             : null
         const sub = subjectMap[entry.subjectId]
-        const pct = finalScore !== null && sub && sub.maxScore > 0
-          ? (finalScore / sub.maxScore) * 100
-          : null
-        const autoRemark = pct !== null ? getAutoRemark(pct) : ''
+        // University: match raw 0-100 score against 0-100 ranges.
+        // Secondary: normalise to /20 then match against 0-20 ranges.
+        const scoreForGrade = isUniversity
+          ? finalScore
+          : (finalScore !== null && sub && sub.maxScore > 0 ? (finalScore / sub.maxScore) * 20 : null)
+        const autoRemark = scoreForGrade !== null ? getAutoRemark(scoreForGrade) : ''
         return prisma.reportEntry.create({
           data: {
             reportCardId: id,
@@ -228,8 +361,8 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
             seq1Score: seq1,
             seq2Score: seq2,
             score: finalScore,
-            grade: finalScore !== null ? (entry.grade || getGradeLetter(pct!)) : null,
-            remarks: entry.remarks || autoRemark
+            grade: scoreForGrade !== null ? getGradeLetter(scoreForGrade) : null,
+            remarks: autoRemark
           }
         })
       })
@@ -292,6 +425,7 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
       include: {
         entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
         student: { select: { classLevel: true } },
+        term: { select: { name: true } },
       },
     })
     if (!reportCard) {
@@ -301,7 +435,7 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
 
     const classLevel = reportCard.student.classLevel
     const [subjects, classMaster] = await Promise.all([
-      prisma.subject.findMany({ where: { schoolId, classLevel }, select: { id: true, name: true } }),
+      prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(reportCard.term.name) }, select: { id: true, name: true } }),
       prisma.user.findFirst({ where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true } }),
     ])
 
@@ -373,6 +507,9 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    const term = await prisma.term.findFirst({ where: { id: String(termId), schoolId }, select: { name: true } })
+    if (!term) { res.status(404).json({ message: 'Term not found' }); return }
+
     // Fetch students + their entries, subject count, and the teacher's assigned subjects for this class
     const [students, subjectCount, teacherSubjects] = await Promise.all([
       prisma.student.findMany({
@@ -389,9 +526,9 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
         },
         orderBy: { name: 'asc' },
       }),
-      prisma.subject.count({ where: { schoolId, classLevel: String(classLevel) } }),
+      prisma.subject.count({ where: { schoolId, classLevel: String(classLevel), ...subjectTermFilter(term.name) } }),
       prisma.teacherSubject.findMany({
-        where: { userId: req.user!.id, subject: { classLevel: String(classLevel) } },
+        where: { userId: req.user!.id, subject: { classLevel: String(classLevel), ...subjectTermFilter(term.name) } },
         select: { subjectId: true },
       }),
     ])
@@ -427,7 +564,10 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
       }
     })
 
-    res.json({ students: result, subjectCount })
+    // teacherSubjectCount = how many of this class's subjects the caller teaches
+    // (0 for admins/VPs, who don't have TeacherSubject rows). Lets the teacher
+    // classes view hide classes where the teacher teaches nothing.
+    res.json({ students: result, subjectCount, teacherSubjectCount: teacherSubjectIds.length })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -444,11 +584,11 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
  */
 async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string): Promise<boolean> {
   const rc = await prisma.reportCard.findFirst({
-    where: { id: reportCardId }, select: { student: { select: { classLevel: true } } },
+    where: { id: reportCardId }, select: { student: { select: { classLevel: true } }, term: { select: { name: true } } },
   })
   if (!rc) return false
   const [classSubjects, entries] = await Promise.all([
-    prisma.subject.findMany({ where: { schoolId, classLevel: rc.student.classLevel }, select: { id: true, compulsory: true } }),
+    prisma.subject.findMany({ where: { schoolId, classLevel: rc.student.classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, compulsory: true } }),
     prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true } }),
   ])
   const scoreBy = new Map(entries.map((e) => [e.subjectId, e.score]))
@@ -629,6 +769,12 @@ export const bulkPublish = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    const term = await prisma.term.findFirst({ where: { id: termId, schoolId }, select: { name: true } })
+    if (!term) {
+      res.status(404).json({ message: 'Term not found' })
+      return
+    }
+
     // Check if class has a master (for attribution only — remarks are now
     // required for every class regardless)
     const classMaster = await prisma.user.findFirst({
@@ -642,9 +788,9 @@ export const bulkPublish = async (req: AuthRequest, res: Response) => {
       select: { id: true, name: true }
     })
 
-    // Get all subjects for this class
+    // Get all subjects for this class (scoped to this term for university courses)
     const subjects = await prisma.subject.findMany({
-      where: { schoolId, classLevel },
+      where: { schoolId, classLevel, ...subjectTermFilter(term.name) },
       select: { id: true, name: true }
     })
 
@@ -718,9 +864,12 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
 
     if (!termId) { res.status(400).json({ message: 'termId required' }); return }
 
+    const term = await prisma.term.findFirst({ where: { id: termId, schoolId }, select: { name: true } })
+    if (!term) { res.status(404).json({ message: 'Term not found' }); return }
+
     const [students, subjects, reportCards] = await Promise.all([
       prisma.student.findMany({ where: { schoolId, isActive: true }, select: { id: true, name: true, classLevel: true } }),
-      prisma.subject.findMany({ where: { schoolId }, select: { id: true, classLevel: true } }),
+      prisma.subject.findMany({ where: { schoolId, ...subjectTermFilter(term.name) }, select: { id: true, classLevel: true } }),
       prisma.reportCard.findMany({
         where: { schoolId, termId },
         select: { id: true, status: true, remarks: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
@@ -793,6 +942,7 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
       include: {
         entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
         student: { select: { classLevel: true } },
+        term: { select: { name: true } },
       },
     })
     if (!rc) { res.status(404).json({ message: 'Not found' }); return }
@@ -800,9 +950,9 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
     const classLevel = rc.student.classLevel
 
     const [subjects, teacherSubjects, classMaster] = await Promise.all([
-      prisma.subject.findMany({ where: { schoolId, classLevel }, select: { id: true, name: true } }),
+      prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, name: true } }),
       prisma.teacherSubject.findMany({
-        where: { subject: { schoolId, classLevel } },
+        where: { subject: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) } },
         include: { user: { select: { id: true, name: true } }, subject: { select: { id: true } } },
       }),
       prisma.user.findFirst({
@@ -847,4 +997,75 @@ function calculateGrade(score: number): string {
   if (score >= 60) return 'C'
   if (score >= 50) return 'D'
   return 'F'
+}
+
+// ── Annual University Transcript ─────────────────────────────────────────────
+// Fetches BOTH semesters' report cards for a student in one academic year,
+// returns everything the PrintableTranscript component needs in one round-trip.
+export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const studentId = String(req.params.studentId)
+    const session   = req.query.session ? String(req.query.session) : null
+
+    // Resolve session: use provided or fall back to current term's session.
+    let resolvedSession = session
+    if (!resolvedSession) {
+      const cur = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { session: true } })
+      resolvedSession = cur?.session ?? null
+    }
+    if (!resolvedSession) {
+      res.status(400).json({ message: 'No active academic year found' })
+      return
+    }
+
+    const [student, reportCards, gradingScale, school, classLevel] = await Promise.all([
+      prisma.student.findFirst({ where: { id: studentId, schoolId } }),
+      prisma.reportCard.findMany({
+        where: { studentId, schoolId, term: { session: resolvedSession } },
+        include: {
+          term: true,
+          entries: {
+            include: { subject: { select: { id: true, name: true, code: true, credit: true, term: true, classLevel: true } } },
+            orderBy: [{ subject: { name: 'asc' } }],
+          },
+        },
+        orderBy: { term: { name: 'asc' } },
+      }),
+      prisma.gradingScale.findUnique({ where: { schoolId } }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, logo: true, language: true, type: true } }),
+      prisma.student.findFirst({
+        where: { id: studentId, schoolId },
+        select: { classLevel: true },
+      }).then(async (s) => s ? prisma.classLevel.findFirst({ where: { schoolId, name: s.classLevel }, select: { maxScore: true } }) : null),
+    ])
+
+    if (!student) {
+      res.status(404).json({ message: 'Student not found' })
+      return
+    }
+
+    const rawScale = gradingScale?.ranges as any
+    let gradingRanges: any[] = []
+    let classificationBands: any[] = []
+    if (Array.isArray(rawScale)) {
+      gradingRanges = rawScale
+    } else if (rawScale && Array.isArray(rawScale.ranges)) {
+      gradingRanges = rawScale.ranges
+      classificationBands = rawScale.classificationBands ?? []
+    }
+
+    res.json({
+      student,
+      school,
+      session: resolvedSession,
+      reportCards,
+      maxScore: (classLevel as { maxScore: number } | null)?.maxScore ?? 20,
+      gradingScale: gradingRanges,
+      classificationBands,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
 }

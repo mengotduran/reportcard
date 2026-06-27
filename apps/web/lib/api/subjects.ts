@@ -5,12 +5,12 @@ export const getSubjectsApi = async () => {
   return res.data
 }
 
-export const createSubjectApi = async (data: { name: string; classLevel: string; coefficient?: number }) => {
+export const createSubjectApi = async (data: { name: string; classLevel: string; code?: string | null; coefficient?: number; credit?: number | null; term?: string | null }) => {
   const res = await api.post('/subjects', data)
   return res.data
 }
 
-export const updateSubjectApi = async (id: string, data: { name?: string; classLevel?: string; coefficient?: number }) => {
+export const updateSubjectApi = async (id: string, data: { name?: string; classLevel?: string; code?: string | null; coefficient?: number; credit?: number | null; term?: string | null }) => {
   const res = await api.put(`/subjects/${id}`, data)
   return res.data
 }
