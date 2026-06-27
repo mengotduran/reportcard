@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
@@ -18,7 +18,8 @@ import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor } fro
 import { useT } from '@/lib/i18n'
 import { DEFAULT_UNIVERSITY_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import {
-  SpreadsheetGrid, SpreadsheetToolbar, ensureSpreadsheet, makeEmptySpreadsheet,
+  SpreadsheetGrid, SpreadsheetToolbar, SheetCtx, GlobalSheetCtx,
+  ensureSpreadsheet, makeEmptySpreadsheet,
   SHEET_FIELD_OPTIONS, SheetRange,
 } from '@/components/ui/SpreadsheetEditor'
 
@@ -404,10 +405,36 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
           <input type="checkbox" checked={sec.showSchoolType} onChange={e => update({ ...sec, showSchoolType: e.target.checked })} />
           {t('Show school type')}
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!sec.officialHeader} onChange={e => update({ ...sec, officialHeader: e.target.checked })} />
+          {t('Official (logo center)')}
+        </label>
       </div>
 
       {/* Rendered header */}
-      {sec.showLogo && sec.logoPosition === 'center' ? (
+      {sec.officialHeader ? (
+        /* Three-column: left text | logo | right text */
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'center', marginBottom: 6 }}>
+            <textarea
+              value={sec.leftText ?? ''}
+              onChange={e => update({ ...sec, leftText: e.target.value })}
+              placeholder={schoolName}
+              rows={4}
+              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 11, color: '#111', fontFamily: 'inherit', lineHeight: 1.5, padding: 0 }}
+            />
+            <div style={{ textAlign: 'center' }}>{LogoEl}</div>
+            <textarea
+              value={sec.rightText ?? ''}
+              onChange={e => update({ ...sec, rightText: e.target.value })}
+              placeholder={'Republic of Cameroon\nPeace-Work-Fatherhood\nMinistry of Higher Education'}
+              rows={4}
+              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 11, color: '#111', fontFamily: 'inherit', lineHeight: 1.5, padding: 0, textAlign: 'right' }}
+            />
+          </div>
+          <div style={{ textAlign: 'center' }}>{SubtitleEls}</div>
+        </>
+      ) : sec.showLogo && sec.logoPosition === 'center' ? (
         <div style={{ textAlign: 'center' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>{LogoEl}</div>
           {SchoolTypeEl}{SchoolNameEl}{SubtitleEls}
@@ -763,7 +790,7 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
     sec.showClassification ? bandRows.length           : 0,
     sec.showLegend         ? LEGEND_ROWS_STATIC.length : 0,
   )
-  const sepR:  React.CSSProperties = { borderRight: '2px solid #9ca3af' }
+  const sepR:  React.CSSProperties = { borderRight: '1px solid #d1d5db' }
   const cell:  React.CSSProperties = { padding: '2px 6px', fontSize: 10, borderBottom: '1px solid #eef2f7', borderRight: '1px solid #e5e7eb', textAlign: 'center' }
   const cellL: React.CSSProperties = { ...cell, textAlign: 'left' }
   const hdr:   React.CSSProperties = { ...cell,  fontWeight: 'bold', backgroundColor: `rgba(${rgb},0.08)` }
@@ -772,11 +799,6 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
   const rowX:  React.CSSProperties = { background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 10, padding: '0 2px', lineHeight: 1 }
 
   // ── SpreadsheetTable CRUD for left/right sides ──────────────────────────
-  const [activeTableId, setActiveTableId] = useState<string | null>(null)
-  const selMapRef = useRef<Record<string, SheetRange | null>>({})
-  const [, setTick] = useState(0)
-  const forceUpdate = () => setTick(n => n + 1)
-
   const makeSpreadCrud = (side: 'leftTables' | 'rightTables', layoutKey: 'leftLayout' | 'rightLayout') => {
     const raw: any[] = (sec as any)[side] ?? []
     const ts: SpreadsheetTable[] = raw.map(ensureSpreadsheet)
@@ -794,23 +816,6 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
   const L = makeSpreadCrud('leftTables',  'leftLayout')
   const R = makeSpreadCrud('rightTables', 'rightLayout')
 
-  type TableEntry = { table: SpreadsheetTable; setTable: (nt: SpreadsheetTable) => void }
-  const builtinEntry: TableEntry | null = sec.builtinTable
-    ? { table: sec.builtinTable, setTable: (nt) => update({ ...sec, builtinTable: nt }) }
-    : null
-  const allEntries: TableEntry[] = [
-    ...(builtinEntry ? [builtinEntry] : []),
-    ...L.tables.map(st => ({ table: st, setTable: (nt: SpreadsheetTable) => L.setTable(nt) })),
-    ...R.tables.map(st => ({ table: st, setTable: (nt: SpreadsheetTable) => R.setTable(nt) })),
-  ]
-  const activeEntry = allEntries.find(e => e.table.id === activeTableId) ?? null
-  const activeSel   = activeTableId ? (selMapRef.current[activeTableId] ?? null) : null
-
-  const makeGridProps = (entry: TableEntry) => ({
-    sel:           activeTableId === entry.table.id ? (selMapRef.current[entry.table.id] ?? null) : null,
-    onSelChange:   (r: SheetRange | null) => { selMapRef.current[entry.table.id] = r; if (activeTableId === entry.table.id) forceUpdate() },
-    onFocusGained: () => { if (activeTableId !== entry.table.id) setActiveTableId(entry.table.id) },
-  })
 
   // Seed built-in grade system table as an editable SpreadsheetTable
   const seedBuiltin = () => {
@@ -876,17 +881,6 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
         ))}
       </div>
 
-      {/* Shared spreadsheet toolbar */}
-      <div style={{ marginBottom: 8 }}>
-        <SpreadsheetToolbar
-          table={activeEntry?.table ?? null}
-          sel={activeSel}
-          onChange={activeEntry ? (nt => activeEntry.setTable(nt)) : null}
-          onSelChange={activeEntry ? (r => { selMapRef.current[activeEntry.table.id] = r; forceUpdate() }) : null}
-          color={color}
-        />
-      </div>
-
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
 
         {/* LEFT — grade system table + optional extra spreadsheet tables */}
@@ -915,7 +909,7 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
                     <button title="Reset to static" onClick={() => update({ ...sec, builtinTable: undefined })} style={{ fontSize: 9, color: '#94a3b8', border: '1px solid #e5e7eb', background: 'none', borderRadius: 3, padding: '1px 5px', cursor: 'pointer' }}>↺ reset</button>
                     <button title="Re-seed from grading scale" onClick={seedBuiltin} style={{ fontSize: 9, color, border: `1px solid ${color}`, background: 'none', borderRadius: 3, padding: '1px 5px', cursor: 'pointer' }}>↺ reseed</button>
                   </div>
-                  <SpreadsheetGrid table={sec.builtinTable} onChange={nt => update({ ...sec, builtinTable: nt })} color={color} {...makeGridProps(builtinEntry!)} />
+                  <SpreadsheetGrid table={sec.builtinTable} onChange={nt => update({ ...sec, builtinTable: nt })} color={color} />
                 </div>
               ) : (
                 <div style={{ flex: 1 }}>
@@ -979,7 +973,6 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
 
             {/* Extra left spreadsheet tables */}
             {L.tables.map(st => {
-              const entry: TableEntry = { table: st, setTable: (nt) => L.setTable(nt) }
               return (
                 <div key={st.id} style={{ flex: 1, minWidth: 180, border: `1px solid rgba(${rgb},0.25)`, borderRadius: 4, padding: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
@@ -988,7 +981,7 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
                     </div>
                     <button onClick={() => L.deleteTable(st.id)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
                   </div>
-                  <SpreadsheetGrid table={st} onChange={nt => L.setTable(nt)} color={color} {...makeGridProps(entry)} />
+                  <SpreadsheetGrid table={st} onChange={nt => L.setTable(nt)} color={color} />
                 </div>
               )
             })}
@@ -1014,7 +1007,6 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
           )}
           <div style={{ display: 'flex', flexDirection: R.layout === 'rows' ? 'column' : 'row', gap: 8, flexWrap: 'wrap' }}>
             {R.tables.map(st => {
-              const entry: TableEntry = { table: st, setTable: (nt) => R.setTable(nt) }
               return (
                 <div key={st.id} style={{ flex: 1, minWidth: 180, border: `1px solid rgba(${rgb},0.25)`, borderRadius: 4, padding: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
@@ -1023,7 +1015,7 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
                     </div>
                     <button onClick={() => R.deleteTable(st.id)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
                   </div>
-                  <SpreadsheetGrid table={st} onChange={nt => R.setTable(nt)} color={color} {...makeGridProps(entry)} />
+                  <SpreadsheetGrid table={st} onChange={nt => R.setTable(nt)} color={color} />
                 </div>
               )
             })}
@@ -1097,11 +1089,42 @@ export default function ReportCardDesignPage() {
   const [config, setConfig] = useState<TemplateConfig & { sections: LayoutSection[] }>(getDefaultLayout('classic'))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [showAddMenu, setShowAddMenu] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [colorText, setColorText] = useState(config.primaryColor)
   const [bgText, setBgText] = useState(config.bgColor || '#ffffff')
   const canvasRef = useRef<HTMLDivElement>(null)
+
+  // ── Page-level spreadsheet toolbar state ──────────────────────────────────
+  const activeTableIdRef   = useRef<string | null>(null)
+  const activeTableRef     = useRef<SpreadsheetTable | null>(null)
+  const activeSetTableRef  = useRef<((t: SpreadsheetTable) => void) | null>(null)
+  const [pageActiveTableId, setPageActiveTableId] = useState<string | null>(null)
+  const [sheetActiveSel, setSheetActiveSel]       = useState<SheetRange | null>(null)
+  const [, setSheetTick]                          = useState(0)
+
+  const sheetCtxValue = useMemo<GlobalSheetCtx>(() => ({
+    onFocus: (table, setTable) => {
+      activeTableIdRef.current  = table.id
+      activeTableRef.current    = table
+      activeSetTableRef.current = setTable
+      setPageActiveTableId(table.id)
+      setSheetActiveSel(null)
+    },
+    onSel: (tableId, sel) => {
+      if (activeTableIdRef.current !== tableId) return
+      setSheetActiveSel(sel)
+    },
+    onUpdate: (tableId, table, setTable) => {
+      if (activeTableIdRef.current !== tableId) return
+      activeTableRef.current    = table
+      activeSetTableRef.current = setTable
+    },
+  }), [])
+
+  // ── Add-section dropdown (fixed-position to clear sidebar) ────────────────
+  const addMenuBtnRef   = useRef<HTMLButtonElement>(null)
+  const [addMenuCoords, setAddMenuCoords] = useState<{ top: number; right: number } | null>(null)
+
   const schoolName = school?.name || 'Your School Name'
   const schoolType = school?.type || 'SECONDARY'
   const schoolLogo = school?.logo ?? null
@@ -1168,7 +1191,6 @@ export default function ReportCardDesignPage() {
   const addSection = (type: LayoutSection['type']) => {
     const sec = newSection(type, config.primaryColor, schoolType)
     setConfig(c => ({ ...c, sections: [...c.sections, sec] }))
-    setShowAddMenu(false)
   }
 
   const handleDrop = (targetIndex: number) => {
@@ -1216,8 +1238,9 @@ export default function ReportCardDesignPage() {
 
       {/* ── Designer — desktop / tablet only ── */}
       <div className="hidden md:block">
-      {/* ── Sticky toolbar ── */}
-      <div className="sticky top-0 z-20 bg-card border-b border-border -mx-8 -mt-8 px-8 py-3 mb-6 flex items-center gap-4 flex-wrap">
+      {/* ── Sticky header (main row + optional spreadsheet toolbar row) ── */}
+      <div className="sticky top-0 z-30 bg-card border-b border-border -mx-8 -mt-8 px-8 mb-6">
+      <div className="py-3 flex items-center gap-4 flex-wrap">
         <div>
           <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
         </div>
@@ -1402,32 +1425,46 @@ export default function ReportCardDesignPage() {
         <div className="flex-1" />
 
         {/* Add section */}
-        <div className="relative">
-          <button onClick={() => setShowAddMenu(!showAddMenu)}
-            className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
-            <Plus size={14} /> {tr('Add Section')}
-          </button>
-          {showAddMenu && (
-            <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-xl shadow-lg z-30 py-1 min-w-[180px]">
-              {ADD_OPTIONS.map(o => (
-                <button key={o.type} onClick={() => addSection(o.type)}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition">
-                  {tr(o.label)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <button ref={addMenuBtnRef}
+          onClick={() => {
+            if (addMenuCoords) { setAddMenuCoords(null); return }
+            const r = addMenuBtnRef.current?.getBoundingClientRect()
+            if (r) setAddMenuCoords({ top: r.bottom + 6, right: window.innerWidth - r.left })
+          }}
+          className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
+          <Plus size={14} /> {tr('Add Section')}
+        </button>
 
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
           <Save size={14} />
           {saving ? tr('Saving…') : tr('Save Design')}
         </button>
-      </div>
+      </div>{/* end main row */}
+
+      {/* Second row: spreadsheet table toolbar (merge/split/bold/etc) */}
+      {pageActiveTableId && (
+        <div className="py-1.5 border-t border-border" style={{ color: '#374151' }}>
+          <SpreadsheetToolbar
+            table={activeTableRef.current}
+            sel={sheetActiveSel}
+            onChange={t => {
+              if (activeSetTableRef.current) {
+                activeSetTableRef.current(t)
+                activeTableRef.current = t
+                setSheetTick(n => n + 1)
+              }
+            }}
+            onSelChange={r => setSheetActiveSel(r)}
+            color={config.primaryColor}
+          />
+        </div>
+      )}
+      </div>{/* end sticky wrapper */}
 
       {/* ── Canvas ── */}
       <TextColorToolbar canvasRef={canvasRef} />
+      <SheetCtx.Provider value={sheetCtxValue}>
       <div className="max-w-3xl mx-auto">
         <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>
 
@@ -1501,8 +1538,24 @@ export default function ReportCardDesignPage() {
           )}
         </div>
       </div>
+      </SheetCtx.Provider>
 
-      {showAddMenu && <div className="fixed inset-0 z-20" onClick={() => setShowAddMenu(false)} />}
+      {/* Add-section dropdown — fixed-position so it floats above the sidebar */}
+      {addMenuCoords && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setAddMenuCoords(null)} />
+          <div className="fixed z-50 bg-card border border-border rounded-xl shadow-lg py-1 w-max"
+            style={{ top: addMenuCoords.top, right: addMenuCoords.right }}>
+            {ADD_OPTIONS.map(o => (
+              <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
+                className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition">
+                {tr(o.label)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
       </div>
     </>
