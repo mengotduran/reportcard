@@ -19,7 +19,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
 export const createClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, hasStream, order, maxScore, feeAmount } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, feeAmount } = req.body
 
     if (!name?.trim()) {
       res.status(400).json({ message: 'Class name is required' })
@@ -42,6 +42,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
     const level = await prisma.classLevel.create({
       data: {
         schoolId, name: name.trim(),
+        abbreviation: abbreviation?.trim() || null,
         hasStream: hasStream ?? false,
         order: order ?? 0,
         maxScore: maxScore ? Number(maxScore) : 20,
@@ -59,7 +60,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, hasStream, order, maxScore, feeAmount } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, feeAmount } = req.body
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) {
@@ -81,12 +82,51 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
       where: { id },
       data: {
         ...(name?.trim() ? { name: name.trim() } : {}),
+        ...(abbreviation !== undefined ? { abbreviation: abbreviation?.trim() || null } : {}),
         ...(hasStream !== undefined ? { hasStream } : {}),
         ...(order !== undefined ? { order } : {}),
         ...(maxScore !== undefined ? { maxScore: Number(maxScore) } : {}),
         ...(feeAmount !== undefined ? { feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0) } : {}),
       },
     })
+
+    // Whenever a non-empty abbreviation is explicitly sent, regenerate all student
+    // IDs in this class so the matricule always reflects the current abbreviation.
+    if (abbreviation?.trim() && updated.abbreviation) {
+      const school = await prisma.school.findUnique({
+        where: { id: schoolId },
+        select: { type: true, acronym: true },
+      })
+      if (school?.type === 'UNIVERSITY' && school.acronym) {
+        const levelMatch = updated.name.match(/- Level (\d+)$/i)
+        const levelSuffix = levelMatch ? levelMatch[1] : ''
+        const progMatch = updated.name.match(/^(HND|Degree)\s/i)
+        const prog = progMatch ? progMatch[1].toUpperCase() : ''
+        const newAbbr = updated.abbreviation + levelSuffix
+
+        const students = await prisma.student.findMany({
+          where: { schoolId, classLevel: updated.name },
+          select: { id: true, studentId: true },
+        })
+
+        for (const s of students) {
+          const parts = s.studentId.split('/')
+          // Expected format: ACRONYM/YEAR[/PROG]/BATCH/OLDABBR/SEQ
+          if (parts[0] !== school.acronym || parts.length < 4) continue
+          const year  = parts[1]
+          // Batch is right after YEAR (index 2) unless PROG is present (index 2 is HND/DEGREE)
+          const hasProg = prog && parts[2]?.toUpperCase() === prog
+          const batchIdx = hasProg ? 3 : 2
+          const batch = parts[batchIdx]
+          const seq   = parts[parts.length - 1]
+          if (!batch || !seq) continue
+          const newParts = [school.acronym, year, ...(prog ? [prog] : []), batch, newAbbr, seq]
+          const newStudentId = newParts.join('/')
+          await prisma.student.update({ where: { id: s.id }, data: { studentId: newStudentId } })
+        }
+      }
+    }
+
     res.json({ message: 'Class updated', classLevel: updated })
   } catch (error) {
     console.error(error)

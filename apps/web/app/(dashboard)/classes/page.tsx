@@ -12,13 +12,16 @@ import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 import { formatXAF } from '@/lib/api/fees'
 
-const emptyForm = { name: '', hasStream: false, maxScore: '20', feeAmount: '150000' }
+const emptyForm = { name: '', abbreviation: '', hasStream: false, maxScore: '20', feeAmount: '150000' }
 
 export default function ClassesPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, school } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  // Universities call classes "departments" — same data/route, just different wording.
+  const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [classes, setClasses] = useState<ClassLevel[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -51,7 +54,7 @@ export default function ClassesPage() {
 
   const openEdit = (cls: ClassLevel) => {
     setEditing(cls)
-    setForm({ name: cls.name, hasStream: cls.hasStream, maxScore: String(cls.maxScore ?? 20), feeAmount: String(cls.feeAmount ?? 0) })
+    setForm({ name: cls.name, abbreviation: cls.abbreviation ?? '', hasStream: cls.hasStream, maxScore: String(cls.maxScore ?? 20), feeAmount: String(cls.feeAmount ?? 0) })
     setError('')
     setShowModal(true)
   }
@@ -67,23 +70,23 @@ export default function ClassesPage() {
     e.preventDefault()
     setError('')
     if (form.feeAmount.trim() === '' || isNaN(Number(form.feeAmount)) || Number(form.feeAmount) < 0) {
-      setError(t('Enter the class fee (use 0 if there is none).'))
+      setError(tt('Enter the class fee (use 0 if there is none).', 'Enter the department fee (use 0 if there is none).'))
       return
     }
     setSaving(true)
     try {
       if (editing) {
-        await updateClassLevelApi(editing.id, { ...form, maxScore: Number(form.maxScore), feeAmount: Number(form.feeAmount) || 0 })
-        showToast(t('Class updated'))
+        await updateClassLevelApi(editing.id, { ...form, abbreviation: form.abbreviation.trim() || undefined, maxScore: Number(form.maxScore), feeAmount: Number(form.feeAmount) || 0 })
+        showToast(tt('Class updated', 'Department updated'))
       } else {
-        await createClassLevelApi({ ...form, maxScore: Number(form.maxScore), feeAmount: Number(form.feeAmount) || 0, order: classes.length })
-        showToast(t('Class added'))
+        await createClassLevelApi({ ...form, abbreviation: form.abbreviation.trim() || undefined, maxScore: Number(form.maxScore), feeAmount: Number(form.feeAmount) || 0, order: classes.length })
+        showToast(tt('Class added', 'Department added'))
       }
       closeModal()
       fetchClasses()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
-      setError(e.response?.data?.message || t('Failed to save class'))
+      setError(e.response?.data?.message || tt('Failed to save class', 'Failed to save department'))
     } finally { setSaving(false) }
   }
 
@@ -93,9 +96,9 @@ export default function ClassesPage() {
       await deleteClassLevelApi(deleteTarget.id)
       setDeleteTarget(null)
       fetchClasses()
-      showToast(t('Class deleted'))
+      showToast(tt('Class deleted', 'Department deleted'))
     } catch {
-      showToast(t('Failed to delete class'), 'error')
+      showToast(tt('Failed to delete class', 'Failed to delete department'), 'error')
     }
   }
 
@@ -121,12 +124,12 @@ export default function ClassesPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">{t('Classes')}</h2>
-          <p className="text-muted-foreground text-sm mt-1">{classes.length} {classes.length !== 1 ? t('classes defined') : t('class defined')}</p>
+          <h2 className="text-2xl font-bold text-foreground">{tt('Classes', 'Departments')}</h2>
+          <p className="text-muted-foreground text-sm mt-1">{classes.length} {classes.length !== 1 ? tt('classes defined', 'departments defined') : tt('class defined', 'department defined')}</p>
         </div>
         <button onClick={openAdd}
           className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
-          <Plus size={16} /> {t('Add Class')}
+          <Plus size={16} /> {tt('Add Class', 'Add Department')}
         </button>
       </div>
 
@@ -136,14 +139,15 @@ export default function ClassesPage() {
         ) : classes.length === 0 ? (
           <div className="text-center py-12">
             <GraduationCap size={32} className="mx-auto mb-2 text-muted-foreground" />
-            <p className="text-muted-foreground text-sm">{t('No classes yet. Add your first class to get started.')}</p>
+            <p className="text-muted-foreground text-sm">{tt('No classes yet. Add your first class to get started.', 'No departments yet. Add your first department to get started.')}</p>
           </div>
         ) : (
           <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Order')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Class Name')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tt('Class Name', 'Department Name')}</th>
+                {isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Abbr.')}</th>}
                 <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Max Score')}</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Fee')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>
@@ -175,6 +179,13 @@ export default function ClassesPage() {
                       <span className="text-sm font-medium text-foreground">{cls.name}</span>
                     </div>
                   </td>
+                  {isUniversity && (
+                    <td className="px-4 py-3">
+                      {cls.abbreviation
+                        ? <span className="text-xs font-mono font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">{cls.abbreviation}</span>
+                        : <span className="text-muted-foreground text-sm">—</span>}
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-center">
                     <span className="text-sm font-semibold text-primary">/ {cls.maxScore ?? 20}</span>
                   </td>
@@ -217,7 +228,7 @@ export default function ClassesPage() {
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl w-full border border-transparent dark:border-zinc-800 w-full max-w-sm p-6">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold text-foreground text-lg">{editing ? t('Edit Class') : t('Add Class')}</h3>
+              <h3 className="font-semibold text-foreground text-lg">{editing ? tt('Edit Class', 'Edit Department') : tt('Add Class', 'Add Department')}</h3>
               <button onClick={closeModal} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
                 <X size={20} />
               </button>
@@ -225,15 +236,26 @@ export default function ClassesPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Class Name')}</label>
-                <input type="text" placeholder="e.g. Form 3, Class 5, Lower Sixth"
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tt('Class Name', 'Department Name')}</label>
+                <input type="text" placeholder={isUniversity ? 'e.g. HND Computer Science - Level 1' : 'e.g. Form 3, Class 5, Lower Sixth'}
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
+              {isUniversity && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Department Abbreviation')} <span className="text-muted-foreground font-normal">(used in student matricule)</span></label>
+                  <input type="text" placeholder="e.g. HWM, SWE, MF"
+                    value={form.abbreviation}
+                    onChange={(e) => setForm({ ...form, abbreviation: e.target.value.toUpperCase() })}
+                    maxLength={10}
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <p className="text-xs text-muted-foreground mt-1">{t('Short code that appears in new student IDs. If left blank the system will auto-generate one.')}</p>
+                </div>
+              )}
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Max Score per Subject')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')}</label>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">{t('out of')}</span>
                   <input
@@ -244,7 +266,7 @@ export default function ClassesPage() {
                     className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">{t('All subjects in this class will use this as their maximum mark.')}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tt('All subjects in this class will use this as their maximum mark.', 'All courses in this department will use this as their maximum mark.')}</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('School Fee (XAF)')} <span className="text-destructive">*</span></label>
@@ -254,7 +276,7 @@ export default function ClassesPage() {
                   onChange={(e) => setForm({ ...form, feeAmount: e.target.value })}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                 />
-                <p className="text-xs text-muted-foreground mt-1">{t('Total fee for this class per academic year. Record each student’s payments from the Students page.')}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tt('Total fee for this class per academic year. Record each student’s payments from the Students page.', 'Total fee for this department per academic year. Record each student’s payments from the Students page.')}</p>
               </div>
               <div>
                 <label className="flex items-center gap-3 cursor-pointer">
@@ -265,7 +287,7 @@ export default function ClassesPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-foreground">{t('Has stream (Arts / Science)')}</p>
-                    <p className="text-xs text-muted-foreground">{t('Students in this class must choose a stream')}</p>
+                    <p className="text-xs text-muted-foreground">{tt('Students in this class must choose a stream', 'Students in this department must choose a stream')}</p>
                   </div>
                 </label>
               </div>
@@ -274,7 +296,7 @@ export default function ClassesPage() {
                   className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{t('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? t('Saving...') : editing ? t('Save Changes') : t('Add Class')}
+                  {saving ? t('Saving...') : editing ? t('Save Changes') : tt('Add Class', 'Add Department')}
                 </button>
               </div>
             </form>
@@ -284,7 +306,7 @@ export default function ClassesPage() {
 
       <ConfirmModal
         isOpen={!!deleteTarget}
-        title={t('Delete Class')}
+        title={tt('Delete Class', 'Delete Department')}
         message={`${t('Are you sure you want to delete')} "${deleteTarget?.name}"? ${t('This cannot be undone.')}`}
         confirmLabel={t('Delete')}
         confirmColor="red"

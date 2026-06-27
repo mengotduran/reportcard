@@ -6,6 +6,232 @@ datasource db {
   provider = "postgresql"
 }
 
+model ParentSchool {
+  id        String   @id @default(uuid())
+  name      String
+  city      String?
+  country   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  sections  School[]
+}
+
+model School {
+  id                 String              @id @default(uuid())
+  name               String
+  type               SchoolType
+  email              String              @unique
+  phone              String?
+  address            String?
+  logo               String?
+  subdomain          String              @unique
+  isActive           Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  coverImage         String?
+  parentSchoolId     String?
+  language           String              @default("EN")
+  coverImages        String[]
+  acronym            String?
+  batch              Int?
+  classLevels        ClassLevel[]
+  classListTemplate  ClassListTemplate?
+  excelTemplates     ExcelTemplate[]
+  feePayments        FeePayment[]
+  gradingScale       GradingScale?
+  reportCards        ReportCard[]
+  reportCardTemplate ReportCardTemplate?
+  parentSchool       ParentSchool?       @relation(fields: [parentSchoolId], references: [id])
+  students           Student[]
+  subjects           Subject[]
+  terms              Term[]
+  users              User[]
+}
+
+model GradingScale {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  ranges    Json     @default("[]")
+  updatedAt DateTime @updatedAt
+  school    School   @relation(fields: [schoolId], references: [id])
+}
+
+model ReportCardTemplate {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  config    Json     @default("{}")
+  updatedAt DateTime @updatedAt
+  school    School   @relation(fields: [schoolId], references: [id])
+}
+
+model ClassListTemplate {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  config    Json     @default("{}")
+  updatedAt DateTime @updatedAt
+  school    School   @relation(fields: [schoolId], references: [id])
+}
+
+model ClassLevel {
+  id           String   @id @default(uuid())
+  schoolId     String
+  name         String
+  abbreviation String?
+  hasStream    Boolean  @default(false)
+  order        Int      @default(0)
+  createdAt    DateTime @default(now())
+  feeAmount    Int      @default(0)
+  maxScore     Int      @default(20)
+  school       School   @relation(fields: [schoolId], references: [id])
+
+  @@unique([schoolId, name])
+}
+
+model User {
+  id               String           @id @default(uuid())
+  schoolId         String?
+  name             String
+  email            String           @unique
+  password         String
+  role             UserRole
+  isActive         Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  masterClassLevel String?
+  reportCards      ReportCard[]
+  teacherSubjects  TeacherSubject[]
+  school           School?          @relation(fields: [schoolId], references: [id])
+}
+
+model Student {
+  id            String        @id @default(uuid())
+  schoolId      String
+  name          String
+  studentId     String
+  classLevel    String
+  guardianName  String?
+  guardianPhone String?
+  guardianEmail String?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  gender        String?
+  status        StudentStatus @default(ACTIVE)
+  feePayments   FeePayment[]
+  reportCards   ReportCard[]
+  school        School        @relation(fields: [schoolId], references: [id])
+
+  @@unique([schoolId, studentId])
+}
+
+model FeePayment {
+  id         String   @id @default(uuid())
+  schoolId   String
+  studentId  String
+  session    String
+  amount     Int
+  paidOn     DateTime
+  note       String?
+  recordedBy String?
+  createdAt  DateTime @default(now())
+  school     School   @relation(fields: [schoolId], references: [id])
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, session])
+}
+
+model Subject {
+  id              String           @id @default(uuid())
+  schoolId        String
+  name            String
+  classLevel      String
+  createdAt       DateTime         @default(now())
+  maxScore        Int              @default(20)
+  coefficient     Int              @default(1)
+  compulsory      Boolean          @default(true)
+  credit          Int?
+  term            String?
+  reportEntries   ReportEntry[]
+  school          School           @relation(fields: [schoolId], references: [id])
+  teacherSubjects TeacherSubject[]
+}
+
+model TeacherSubject {
+  id        String   @id @default(uuid())
+  userId    String
+  subjectId String
+  createdAt DateTime @default(now())
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+}
+
+model Term {
+  id          String       @id @default(uuid())
+  schoolId    String
+  name        String
+  session     String
+  startDate   DateTime
+  endDate     DateTime
+  isCurrent   Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  reportCards ReportCard[]
+  school      School       @relation(fields: [schoolId], references: [id])
+}
+
+model ReportCard {
+  id                   String        @id @default(uuid())
+  studentId            String
+  schoolId             String
+  termId               String
+  createdById          String
+  status               ReportStatus  @default(DRAFT)
+  totalScore           Float?
+  average              Float?
+  position             Int?
+  remarks              String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  marksEditGrantedTo   String?
+  remarksEditGrantedTo String?
+  remarksFr            String?
+  remarksAiEn          String?
+  remarksAiFr          String?
+  remarksSource        String?
+  createdBy            User          @relation(fields: [createdById], references: [id])
+  school               School        @relation(fields: [schoolId], references: [id])
+  student              Student       @relation(fields: [studentId], references: [id])
+  term                 Term          @relation(fields: [termId], references: [id])
+  entries              ReportEntry[]
+
+  @@unique([studentId, termId])
+}
+
+model ReportEntry {
+  id           String     @id @default(uuid())
+  reportCardId String
+  subjectId    String
+  score        Float?
+  grade        String?
+  remarks      String?
+  seq1Score    Float?
+  seq2Score    Float?
+  reportCard   ReportCard @relation(fields: [reportCardId], references: [id])
+  subject      Subject    @relation(fields: [subjectId], references: [id])
+}
+
+model ExcelTemplate {
+  id          String   @id @default(uuid())
+  schoolId    String
+  name        String
+  fileData    Bytes
+  classLevels String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  school      School   @relation(fields: [schoolId], references: [id])
+}
+
 enum SchoolType {
   PRIMARY
   SECONDARY
@@ -16,11 +242,11 @@ enum UserRole {
   SUPERADMIN
   SCHOOL_ADMIN
   VICE_PRINCIPAL
-  CLASS_MASTER
   CLASS_TEACHER
   SUBJECT_TEACHER
   STUDENT
   PARENT
+  CLASS_MASTER
 }
 
 enum ReportStatus {
@@ -28,225 +254,8 @@ enum ReportStatus {
   PUBLISHED
 }
 
-model ParentSchool {
-  id        String   @id @default(uuid())
-  name      String
-  city      String?
-  country   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-
-  sections  School[]
-}
-
-model School {
-  id             String     @id @default(uuid())
-  parentSchoolId String?
-  name           String
-  type           SchoolType
-  language       String     @default("EN")
-  email          String     @unique
-  phone          String?
-  address        String?
-  logo           String?
-  coverImage     String?
-  coverImages    String[]
-  subdomain      String     @unique
-  isActive       Boolean    @default(true)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-
-  parentSchool   ParentSchool? @relation(fields: [parentSchoolId], references: [id])
-
-  users               User[]
-  students            Student[]
-  subjects            Subject[]
-  terms               Term[]
-  reportCards         ReportCard[]
-  classLevels         ClassLevel[]
-  reportCardTemplate  ReportCardTemplate?
-  classListTemplate   ClassListTemplate?
-  gradingScale        GradingScale?
-  feePayments         FeePayment[]
-}
-
-model GradingScale {
-  id        String   @id @default(uuid())
-  schoolId  String   @unique
-  ranges    Json     @default("[]")
-  updatedAt DateTime @updatedAt
-
-  school School @relation(fields: [schoolId], references: [id])
-}
-
-model ReportCardTemplate {
-  id        String   @id @default(uuid())
-  schoolId  String   @unique
-  config    Json     @default("{}")
-  updatedAt DateTime @updatedAt
-
-  school School @relation(fields: [schoolId], references: [id])
-}
-
-model ClassListTemplate {
-  id        String   @id @default(uuid())
-  schoolId  String   @unique
-  config    Json     @default("{}")
-  updatedAt DateTime @updatedAt
-
-  school School @relation(fields: [schoolId], references: [id])
-}
-
-model ClassLevel {
-  id        String   @id @default(uuid())
-  schoolId  String
-  name      String
-  hasStream Boolean  @default(false)
-  order     Int      @default(0)
-  maxScore  Int      @default(20)
-  feeAmount Int      @default(0) // total fee for this class per academic session, in XAF
-  createdAt DateTime @default(now())
-
-  school School @relation(fields: [schoolId], references: [id])
-
-  @@unique([schoolId, name])
-}
-
-model User {
-  id               String   @id @default(uuid())
-  schoolId         String?
-  name             String
-  email            String   @unique
-  password         String
-  role             UserRole
-  masterClassLevel String?
-  isActive         Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  school          School?          @relation(fields: [schoolId], references: [id])
-  reportCards     ReportCard[]
-  teacherSubjects TeacherSubject[]
-}
-
-model Student {
-  id            String   @id @default(uuid())
-  schoolId      String
-  name          String
-  gender        String?  // 'Male' | 'Female'
-  studentId     String
-  classLevel    String
-  guardianName  String?
-  guardianPhone String?
-  guardianEmail String?
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  school      School       @relation(fields: [schoolId], references: [id])
-  reportCards ReportCard[]
-  feePayments FeePayment[]
-
-  @@unique([schoolId, studentId])
-}
-
-model FeePayment {
-  id         String   @id @default(uuid())
-  schoolId   String
-  studentId  String
-  session    String   // academic session this payment counts toward, e.g. "2026/2027"
-  amount     Int      // installment amount paid, in XAF
-  paidOn     DateTime // date the payment was made
-  note       String?
-  recordedBy String?  // id of the user who recorded the payment
-  createdAt  DateTime @default(now())
-
-  school  School  @relation(fields: [schoolId], references: [id])
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
-  @@index([studentId, session])
-}
-
-model Subject {
-  id          String   @id @default(uuid())
-  schoolId    String
-  name        String
-  classLevel  String
-  maxScore    Int      @default(20)
-  coefficient Int      @default(1)
-  compulsory  Boolean  @default(true) // optional subjects: a student may not take them
-  createdAt   DateTime @default(now())
-
-  school          School           @relation(fields: [schoolId], references: [id])
-  reportEntries   ReportEntry[]
-  teacherSubjects TeacherSubject[]
-}
-
-model TeacherSubject {
-  id        String   @id @default(uuid())
-  userId    String
-  subjectId String
-  createdAt DateTime @default(now())
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, subjectId])
-}
-
-model Term {
-  id        String   @id @default(uuid())
-  schoolId  String
-  name      String
-  session   String
-  startDate DateTime
-  endDate   DateTime
-  isCurrent Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  school      School       @relation(fields: [schoolId], references: [id])
-  reportCards ReportCard[]
-}
-
-model ReportCard {
-  id          String       @id @default(uuid())
-  studentId   String
-  schoolId    String
-  termId      String
-  createdById String
-  status              ReportStatus @default(DRAFT)
-  totalScore          Float?
-  average             Float?
-  position            Int?
-  remarks             String?
-  remarksFr           String?
-  remarksAiEn         String?
-  remarksAiFr         String?
-  remarksSource       String?
-  marksEditGrantedTo    String?
-  remarksEditGrantedTo  String?
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
-
-  student   Student       @relation(fields: [studentId], references: [id])
-  school    School        @relation(fields: [schoolId], references: [id])
-  term      Term          @relation(fields: [termId], references: [id])
-  createdBy User          @relation(fields: [createdById], references: [id])
-  entries   ReportEntry[]
-
-  @@unique([studentId, termId])
-}
-
-model ReportEntry {
-  id           String  @id @default(uuid())
-  reportCardId String
-  subjectId    String
-  seq1Score    Float?
-  seq2Score    Float?
-  score        Float?
-  grade        String?
-  remarks      String?
-
-  reportCard ReportCard @relation(fields: [reportCardId], references: [id])
-  subject    Subject    @relation(fields: [subjectId], references: [id])
+enum StudentStatus {
+  ACTIVE
+  DISABLED
+  DISMISSED
 }

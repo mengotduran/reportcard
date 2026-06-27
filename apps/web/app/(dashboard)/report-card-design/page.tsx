@@ -504,6 +504,7 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
     { label: 'Student Name',  value: 'student.name' },
     { label: 'Student ID',    value: 'student.studentId' },
     { label: 'Class',         value: 'student.classLevel' },
+    { label: 'Gender',        value: 'student.gender' },
     { label: 'Guardian',      value: 'student.guardianName' },
     { label: 'Term',          value: 'term.name' },
     { label: 'Session',       value: 'term.session' },
@@ -955,6 +956,11 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
                     <button title="Re-seed from grading scale" onClick={seedBuiltin} style={{ fontSize: 9, color, border: `1px solid ${color}`, background: 'none', borderRadius: 3, padding: '1px 5px', cursor: 'pointer' }}>↺ reseed</button>
                   </div>
                   <SpreadsheetGrid table={sec.builtinTable} onChange={nt => update({ ...sec, builtinTable: nt })} color={color} />
+                  <button
+                    onClick={() => update({ ...sec, builtinTable: undefined })}
+                    style={{ marginTop: 6, fontSize: 9, color: '#6b7280', border: '1px solid #d1d5db', background: '#f9fafb', padding: '3px 10px', borderRadius: 3, cursor: 'pointer', display: 'block', width: '100%' }}>
+                    ← Back to static view
+                  </button>
                 </div>
               ) : (
                 <div style={{ flex: 1 }}>
@@ -973,7 +979,7 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
                           {showGS && vGrade.includes('gp')    && <th style={{ ...hdr, ...(lastGCol === 'gp'    && (showCL || showLE) ? sepR : {}) }}>GP    <button style={colX} onClick={() => hideBuiltinCol('gp')}>×</button></th>}
                           {showCL && <th style={{ ...hdrL, ...(showLE ? sepR : {}) }}>GPA / Remark <button style={colX} onClick={() => hideBuiltinCol('classification')}>×</button></th>}
                           {showLE && <th style={hdrL}>Legend <button style={colX} onClick={() => hideBuiltinCol('legend')}>×</button></th>}
-                          <th style={{ ...hdr, background: 'transparent', border: 'none', width: 16 }} />
+                          <th style={{ ...hdr, backgroundColor: 'transparent', border: 'none', width: 16 }} />
                         </tr>
                       </thead>
                       <tbody>
@@ -1488,24 +1494,22 @@ export default function ReportCardDesignPage() {
         </button>
       </div>{/* end main row */}
 
-      {/* Second row: spreadsheet table toolbar (merge/split/bold/etc) */}
-      {pageActiveTableId && (
-        <div className="py-1.5 border-t border-border" style={{ color: '#374151' }}>
-          <SpreadsheetToolbar
-            table={activeTableRef.current}
-            sel={sheetActiveSel}
-            onChange={t => {
-              if (activeSetTableRef.current) {
-                activeSetTableRef.current(t)
-                activeTableRef.current = t
-                setSheetTick(n => n + 1)
-              }
-            }}
-            onSelChange={r => setSheetActiveSel(r)}
-            color={config.primaryColor}
-          />
-        </div>
-      )}
+      {/* Second row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
+      <div className="py-1.5 border-t border-border" style={{ color: '#374151', visibility: pageActiveTableId ? 'visible' : 'hidden' }}>
+        <SpreadsheetToolbar
+          table={pageActiveTableId ? activeTableRef.current : null}
+          sel={pageActiveTableId ? sheetActiveSel : null}
+          onChange={t => {
+            if (activeSetTableRef.current) {
+              activeSetTableRef.current(t)
+              activeTableRef.current = t
+              setSheetTick(n => n + 1)
+            }
+          }}
+          onSelChange={r => setSheetActiveSel(r)}
+          color={config.primaryColor}
+        />
+      </div>
       </div>{/* end sticky wrapper */}
 
       {/* ── Canvas ── */}
