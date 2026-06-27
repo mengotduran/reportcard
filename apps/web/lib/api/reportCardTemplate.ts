@@ -36,6 +36,8 @@ export interface TemplateConfig {
     showLegend?: boolean
     deanLabel?: string
     registrarLabel?: string
+    reportTitle?: string
+    academicYearLabel?: string
   }
 }
 

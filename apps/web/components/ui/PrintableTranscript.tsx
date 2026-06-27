@@ -166,6 +166,8 @@ export interface PrintableTranscriptProps {
   showLegend?: boolean
   deanLabel?: string
   registrarLabel?: string
+  reportTitle?: string
+  academicYearLabel?: string
 }
 
 export function PrintableTranscript({
@@ -176,6 +178,8 @@ export function PrintableTranscript({
   showLegend = true,
   deanLabel = "Dean of Studies' Signature",
   registrarLabel = "Registrar's Signature",
+  reportTitle = 'Annual Transcript',
+  academicYearLabel = 'Academic Year',
 }: PrintableTranscriptProps) {
   const { student, school, session, reportCards, maxScore, gradingScale } = data
   const classificationBands: ClassificationBand[] =
@@ -232,9 +236,9 @@ export function PrintableTranscript({
         <h1 style={{ fontSize: '20px', fontWeight: 'bold', margin: '0 0 2px', color: primaryColor, textTransform: 'uppercase' }}>
           {school.name}
         </h1>
-        <div style={{ fontSize: '11px', color: '#555', marginBottom: '6px' }}>Academic Year: {session}</div>
+        <div style={{ fontSize: '11px', color: '#555', marginBottom: '6px' }}>{academicYearLabel}: {session}</div>
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '8px 0 0', letterSpacing: '3px', textTransform: 'uppercase', color: primaryColor }}>
-          Annual Transcript
+          {reportTitle}
         </h2>
       </div>
 

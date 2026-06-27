@@ -16,7 +16,7 @@ export default function AnnualTranscriptPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [primaryColor, setPrimaryColor] = useState('#1e3a5f')
-  const [transcriptConfig, setTranscriptConfig] = useState<{ showGradeSystem?: boolean; showClassification?: boolean; showLegend?: boolean; deanLabel?: string; registrarLabel?: string }>({})
+  const [transcriptConfig, setTranscriptConfig] = useState<{ showGradeSystem?: boolean; showClassification?: boolean; showLegend?: boolean; deanLabel?: string; registrarLabel?: string; reportTitle?: string; academicYearLabel?: string }>({})
   const [printing, setPrinting] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
 
@@ -118,6 +118,8 @@ export default function AnnualTranscriptPage() {
             showLegend={transcriptConfig.showLegend ?? true}
             deanLabel={transcriptConfig.deanLabel}
             registrarLabel={transcriptConfig.registrarLabel}
+            reportTitle={transcriptConfig.reportTitle}
+            academicYearLabel={transcriptConfig.academicYearLabel}
           />
         </div>
       </div>

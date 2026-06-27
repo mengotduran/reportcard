@@ -1535,7 +1535,71 @@ export default function ReportCardDesignPage() {
         </button>
       </div>{/* end main row */}
 
-      {/* Second row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
+      {/* Second row: transcript settings — shown only in transcript mode */}
+      {isTranscript && (
+        <div className="py-2 border-t border-border flex items-start gap-4 flex-wrap">
+          {/* Report title */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-muted-foreground whitespace-nowrap">Title</label>
+            <input type="text"
+              value={tc.reportTitle ?? ''}
+              onChange={e => setTc({ reportTitle: e.target.value })}
+              placeholder="Annual Transcript"
+              className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-40"
+            />
+          </div>
+
+          {/* Academic year label */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-muted-foreground whitespace-nowrap">Year label</label>
+            <input type="text"
+              value={tc.academicYearLabel ?? ''}
+              onChange={e => setTc({ academicYearLabel: e.target.value })}
+              placeholder="Academic Year"
+              className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-32"
+            />
+          </div>
+
+          <div className="border-l border-border pl-4 flex items-center gap-3">
+            {([
+              ['showGradeSystem', 'Grade System'],
+              ['showClassification', 'Classification'],
+              ['showLegend', 'Legend'],
+            ] as const).map(([key, label]) => (
+              <label key={key} className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none whitespace-nowrap">
+                <input type="checkbox"
+                  checked={tc[key] ?? true}
+                  onChange={e => setTc({ [key]: e.target.checked })}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+
+          <div className="border-l border-border pl-4 flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-muted-foreground whitespace-nowrap">Dean label</label>
+              <input type="text"
+                value={tc.deanLabel ?? ''}
+                onChange={e => setTc({ deanLabel: e.target.value })}
+                placeholder="Dean of Studies' Signature"
+                className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-44"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-muted-foreground whitespace-nowrap">Registrar label</label>
+              <input type="text"
+                value={tc.registrarLabel ?? ''}
+                onChange={e => setTc({ registrarLabel: e.target.value })}
+                placeholder="Registrar's Signature"
+                className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-44"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Third row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
       <div className="py-1.5 border-t border-border" style={{ color: '#374151', visibility: pageActiveTableId ? 'visible' : 'hidden' }}>
         <SpreadsheetToolbar
           table={pageActiveTableId ? activeTableRef.current : null}
@@ -1598,6 +1662,8 @@ export default function ReportCardDesignPage() {
               showLegend={tc.showLegend ?? true}
               deanLabel={tc.deanLabel}
               registrarLabel={tc.registrarLabel}
+              reportTitle={tc.reportTitle}
+              academicYearLabel={tc.academicYearLabel}
             />
           )}
 
@@ -1728,47 +1794,6 @@ export default function ReportCardDesignPage() {
             </div>
           </button>
 
-          {/* Transcript-specific settings */}
-          {isTranscript && (
-            <div className="mt-4 space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Sections</p>
-              {([
-                ['showGradeSystem', 'Grade System'],
-                ['showClassification', 'Classification'],
-                ['showLegend', 'Legend'],
-              ] as const).map(([key, label]) => (
-                <label key={key} className="flex items-center gap-2 text-xs text-foreground cursor-pointer select-none">
-                  <input type="checkbox"
-                    checked={tc[key] ?? true}
-                    onChange={e => setTc({ [key]: e.target.checked })}
-                    className="rounded border-border"
-                  />
-                  {label}
-                </label>
-              ))}
-              <div className="pt-2 space-y-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Labels</p>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Dean</p>
-                  <input type="text"
-                    value={tc.deanLabel ?? ''}
-                    onChange={e => setTc({ deanLabel: e.target.value })}
-                    placeholder="Dean of Studies' Signature"
-                    className="w-full border border-border rounded px-2 py-1 text-xs text-foreground bg-background"
-                  />
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Registrar</p>
-                  <input type="text"
-                    value={tc.registrarLabel ?? ''}
-                    onChange={e => setTc({ registrarLabel: e.target.value })}
-                    placeholder="Registrar's Signature"
-                    className="w-full border border-border rounded px-2 py-1 text-xs text-foreground bg-background"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
