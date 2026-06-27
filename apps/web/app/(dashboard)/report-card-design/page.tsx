@@ -336,6 +336,8 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; update: (s: HeaderSec) => void }) {
   const t = useT()
   const logoSize = sec.logoSize || 60
+  const [leftVer,  setLeftVer]  = useState(0)
+  const [rightVer, setRightVer] = useState(0)
 
   const LogoEl = schoolLogo ? (
     <img src={schoolLogo} alt="logo" style={{ width: logoSize, height: logoSize, objectFit: 'contain', borderRadius: 4, display: 'block' }} />
@@ -410,8 +412,9 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
             onChange={e => {
               const on = e.target.checked
               const patch: Partial<HeaderSec> = { officialHeader: on }
-              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF TECHNOLOGY AND MANAGEMENT\n${schoolName}\nINSTITUT SUPERIEUR EN TECHNOLOGIE ET EN GESTION`
+              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${schoolName}\nINSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION`
               if (on && !sec.rightText) patch.rightText = `REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\nREPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTRY OF HIGHER EDUCATION\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR`
+              if (on && !sec.subtitle) patch.subtitle = `Email: school@mail.com  |  WEB: www.school.com  |  TEL: +000 000 000 000  |  P.O.Box 000 City, Country`
               update({ ...sec, ...patch })
             }} />
           {t('Official (logo center)')}
@@ -424,65 +427,51 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
         (() => {
           const leftLines  = (sec.leftText  ?? '').split('\n')
           const rightLines = (sec.rightText ?? '').split('\n')
-          // Detect the acronym line in leftText: short, all-caps
-          const isAcronym  = (l: string) => /^[A-Z0-9\s.]{1,10}$/.test(l.trim()) && l.trim().length > 0 && l.trim().length <= 10
-          // Detect the "ministry block" in rightText: lines after the first blank separator
-          const blankIdx   = rightLines.findIndex(l => l.trim() === '')
-          const renderLeft = () => (
-            <div style={{ textAlign: 'left' }}>
-              {leftLines.map((line, i) => (
-                <div key={i} style={{ lineHeight: 1.35, minHeight: line.trim() ? undefined : 6,
-                  fontSize: isAcronym(line) ? 13 : 9.5,
-                  fontWeight: 'bold',
-                  letterSpacing: isAcronym(line) ? 1 : 0,
-                }}>
-                  {line || ''}
-                </div>
-              ))}
-            </div>
-          )
-          const renderRight = () => (
-            <div style={{ textAlign: 'right' }}>
-              {rightLines.map((line, i) => {
-                const inMinistryBlock = blankIdx >= 0 && i > blankIdx
-                const isMotto = /[a-z]/.test(line)
-                return (
-                  <div key={i} style={{ lineHeight: 1.35, minHeight: line.trim() ? undefined : 6,
-                    fontSize: inMinistryBlock ? 8.5 : 9.5,
-                    fontWeight: inMinistryBlock ? 'normal' : 'bold',
-                    fontStyle: isMotto ? 'italic' : 'normal',
-                  }}>
-                    {line || ''}
-                  </div>
-                )
-              })}
-            </div>
-          )
+          const midIdx   = Math.floor(leftLines.length / 2)
+          const blankIdx = rightLines.findIndex(l => l.trim() === '')
+
+          const toHtml = (lines: string[], align: 'left'|'right') =>
+            lines.map((line, i) => {
+              const big     = align === 'left' && i === midIdx
+              const inMin   = align === 'right' && blankIdx >= 0 && i > blankIdx
+              const italic  = align === 'right' && /[a-z]/.test(line)
+              const fs      = big ? 14 : inMin ? 8.5 : 10
+              const fw      = inMin ? 'normal' : 'bold'
+              const fi      = italic ? 'italic' : 'normal'
+              const lh      = big ? 1.1 : 1.45
+              const ls      = big ? '1px' : '0'
+              const mg      = big ? '3px 0' : '0'
+              const mh      = line.trim() ? '' : `min-height:${align==='left'?4:5}px;`
+              const txt     = line || '\u00A0'
+              return `<div style="font-family:Arial,sans-serif;font-size:${fs}px;font-weight:${fw};font-style:${fi};line-height:${lh};letter-spacing:${ls};margin:${mg};text-align:${align};${mh}">${txt}</div>`
+            }).join('')
+
           return (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 12, alignItems: 'center', marginBottom: 4 }}>
-                {/* Left editable block */}
-                <div style={{ position: 'relative' }}>
-                  {renderLeft()}
-                  <textarea value={sec.leftText ?? ''} onChange={e => update({ ...sec, leftText: e.target.value })}
-                    style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'text', resize: 'none', background: 'transparent', border: 'none', outline: 'none' }} />
-                </div>
-                {/* Center logo */}
-                <div style={{ textAlign: 'center' }}>{LogoEl}</div>
-                {/* Right editable block */}
-                <div style={{ position: 'relative' }}>
-                  {renderRight()}
-                  <textarea value={sec.rightText ?? ''} onChange={e => update({ ...sec, rightText: e.target.value })}
-                    style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'text', resize: 'none', background: 'transparent', border: 'none', outline: 'none' }} />
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'start', marginBottom: 4 }}>
+                <div
+                  key={leftVer}
+                  contentEditable suppressContentEditableWarning
+                  dangerouslySetInnerHTML={{ __html: toHtml(leftLines, 'left') }}
+                  onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
+                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
+                  title="Click to edit"
+                />
+                <div style={{ textAlign: 'center', alignSelf: 'center' }}>{LogoEl}</div>
+                <div
+                  key={rightVer + 10000}
+                  contentEditable suppressContentEditableWarning
+                  dangerouslySetInnerHTML={{ __html: toHtml(rightLines, 'right') }}
+                  onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
+                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
+                  title="Click to edit"
+                />
               </div>
-              {/* Contact line: subtitle */}
               <div style={{ textAlign: 'center', fontSize: 8.5, color: '#444', borderTop: `1px solid ${color}22`, paddingTop: 3, marginTop: 2 }}>
                 <ET value={sec.subtitle} onChange={v => update({ ...sec, subtitle: v })}
                   placeholder="Email: school@mail.com  |  WEB: www.school.com  |  TEL: 000000000  |  P.O.Box 000 City, Country"
                   style={{ display: 'block', fontSize: 8.5, color: '#444' }} />
               </div>
-              {/* Report title */}
               <div style={{ textAlign: 'center', marginTop: 4 }}>
                 <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                   style={{ display: 'block', fontSize: 14, fontWeight: 'bold', color, letterSpacing: 3, textTransform: 'uppercase' }} />
@@ -1095,14 +1084,15 @@ const TEMPLATES = [
 ]
 
 const ADD_OPTIONS = [
-  { type: 'text_block' as const, label: '📝 Text Block' },
-  { type: 'divider'    as const, label: '── Divider' },
-  { type: 'remarks'    as const, label: '💬 Remarks' },
-  { type: 'signatures' as const, label: '✍ Signatures' },
-  { type: 'summary'    as const, label: '📊 Summary Boxes' },
+  { type: 'header'         as const, label: '🏷 Header' },
   { type: 'student_info'   as const, label: '👤 Student Info' },
   { type: 'marks_table'    as const, label: '📋 Marks Table' },
+  { type: 'summary'        as const, label: '📊 Summary Boxes' },
   { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
+  { type: 'remarks'        as const, label: '💬 Remarks' },
+  { type: 'signatures'     as const, label: '✍ Signatures' },
+  { type: 'text_block'     as const, label: '📝 Text Block' },
+  { type: 'divider'        as const, label: '── Divider' },
 ]
 
 function newSection(type: LayoutSection['type'], color: string, schoolType?: string): LayoutSection {
@@ -1604,7 +1594,7 @@ export default function ReportCardDesignPage() {
             style={{ top: addMenuCoords.top, left: addMenuCoords.left }}>
             {ADD_OPTIONS.map(o => (
               <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition">
+                className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition whitespace-nowrap">
                 {tr(o.label)}
               </button>
             ))}
