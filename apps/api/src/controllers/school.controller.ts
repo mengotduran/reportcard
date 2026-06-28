@@ -18,6 +18,24 @@ export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
   }
 }
 
+export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const { name, phone, address, acronym, batch } = req.body
+    const data: Record<string, unknown> = {}
+    if (name     !== undefined) data.name    = String(name).trim()
+    if (phone    !== undefined) data.phone   = String(phone).trim() || null
+    if (address  !== undefined) data.address = String(address).trim() || null
+    if (acronym  !== undefined) data.acronym = String(acronym).trim().toUpperCase() || null
+    if (batch    !== undefined) data.batch   = batch === null || batch === '' ? null : Number(batch)
+    const school = await prisma.school.update({ where: { id: schoolId }, data })
+    res.json({ school })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const uploadLogo = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!

@@ -264,8 +264,11 @@ export default function AdminReportCardDetail() {
       setTeachers(teacherData.teachers)
       if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
       // Compulsory subjects + optional ones the student actually took (has an entry).
+      // A course scoped to one semester (university) only counts for that
+      // semester; a subject with no term (primary/secondary) always counts.
       const classSubjects = subjectData.subjects.filter((s) =>
         s.classLevel === rc.student.classLevel
+        && (s.term == null || s.term === rc.term.name)
         && (s.compulsory !== false || rc.entries.some((e: any) => e.subject.id === s.id)))
       setSubjects(classSubjects)
       // Fetch attribution (which teacher / class master is blocking)
@@ -657,8 +660,8 @@ export default function AdminReportCardDetail() {
                       )}
                     </View>
                   </View>
-                  {entry?.remarks ? (
-                    <Text style={styles.scoreRemarks}>"{entry.remarks}"</Text>
+                  {gr?.remark ? (
+                    <Text style={styles.scoreRemarks}>"{gr.remark}"</Text>
                   ) : null}
                 </View>
               )

@@ -2,12 +2,14 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, deleteStudentApi } from '@/lib/api/students'
+import {
+  getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, StudentStatus,
+  downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult,
+} from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, Trash2, Pencil, X, Wallet, Download } from 'lucide-react'
-import ConfirmModal from '@/components/ui/ConfirmModal'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
@@ -15,26 +17,39 @@ import { usePagination } from '@/lib/usePagination'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
 import { getFeesOverviewApi, formatXAF, FeeOverviewRow } from '@/lib/api/fees'
-import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
+import { buildCsv, saveCsv, saveBlob, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
 
 interface Student {
   id: string; name: string; studentId: string
   classLevel: string; gender?: string; guardianName?: string
   guardianPhone?: string; guardianEmail?: string
+  status?: StudentStatus
+}
+
+const STATUS_TABS: { value: StudentStatus; label: string }[] = [
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'DISABLED', label: 'Disabled' },
+  { value: 'DISMISSED', label: 'Dismissed' },
+]
+const STATUS_BADGE: Record<StudentStatus, string> = {
+  ACTIVE: 'bg-emerald-100 text-emerald-700',
+  DISABLED: 'bg-amber-100 text-amber-700',
+  DISMISSED: 'bg-red-100 text-red-700',
 }
 
 const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '' }
 
 export default function StudentsPage() {
   const router = useRouter()
-  const { isAuthenticated, activeSession } = useAuthStore()
+  const { isAuthenticated, activeSession, setActiveSession } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const [students, setStudents] = useState<Student[]>([])
   const [filterClasses, setFilterClasses] = useState<string[]>([])
   const [definedClasses, setDefinedClasses] = useState<ClassLevel[]>([])
   const [activeClass, setActiveClass] = useState('all')
+  const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -42,12 +57,20 @@ export default function StudentsPage() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  const [statusTarget, setStatusTarget] = useState<Student | null>(null)
+  const [newStatus, setNewStatus] = useState<StudentStatus>('ACTIVE')
+  const [statusSaving, setStatusSaving] = useState(false)
   const [feesTarget, setFeesTarget] = useState<{ id: string; name: string } | null>(null)
   const [feesByStudent, setFeesByStudent] = useState<Record<string, FeeOverviewRow>>({})
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
   const [exporting, setExporting] = useState(false)
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
+  const [importModalOpen, setImportModalOpen] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importPreview, setImportPreview] = useState<ImportPreviewResult | null>(null)
+  const [importPreviewing, setImportPreviewing] = useState(false)
+  const [importCommitting, setImportCommitting] = useState(false)
+  const [importError, setImportError] = useState('')
   const [activeTermId, setActiveTermId] = useState<string>('')
 
   useEffect(() => {
@@ -106,13 +129,16 @@ export default function StudentsPage() {
   // The table shows the (active) student roster filtered by class + search. The
   // term chips don't change the roster (a class's students are the same across
   // terms) — they choose how the EXPORT is split into per-term files.
-  const fetchStudents = async (classFilter = activeClass, searchVal = search) => {
+  // Disabled/Dismissed is a status filter, not a year filter — it bypasses the
+  // year-aware roster entirely (see getStudents in student.controller.ts).
+  const fetchStudents = async (classFilter = activeClass, searchVal = search, statusVal = statusFilter) => {
     try {
       setLoading(true)
-      const params: { classLevel?: string; search?: string; session?: string } = {}
+      const params: { classLevel?: string; search?: string; session?: string; status?: string } = {}
       if (classFilter && classFilter !== 'all') params.classLevel = classFilter
       if (searchVal) params.search = searchVal
-      if (activeSession) params.session = activeSession
+      if (statusVal === 'ACTIVE') { if (activeSession) params.session = activeSession }
+      else params.status = statusVal
       const data = await getStudentsApi(params)
       setStudents(data.students)
     } catch { console.error('Failed to fetch students') }
@@ -126,12 +152,34 @@ export default function StudentsPage() {
     fetchFeesOverview()
   }, [activeSession])
 
+  const handleStatusFilter = (status: StudentStatus) => {
+    setStatusFilter(status)
+    setSearch('')
+    fetchStudents(activeClass, '', status)
+  }
+
   // The terms shown belong only to the active academic year.
   const visibleTerms = terms.filter((tm) => tm.session === activeSession)
   // If the selected term isn't in the active year, fall back to "All Terms".
   useEffect(() => {
     if (activeTermId && !visibleTerms.some((tm) => tm.id === activeTermId)) setActiveTermId('')
   }, [activeSession, terms])
+
+  // A newly created/imported student only shows up in this list while
+  // viewing the LIVE academic year — a past year's roster is scoped to
+  // students who already have a report card that session, which a freshly
+  // created student never has yet (see student.controller.ts getStudents).
+  // Switch the app-wide active year to the live one right after a successful
+  // create/import so the new student is actually visible, instead of
+  // silently "disappearing" if a past year happened to be selected.
+  const switchToLiveYearIfNeeded = (): string | null => {
+    const live = terms.find((tm) => tm.isCurrent)?.session
+    if (live && live !== activeSession) {
+      setActiveSession(live)
+      return live
+    }
+    return null
+  }
 
   const handleClassFilter = (cls: string) => {
     setActiveClass(cls)
@@ -203,7 +251,10 @@ export default function StudentsPage() {
         showToast(t('Student updated'))
       } else {
         await createStudentApi({ ...rest, classLevel })
-        showToast(t('Student added successfully'))
+        const switchedTo = switchToLiveYearIfNeeded()
+        showToast(switchedTo
+          ? `${t('Student added successfully')} — ${t('switched to the current academic year')} (${switchedTo})`
+          : t('Student added successfully'))
       }
       closeModal()
       fetchStudents(activeClass)
@@ -214,16 +265,98 @@ export default function StudentsPage() {
     } finally { setSaving(false) }
   }
 
-  const handleDeleteConfirm = async () => {
-    if (!deleteTarget) return
+  // Replaces the old silent "delete" (which never deleted anything — just set
+  // isActive: false with no visible status and no way back). See
+  // Student.status in schema.prisma.
+  const openStatusModal = (s: Student) => {
+    setStatusTarget(s)
+    setNewStatus(s.status ?? 'ACTIVE')
+  }
+
+  const closeStatusModal = () => setStatusTarget(null)
+
+  const handleStatusSave = async () => {
+    if (!statusTarget) return
+    setStatusSaving(true)
     try {
-      await deleteStudentApi(deleteTarget.id)
-      setDeleteTarget(null)
+      await setStudentStatusApi(statusTarget.id, newStatus)
+      showToast(`${statusTarget.name} — ${t(STATUS_TABS.find((s) => s.value === newStatus)?.label ?? newStatus)}`)
+      closeStatusModal()
       fetchStudents(activeClass)
       fetchFilterClasses()
-      showToast(t('Student deleted'))
     } catch {
-      showToast(t('Failed to delete student'), 'error')
+      showToast(t('Failed to update status'), 'error')
+    } finally {
+      setStatusSaving(false)
+    }
+  }
+
+  // Bulk import (transfer an existing Excel/CSV roster instead of one-at-a-time
+  // entry) — same flow for every school type, see lib/api/students.ts.
+  const openImportModal = () => {
+    setImportFile(null)
+    setImportPreview(null)
+    setImportError('')
+    setImportModalOpen(true)
+  }
+
+  const closeImportModal = () => {
+    setImportModalOpen(false)
+    setImportFile(null)
+    setImportPreview(null)
+    setImportError('')
+  }
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await downloadStudentImportTemplateApi()
+      saveBlob(blob, 'student-import-template.xlsx')
+    } catch {
+      showToast(t('Failed to download template'), 'error')
+    }
+  }
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null
+    setImportFile(file)
+    setImportPreview(null)
+    setImportError('')
+    if (!file) return
+    setImportPreviewing(true)
+    try {
+      const result = await previewStudentImportApi(file)
+      setImportPreview(result)
+    } catch (err: unknown) {
+      const e2 = err as { response?: { data?: { message?: string } } }
+      setImportError(e2.response?.data?.message || t('Failed to read that file. Make sure it is a valid .xlsx or .csv file.'))
+    } finally {
+      setImportPreviewing(false)
+    }
+  }
+
+  const handleImportCommit = async () => {
+    if (!importPreview || importPreview.valid.length === 0) return
+    setImportCommitting(true)
+    try {
+      const result = await commitStudentImportApi(importPreview.valid)
+      const parts = [`${t('Imported')} ${result.created} ${t('students')}`]
+      if (result.failed.length > 0) parts.push(`${result.failed.length} ${t('failed')}`)
+      if (result.feesRecorded > 0) parts.push(`${result.feesRecorded} ${t('fee payments recorded')}`)
+      if (result.created > 0) {
+        const switchedTo = switchToLiveYearIfNeeded()
+        if (switchedTo) parts.push(`${t('switched to the current academic year')} (${switchedTo})`)
+      }
+      if (result.feeWarning) parts.push(result.feeWarning)
+      showToast(parts.join(' · '), result.feeWarning ? 'error' : 'success')
+      closeImportModal()
+      fetchStudents(activeClass)
+      fetchFilterClasses()
+      fetchFeesOverview()
+    } catch (err: unknown) {
+      const e2 = err as { response?: { data?: { message?: string } } }
+      setImportError(e2.response?.data?.message || t('Failed to import students'))
+    } finally {
+      setImportCommitting(false)
     }
   }
 
@@ -293,7 +426,7 @@ export default function StudentsPage() {
     }
   }
 
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(students, 15, `${activeClass}|${search}`)
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(students, 15, `${activeClass}|${search}|${statusFilter}`)
 
   return (
     <div>
@@ -308,6 +441,10 @@ export default function StudentsPage() {
           <button onClick={handleExport} disabled={exporting}
             className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
             <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
+          </button>
+          <button onClick={openImportModal}
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+            <Upload size={16} /> {t('Import Students')}
           </button>
           <button onClick={openAdd}
             className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
@@ -331,6 +468,16 @@ export default function StudentsPage() {
           ))}
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="text-xs text-muted-foreground mr-1">{t('Status')}:</span>
+        {STATUS_TABS.map((tab) => (
+          <button key={tab.value} onClick={() => handleStatusFilter(tab.value)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${statusFilter === tab.value ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
+            {t(tab.label)}
+          </button>
+        ))}
+      </div>
 
       {visibleTerms.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -360,7 +507,9 @@ export default function StudentsPage() {
         ) : students.length === 0 ? (
           <div className="text-center py-12">
             <Users size={32} className="mx-auto mb-2 text-muted-foreground" />
-            <p className="text-muted-foreground text-sm">{t('No students yet.')}</p>
+            <p className="text-muted-foreground text-sm">
+              {statusFilter === 'ACTIVE' ? t('No students yet.') : t('No students with this status.')}
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -373,6 +522,7 @@ export default function StudentsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Gender')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Fees')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Status')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Actions')}</th>
               </tr>
             </thead>
@@ -401,6 +551,11 @@ export default function StudentsPage() {
                     })()}
                   </td>
                   <td className="px-4 py-3">
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[s.status ?? 'ACTIVE']}`}>
+                      {t(STATUS_TABS.find((tab) => tab.value === (s.status ?? 'ACTIVE'))?.label ?? 'Active')}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <button onClick={() => setFeesTarget({ id: s.id, name: s.name })} title={t('School Fees')}
                         className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 rounded transition">
@@ -410,9 +565,9 @@ export default function StudentsPage() {
                         className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => setDeleteTarget({ id: s.id, name: s.name })}
+                      <button onClick={() => openStatusModal(s)} title={t('Change Status')}
                         className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition">
-                        <Trash2 size={14} />
+                        <UserX size={14} />
                       </button>
                     </div>
                   </td>
@@ -524,6 +679,87 @@ export default function StudentsPage() {
         </div>
       )}
 
+      {importModalOpen && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-foreground text-lg">{t('Import Students')}</h3>
+              <button onClick={closeImportModal} className="text-muted-foreground hover:text-foreground">
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              {t('Already have a student list in Excel? Upload it here instead of adding students one at a time. You can also include a Fee Paid column for students who already paid part of their fees.')}
+            </p>
+
+            <button onClick={handleDownloadTemplate}
+              className="flex items-center gap-2 text-sm text-primary font-medium hover:underline mb-4">
+              <Download size={14} /> {t('Download template')}
+            </button>
+
+            <div>
+              <label className="block text-xs font-medium text-foreground mb-1">{t('Upload file (.xlsx or .csv)')}</label>
+              <input type="file" accept=".xlsx,.csv"
+                onChange={handleImportFileChange}
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+              {importFile && <p className="text-xs text-muted-foreground mt-1">{t('Selected:')} {importFile.name}</p>}
+            </div>
+
+            {importPreviewing && (
+              <p className="text-sm text-muted-foreground mt-4">{t('Reading file...')}</p>
+            )}
+
+            {importError && (
+              <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{importError}</div>
+            )}
+
+            {importPreview && !importPreviewing && (
+              <div className="mt-4 space-y-3">
+                {importPreview.headerError ? (
+                  <div className="p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">
+                    {importPreview.headerError}
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 text-sm text-foreground">
+                      <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                      {importPreview.valid.length} {t('students ready to import')}
+                    </div>
+                    {importPreview.errors.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 text-sm text-destructive mb-2">
+                          <AlertTriangle size={16} className="flex-shrink-0" />
+                          {importPreview.errors.length} {t('rows have problems and will be skipped')}
+                        </div>
+                        <div className="bg-muted rounded-lg border border-border max-h-40 overflow-y-auto">
+                          {importPreview.errors.map((e) => (
+                            <div key={e.row} className="px-3 py-2 text-xs text-muted-foreground border-b border-border last:border-0">
+                              {t('Row')} {e.row}: {e.reason}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-5">
+              <button type="button" onClick={closeImportModal}
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                {t('Cancel')}
+              </button>
+              <button type="button" onClick={handleImportCommit}
+                disabled={!importPreview || importPreview.valid.length === 0 || importCommitting}
+                className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
+                {importCommitting ? t('Importing...') : `${t('Import')} ${importPreview?.valid.length ?? 0} ${t('students')}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {feesTarget && (
         <StudentFeesModal
           studentId={feesTarget.id}
@@ -533,15 +769,45 @@ export default function StudentsPage() {
         />
       )}
 
-      <ConfirmModal
-        isOpen={!!deleteTarget}
-        title={t('Delete Student')}
-        message={`${t('Are you sure you want to delete')} ${deleteTarget?.name}? ${t('This cannot be undone.')}`}
-        confirmLabel={t('Delete')}
-        confirmColor="red"
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteTarget(null)}
-      />
+      {statusTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-foreground text-lg">{t('Change Status')}</h3>
+              <button onClick={closeStatusModal} className="text-muted-foreground hover:text-foreground">
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">{statusTarget.name}</p>
+            <div className="space-y-2 mb-5">
+              {STATUS_TABS.map((tab) => (
+                <label key={tab.value} className="flex items-center gap-3 cursor-pointer border border-border rounded-lg px-3 py-2.5 hover:bg-muted transition">
+                  <input type="radio" name="status" value={tab.value}
+                    checked={newStatus === tab.value}
+                    onChange={() => setNewStatus(tab.value)}
+                    className="accent-primary" />
+                  <span className="text-sm text-foreground">{t(tab.label)}</span>
+                </label>
+              ))}
+            </div>
+            {newStatus !== 'ACTIVE' && (
+              <p className="text-xs text-muted-foreground mb-4">
+                {t('A disabled or dismissed student is excluded from bulk report card printing and most active rosters. You can switch them back to Active at any time.')}
+              </p>
+            )}
+            <div className="flex gap-3">
+              <button type="button" onClick={closeStatusModal}
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                {t('Cancel')}
+              </button>
+              <button type="button" onClick={handleStatusSave} disabled={statusSaving}
+                className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
+                {statusSaving ? t('Saving...') : t('Save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

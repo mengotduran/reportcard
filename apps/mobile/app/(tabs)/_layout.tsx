@@ -13,7 +13,7 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
 export default function TabsLayout() {
-  const { isAuthenticated, _hasHydrated, user, logout, activeSession, setActiveSession } = useAuthStore()
+  const { isAuthenticated, _hasHydrated, user, school, logout, activeSession, setActiveSession } = useAuthStore()
   const { colors, isDark } = useTheme()
   const router = useRouter()
   const t = useT()
@@ -34,6 +34,7 @@ export default function TabsLayout() {
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   const handleLogout = () => { logout(); router.replace('/login') }
 
@@ -94,7 +95,7 @@ export default function TabsLayout() {
     return (
       <Tabs screenOptions={{ ...tabStyle, tabBarActiveTintColor: isClassMaster ? '#F03E2F' : colors.primary }}>
         <Tabs.Screen name="index" options={{ title: t('Home'), headerRight: () => logoutButton, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
-        <Tabs.Screen name="report-cards" options={{ title: isClassMaster ? t('My Classes') : t('Classes'), tabBarIcon: ({ color, size }) => <Ionicons name={isClassMaster ? 'chatbubble-ellipses-outline' : 'school-outline'} size={size} color={color} /> }} />
+        <Tabs.Screen name="report-cards" options={{ title: isClassMaster ? t(isUniversity ? 'My Departments' : 'My Classes') : t(isUniversity ? 'Departments' : 'Classes'), tabBarIcon: ({ color, size }) => <Ionicons name={isClassMaster ? 'chatbubble-ellipses-outline' : 'school-outline'} size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ href: null }} />
         <Tabs.Screen name="schools" options={{ href: null }} />
         <Tabs.Screen name="more" options={{ href: null }} />

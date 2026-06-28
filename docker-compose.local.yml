@@ -1,0 +1,74 @@
+# Single-device offline install: runs db + api + web entirely on one
+# machine via Docker, no cloud dependency. Usage:
+#   docker compose --env-file .env.local-install -f docker-compose.local.yml up --build -d
+#   docker compose --env-file .env.local-install -f docker-compose.local.yml down
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-reportcard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reportcard}
+      POSTGRES_DB: ${POSTGRES_DB:-reportcard_db}
+    volumes:
+      - reportcard_db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-reportcard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+      target: api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-reportcard}:${POSTGRES_PASSWORD:-reportcard}@db:5432/${POSTGRES_DB:-reportcard_db}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.local-install}
+      SUPERADMIN_SECRET: ${SUPERADMIN_SECRET:?Set SUPERADMIN_SECRET in .env.local-install}
+      PORT: 5000
+      UPLOAD_DIR: /data/uploads
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+    volumes:
+      - reportcard_uploads:/data/uploads
+    ports:
+      - "5000:5000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+      target: web
+      args:
+        NEXT_PUBLIC_API_URL: ${WEB_API_URL:?Set WEB_API_URL in .env.local-install, e.g. http://192.168.1.50:5000/api}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+  # phpMyAdmin-style web UI for browsing the database directly — click a
+  # table, see rows in a grid, edit cells, no SQL needed. Login: System =
+  # PostgreSQL, Server = db (pre-filled), then the POSTGRES_USER/PASSWORD/DB
+  # values from .env.local-install.
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    depends_on:
+      - db
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  reportcard_db_data:
+  reportcard_uploads:

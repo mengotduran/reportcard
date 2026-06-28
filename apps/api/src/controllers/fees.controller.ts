@@ -8,7 +8,7 @@ export type FeeStatus = 'COMPLETE' | 'PARTIAL' | 'UNPAID' | 'NONE'
  * The academic session fees are tracked against = the session of the current
  * term. Returns null when no current term is set (fees can't be scoped yet).
  */
-async function currentSession(schoolId: string): Promise<string | null> {
+export async function currentSession(schoolId: string): Promise<string | null> {
   const term = await prisma.term.findFirst({
     where: { schoolId, isCurrent: true },
     select: { session: true },

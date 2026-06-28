@@ -171,8 +171,11 @@ export default function ReportCardDetailScreen() {
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
     setReportCard(rc)
     setRemarks(rc.remarks || '')
+    // A course scoped to one semester (university) only counts for that
+    // semester; a subject with no term (primary/secondary) always counts.
     const classSubjects = subjectData.subjects.filter((s) =>
       s.classLevel === rc.student.classLevel
+      && (s.term == null || s.term === rc.term.name)
       && (s.compulsory !== false || rc.entries.some((e) => e.subject.id === s.id)))
     setSubjects(classSubjects)
     setEntries(
@@ -359,18 +362,6 @@ export default function ReportCardDetailScreen() {
                   <Text style={{ fontSize: 12, color: colors.textMuted }}>--</Text>
                 )}
               </View>
-              {isDraft && (
-                <TextInput
-                  style={styles.remarksInput}
-                  value={entry?.remarks ?? ''}
-                  onChangeText={(v) => updateRemarks(subject.id, v)}
-                  placeholder={t('Remark...')}
-                  placeholderTextColor="#9ca3af"
-                />
-              )}
-              {!isDraft && entry?.remarks ? (
-                <Text style={styles.remarksReadOnly}>{entry.remarks}</Text>
-              ) : null}
             </View>
           )
         })}

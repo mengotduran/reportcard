@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { getClasses, createClass, deleteClass, ClassLevel } from '@/lib/api/classes'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
 import { formatXAF } from '@/lib/api/fees'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
@@ -120,6 +121,10 @@ export default function ClassesScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
+  const { school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  // Universities call classes "departments" — same data/route, just different wording.
+  const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [classes, setClasses] = useState<ClassLevel[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -135,7 +140,7 @@ export default function ClassesScreen() {
       const data = await getClasses()
       setClasses(data.classLevels.sort((a, b) => a.order - b.order))
     } catch {
-      Alert.alert(t('Error'), t('Failed to load classes.'))
+      Alert.alert(t('Error'), tt('Failed to load classes.', 'Failed to load departments.'))
     }
   }, [])
 
@@ -152,7 +157,7 @@ export default function ClassesScreen() {
   const handleCreate = async () => {
     if (!newName.trim()) return
     if (feeAmount.trim() === '' || isNaN(Number(feeAmount)) || Number(feeAmount) < 0) {
-      Alert.alert(t('Validation'), t('Enter the class fee (use 0 if there is none).'))
+      Alert.alert(t('Validation'), tt('Enter the class fee (use 0 if there is none).', 'Enter the department fee (use 0 if there is none).'))
       return
     }
     setCreating(true)
@@ -165,7 +170,7 @@ export default function ClassesScreen() {
       setFeeAmount('150000')
       await fetchClasses()
     } catch (err: any) {
-      Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to create class.'))
+      Alert.alert(t('Error'), err?.response?.data?.message ?? tt('Failed to create class.', 'Failed to create department.'))
     } finally {
       setCreating(false)
     }
@@ -173,7 +178,7 @@ export default function ClassesScreen() {
 
   const handleDelete = (cls: ClassLevel) => {
     Alert.alert(
-      t('Delete Class'),
+      tt('Delete Class', 'Delete Department'),
       `${t('Delete')} "${cls.name}"? ${t('This may affect students and report cards.')}`,
       [
         { text: t('Cancel'), style: 'cancel' },
@@ -185,7 +190,7 @@ export default function ClassesScreen() {
               await deleteClass(cls.id)
               setClasses((prev) => prev.filter((c) => c.id !== cls.id))
             } catch {
-              Alert.alert(t('Error'), t('Failed to delete class.'))
+              Alert.alert(t('Error'), tt('Failed to delete class.', 'Failed to delete department.'))
             }
           },
         },
@@ -208,8 +213,8 @@ export default function ClassesScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="school-outline" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>{t('No class levels yet')}</Text>
-            <Text style={styles.emptySubText}>{t('Tap + to add a class')}</Text>
+            <Text style={styles.emptyText}>{tt('No class levels yet', 'No departments yet')}</Text>
+            <Text style={styles.emptySubText}>{tt('Tap + to add a class', 'Tap + to add a department')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -255,23 +260,23 @@ export default function ClassesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t('Add Class Level')}</Text>
+              <Text style={styles.modalTitle}>{tt('Add Class Level', 'Add Department')}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={22} color="#6b7280" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{t('Class Name')}</Text>
+            <Text style={styles.label}>{tt('Class Name', 'Department Name')}</Text>
             <TextInput
               style={styles.input}
               value={newName}
               onChangeText={setNewName}
-              placeholder={t('e.g. Form 1, Grade 7')}
+              placeholder={isUniversity ? t('e.g. HND Computer Science - Level 1') : t('e.g. Form 1, Grade 7')}
               placeholderTextColor="#9ca3af"
               autoFocus
             />
 
-            <Text style={styles.label}>{t('Max Score per Subject')}</Text>
+            <Text style={styles.label}>{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')}</Text>
             <TextInput
               style={styles.input}
               value={maxScore}
@@ -311,7 +316,7 @@ export default function ClassesScreen() {
             >
               {creating
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={styles.createBtnText}>{t('Create Class')}</Text>}
+                : <Text style={styles.createBtnText}>{tt('Create Class', 'Create Department')}</Text>}
             </TouchableOpacity>
           </View>
         </View>

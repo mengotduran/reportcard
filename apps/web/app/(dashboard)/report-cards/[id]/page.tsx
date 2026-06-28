@@ -10,13 +10,13 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
-import { getTemplateApi, TemplateConfig, TemplateName, DEFAULT_CONFIG } from '@/lib/api/reportCardTemplate'
-import { getGradingScaleApi, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
-import { gradeFromScore, gradeFromPercent } from '@/lib/grading'
+import { getTemplateApi, TemplateConfig, TemplateName, DEFAULT_CONFIG, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
+import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
+import { gradeFromScore } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
 
-interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number; compulsory?: boolean }
+interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number; credit?: number; compulsory?: boolean; term?: string | null }
 interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string }
 interface ReportCard {
   id: string
@@ -29,7 +29,7 @@ interface ReportCard {
   remarksSource: string | null
   marksEditGrantedTo: string | null
   remarksEditGrantedTo: string | null
-  student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string }
+  student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
   term: { id: string; name: string; session: string }
   school: { name: string; type: string; language?: string; logo?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
@@ -65,6 +65,10 @@ export default function ReportCardDetailPage() {
   const [showUnpublishModal, setShowUnpublishModal] = useState(false)
   const [templateConfig, setTemplateConfig] = useState<TemplateConfig>(DEFAULT_CONFIG)
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
+  const [studentCgpa, setStudentCgpa] = useState<number | null>(null)
+  const [subjectStats, setSubjectStats] = useState<Record<string, { min: number; avg: number; max: number }>>({})
+
   const [teachers, setTeachers] = useState<{ id: string; name: string; role: string }[]>([])
   const [grantMarksUserId, setGrantMarksUserId] = useState('')
   const [grantRemarksUserId, setGrantRemarksUserId] = useState('')
@@ -130,25 +134,34 @@ export default function ReportCardDetailPage() {
         getReportCardApi(String(params.id)),
         getSubjectsApi(),
         getTemplateApi().catch(() => ({ config: {} })),
-        getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES })),
+        getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: DEFAULT_CLASSIFICATION_BANDS, legendRows: [] })),
         getTeachersApi().catch(() => ({ teachers: [] })),
       ])
       setTeachers((teacherData.teachers ?? []).filter((t: any) => ['CLASS_TEACHER', 'CLASS_MASTER'].includes(t.role)))
       if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
+      if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
       if (tplData.config && Object.keys(tplData.config).length > 0) {
         const { TEMPLATE_DEFAULTS } = await import('@/lib/api/reportCardTemplate')
         const saved = tplData.config as Partial<TemplateConfig>
         const base = TEMPLATE_DEFAULTS[(saved.template ?? 'classic') as TemplateName]
         setTemplateConfig({ ...base, ...saved } as TemplateConfig)
+      } else {
+        // No saved design → use the section-type default (university gets the GPA transcript).
+        setTemplateConfig(getDefaultLayoutForType(rc.school?.type) as TemplateConfig)
       }
+      if (rc.cgpa != null) setStudentCgpa(rc.cgpa)
       setReportCard(rc)
+      if (rc.subjectStats) setSubjectStats(rc.subjectStats)
       setGeneralRemarks(rc.remarks || '')
       setGeneralRemarksFr(rc.remarksFr || '')
       if (isAdmin) getReadinessDetailApi(String(params.id)).then(setReadiness).catch(() => {})
       // Show compulsory subjects + optional ones only when the student took them
       // (i.e. a report-card entry exists). Optional-not-taken are omitted.
+      // A course scoped to one semester (university) only counts for that
+      // semester; a subject with no term (primary/secondary) always counts.
       const classSubjects = subjectData.subjects.filter(
         (s: Subject) => s.classLevel === rc.student.classLevel
+          && (s.term == null || s.term === rc.term.name)
           && (s.compulsory !== false || rc.entries.some((e: any) => e.subject.id === s.id))
       )
       setSubjects(classSubjects)
@@ -515,7 +528,11 @@ export default function ReportCardDetailPage() {
                         }
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm text-muted-foreground dark:text-muted-foreground">{entry?.remarks || '—'}</span>
+                        <span className="text-sm text-muted-foreground dark:text-muted-foreground">
+                          {entry?.seq1Score == null || entry?.seq2Score == null
+                            ? '—'
+                            : gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges).remark || '—'}
+                        </span>
                       </td>
                     </tr>
                   )
@@ -638,6 +655,10 @@ export default function ReportCardDetailPage() {
           average={average}
           position={reportCard.position}
           config={templateConfig}
+          gradeBands={gradingRanges}
+          classificationBands={classificationBands}
+          cgpa={studentCgpa ?? undefined}
+          subjectStats={subjectStats}
         />
       </div>
     </div>

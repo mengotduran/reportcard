@@ -329,6 +329,95 @@ Auto-recalculated for all students in the same class/term every time any teacher
 
 ---
 
+### University GPA Algorithm (CITEC-style, /100 marks)
+
+University schools use a **different grading system** from primary/secondary:
+
+- Marks are entered **out of 100** (CA /30 + Exam /70 = /100). `ClassLevel.maxScore = 100`.
+- There are no coefficients — instead each course has a **Credit** value (`Subject.credit`).
+- There are no Seq1/Seq2 sequences — a single `score` (the total /100) is stored.
+
+#### Step 1 — Grade Point lookup
+
+The **Grade Point (GP)** is read from the school's grading scale (the `/grading-scale` page). Default scale:
+
+| Mark /100 | Grade | Grade Point (GP) |
+|-----------|-------|-----------------|
+| 90 – 100  | A+    | 4.00 |
+| 80 – 89   | A     | 3.70 |
+| 70 – 79   | B+    | 3.30 |
+| 60 – 69   | B     | 3.00 |
+| 55 – 59   | C+    | 2.30 |
+| 50 – 54   | C     | 2.00 |
+| 45 – 49   | D+    | 1.50 |
+| 40 – 44   | D     | 1.30 |
+|  0 – 39   | F     | 0.00 |
+
+#### Step 2 — Weighted Point
+
+```
+Weighted Point (WP) = Credit × Grade Point
+```
+
+**Example**: Course with Credit=14, Mark=75 → GP=3.30 → WP = 14 × 3.30 = 46.20
+
+#### Step 3 — Semester GPA
+
+```
+Semester GPA = Σ(WP for all courses in semester) / Σ(Credits for all courses in semester)
+```
+
+All courses registered in the semester are included, **including failed courses (F, GP=0)**.
+
+#### Step 4 — CGPA (Cumulative GPA)
+
+```
+CGPA = Σ(WP for ALL courses, both semesters) / Σ(Credits for ALL courses, both semesters)
+```
+
+Again, every registered course (pass or fail) is included — this matches standard university practice.
+
+#### Step 5 — Overall Credits Earned
+
+```
+Overall Credits Earned = Σ(all credits registered, both semesters)
+```
+
+This is total registered credits, **not** just passed credits. The transcript prints this as a summary statistic.
+
+#### Step 6 — Classification
+
+The CGPA maps to a classification (shown as the transcript "REMARK"):
+
+| CGPA Range  | Classification  |
+|-------------|----------------|
+| 3.60 – 4.00 | Distinction    |
+| 2.80 – 3.59 | Upper Credit   |
+| 2.40 – 2.79 | Lower Credit   |
+| 2.00 – 2.39 | Pass           |
+| 0.00 – 1.99 | Fail           |
+
+#### Verification example (from CITEC real transcript)
+
+- Semester 1: Σ(WP) = 153.7, Σ(Credits) = 60 → Sem1 GPA = 153.7/60 = 2.56
+- Semester 2: Σ(WP) = 157.4, Σ(Credits) = 60 → Sem2 GPA = 157.4/60 = 2.62
+- CGPA = (153.7 + 157.4) / (60 + 60) = 311.1 / 120 = **2.59 → Lower Credit** ✓
+
+#### Annual Transcript
+
+The annual transcript is a separate print format that combines both semesters. It is accessed from the report-cards list via the scroll icon (university schools only) next to each student's row. The transcript page is at `/report-cards/transcript/[studentId]?session=XXXX/XXXX`.
+
+The transcript shows:
+1. School header + student info (name, matricule, department, session, sex)
+2. **First Semester table**: CODE | TITLE | CREDIT | MARK /100 | GRADE | GP | WP | REMARK
+3. Per-semester totals row + Semester GPA
+4. **Second Semester table** (same columns)
+5. Bottom section (3 side-by-side panels): Grade System table · Classification table · Legend
+6. Overall summary: Credits Earned + CGPA + Remark classification
+7. Signature lines: Dean of Studies + Registrar
+
+---
+
 ## 8. Subjects & Coefficients
 
 Each subject has:

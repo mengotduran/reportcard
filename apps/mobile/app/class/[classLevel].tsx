@@ -95,11 +95,13 @@ export default function ClassScreen() {
   useFocusEffect(useCallback(() => {
     getSubjects()
       .then((data) => {
-        const filtered = data.subjects.filter((s) => s.classLevel === decodedClass)
+        // A course scoped to one semester (university) only counts for that
+        // semester; a subject with no term (primary/secondary) always counts.
+        const filtered = data.subjects.filter((s) => s.classLevel === decodedClass && (s.term == null || s.term === termName))
         setSubjects(filtered)
       })
       .finally(() => setLoading(false))
-  }, [decodedClass]))
+  }, [decodedClass, termName]))
 
   return (
     <View style={styles.container}>

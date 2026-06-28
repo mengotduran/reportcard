@@ -4,7 +4,7 @@ import {
   saveEntries, updateRemarks, generateRemarks, publishReportCard, unpublishReportCard,
   grantEditPermission, revokeEditPermission, bulkPublish,
   deleteReportCard, getClassOverview, getClassReadiness, getReadinessDetail,
-  getMarksExport
+  getMarksExport, getStudentTranscript
 } from '../controllers/reportcard.controller'
 import { protect, restrictTo } from '../middleware/auth'
 
@@ -12,6 +12,7 @@ const router = Router()
 
 router.use(protect)
 router.get('/class-overview', getClassOverview)
+router.get('/student/:studentId/transcript', getStudentTranscript)
 router.get('/marks-export', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), getMarksExport)
 router.get('/class-readiness', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), getClassReadiness)
 router.get('/:id/readiness-detail', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), getReadinessDetail)

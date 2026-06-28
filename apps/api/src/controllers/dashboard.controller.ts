@@ -146,7 +146,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       // No terms yet — fall back to the live roster + school-wide counts.
       const [students, teachers, subjects] = await Promise.all([
         prisma.student.count({ where: { schoolId, isActive: true } }),
-        prisma.user.count({ where: { schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] } } }),
+        prisma.user.count({ where: { schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] } } }),
         prisma.subject.count({ where: { schoolId } }),
       ])
       res.json({ students, teachers, reportCards: 0, subjects, session: null })
@@ -167,7 +167,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       prisma.subject.count({ where: { schoolId, classLevel: { in: classLevels } } }),
       prisma.user.count({
         where: {
-          schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] },
+          schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] },
           teacherSubjects: { some: { subject: { classLevel: { in: classLevels } } } },
         },
       }),

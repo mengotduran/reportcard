@@ -69,7 +69,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
   const isClassMaster = user?.role === 'CLASS_MASTER'
-  const navItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
+  const baseNavItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
+  // Universities use different wording for the same routes/data — just relabel the nav.
+  // Keyed by label (not href) since "Classes" appears on multiple hrefs across the
+  // admin/teacher/class-master nav arrays above, all meaning the same ClassLevel entity.
+  const UNIVERSITY_NAV_LABELS: Record<string, string> = {
+    'Terms': 'Semesters',
+    'Subjects': 'Courses',
+    'Classes': 'Departments',
+    'My Class': 'My Department',
+  }
+  const navItems = school?.type === 'UNIVERSITY'
+    ? baseNavItems.map((item) => UNIVERSITY_NAV_LABELS[item.label] ? { ...item, label: UNIVERSITY_NAV_LABELS[item.label] } : item)
+    : baseNavItems
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 

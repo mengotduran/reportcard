@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { getTeachersApi, createTeacherApi, updateTeacherApi, deleteTeacherApi, getTeacherSubjectsApi, assignTeacherSubjectsApi } from '@/lib/api/teachers'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getClassLevelsApi } from '@/lib/api/classLevels'
+import { useAuthStore } from '@/lib/store/auth.store'
 import { School, Plus, Trash2, X, Eye, EyeOff, BookOpen, Info, Pencil, KeyRound } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
@@ -13,7 +14,7 @@ import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 
 interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string }
-interface Subject { id: string; name: string; classLevel: string }
+interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
 const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '' }
 
@@ -33,9 +34,13 @@ const roleColors: Record<string, string> = {
 export default function TeachersPage() {
   const { toast, showToast, hideToast } = useToast()
   const tr = useT()
+  const { school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [allSubjects, setAllSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<string[]>([])
+  const [availableTerms, setAvailableTerms] = useState<string[]>([])
+  const [selectedTerm, setSelectedTerm] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState(emptyForm)
@@ -58,14 +63,34 @@ export default function TeachersPage() {
   const [reassignedInfo, setReassignedInfo] = useState<string[]>([])
 
   useEffect(() => { fetchAll() }, [])
+  // Re-fetch teachers when the semester tab changes (but not on the initial
+  // mount — fetchAll already loads teachers for the first term).
+  const [termInitialised, setTermInitialised] = useState(false)
+  useEffect(() => {
+    if (!selectedTerm || !termInitialised) return
+    getTeachersApi({ term: selectedTerm }).then((d) => setTeachers(d.teachers)).catch(() => {})
+  }, [selectedTerm])
 
   const fetchAll = async () => {
     try {
       setLoading(true)
-      const [td, sd, clData] = await Promise.all([getTeachersApi(), getSubjectsApi(), getClassLevelsApi()])
-      setTeachers(td.teachers)
+      const [sd, clData] = await Promise.all([getSubjectsApi(), getClassLevelsApi()])
       setAllSubjects(sd.subjects)
       setClassLevels(clData.classLevels.sort((a: any, b: any) => a.order - b.order).map((cl: any) => cl.name))
+      // For university, derive available semesters from the subjects list and
+      // load teachers for the first semester right away.
+      if (isUniversity) {
+        const terms = [...new Set((sd.subjects as Subject[]).map((s) => s.term).filter(Boolean))] as string[]
+        setAvailableTerms(terms)
+        const first = terms[0] ?? ''
+        setSelectedTerm(first)
+        const td = await getTeachersApi(first ? { term: first } : undefined)
+        setTeachers(td.teachers)
+        setTermInitialised(true)
+      } else {
+        const td = await getTeachersApi()
+        setTeachers(td.teachers)
+      }
     } catch {
       showToast(tr('Failed to load data'), 'error')
     } finally {
@@ -194,7 +219,13 @@ export default function TeachersPage() {
     }
   }
 
-  const grouped = allSubjects.reduce<Record<string, Subject[]>>((acc, s) => {
+  // For university: only show courses from the selected semester in the
+  // subject-assignment modal — prevents assigning "First Semester" courses
+  // to a "Second Semester" teacher by accident.
+  const modalSubjects = isUniversity && selectedTerm
+    ? allSubjects.filter((s) => s.term === selectedTerm)
+    : allSubjects
+  const grouped = modalSubjects.reduce<Record<string, Subject[]>>((acc, s) => {
     if (!acc[s.classLevel]) acc[s.classLevel] = []
     acc[s.classLevel].push(s)
     return acc
@@ -214,6 +245,22 @@ export default function TeachersPage() {
           <Plus size={16} /> {tr('Add Teacher')}
         </button>
       </div>
+
+      {/* Semester tabs — university only */}
+      {isUniversity && availableTerms.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {availableTerms.map((term) => (
+            <button key={term} onClick={() => setSelectedTerm(term)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
+                selectedTerm === term
+                  ? 'bg-primary text-white border-primary'
+                  : 'bg-card text-muted-foreground border-border hover:border-primary hover:text-primary'
+              }`}>
+              {term}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {loading ? (
@@ -262,7 +309,7 @@ export default function TeachersPage() {
                     <div className="flex items-center gap-2">
                       <button onClick={() => openAssignModal(t)}
                         className="flex items-center gap-1 text-xs text-primary bg-primary/10 hover:bg-primary/10 px-2 py-1.5 rounded transition">
-                        <BookOpen size={12} /> {tr('Subjects')}
+                        <BookOpen size={12} /> {tr(isUniversity ? 'Courses' : 'Subjects')}
                       </button>
                       <button onClick={() => openEditModal(t)}
                         className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('Edit')}>
@@ -356,7 +403,7 @@ export default function TeachersPage() {
           <div className="bg-card rounded-2xl w-full border border-transparent dark:border-zinc-800 w-full max-w-lg p-6 max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-foreground text-lg">{tr('Assign Subjects')}</h3>
+                <h3 className="font-semibold text-foreground text-lg">{isUniversity ? `${tr('Assign Courses')}${selectedTerm ? ` — ${selectedTerm}` : ''}` : tr('Assign Subjects')}</h3>
                 <p className="text-sm text-muted-foreground mt-0.5">{assignTarget.name} · {tr(roleLabels[assignTarget.role])}</p>
               </div>
               <button onClick={() => setAssignTarget(null)} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground"><X size={20} /></button>
@@ -409,7 +456,7 @@ export default function TeachersPage() {
                 className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{tr('Cancel')}</button>
               <button onClick={handleAssignSave} disabled={assigning || reassignedInfo.length > 0}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                {assigning ? tr('Saving...') : `${tr('Save (')}${assignedIds.length} ${tr('subjects')})`}
+                {assigning ? tr('Saving...') : `${tr('Save (')}${assignedIds.length} ${tr(isUniversity ? 'courses' : 'subjects')})`}
               </button>
             </div>
           </div>

@@ -202,7 +202,7 @@ export default function GradingScaleScreen() {
       </View>
 
       <View style={styles.tableHeader}>
-        <Text style={[styles.colHead, { flex: 1.2 }]}>{t('RANGE (%)')}</Text>
+        <Text style={[styles.colHead, { flex: 1.2 }]}>{t('RANGE (/20)')}</Text>
         <Text style={[styles.colHead, { width: 52 }]}>{t('GRADE')}</Text>
         <Text style={[styles.colHead, { flex: 1.5 }]}>{t('REMARK')}</Text>
         <Text style={[styles.colHead, { width: 52 }]}>{t('COLOR')}</Text>

@@ -9,15 +9,16 @@ export interface GradeResult {
 
 // score    - raw score (e.g. 15 out of 20)
 // maxScore - maximum possible score for this subject (e.g. 20)
-// ranges   - the school's custom grading scale
+// ranges   - the school's custom grading scale (defined on the /20 scale)
 export function gradeFromScore(score: number, maxScore: number, ranges: GradeRange[]): GradeResult {
-  const pct = maxScore > 0 ? (score / maxScore) * 100 : 0
-  return gradeFromPercent(pct, ranges)
+  const score20 = maxScore > 0 ? (score / maxScore) * 20 : 0
+  return gradeForScore20(score20, ranges)
 }
 
-export function gradeFromPercent(pct: number, ranges: GradeRange[]): GradeResult {
+/** Grade for a mark already on the /20 scale (e.g. a term average out of 20). */
+export function gradeForScore20(score20: number, ranges: GradeRange[]): GradeResult {
   const sorted = [...(ranges.length > 0 ? ranges : DEFAULT_RANGES)].sort((a, b) => b.minScore - a.minScore)
-  const match = sorted.find(r => pct >= r.minScore && pct <= r.maxScore)
+  const match = sorted.find(r => score20 >= r.minScore && score20 <= r.maxScore)
   if (!match) return { grade: 'N/A', remark: '', color: '#6b7280', bgColor: '#f3f4f6' }
   return { grade: match.grade, remark: match.remark, color: match.color, bgColor: hexToLight(match.color) }
 }

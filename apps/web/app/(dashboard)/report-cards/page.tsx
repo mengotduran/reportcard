@@ -8,7 +8,7 @@ import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
 import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
-import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download } from 'lucide-react'
+import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download, Scroll, FileSpreadsheet } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -20,15 +20,17 @@ import ClassPickerModal, { ClassOption } from '@/components/ui/ClassPickerModal'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
 import Pagination from '@/components/ui/Pagination'
 import { usePagination } from '@/lib/usePagination'
+import { getGradingScaleApi, GradeRange } from '@/lib/api/gradingScale'
 import { useT } from '@/lib/i18n'
+import { ExcelTemplate, listExcelTemplatesApi, downloadExcelTranscriptApi, fetchExcelPreviewHtmlApi } from '@/lib/api/excelTemplates'
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
-  grade: string; remarks: string; subject: { id: string; name: string }
+  grade: string; remarks: string; subject: { id: string; name: string; coefficient?: number; credit?: number }
 }
 interface RawRC {
   id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
-  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
+  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; isActive?: boolean }
   term: { id: string; name: string; session: string }
   entries: RawEntry[]
 }
@@ -106,6 +108,9 @@ function TeacherClassesView() {
   const [printing, setPrinting] = useState(false)
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
   const [bulkResult, setBulkResult] = useState<{ classLevel: string; published: number; skipped: number; issues: { student: string; reason: string }[] } | null>(null)
+  const [gradeBands, setGradeBands] = useState<GradeRange[]>([])
+
+  useEffect(() => { getGradingScaleApi().then(d => setGradeBands(d.ranges)).catch(() => {}) }, [])
 
   useEffect(() => {
     if (!printJob) return
@@ -124,7 +129,10 @@ function TeacherClassesView() {
         getReportCardsApi({ termId, classLevel }),
         getTemplateApi().catch(() => ({ config: {} })),
       ])
-      const published: RawRC[] = (rcData.reportCards as RawRC[]).filter(rc => rc.status === 'PUBLISHED')
+      // Disabled/Dismissed students are excluded from bulk printing (see
+      // Student.status in schema.prisma) — they're still printable one at a
+      // time from their own report-card detail page if ever needed.
+      const published: RawRC[] = (rcData.reportCards as RawRC[]).filter(rc => rc.status === 'PUBLISHED' && rc.student.isActive !== false)
       if (!published.length) { setPrinting(false); return }
       const saved = tplData.config as Partial<TemplateConfig> | undefined
       const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
@@ -154,20 +162,25 @@ function TeacherClassesView() {
     }
   }
 
+  // A teacher/class master should only see classes they actually teach in (≥1 of
+  // their courses) or are class master of — not every class in the school.
+  const buildClasses = (classLevels: string[], overviews: Awaited<ReturnType<typeof getClassOverviewApi>>[]) =>
+    classLevels
+      .map((cl, i) => ({ cl, ov: overviews[i] }))
+      .filter(({ cl, ov }) => isAdmin || (ov.teacherSubjectCount ?? 0) > 0 || cl === user?.masterClassLevel)
+      .map(({ cl, ov }) => ({
+        classLevel: cl,
+        total: ov.students.length,
+        filled: ov.students.filter((s: any) => s.reportCard?.marksFilled === true).length,
+        published: ov.students.filter((s: any) => s.reportCard?.status === 'PUBLISHED').length,
+        hasSubjects: (ov.subjectCount ?? 0) > 0,
+      }))
+
   const reloadClasses = async () => {
     if (!term) return
     const { classLevels } = await getClassLevelsApi()
     const overviews = await Promise.all(classLevels.map((cl) => getClassOverviewApi(term.id, cl)))
-    setClasses(classLevels.map((cl, i) => {
-      const students = overviews[i].students
-      return {
-        classLevel: cl,
-        total: students.length,
-        filled: students.filter((s: any) => s.reportCard?.marksFilled === true).length,
-        published: students.filter((s: any) => s.reportCard?.status === 'PUBLISHED').length,
-        hasSubjects: (overviews[i].subjectCount ?? 0) > 0,
-      }
-    }))
+    setClasses(buildClasses(classLevels, overviews))
   }
 
   useEffect(() => {
@@ -177,16 +190,7 @@ function TeacherClassesView() {
         setTerm(t)
         const { classLevels } = await getClassLevelsApi()
         const overviews = await Promise.all(classLevels.map((cl) => getClassOverviewApi(t.id, cl)))
-        setClasses(classLevels.map((cl, i) => {
-          const students = overviews[i].students
-          return {
-            classLevel: cl,
-            total: students.length,
-            filled: students.filter((s: any) => s.reportCard?.marksFilled === true).length,
-            published: students.filter((s: any) => s.reportCard?.status === 'PUBLISHED').length,
-            hasSubjects: (overviews[i].subjectCount ?? 0) > 0,
-          }
-        }))
+        setClasses(buildClasses(classLevels, overviews))
       } catch (err: any) {
         if (err?.response?.status === 404) setError(tr('No active term set. Please set a current term first.'))
         else setError(tr('Failed to load classes.'))
@@ -277,15 +281,16 @@ function TeacherClassesView() {
             <div key={rc.id} id={`rc-print-${rc.id}`}>
               <PrintableReportCard
                 school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language }}
-                student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName }}
+                student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
-                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))}
+                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
                 entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
                 config={printJob.config}
+                gradeBands={gradeBands}
               />
             </div>
           ))}
@@ -361,8 +366,40 @@ export default function ReportCardsPage() {
   const [pickerBusy, setPickerBusy] = useState(false)
   const [classReadiness, setClassReadiness] = useState<Record<string, ClassReadiness>>({})
   const [exporting, setExporting] = useState(false)
+  const [gradeBands, setGradeBands] = useState<GradeRange[]>([])
+  const [excelTemplates, setExcelTemplates] = useState<ExcelTemplate[]>([])
+  const [downloadingExcel, setDownloadingExcel] = useState<string | null>(null)
+  const [excelPreview, setExcelPreview] = useState<{ html: string; studentId: string; studentName: string; classLevel: string; session: string } | null>(null)
+  const [loadingPreview, setLoadingPreview] = useState<string | null>(null)
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
+  useEffect(() => { getGradingScaleApi().then(d => setGradeBands(d.ranges)).catch(() => {}) }, [])
+  useEffect(() => {
+    if (school?.type !== 'UNIVERSITY') return
+    listExcelTemplatesApi().then(d => setExcelTemplates(d.templates)).catch(() => {})
+  }, [school?.type])
+
+  const handleDownloadExcel = async (studentId: string, classLevel: string, session: string, studentName: string) => {
+    const tpl = excelTemplates.find(t => t.classLevels.includes(classLevel)) ?? excelTemplates[0]
+    if (!tpl) { showToast(tr('No Excel template configured. Add one in Settings.'), 'error'); return }
+    setDownloadingExcel(studentId)
+    try {
+      const filename = `${studentName.replace(/\s+/g, '_')}_transcript_${session.replace('/', '-')}.xlsx`
+      await downloadExcelTranscriptApi(tpl.id, studentId, session, filename)
+    } catch { showToast(tr('Download failed'), 'error') }
+    finally { setDownloadingExcel(null) }
+  }
+
+  const handlePreviewExcel = async (studentId: string, classLevel: string, session: string, studentName: string) => {
+    const tpl = excelTemplates.find(t => t.classLevels.includes(classLevel)) ?? excelTemplates[0]
+    if (!tpl) { showToast(tr('No Excel template configured.'), 'error'); return }
+    setLoadingPreview(studentId)
+    try {
+      const html = await fetchExcelPreviewHtmlApi(tpl.id, studentId, session)
+      setExcelPreview({ html, studentId, studentName, classLevel, session })
+    } catch { showToast(tr('Preview failed'), 'error') }
+    finally { setLoadingPreview(null) }
+  }
 
   // Publish several classes at once.
   const handleBulkPublishMany = async (classes: string[]) => {
@@ -414,7 +451,8 @@ export default function ReportCardsPage() {
       const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
       const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
       const lists = await Promise.all(classes.map((cl) => getReportCardsApi({ termId: activeTerm.id, classLevel: cl })))
-      const cards: RawRC[] = lists.flatMap((d) => (d.reportCards as RawRC[]).filter((rc) => rc.status === 'PUBLISHED'))
+      // Disabled/Dismissed students are excluded from bulk printing — see Student.status in schema.prisma.
+      const cards: RawRC[] = lists.flatMap((d) => (d.reportCards as RawRC[]).filter((rc) => rc.status === 'PUBLISHED' && rc.student.isActive !== false))
       if (!cards.length) { showToast(tr('No published cards for this class'), 'error'); return }
       setPrintJob({ cards, config })
     } catch {
@@ -524,7 +562,7 @@ export default function ReportCardsPage() {
   // Paginate the table; reset to page 1 when the year or term filter changes.
   const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(reportCards, 15, `${activeSession}|${filterTermId}`)
 
-  type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null }
+  type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null; isActive?: boolean }
 
   // Roster export (no marks). The students who have a report card in the target
   // term — i.e. exactly what the table shows when filtered to that term. One file per term.
@@ -534,26 +572,31 @@ export default function ReportCardsPage() {
     setExporting(true)
     try {
       const subData = await getSubjectsApi()
-      const subjectsByClass: Record<string, string[]> = {}
-      for (const s of (subData.subjects as { name: string; classLevel: string }[])) {
-        (subjectsByClass[s.classLevel] ??= []).push(s.name)
-      }
-      const cols = [
-        { label: tr('Name'), value: (s: ExportStudent) => s.name },
-        { label: tr('Student ID'), value: (s: ExportStudent) => s.studentId },
-        { label: tr('Class'), value: (s: ExportStudent) => s.classLevel },
-        { label: tr('Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
-        { label: tr('Guardian'), value: (s: ExportStudent) => s.guardianName || '' },
-        { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
-        { label: tr('Guardian Email'), value: (s: ExportStudent) => s.guardianEmail || '' },
-      ]
+      const allSubjects = subData.subjects as { name: string; classLevel: string; term?: string | null }[]
       const files: { name: string; content: string }[] = []
       for (const term of targets) {
+        // A course scoped to one semester (university) only counts for that
+        // semester; a subject with no term (primary/secondary) always counts.
+        const subjectsByClass: Record<string, string[]> = {}
+        for (const s of allSubjects) {
+          if (s.term != null && s.term !== term.name) continue
+          (subjectsByClass[s.classLevel] ??= []).push(s.name)
+        }
+        const cols = [
+          { label: tr('Name'), value: (s: ExportStudent) => s.name },
+          { label: tr('Student ID'), value: (s: ExportStudent) => s.studentId },
+          { label: tr('Class'), value: (s: ExportStudent) => s.classLevel },
+          { label: tr('Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
+          { label: tr('Guardian'), value: (s: ExportStudent) => s.guardianName || '' },
+          { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
+          { label: tr('Guardian Email'), value: (s: ExportStudent) => s.guardianEmail || '' },
+        ]
         const res = await getReportCardsApi({ termId: term.id })
         const seen = new Set<string>()
         const students: ExportStudent[] = []
+        // Disabled/Dismissed students are excluded from this export too — see Student.status in schema.prisma.
         for (const rc of (res.reportCards as { student: ExportStudent }[])) {
-          if (rc.student && !seen.has(rc.student.id)) { seen.add(rc.student.id); students.push(rc.student) }
+          if (rc.student && rc.student.isActive !== false && !seen.has(rc.student.id)) { seen.add(rc.student.id); students.push(rc.student) }
         }
         if (students.length === 0) continue
         files.push({ name: datedFilename(`school-students-${term.name}`), content: buildCsv(students, cols) })
@@ -748,6 +791,35 @@ export default function ReportCardsPage() {
                         className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('View / Print')}>
                         <Eye size={14} />
                       </button>
+                      {school?.type === 'UNIVERSITY' && (() => {
+                        const matchedTpl = excelTemplates.find(t => t.classLevels.includes(rc.student.classLevel))
+                        if (matchedTpl) {
+                          return (<>
+                            <button
+                              onClick={() => handlePreviewExcel(rc.student.id, rc.student.classLevel, rc.term.session, rc.student.name)}
+                              disabled={loadingPreview === rc.student.id}
+                              className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition disabled:opacity-40"
+                              title={tr('Preview transcript')}>
+                              <Eye size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDownloadExcel(rc.student.id, rc.student.classLevel, rc.term.session, rc.student.name)}
+                              disabled={downloadingExcel === rc.student.id}
+                              className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 rounded transition disabled:opacity-40"
+                              title={tr('Download Excel Transcript')}>
+                              <FileSpreadsheet size={14} />
+                            </button>
+                          </>)
+                        }
+                        return (
+                          <button
+                            onClick={() => router.push(`/report-cards/transcript/${rc.student.id}?session=${encodeURIComponent(rc.term.session)}`)}
+                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition"
+                            title={tr('Print Annual Transcript')}>
+                            <Scroll size={14} />
+                          </button>
+                        )
+                      })()}
                       <button onClick={() => setDeleteTarget(rc.id)}
                         className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition" title={tr('Delete')}>
                         <Trash2 size={14} />
@@ -813,6 +885,34 @@ export default function ReportCardsPage() {
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      {/* Excel transcript preview modal */}
+      {excelPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setExcelPreview(null)}>
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
+              <div>
+                <h2 className="font-semibold text-foreground">{excelPreview.studentName}</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">{tr('Transcript preview')} · {excelPreview.session}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { handleDownloadExcel(excelPreview.studentId, excelPreview.classLevel, excelPreview.session, excelPreview.studentName); setExcelPreview(null) }}
+                  disabled={downloadingExcel === excelPreview.studentId}
+                  className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-1.5 rounded-lg transition disabled:opacity-50">
+                  <FileSpreadsheet size={14} /> {tr('Download Excel')}
+                </button>
+                <button onClick={() => setExcelPreview(null)} className="p-1.5 rounded-lg hover:bg-muted transition text-muted-foreground">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="overflow-auto flex-1 p-4">
+              <div dangerouslySetInnerHTML={{ __html: excelPreview.html }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
 
@@ -887,15 +987,16 @@ export default function ReportCardsPage() {
             <div key={rc.id} id={`rc-print-${rc.id}`}>
               <PrintableReportCard
                 school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language }}
-                student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName }}
+                student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
-                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))}
+                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
                 entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
                 config={printJob.config}
+                gradeBands={gradeBands}
               />
             </div>
           ))}

@@ -8,8 +8,10 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { getSubjects, createSubject, deleteSubject, Subject } from '@/lib/api/subjects'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
+import { getTerms, Term } from '@/lib/api/terms'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
 
 interface SectionData { title: string; data: Subject[] }
 
@@ -143,35 +145,52 @@ export default function SubjectsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
+  const { school, activeSession } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  // Universities call subjects "courses" and classes "departments" — same data/routes, just different wording.
+  const tt = (subjectStr: string, courseStr: string) => t(isUniversity ? courseStr : subjectStr)
+  const tc = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [sections, setSections] = useState<SectionData[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
+  const [termList, setTermList] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [subjectName, setSubjectName] = useState('')
   const [classLevel, setClassLevel] = useState('')
+  const [term, setTerm] = useState('')
   const [coefficient, setCoefficient] = useState('1')
+  const [credit, setCredit] = useState('')
   const [creating, setCreating] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
+  const [termPickerOpen, setTermPickerOpen] = useState(false)
 
+  // University: a course belongs to one semester, so group/label sections by
+  // department + semester (see Subject.term in schema.prisma). Other types:
+  // group by class only, exactly as before.
   const buildSections = (subjects: Subject[]): SectionData[] => {
     const map: Record<string, Subject[]> = {}
+    const keyOf = (s: Subject) => isUniversity ? `${s.classLevel} — ${s.term ?? t('No semester')}` : s.classLevel
     for (const s of subjects) {
-      if (!map[s.classLevel]) map[s.classLevel] = []
-      map[s.classLevel].push(s)
+      const key = keyOf(s)
+      if (!map[key]) map[key] = []
+      map[key].push(s)
     }
-    return Object.keys(map).sort().map((cl) => ({ title: cl, data: map[cl] }))
+    return Object.keys(map).sort().map((key) => ({ title: key, data: map[key] }))
   }
 
   const fetchData = useCallback(async () => {
     try {
-      const [subData, clData] = await Promise.all([getSubjects(), getClasses()])
+      const [subData, clData, termData] = await Promise.all([getSubjects(), getClasses(), getTerms()])
       setClassList(clData.classLevels.sort((a, b) => a.order - b.order))
+      // Distinct semester names within the active academic session.
+      const seen = new Set<string>()
+      setTermList(termData.terms.filter((tm) => tm.session === activeSession && !seen.has(tm.name) && seen.add(tm.name)))
       setSections(buildSections(subData.subjects))
     } catch {
-      Alert.alert(t('Error'), t('Failed to load subjects.'))
+      Alert.alert(t('Error'), tt('Failed to load subjects.', 'Failed to load courses.'))
     }
-  }, [])
+  }, [activeSession, isUniversity])
 
   useFocusEffect(useCallback(() => {
     fetchData().finally(() => setLoading(false))
@@ -184,8 +203,8 @@ export default function SubjectsScreen() {
   }
 
   const handleCreate = async () => {
-    if (!subjectName.trim() || !classLevel) {
-      Alert.alert(t('Validation'), t('Subject name and class level are required.'))
+    if (!subjectName.trim() || !classLevel || (isUniversity ? (!term || !credit) : false)) {
+      Alert.alert(t('Validation'), isUniversity ? t('Course name, department, semester, and credit are required.') : t('Subject name and class level are required.'))
       return
     }
     setCreating(true)
@@ -193,15 +212,20 @@ export default function SubjectsScreen() {
       await createSubject({
         name: subjectName.trim(),
         classLevel,
-        coefficient: Number(coefficient) || 1,
+        // Universities don't enter a separate coefficient — credit hours double as
+        // the weight in the average, same value the seed already uses for this.
+        coefficient: isUniversity ? (Number(credit) || 1) : (Number(coefficient) || 1),
+        ...(isUniversity ? { term, credit: Number(credit) } : {}),
       })
       setModalVisible(false)
       setSubjectName('')
       setClassLevel('')
+      setTerm('')
       setCoefficient('1')
+      setCredit('')
       await fetchData()
     } catch (err: any) {
-      Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to create subject.'))
+      Alert.alert(t('Error'), err?.response?.data?.message ?? tt('Failed to create subject.', 'Failed to create course.'))
     } finally {
       setCreating(false)
     }
@@ -209,7 +233,7 @@ export default function SubjectsScreen() {
 
   const handleDelete = (subject: Subject) => {
     Alert.alert(
-      t('Delete Subject'),
+      tt('Delete Subject', 'Delete Course'),
       `${t('Delete')} "${subject.name}"?`,
       [
         { text: t('Cancel'), style: 'cancel' },
@@ -221,7 +245,7 @@ export default function SubjectsScreen() {
               await deleteSubject(subject.id)
               await fetchData()
             } catch {
-              Alert.alert(t('Error'), t('Failed to delete subject.'))
+              Alert.alert(t('Error'), tt('Failed to delete subject.', 'Failed to delete course.'))
             }
           },
         },
@@ -244,8 +268,8 @@ export default function SubjectsScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="book-outline" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>{t('No subjects yet')}</Text>
-            <Text style={styles.emptySubText}>{t('Tap + to add a subject')}</Text>
+            <Text style={styles.emptyText}>{tt('No subjects yet', 'No courses yet')}</Text>
+            <Text style={styles.emptySubText}>{tt('Tap + to add a subject', 'Tap + to add a course')}</Text>
           </View>
         }
         renderSectionHeader={({ section }) => (
@@ -260,7 +284,7 @@ export default function SubjectsScreen() {
             </View>
             <View style={styles.info}>
               <Text style={styles.subjectName}>{item.name}</Text>
-              <Text style={styles.meta}>{t('Max:')} {item.maxScore} · {t('Coeff:')} {item.coefficient}</Text>
+              <Text style={styles.meta}>{t('Max:')} {item.maxScore} · {isUniversity ? `${t('Credit:')} ${item.credit ?? '—'}` : `${t('Coeff:')} ${item.coefficient}`}</Text>
             </View>
             <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
               <Ionicons name="trash-outline" size={17} color="#ef4444" />
@@ -278,26 +302,26 @@ export default function SubjectsScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t('Add Subject')}</Text>
+              <Text style={styles.modalTitle}>{tt('Add Subject', 'Add Course')}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={22} color="#6b7280" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{t('Subject Name')}</Text>
+            <Text style={styles.label}>{tt('Subject Name', 'Course Name')}</Text>
             <TextInput
               style={styles.input}
               value={subjectName}
               onChangeText={setSubjectName}
-              placeholder={t('e.g. Mathematics')}
+              placeholder={isUniversity ? t('e.g. Calculus I') : t('e.g. Mathematics')}
               placeholderTextColor="#9ca3af"
               autoFocus
             />
 
-            <Text style={styles.label}>{t('Class Level')}</Text>
+            <Text style={styles.label}>{tc('Class Level', 'Department')}</Text>
             <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
               <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>
-                {classLevel || t('Select class level')}
+                {classLevel || tc('Select class level', 'Select department')}
               </Text>
               <Ionicons name="chevron-down" size={16} color="#6b7280" />
             </TouchableOpacity>
@@ -317,16 +341,59 @@ export default function SubjectsScreen() {
               </View>
             )}
 
-            <View>
-              <Text style={styles.label}>{t('Coefficient')}</Text>
-              <TextInput
-                style={styles.input}
-                value={coefficient}
-                onChangeText={setCoefficient}
-                keyboardType="numeric"
-                placeholderTextColor="#9ca3af"
-              />
-            </View>
+            {isUniversity && (
+              <>
+                <Text style={styles.label}>{t('Semester')}</Text>
+                <TouchableOpacity style={styles.picker} onPress={() => setTermPickerOpen((v) => !v)}>
+                  <Text style={[styles.pickerText, !term && { color: colors.textMuted }]}>
+                    {term || t('Select semester')}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color="#6b7280" />
+                </TouchableOpacity>
+                {termPickerOpen && (
+                  <View style={styles.dropdownList}>
+                    {termList.map((tm) => (
+                      <TouchableOpacity
+                        key={tm.id}
+                        style={styles.dropdownItem}
+                        onPress={() => { setTerm(tm.name); setTermPickerOpen(false) }}
+                      >
+                        <Text style={[styles.dropdownItemText, tm.name === term && { color: '#F03E2F', fontWeight: '700' }]}>
+                          {tm.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </>
+            )}
+
+            {!isUniversity && (
+              <View>
+                <Text style={styles.label}>{t('Coefficient')}</Text>
+                <TextInput
+                  style={styles.input}
+                  value={coefficient}
+                  onChangeText={setCoefficient}
+                  keyboardType="numeric"
+                  placeholderTextColor="#9ca3af"
+                />
+              </View>
+            )}
+
+            {isUniversity && (
+              <View>
+                <Text style={styles.label}>{t('Credit hours')}</Text>
+                <TextInput
+                  style={styles.input}
+                  value={credit}
+                  onChangeText={setCredit}
+                  placeholder="e.g. 3"
+                  keyboardType="numeric"
+                  placeholderTextColor="#9ca3af"
+                />
+              </View>
+            )}
 
             <TouchableOpacity
               style={[styles.createBtn, creating && styles.disabled]}
@@ -335,7 +402,7 @@ export default function SubjectsScreen() {
             >
               {creating
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={styles.createBtnText}>{t('Add Subject')}</Text>}
+                : <Text style={styles.createBtnText}>{tt('Add Subject', 'Add Course')}</Text>}
             </TouchableOpacity>
           </View>
         </View>

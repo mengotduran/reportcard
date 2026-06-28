@@ -1,0 +1,3 @@
+CREATE TYPE "StudentStatus" AS ENUM ('ACTIVE', 'DISABLED', 'DISMISSED');
+
+ALTER TABLE "Student" ADD COLUMN "status" "StudentStatus" NOT NULL DEFAULT 'ACTIVE';

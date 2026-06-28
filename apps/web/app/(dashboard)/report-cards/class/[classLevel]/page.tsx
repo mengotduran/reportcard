@@ -10,7 +10,7 @@ import { downloadCsv, datedFilename } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 
-interface Subject { id: string; name: string; classLevel: string }
+interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
 export default function ClassSubjectsPage() {
   const router = useRouter()
@@ -30,9 +30,11 @@ export default function ClassSubjectsPage() {
 
   useEffect(() => {
     getSubjectsApi()
-      .then((data) => setSubjects(data.subjects.filter((s: Subject) => s.classLevel === classLevel)))
+      // A course scoped to one semester (university) only counts for that semester;
+      // a subject with no term (primary/secondary) always counts — see Subject.term.
+      .then((data) => setSubjects(data.subjects.filter((s: Subject) => s.classLevel === classLevel && (s.term == null || s.term === termName))))
       .finally(() => setLoading(false))
-  }, [classLevel])
+  }, [classLevel, termName])
 
   const handleExportMarks = async () => {
     if (!termId) { showToast(t('No term selected'), 'error'); return }

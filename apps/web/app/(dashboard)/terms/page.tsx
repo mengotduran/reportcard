@@ -21,8 +21,11 @@ const emptyForm = { name: '', session: '', startDate: '', endDate: '' }
 
 export default function TermsPage() {
   const router = useRouter()
-  const { isAuthenticated, activeSession } = useAuthStore()
+  const { isAuthenticated, activeSession, school } = useAuthStore()
   const t = useT()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  // Universities call terms "semesters" — same data/route, just different wording.
+  const tt = (termStr: string, semesterStr: string) => t(isUniversity ? semesterStr : termStr)
   const [terms, setTerms] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -90,7 +93,7 @@ export default function TermsPage() {
       fetchTerms()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
-      setError(e.response?.data?.message || t('Failed to save term'))
+      setError(e.response?.data?.message || tt('Failed to save term', 'Failed to save semester'))
     } finally {
       setSaving(false)
     }
@@ -102,7 +105,7 @@ export default function TermsPage() {
   }
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`${t('Delete term')} "${name}"?`)) return
+    if (!confirm(`${tt('Delete term', 'Delete semester')} "${name}"?`)) return
     await deleteTermApi(id)
     fetchTerms()
   }
@@ -115,12 +118,12 @@ export default function TermsPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">{t('Terms')}</h2>
-          <p className="text-muted-foreground text-sm mt-1">{t('Manage academic terms and sessions')}</p>
+          <h2 className="text-2xl font-bold text-foreground">{tt('Terms', 'Semesters')}</h2>
+          <p className="text-muted-foreground text-sm mt-1">{tt('Manage academic terms and sessions', 'Manage academic semesters and sessions')}</p>
         </div>
         <button onClick={openAdd}
           className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
-          <Plus size={16} /> {t('Add Term')}
+          <Plus size={16} /> {tt('Add Term', 'Add Semester')}
         </button>
       </div>
 
@@ -129,7 +132,7 @@ export default function TermsPage() {
       ) : visibleTerms.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <Calendar size={32} className="mx-auto mb-2 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">{t('No terms yet. Add your first term.')}</p>
+          <p className="text-muted-foreground text-sm">{tt('No terms yet. Add your first term.', 'No semesters yet. Add your first semester.')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -177,7 +180,7 @@ export default function TermsPage() {
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-card rounded-2xl w-full max-w-sm p-6 border border-transparent dark:border-border">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold text-foreground text-lg">{editingId ? t('Edit Term') : t('Add Term')}</h3>
+              <h3 className="font-semibold text-foreground text-lg">{editingId ? tt('Edit Term', 'Edit Semester') : tt('Add Term', 'Add Semester')}</h3>
               <button onClick={closeModal} className="text-muted-foreground hover:text-muted-foreground ">
                 <X size={20} />
               </button>
@@ -187,8 +190,8 @@ export default function TermsPage() {
             )}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{t('Term Name')}</label>
-                <input type="text" placeholder="First Term"
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tt('Term Name', 'Semester Name')}</label>
+                <input type="text" placeholder={isUniversity ? 'First Semester' : 'First Term'}
                   value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -221,7 +224,7 @@ export default function TermsPage() {
                 </button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? t('Saving...') : editingId ? t('Save Changes') : t('Add Term')}
+                  {saving ? t('Saving...') : editingId ? t('Save Changes') : tt('Add Term', 'Add Semester')}
                 </button>
               </div>
             </form>

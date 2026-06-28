@@ -123,7 +123,10 @@ export default function TermsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const tr = useT()
-  const { activeSession } = useAuthStore()
+  const { activeSession, school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  // Universities call terms "semesters" — same data/route, just different wording.
+  const tt = (termStr: string, semesterStr: string) => tr(isUniversity ? semesterStr : termStr)
   const [terms, setTerms] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -138,7 +141,7 @@ export default function TermsScreen() {
       const data = await getTerms()
       setTerms(data.terms)
     } catch {
-      Alert.alert(tr('Error'), tr('Failed to load terms.'))
+      Alert.alert(tr('Error'), tt('Failed to load terms.', 'Failed to load semesters.'))
     }
   }, [])
 
@@ -154,7 +157,7 @@ export default function TermsScreen() {
 
   const handleCreate = async () => {
     if (!termName.trim() || !session.trim()) {
-      Alert.alert(tr('Validation'), tr('Term name and session are required.'))
+      Alert.alert(tr('Validation'), tt('Term name and session are required.', 'Semester name and session are required.'))
       return
     }
     setCreating(true)
@@ -165,7 +168,7 @@ export default function TermsScreen() {
       setSession('')
       await fetchTerms()
     } catch (err: any) {
-      Alert.alert(tr('Error'), err?.response?.data?.message ?? tr('Failed to create term.'))
+      Alert.alert(tr('Error'), err?.response?.data?.message ?? tt('Failed to create term.', 'Failed to create semester.'))
     } finally {
       setCreating(false)
     }
@@ -173,8 +176,8 @@ export default function TermsScreen() {
 
   const handleSetCurrent = async (term: Term) => {
     Alert.alert(
-      tr('Set Current Term'),
-      `"${term.name} (${term.session})" ${tr('as the current active term?')}`,
+      tt('Set Current Term', 'Set Current Semester'),
+      `"${term.name} (${term.session})" ${tt('as the current active term?', 'as the current active semester?')}`,
       [
         { text: tr('Cancel'), style: 'cancel' },
         {
@@ -185,7 +188,7 @@ export default function TermsScreen() {
               await setCurrentTerm(term.id)
               await fetchTerms()
             } catch {
-              Alert.alert(tr('Error'), tr('Failed to set current term.'))
+              Alert.alert(tr('Error'), tt('Failed to set current term.', 'Failed to set current semester.'))
             } finally {
               setSettingCurrent(null)
             }
@@ -197,7 +200,7 @@ export default function TermsScreen() {
 
   const handleDelete = (term: Term) => {
     Alert.alert(
-      tr('Delete Term'),
+      tt('Delete Term', 'Delete Semester'),
       `${tr('Delete')} "${term.name} (${term.session})"?`,
       [
         { text: tr('Cancel'), style: 'cancel' },
@@ -209,7 +212,7 @@ export default function TermsScreen() {
               await deleteTerm(term.id)
               setTerms((prev) => prev.filter((t) => t.id !== term.id))
             } catch {
-              Alert.alert(tr('Error'), tr('Failed to delete term.'))
+              Alert.alert(tr('Error'), tt('Failed to delete term.', 'Failed to delete semester.'))
             }
           },
         },
@@ -232,8 +235,8 @@ export default function TermsScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="calendar-outline" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>{tr('No terms yet')}</Text>
-            <Text style={styles.emptySubText}>{tr('Tap + to add a term')}</Text>
+            <Text style={styles.emptyText}>{tt('No terms yet', 'No semesters yet')}</Text>
+            <Text style={styles.emptySubText}>{tt('Tap + to add a term', 'Tap + to add a semester')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -286,18 +289,18 @@ export default function TermsScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{tr('Add Term')}</Text>
+              <Text style={styles.modalTitle}>{tt('Add Term', 'Add Semester')}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={22} color="#6b7280" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{tr('Term Name')}</Text>
+            <Text style={styles.label}>{tt('Term Name', 'Semester Name')}</Text>
             <TextInput
               style={styles.input}
               value={termName}
               onChangeText={setTermName}
-              placeholder={tr('e.g. First Term')}
+              placeholder={tt('e.g. First Term', 'e.g. First Semester')}
               placeholderTextColor="#9ca3af"
               autoFocus
             />
@@ -318,7 +321,7 @@ export default function TermsScreen() {
             >
               {creating
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={styles.createBtnText}>{tr('Create Term')}</Text>}
+                : <Text style={styles.createBtnText}>{tt('Create Term', 'Create Semester')}</Text>}
             </TouchableOpacity>
           </View>
         </View>

@@ -6,9 +6,10 @@ import {
   TouchableOpacity, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getStudents, createStudent, updateStudent, deleteStudent, Student } from '@/lib/api/students'
+import { getStudents, createStudent, updateStudent, setStudentStatus, Student, StudentStatus } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { getSubjects } from '@/lib/api/reportcards'
+import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
@@ -16,6 +17,11 @@ import { shareCsv } from '@/lib/csv'
 import StudentFeesModal from '@/components/StudentFeesModal'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
+const STATUS_TABS: StudentStatus[] = ['ACTIVE', 'DISABLED', 'DISMISSED']
+
+// Older cached data may not carry `status` yet — fall back to isActive so a
+// stale client still renders a sensible badge instead of crashing.
+const effectiveStatus = (s: Student): StudentStatus => s.status ?? (s.isActive ? 'ACTIVE' : 'DISABLED')
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -44,9 +50,16 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
   badgeActive: { backgroundColor: '#dcfce7' },
   badgeInactive: { backgroundColor: '#fee2e2' },
+  badgeDisabled: { backgroundColor: '#fef3c7' },
   badgeText: { fontSize: 11, fontWeight: '600' },
   badgeTextActive: { color: '#16a34a' },
   badgeTextInactive: { color: '#dc2626' },
+  badgeTextDisabled: { color: '#b45309' },
+  statusTabsRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginBottom: 10 },
+  statusTab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
+  statusTabActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  statusTabText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
+  statusTabTextActive: { color: '#fff' },
   errorText: { color: '#ef4444', fontSize: 14 },
   emptyText: { color: colors.textMuted, fontSize: 14 },
   fab: {
@@ -117,14 +130,14 @@ function StudentDetailModal({
   student,
   visible,
   onClose,
-  onDelete,
+  onChangeStatus,
   onEdit,
   onFees,
 }: {
   student: Student | null
   visible: boolean
   onClose: () => void
-  onDelete: (id: string) => void
+  onChangeStatus: (student: Student) => void
   onEdit: (student: Student) => void
   onFees: (student: Student) => void
 }) {
@@ -132,6 +145,9 @@ function StudentDetailModal({
   const styles = makeStylesStyles(colors)
   const t = useT()
   if (!student) return null
+  const status = effectiveStatus(student)
+  const badgeBox = status === 'ACTIVE' ? styles.badgeActive : status === 'DISABLED' ? styles.badgeDisabled : styles.badgeInactive
+  const badgeText = status === 'ACTIVE' ? styles.badgeTextActive : status === 'DISABLED' ? styles.badgeTextDisabled : styles.badgeTextInactive
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
@@ -165,9 +181,9 @@ function StudentDetailModal({
             <View style={styles.divider} />
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>{t('Status')}</Text>
-              <View style={[styles.badge, student.isActive ? styles.badgeActive : styles.badgeInactive]}>
-                <Text style={[styles.badgeText, student.isActive ? styles.badgeTextActive : styles.badgeTextInactive]}>
-                  {student.isActive ? t('Active') : t('Inactive')}
+              <View style={[styles.badge, badgeBox]}>
+                <Text style={[styles.badgeText, badgeText]}>
+                  {t(status === 'ACTIVE' ? 'Active' : status === 'DISABLED' ? 'Disabled' : 'Dismissed')}
                 </Text>
               </View>
             </View>
@@ -181,9 +197,9 @@ function StudentDetailModal({
               <Ionicons name="create-outline" size={16} color="#F03E2F" />
               <Text style={styles.editBtnText}>{t('Edit')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.deleteActionBtn} onPress={() => onDelete(student.id)}>
-              <Ionicons name="trash-outline" size={16} color="#ef4444" />
-              <Text style={styles.deleteActionText}>{t('Delete')}</Text>
+            <TouchableOpacity style={styles.deleteActionBtn} onPress={() => onChangeStatus(student)}>
+              <Ionicons name="person-remove-outline" size={16} color="#ef4444" />
+              <Text style={styles.deleteActionText}>{t('Change Status')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -299,11 +315,13 @@ export default function StudentsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
-  const { user, activeSession } = useAuthStore()
+  const { user, activeSession, setActiveSession } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
 
   const [students, setStudents] = useState<Student[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
+  const [liveSession, setLiveSession] = useState<string | undefined>()
+  const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -316,12 +334,18 @@ export default function StudentsScreen() {
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
 
+  // Disabled/Dismissed is a status filter, not a year filter — it bypasses
+  // the year-aware roster entirely (see getStudents in student.controller.ts).
   const fetchStudents = useCallback(async () => {
     try {
-      const [sData, clData, subData] = await Promise.all([
-        getStudents(activeSession ? { session: activeSession } : undefined),
+      const studentParams = statusFilter === 'ACTIVE'
+        ? (activeSession ? { session: activeSession } : undefined)
+        : { status: statusFilter }
+      const [sData, clData, subData, termData] = await Promise.all([
+        getStudents(studentParams),
         isAdmin ? getClasses() : Promise.resolve({ classLevels: [] }),
         isAdmin ? getSubjects() : Promise.resolve({ subjects: [] }),
+        isAdmin ? getTerms() : Promise.resolve({ terms: [] }),
       ])
       setStudents(sData.students)
       if (isAdmin) {
@@ -331,11 +355,24 @@ export default function StudentsScreen() {
           (map[s.classLevel] ??= []).push(s.name)
         }
         setSubjectsByClass(map)
+        setLiveSession(termData.terms.find((tm) => tm.isCurrent)?.session)
       }
     } catch {
       setError(t('Failed to load students'))
     }
-  }, [isAdmin, activeSession])
+  }, [isAdmin, activeSession, statusFilter])
+
+  // A newly created student only shows up in this list while viewing the LIVE
+  // academic year — a past year's roster is scoped to students who already
+  // have a report card that session, which a freshly created student never
+  // has yet (see student.controller.ts getStudents). Switch the app-wide
+  // active year to the live one right after a successful create so the new
+  // student is actually visible, instead of silently "disappearing" if a
+  // past year happened to be selected.
+  const handleStudentCreated = () => {
+    if (liveSession && liveSession !== activeSession) setActiveSession(liveSession)
+    fetchStudents()
+  }
 
   useEffect(() => {
     if (isSuperAdmin) { setLoading(false); return }
@@ -360,28 +397,27 @@ export default function StudentsScreen() {
       s.classLevel.toLowerCase().includes(search.toLowerCase())
   )
 
-  const handleDeleteStudent = (id: string) => {
-    const student = students.find((s) => s.id === id)
-    Alert.alert(
-      t('Delete Student'),
-      `${t('Delete')} ${student?.name ?? t('this student')}? ${t('This cannot be undone.')}`,
-      [
-        { text: t('Cancel'), style: 'cancel' },
-        {
-          text: t('Delete'),
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteStudent(id)
-              setDetailVisible(false)
-              setStudents((prev) => prev.filter((s) => s.id !== id))
-            } catch {
-              Alert.alert(t('Error'), t('Failed to delete student.'))
-            }
-          },
-        },
-      ]
-    )
+  // Replaces the old silent "delete" (which never deleted anything — just set
+  // isActive: false with no visible status and no way back). See
+  // Student.status in schema.prisma.
+  const applyStatus = async (student: Student, status: StudentStatus) => {
+    try {
+      await setStudentStatus(student.id, status)
+      setDetailVisible(false)
+      fetchStudents()
+    } catch {
+      Alert.alert(t('Error'), t('Failed to update status.'))
+    }
+  }
+
+  const handleChangeStatus = (student: Student) => {
+    const buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress: () => void }[] = STATUS_TABS.map((status) => ({
+      text: t(status === 'ACTIVE' ? 'Active' : status === 'DISABLED' ? 'Disabled' : 'Dismissed'),
+      style: status === 'DISMISSED' ? 'destructive' : 'default',
+      onPress: () => { applyStatus(student, status) },
+    }))
+    buttons.push({ text: t('Cancel'), style: 'cancel', onPress: () => {} })
+    Alert.alert(t('Change Status'), student.name, buttons)
   }
 
   const handleEditStudent = (student: Student) => {
@@ -398,7 +434,7 @@ export default function StudentsScreen() {
         { label: t('Class'), value: (s) => s.classLevel },
         { label: t('Subjects'), value: (s) => (subjectsByClass[s.classLevel] || []).join(', ') },
         { label: t('Guardian'), value: (s) => s.guardianName || '' },
-        { label: t('Status'), value: (s) => (s.isActive ? t('Active') : t('Inactive')) },
+        { label: t('Status'), value: (s) => { const st = effectiveStatus(s); return t(st === 'ACTIVE' ? 'Active' : st === 'DISABLED' ? 'Disabled' : 'Dismissed') } },
       ])
     } catch { /* user dismissed the share sheet */ }
   }
@@ -415,6 +451,18 @@ export default function StudentsScreen() {
           placeholderTextColor="#9ca3af"
         />
       </View>
+
+      {isAdmin && (
+        <View style={styles.statusTabsRow}>
+          {STATUS_TABS.map((s) => (
+            <TouchableOpacity key={s} style={[styles.statusTab, statusFilter === s && styles.statusTabActive]} onPress={() => setStatusFilter(s)}>
+              <Text style={[styles.statusTabText, statusFilter === s && styles.statusTabTextActive]}>
+                {t(s === 'ACTIVE' ? 'Active' : s === 'DISABLED' ? 'Disabled' : 'Dismissed')}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       {isAdmin && filtered.length > 0 && (
         <View style={styles.exportBar}>
@@ -458,11 +506,18 @@ export default function StudentsScreen() {
               <Text style={styles.name}>{item.name}</Text>
               <Text style={styles.meta}>ID: {item.studentId} · {item.classLevel}</Text>
             </View>
-            <View style={[styles.badge, item.isActive ? styles.badgeActive : styles.badgeInactive]}>
-              <Text style={[styles.badgeText, item.isActive ? styles.badgeTextActive : styles.badgeTextInactive]}>
-                {item.isActive ? t('Active') : t('Inactive')}
-              </Text>
-            </View>
+            {(() => {
+              const st = effectiveStatus(item)
+              const box = st === 'ACTIVE' ? styles.badgeActive : st === 'DISABLED' ? styles.badgeDisabled : styles.badgeInactive
+              const txt = st === 'ACTIVE' ? styles.badgeTextActive : st === 'DISABLED' ? styles.badgeTextDisabled : styles.badgeTextInactive
+              return (
+                <View style={[styles.badge, box]}>
+                  <Text style={[styles.badgeText, txt]}>
+                    {t(st === 'ACTIVE' ? 'Active' : st === 'DISABLED' ? 'Disabled' : 'Dismissed')}
+                  </Text>
+                </View>
+              )
+            })()}
           </TouchableOpacity>
         )}
       />}
@@ -477,7 +532,7 @@ export default function StudentsScreen() {
         student={selectedStudent}
         visible={detailVisible}
         onClose={() => setDetailVisible(false)}
-        onDelete={handleDeleteStudent}
+        onChangeStatus={handleChangeStatus}
         onEdit={handleEditStudent}
         onFees={(s) => { setDetailVisible(false); setFeesStudent(s) }}
       />
@@ -494,7 +549,7 @@ export default function StudentsScreen() {
       <CreateStudentModal
         visible={createVisible}
         onClose={() => setCreateVisible(false)}
-        onCreated={fetchStudents}
+        onCreated={handleStudentCreated}
         classList={classList}
       />
     </View>

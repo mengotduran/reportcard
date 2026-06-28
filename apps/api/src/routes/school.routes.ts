@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { getSchoolSettings, uploadLogo, uploadCover, removeLogo, removeCover, addCoverImage, removeCoverImage } from '../controllers/school.controller'
+import { getSchoolSettings, updateSchoolSettings, uploadLogo, uploadCover, removeLogo, removeCover, addCoverImage, removeCoverImage } from '../controllers/school.controller'
 import { protect, restrictTo } from '../middleware/auth'
 import { upload } from '../middleware/upload'
 
@@ -7,6 +7,7 @@ const router = Router()
 
 router.use(protect)
 router.get('/settings', getSchoolSettings)
+router.put('/settings', restrictTo('SCHOOL_ADMIN'), updateSchoolSettings)
 router.post('/logo', restrictTo('SCHOOL_ADMIN'), upload.single('logo'), uploadLogo)
 router.post('/cover', restrictTo('SCHOOL_ADMIN'), upload.single('cover'), uploadCover)
 router.delete('/logo', restrictTo('SCHOOL_ADMIN'), removeLogo)

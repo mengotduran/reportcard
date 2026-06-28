@@ -30,6 +30,7 @@ export interface Subject {
   maxScore: number
   coefficient: number
   compulsory?: boolean
+  term?: string | null
 }
 
 export interface Term {

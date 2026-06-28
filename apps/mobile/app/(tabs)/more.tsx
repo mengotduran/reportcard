@@ -96,6 +96,15 @@ export default function MoreScreen() {
   const styles = makeStylesStyles(colors)
   const router = useRouter()
   const { school } = useAuthStore()
+  // Universities use different wording for the same routes/data — just relabel the menu.
+  const UNIVERSITY_MENU_LABELS: Record<string, string> = {
+    '/admin/terms': 'Semesters',
+    '/admin/subjects': 'Courses',
+    '/admin/classes': 'Departments',
+  }
+  const menuItems = school?.type === 'UNIVERSITY'
+    ? MENU_ITEMS.map((item) => UNIVERSITY_MENU_LABELS[item.route] ? { ...item, label: UNIVERSITY_MENU_LABELS[item.route] } : item)
+    : MENU_ITEMS
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -111,7 +120,7 @@ export default function MoreScreen() {
 
 <Text style={styles.sectionLabel}>{t('MANAGEMENT')}</Text>
 
-      {MENU_ITEMS.map((item) => (
+      {menuItems.map((item) => (
         <TouchableOpacity
           key={item.route}
           style={styles.card}

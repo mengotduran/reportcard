@@ -1,0 +1,3 @@
+{
+  "/(dashboard)/report-cards/class/[classLevel]/page": "app/(dashboard)/report-cards/class/[classLevel]/page.js"
+}

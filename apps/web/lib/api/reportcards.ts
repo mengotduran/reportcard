@@ -10,7 +10,7 @@ export const getClassLevelsApi = async () => {
   return res.data as { classLevels: string[] }
 }
 
-export const getClassOverviewApi = async (termId: string, classLevel: string): Promise<{ students: any[]; subjectCount: number }> => {
+export const getClassOverviewApi = async (termId: string, classLevel: string): Promise<{ students: any[]; subjectCount: number; teacherSubjectCount: number }> => {
   const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel } })
   return res.data as {
     students: {
@@ -18,6 +18,7 @@ export const getClassOverviewApi = async (termId: string, classLevel: string): P
       reportCard: { id: string; status: string; average: number | null; marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean } | null
     }[]
     subjectCount: number
+    teacherSubjectCount: number
   }
 }
 
@@ -156,5 +157,40 @@ export const getReadinessDetailApi = async (id: string): Promise<ReadinessDetail
 
 export const getClassReadinessApi = async (termId: string): Promise<{ readiness: Record<string, ClassReadiness> }> => {
   const res = await api.get(`/report-cards/class-readiness?termId=${termId}`)
+  return res.data
+}
+
+export interface TranscriptEntry {
+  id: string
+  score: number | null
+  seq1Score?: number | null
+  seq2Score?: number | null
+  grade?: string | null
+  subject: { id: string; name: string; code?: string | null; credit?: number | null; term?: string | null; classLevel: string }
+}
+
+export interface TranscriptReportCard {
+  id: string
+  term: { id: string; name: string; session: string }
+  entries: TranscriptEntry[]
+  average?: number | null
+  remarks?: string | null
+}
+
+export interface StudentTranscript {
+  student: {
+    id: string; name: string; studentId: string; classLevel: string; gender?: string | null
+    dateOfBirth?: string | null; nationality?: string | null
+  }
+  school: { name: string; logo?: string | null; language?: string | null; type?: string | null }
+  session: string
+  reportCards: TranscriptReportCard[]
+  maxScore: number
+  gradingScale: { id: string; minScore: number; maxScore: number; grade: string; remark: string; color: string; gradePoint?: number }[]
+  classificationBands: { min: number; max: number; label: string }[]
+}
+
+export const getStudentTranscriptApi = async (studentId: string, session?: string): Promise<StudentTranscript> => {
+  const res = await api.get(`/report-cards/student/${studentId}/transcript`, { params: session ? { session } : {} })
   return res.data
 }

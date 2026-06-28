@@ -1,0 +1,219 @@
+{
+  "version": 3,
+  "pages404": true,
+  "appType": "app",
+  "caseSensitive": false,
+  "basePath": "",
+  "redirects": [
+    {
+      "source": "/:path+/",
+      "destination": "/:path+",
+      "internal": true,
+      "priority": true,
+      "statusCode": 308,
+      "regex": "^(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))/$"
+    }
+  ],
+  "headers": [],
+  "onMatchHeaders": [],
+  "rewrites": {
+    "beforeFiles": [],
+    "afterFiles": [
+      {
+        "source": "/uploads/:path*",
+        "destination": "/uploads/:path*",
+        "regex": "^/uploads(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?(?:/)?$"
+      }
+    ],
+    "fallback": []
+  },
+  "dynamicRoutes": [
+    {
+      "page": "/print/class/[classLevel]",
+      "regex": "^/print/class/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPclassLevel": "nxtPclassLevel"
+      },
+      "namedRegex": "^/print/class/(?<nxtPclassLevel>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/report-cards/class/[classLevel]",
+      "regex": "^/report\\-cards/class/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPclassLevel": "nxtPclassLevel"
+      },
+      "namedRegex": "^/report\\-cards/class/(?<nxtPclassLevel>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/report-cards/class/[classLevel]/[subjectId]",
+      "regex": "^/report\\-cards/class/([^/]+?)/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPclassLevel": "nxtPclassLevel",
+        "nxtPsubjectId": "nxtPsubjectId"
+      },
+      "namedRegex": "^/report\\-cards/class/(?<nxtPclassLevel>[^/]+?)/(?<nxtPsubjectId>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/report-cards/[id]",
+      "regex": "^/report\\-cards/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/report\\-cards/(?<nxtPid>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/superadmin/schools/[id]",
+      "regex": "^/superadmin/schools/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/superadmin/schools/(?<nxtPid>[^/]+?)(?:/)?$"
+    }
+  ],
+  "staticRoutes": [
+    {
+      "page": "/",
+      "regex": "^/(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/(?:/)?$"
+    },
+    {
+      "page": "/_global-error",
+      "regex": "^/_global\\-error(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_global\\-error(?:/)?$"
+    },
+    {
+      "page": "/_not-found",
+      "regex": "^/_not\\-found(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_not\\-found(?:/)?$"
+    },
+    {
+      "page": "/academic-year",
+      "regex": "^/academic\\-year(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/academic\\-year(?:/)?$"
+    },
+    {
+      "page": "/class-list-design",
+      "regex": "^/class\\-list\\-design(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/class\\-list\\-design(?:/)?$"
+    },
+    {
+      "page": "/class-master",
+      "regex": "^/class\\-master(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/class\\-master(?:/)?$"
+    },
+    {
+      "page": "/classes",
+      "regex": "^/classes(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/classes(?:/)?$"
+    },
+    {
+      "page": "/dashboard",
+      "regex": "^/dashboard(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/dashboard(?:/)?$"
+    },
+    {
+      "page": "/favicon.ico",
+      "regex": "^/favicon\\.ico(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/favicon\\.ico(?:/)?$"
+    },
+    {
+      "page": "/fees",
+      "regex": "^/fees(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/fees(?:/)?$"
+    },
+    {
+      "page": "/grading-scale",
+      "regex": "^/grading\\-scale(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/grading\\-scale(?:/)?$"
+    },
+    {
+      "page": "/login",
+      "regex": "^/login(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login(?:/)?$"
+    },
+    {
+      "page": "/register",
+      "regex": "^/register(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/register(?:/)?$"
+    },
+    {
+      "page": "/report-card-design",
+      "regex": "^/report\\-card\\-design(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/report\\-card\\-design(?:/)?$"
+    },
+    {
+      "page": "/report-cards",
+      "regex": "^/report\\-cards(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/report\\-cards(?:/)?$"
+    },
+    {
+      "page": "/settings",
+      "regex": "^/settings(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/settings(?:/)?$"
+    },
+    {
+      "page": "/students",
+      "regex": "^/students(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/students(?:/)?$"
+    },
+    {
+      "page": "/subjects",
+      "regex": "^/subjects(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/subjects(?:/)?$"
+    },
+    {
+      "page": "/superadmin",
+      "regex": "^/superadmin(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/superadmin(?:/)?$"
+    },
+    {
+      "page": "/teachers",
+      "regex": "^/teachers(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/teachers(?:/)?$"
+    },
+    {
+      "page": "/terms",
+      "regex": "^/terms(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/terms(?:/)?$"
+    }
+  ],
+  "dataRoutes": [],
+  "rsc": {
+    "header": "rsc",
+    "varyHeader": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "prefetchHeader": "next-router-prefetch",
+    "didPostponeHeader": "x-nextjs-postponed",
+    "contentTypeHeader": "text/x-component",
+    "suffix": ".rsc",
+    "prefetchSegmentHeader": "next-router-segment-prefetch",
+    "prefetchSegmentSuffix": ".segment.rsc",
+    "prefetchSegmentDirSuffix": ".segments",
+    "clientParamParsing": false,
+    "dynamicRSCPrerender": false
+  },
+  "rewriteHeaders": {
+    "pathHeader": "x-nextjs-rewritten-path",
+    "queryHeader": "x-nextjs-rewritten-query"
+  }
+}
