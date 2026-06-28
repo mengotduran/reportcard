@@ -56,29 +56,32 @@ function toLevel1ClassName(classLevel: string): string {
 }
 
 /**
- * Builds a map from each HND class name → the fee that student owes in total.
+ * Resolve the total fee owed by a single student.
  *
- * Level 1: full 2-year program fee (set on the Level 1 class by admin).
- * Level 2: half that fee — covers students who join the program directly at Level 2.
- *   Students who started at Level 1 already paid (or part-paid) toward 650 000;
- *   their all-session payment sum is still compared against 325 000 here, so any
- *   overpayment from Level 1 simply leaves a zero balance in Level 2.
+ * HND Level 1 → full 2-year program fee stored on the Level 1 class.
+ * HND Level 2, carry-over student (directLevel2Entry = false) → same Level 1 fee;
+ *   payments made across both Level 1 and Level 2 sessions all count.
+ * HND Level 2, direct entrant (directLevel2Entry = true) → the Level 2 class's
+ *   own feeAmount (set independently by admin; NOT forced to half of Level 1).
+ * Everything else → use the class's own feeAmount (session-scoped payments).
  */
-function buildHndFeeMap(classes: ClassFeeInfo[]): Map<string, number> {
-  const map = new Map<string, number>()
-  for (const c of classes) {
-    if (!isHndClass(c.name)) continue
-    const l1Name = toLevel1ClassName(c.name)
-    const l1Fee = classes.find((x) => x.name === l1Name)?.feeAmount ?? 0
-    if (/ - Level 1$/i.test(c.name)) {
-      // Level 1: show the full program fee (falls back to own feeAmount if set)
-      map.set(c.name, l1Fee || c.feeAmount)
-    } else {
-      // Level 2: half the Level 1 program fee
-      map.set(c.name, l1Fee > 0 ? Math.round(l1Fee / 2) : c.feeAmount)
-    }
+function resolveStudentFee(
+  student: { classLevel: string; directLevel2Entry: boolean },
+  classes: ClassFeeInfo[],
+): number {
+  if (/ - Level 1$/i.test(student.classLevel)) {
+    return classes.find((c) => c.name === student.classLevel)?.feeAmount ?? 0
   }
-  return map
+  if (/ - Level 2$/i.test(student.classLevel)) {
+    if (student.directLevel2Entry) {
+      // Direct Level 2 entrant: pay the Level 2 class fee (admin-configured)
+      return classes.find((c) => c.name === student.classLevel)?.feeAmount ?? 0
+    }
+    // Carry-over from Level 1: pay the full program fee stored on Level 1
+    const l1Name = toLevel1ClassName(student.classLevel)
+    return classes.find((c) => c.name === l1Name)?.feeAmount ?? 0
+  }
+  return makeFeeResolver(classes)(student.classLevel)
 }
 
 /** GET /api/fees/student/:studentId — ledger + balance. HND students see the full 2-year program fee across all sessions. */
@@ -98,9 +101,8 @@ export const getStudentFees = async (req: AuthRequest, res: Response) => {
       loadClassFees(schoolId),
     ])
 
-    const hndFeeMap = buildHndFeeMap(classes)
     const hnd = isHndClass(student.classLevel)
-    const due = hnd ? (hndFeeMap.get(student.classLevel) ?? 0) : makeFeeResolver(classes)(student.classLevel)
+    const due = resolveStudentFee(student as { classLevel: string; directLevel2Entry: boolean }, classes)
 
     // HND: sum all payments ever made (both Level 1 and Level 2 sessions).
     // Others: scope to current session only.
@@ -222,10 +224,11 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
     ])
 
     const hnd = isHndClass(classLevel)
-    const hndFeeMap = hnd ? buildHndFeeMap(classes) : null
     const cls = classes.find((c) => c.name === classLevel)
+    // For the class header we show the Level 1 program fee (carry-over students' total).
+    // Per-student rows may differ if some are direct Level 2 entrants.
     const feeAmount = hnd
-      ? (hndFeeMap!.get(classLevel) ?? 0)
+      ? resolveStudentFee({ classLevel, directLevel2Entry: false }, classes)
       : cls ? cls.feeAmount : makeFeeResolver(classes)(classLevel)
 
     // For a streamed class ("Form 4") the students are "Form 4 Arts"/"Form 4 Science".
@@ -235,7 +238,7 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
 
     const students = await prisma.student.findMany({
       where: studentWhere,
-      select: { id: true, name: true, studentId: true },
+      select: { id: true, name: true, studentId: true, directLevel2Entry: true },
       orderBy: { name: 'asc' },
     })
 
@@ -254,14 +257,20 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
     }
 
     const rows = students.map((s) => {
+      // Per-student fee: carry-over Level 2 students see the Level 1 program fee;
+      // direct Level 2 entrants see the Level 2 class's own fee.
+      const studentFee = hnd
+        ? resolveStudentFee({ classLevel, directLevel2Entry: s.directLevel2Entry }, classes)
+        : feeAmount
       const paid = paidByStudent.get(s.id) ?? 0
       return {
         studentId: s.id,
         name: s.name,
         studentIdCode: s.studentId,
+        fee: studentFee,
         paid,
-        balance: Math.max(0, feeAmount - paid),
-        status: feeStatus(feeAmount, paid),
+        balance: Math.max(0, studentFee - paid),
+        status: feeStatus(studentFee, paid),
       }
     })
 
@@ -350,13 +359,10 @@ export const getFeesOverview = async (req: AuthRequest, res: Response) => {
       currentSession(schoolId),
       prisma.student.findMany({
         where: { schoolId, isActive: true },
-        select: { id: true, classLevel: true },
+        select: { id: true, classLevel: true, directLevel2Entry: true },
       }),
       loadClassFees(schoolId),
     ])
-
-    const feeFor = makeFeeResolver(classes)
-    const hndFeeMap = buildHndFeeMap(classes)
 
     const hndIds = students.filter((s) => isHndClass(s.classLevel)).map((s) => s.id)
     const stdIds = students.filter((s) => !isHndClass(s.classLevel)).map((s) => s.id)
@@ -384,7 +390,7 @@ export const getFeesOverview = async (req: AuthRequest, res: Response) => {
     }
 
     const result = students.map((s) => {
-      const due = isHndClass(s.classLevel) ? (hndFeeMap.get(s.classLevel) ?? 0) : feeFor(s.classLevel)
+      const due = resolveStudentFee(s, classes)
       const paid = paidByStudent.get(s.id) ?? 0
       return { studentId: s.id, due, paid, balance: Math.max(0, due - paid), status: feeStatus(due, paid) }
     })

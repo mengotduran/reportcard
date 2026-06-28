@@ -4,12 +4,13 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
   getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, StudentStatus,
+  bulkPromoteStudentsApi,
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
@@ -25,6 +26,7 @@ interface Student {
   classLevel: string; gender?: string; guardianName?: string
   guardianPhone?: string; guardianEmail?: string
   status?: StudentStatus
+  directLevel2Entry?: boolean
 }
 
 const STATUS_TABS: { value: StudentStatus; label: string }[] = [
@@ -38,7 +40,7 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   DISMISSED: 'bg-red-100 text-red-700',
 }
 
-const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '' }
+const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
 
 // Helpers for parsing university class level names
 function univDept(classLevel: string): string {
@@ -86,6 +88,9 @@ export default function StudentsPage() {
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
   const [exporting, setExporting] = useState(false)
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
+  const [promoteModalOpen, setPromoteModalOpen] = useState(false)
+  const [promoteSelected, setPromoteSelected] = useState<Set<string>>(new Set())
+  const [promoting, setPromoting] = useState(false)
   const [importModalOpen, setImportModalOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importPreview, setImportPreview] = useState<ImportPreviewResult | null>(null)
@@ -259,6 +264,7 @@ export default function StudentsPage() {
       guardianEmail: s.guardianEmail || '',
       uniDept: isUniversity ? univDept(baseClass) : '',
       uniLevel: isUniversity ? univLevel(baseClass) : '',
+      directLevel2Entry: (s as { directLevel2Entry?: boolean }).directLevel2Entry ?? false,
     })
     setError('')
     setShowModal(true)
@@ -289,12 +295,13 @@ export default function StudentsPage() {
     setSaving(true)
     try {
       const classLevel = needsStream ? `${form.classLevel} ${form.stream}` : form.classLevel
-      const { stream, studentId: _sid, ...rest } = form
+      const { stream, studentId: _sid, uniDept: _ud, uniLevel: _ul, ...rest } = form
+      const isLevel2 = / - Level 2$/i.test(classLevel)
       if (editingId) {
-        await updateStudentApi(editingId, { ...rest, classLevel })
+        await updateStudentApi(editingId, { ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
         showToast(t('Student updated'))
       } else {
-        await createStudentApi({ ...rest, classLevel })
+        await createStudentApi({ ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
         const switchedTo = switchToLiveYearIfNeeded()
         showToast(switchedTo
           ? `${t('Student added successfully')} — ${t('switched to the current academic year')} (${switchedTo})`
@@ -481,7 +488,16 @@ export default function StudentsPage() {
             {students.length} {activeClass !== 'all' ? `${t('in')} ${activeClass}` : t('total students')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {isUniversity && / - Level 1$/i.test(activeClass) && statusFilter === 'ACTIVE' && (
+            <button onClick={() => {
+              setPromoteSelected(new Set(students.map((s) => s.id)))
+              setPromoteModalOpen(true)
+            }}
+              className="flex items-center gap-2 border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/30 dark:border-indigo-700 dark:text-indigo-300 px-3 py-2 rounded-lg text-sm font-medium transition">
+              <ArrowUpCircle size={16} /> Promote to Level 2
+            </button>
+          )}
           <button onClick={handleExport} disabled={exporting}
             className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
             <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
@@ -686,19 +702,40 @@ export default function StudentsPage() {
                     )}
                   </div>
                   {form.uniDept && (
-                    <div>
-                      <label className="block text-xs font-medium text-foreground mb-2">Level <span className="text-destructive">*</span></label>
-                      <div className="flex flex-wrap gap-3">
-                        {uniLevelsForDept.map(({ label, classLevel }) => (
-                          <label key={label} className="flex items-center gap-2 cursor-pointer">
-                            <input type="radio" name="uniLevel" value={label} required
-                              checked={form.uniLevel === label}
-                              onChange={() => setForm({ ...form, uniLevel: label, classLevel })}
-                              className="accent-primary" />
-                            <span className="text-sm text-foreground">{label}</span>
-                          </label>
-                        ))}
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-foreground mb-2">Level <span className="text-destructive">*</span></label>
+                        <div className="flex flex-wrap gap-3">
+                          {uniLevelsForDept.map(({ label, classLevel }) => (
+                            <label key={label} className="flex items-center gap-2 cursor-pointer">
+                              <input type="radio" name="uniLevel" value={label} required
+                                checked={form.uniLevel === label}
+                                onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
+                                className="accent-primary" />
+                              <span className="text-sm text-foreground">{label}</span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
+                      {form.uniLevel === 'Level 2' && !editingId && (
+                        <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+                          <strong>Old Level 1 students?</strong> Use the <strong>"Promote to Level 2"</strong> button on the students list instead — it moves existing students in bulk without creating duplicates.
+                        </div>
+                      )}
+                      {form.uniLevel === 'Level 2' && (
+                        <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
+                          <input type="checkbox"
+                            checked={form.directLevel2Entry}
+                            onChange={(e) => setForm({ ...form, directLevel2Entry: e.target.checked })}
+                            className="mt-0.5 accent-amber-600 w-4 h-4 flex-shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Direct Level 2 entrant (new student)</p>
+                            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                              Check this only if the student is enrolling fresh at Level 2 and was NOT here in Level 1. They will be charged the Level 2 entry fee instead of the full 2-year program fee.
+                            </p>
+                          </div>
+                        </label>
+                      )}
                     </div>
                   )}
                 </div>
@@ -759,7 +796,7 @@ export default function StudentsPage() {
                 <div key={field.name}>
                   <label className="block text-xs font-medium text-foreground mb-1">{t(field.label)}</label>
                   <input type="text" placeholder={field.placeholder}
-                    value={form[field.name as keyof typeof emptyForm]}
+                    value={form[field.name as keyof typeof emptyForm] as string}
                     onChange={(e) => setForm({ ...form, [field.name]: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
@@ -902,6 +939,128 @@ export default function StudentsPage() {
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                 {statusSaving ? t('Saving...') : t('Save')}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {promoteModalOpen && / - Level 1$/i.test(activeClass) && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 pb-4 border-b border-border">
+              <div>
+                <h3 className="font-semibold text-foreground text-lg flex items-center gap-2">
+                  <ArrowUpCircle size={20} className="text-indigo-600 dark:text-indigo-400" />
+                  Promote to Level 2
+                </h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {activeClass.replace(/ - Level 1$/i, '')} · Uncheck students who are not continuing
+                </p>
+              </div>
+              <button onClick={() => setPromoteModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="px-6 py-3 border-b border-border flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">
+                {promoteSelected.size} of {students.length} selected
+              </span>
+              <button
+                onClick={() => {
+                  if (promoteSelected.size === students.length) {
+                    setPromoteSelected(new Set())
+                  } else {
+                    setPromoteSelected(new Set(students.map((s) => s.id)))
+                  }
+                }}
+                className="text-xs text-primary hover:underline font-medium"
+              >
+                {promoteSelected.size === students.length ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 px-6 py-3 space-y-1">
+              {students.length === 0 && (
+                <p className="text-sm text-muted-foreground py-4 text-center">No students in this class.</p>
+              )}
+              {students.map((s) => {
+                const feeRow = feesByStudent[s.id]
+                const feeStatus = feeRow?.status
+                const feeBadge =
+                  feeStatus === 'COMPLETE' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+                  feeStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                  feeStatus === 'UNPAID' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : ''
+                const feeLabel2 =
+                  feeStatus === 'COMPLETE' ? 'Fees complete' :
+                  feeStatus === 'PARTIAL' ? 'Partly paid' :
+                  feeStatus === 'UNPAID' ? 'Unpaid' : ''
+                return (
+                  <label key={s.id}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-muted transition border ${promoteSelected.has(s.id) ? 'border-indigo-200 bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-800' : 'border-transparent'}`}>
+                    <input
+                      type="checkbox"
+                      checked={promoteSelected.has(s.id)}
+                      onChange={(e) => {
+                        const next = new Set(promoteSelected)
+                        if (e.target.checked) next.add(s.id)
+                        else next.delete(s.id)
+                        setPromoteSelected(next)
+                      }}
+                      className="accent-indigo-600 w-4 h-4 flex-shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{s.name}</p>
+                      <p className="text-xs text-muted-foreground">{s.studentId}</p>
+                    </div>
+                    {feeLabel2 && (
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${feeBadge}`}>
+                        {feeLabel2}
+                      </span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+
+            <div className="p-6 pt-4 border-t border-border">
+              {terms.some((t) => t.isCurrent) && (
+                <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg text-xs text-amber-800 dark:text-amber-300">
+                  <strong>Academic year still active.</strong> End the current academic year on the Terms page before promoting students to Level 2.
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground mb-4">
+                Selected students will be moved to <strong>{activeClass.replace(/ - Level 1$/i, ' - Level 2')}</strong>.
+                They keep carry-over status — their 2-year program fee stays intact.
+              </p>
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setPromoteModalOpen(false)}
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={promoting || promoteSelected.size === 0 || terms.some((t) => t.isCurrent)}
+                  onClick={async () => {
+                    setPromoting(true)
+                    try {
+                      const result = await bulkPromoteStudentsApi(Array.from(promoteSelected))
+                      showToast(`${result.promoted} student${result.promoted !== 1 ? 's' : ''} promoted to Level 2`, 'success')
+                      setPromoteModalOpen(false)
+                      fetchStudents(activeClass)
+                      fetchFilterClasses()
+                    } catch (err: unknown) {
+                      const e2 = err as { response?: { data?: { message?: string } } }
+                      showToast(e2.response?.data?.message || 'Failed to promote students', 'error')
+                    } finally {
+                      setPromoting(false)
+                    }
+                  }}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition"
+                >
+                  {promoting ? 'Promoting...' : `Promote ${promoteSelected.size > 0 ? promoteSelected.size : ''} student${promoteSelected.size !== 1 ? 's' : ''}`}
+                </button>
+              </div>
             </div>
           </div>
         </div>

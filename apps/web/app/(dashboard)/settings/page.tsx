@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap } from 'lucide-react'
 import api from '@/lib/api/client'
 import { saveBlob } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
@@ -145,6 +145,8 @@ export default function SettingsPage() {
 
   const [infoForm, setInfoForm] = useState({ name: school?.name ?? '', acronym: (school as any)?.acronym ?? '', batch: (school as any)?.batch ?? '' })
   const [savingInfo, setSavingInfo] = useState(false)
+  const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
+  const [savingThreshold, setSavingThreshold] = useState(false)
 
   const handleSaveInfo = async () => {
     setSavingInfo(true)
@@ -154,6 +156,16 @@ export default function SettingsPage() {
       showToast(t('School info saved'))
     } catch { showToast(t('Failed to save'), 'error') }
     finally { setSavingInfo(false) }
+  }
+
+  const handleSaveThreshold = async () => {
+    setSavingThreshold(true)
+    try {
+      const res = await api.put('/school/settings', { repeatThreshold: thresholdValue === '' ? null : Number(thresholdValue) })
+      updateSchool(res.data.school)
+      showToast(t('Decision threshold saved'))
+    } catch { showToast(t('Failed to save'), 'error') }
+    finally { setSavingThreshold(false) }
   }
 
   const logoUrl = school?.logo ?? null
@@ -320,6 +332,41 @@ export default function SettingsPage() {
           ref={coverRef} type="file" accept="image/*" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAddCoverImage(f); e.target.value = '' }}
         />
+      </div>
+
+      {/* Academic Decisions */}
+      <div className="bg-card rounded-xl border border-border p-6 mb-4">
+        <h3 className="font-semibold text-foreground flex items-center gap-2 mb-1">
+          <GraduationCap size={16} /> {t('Academic Decisions (PASS / REPEAT)')}
+        </h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          {t('Set the minimum annual average a student needs to pass. When you end the academic year, PASS or REPEAT is written automatically on every report card.')}
+        </p>
+        <div className="flex items-end gap-3">
+          <div className="flex-1 max-w-xs">
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+              {isUniversity ? t('Min average to pass (0 – 100)') : t('Min average to pass (0 – 20)')}
+            </label>
+            <input
+              type="number"
+              min={0} max={isUniversity ? 100 : 20} step={0.5}
+              placeholder={t('e.g. 10')}
+              value={thresholdValue}
+              onChange={(e) => setThresholdValue(e.target.value)}
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              {thresholdValue !== '' ? `Students averaging below ${thresholdValue} will be marked REPEAT.` : t('Leave blank to disable auto-decisions.')}
+            </p>
+          </div>
+          <button
+            onClick={handleSaveThreshold}
+            disabled={savingThreshold}
+            className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+          >
+            {savingThreshold ? t('Saving…') : t('Save')}
+          </button>
+        </div>
       </div>
 
       {/* Grading Scale */}

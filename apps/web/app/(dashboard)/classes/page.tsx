@@ -54,7 +54,7 @@ type FormState = {
 }
 
 const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '150000', hndRegistrationFee: '65000' }
-const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '325000', hndRegistrationFee: '65000' }
+const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '650000', hndRegistrationFee: '65000' }
 
 export default function ClassesPage() {
   const router = useRouter()

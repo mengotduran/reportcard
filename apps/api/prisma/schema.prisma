@@ -34,6 +34,7 @@ model School {
   coverImages        String[]
   acronym            String?
   batch              Int?
+  repeatThreshold    Float?
   classLevels        ClassLevel[]
   classListTemplate  ClassListTemplate?
   excelTemplates     ExcelTemplate[]
@@ -114,11 +115,12 @@ model Student {
   guardianName  String?
   guardianPhone String?
   guardianEmail String?
-  isActive      Boolean       @default(true)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  gender        String?
-  status        StudentStatus @default(ACTIVE)
+  isActive            Boolean       @default(true)
+  directLevel2Entry   Boolean       @default(false)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  gender              String?
+  status              StudentStatus @default(ACTIVE)
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
   reportCards              ReportCard[]
@@ -219,6 +221,7 @@ model ReportCard {
   remarksAiEn          String?
   remarksAiFr          String?
   remarksSource        String?
+  decision             String?
   createdBy            User          @relation(fields: [createdById], references: [id])
   school               School        @relation(fields: [schoolId], references: [id])
   student              Student       @relation(fields: [studentId], references: [id])

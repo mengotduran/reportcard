@@ -30,6 +30,7 @@ interface RawEntry {
 }
 interface RawRC {
   id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
+  decision?: string | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; isActive?: boolean }
   term: { id: string; name: string; session: string }
   entries: RawEntry[]
@@ -83,6 +84,7 @@ interface ReportCard {
   status: string
   totalScore: number | null
   average: number | null
+  decision?: string | null
   student: { id: string; name: string; classLevel: string; studentId: string }
   term: { id: string; name: string; session: string }
   entries: { id: string; score: number; grade: string; subject: { name: string } }[]
@@ -779,6 +781,7 @@ export default function ReportCardsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Term')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Subjects')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Average')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Decision')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Status')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Actions')}</th>
               </tr>
@@ -801,6 +804,14 @@ export default function ReportCardsPage() {
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.term.name} — {rc.term.session}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.entries.length} {tr('subjects')}</td>
                   <td className="px-4 py-3 text-sm font-medium text-foreground">{rc.average != null ? rc.average.toFixed(1) : '—'}</td>
+                  <td className="px-4 py-3">
+                    {rc.decision === 'PASS' && (
+                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded-full">PASS</span>
+                    )}
+                    {rc.decision === 'REPEAT' && (
+                      <span className="text-xs font-semibold text-red-700 bg-red-100 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded-full">REPEAT</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     {rc.status === 'PUBLISHED' ? (
                       <span className="flex items-center gap-1 text-xs text-green-700 bg-green-100 px-2 py-1 rounded-full w-fit">

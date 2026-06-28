@@ -166,7 +166,7 @@ async function generateStudentId(schoolId: string, classLevel?: string): Promise
 export const createStudent = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry } = req.body
 
     if (gender !== 'Male' && gender !== 'Female') {
       res.status(400).json({ message: 'Gender (Male or Female) is required' })
@@ -179,7 +179,7 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
     const studentId = await generateStudentId(schoolId, classLevel)
 
     const student = await prisma.student.create({
-      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail }
+      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry: !!directLevel2Entry }
     })
 
     res.status(201).json({ message: 'Student created', student })
@@ -193,7 +193,7 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry } = req.body
 
     const student = await prisma.student.findFirst({ where: { id, schoolId } })
     if (!student) {
@@ -203,7 +203,7 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
 
     const updated = await prisma.student.update({
       where: { id },
-      data: { name, classLevel, ...(gender !== undefined ? { gender } : {}), guardianName, guardianPhone, guardianEmail }
+      data: { name, classLevel, ...(gender !== undefined ? { gender } : {}), guardianName, guardianPhone, guardianEmail, ...(directLevel2Entry !== undefined ? { directLevel2Entry: !!directLevel2Entry } : {}) }
     })
 
     res.json({ message: 'Student updated', student: updated })
@@ -242,6 +242,51 @@ export const setStudentStatus = async (req: AuthRequest, res: Response) => {
       data: { status: status as any, isActive: status === 'ACTIVE' },
     })
     res.json({ message: 'Student status updated', student: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+/**
+ * POST /api/students/bulk-promote
+ * Moves a list of Level 1 HND students up to Level 2.
+ * directLevel2Entry stays false (carry-over fee behaviour).
+ */
+export const bulkPromoteStudents = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const studentIds: string[] = Array.isArray(req.body.studentIds) ? req.body.studentIds : []
+    if (studentIds.length === 0) {
+      res.status(400).json({ message: 'No students selected.' })
+      return
+    }
+
+    // Verify all students belong to this school and are in a Level 1 class
+    const students = await prisma.student.findMany({
+      where: { id: { in: studentIds }, schoolId, isActive: true },
+      select: { id: true, classLevel: true },
+    })
+
+    const toUpdate: { id: string; newLevel: string }[] = []
+    for (const s of students) {
+      if (!/ - Level 1$/i.test(s.classLevel)) continue
+      const newLevel = s.classLevel.replace(/ - Level 1$/i, ' - Level 2')
+      toUpdate.push({ id: s.id, newLevel })
+    }
+
+    if (toUpdate.length === 0) {
+      res.status(400).json({ message: 'None of the selected students are in a Level 1 class.' })
+      return
+    }
+
+    await prisma.$transaction(
+      toUpdate.map(({ id, newLevel }) =>
+        prisma.student.update({ where: { id }, data: { classLevel: newLevel, directLevel2Entry: false } }),
+      ),
+    )
+
+    res.json({ message: `${toUpdate.length} student${toUpdate.length !== 1 ? 's' : ''} promoted to Level 2.`, promoted: toUpdate.length })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

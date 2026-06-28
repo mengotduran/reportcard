@@ -59,6 +59,7 @@ export interface ClassFeeRow {
   studentId: string
   name: string
   studentIdCode: string
+  fee?: number   // per-student (may differ for carry-over vs direct Level 2 entrants)
   paid: number
   balance: number
   status: FeeStatus

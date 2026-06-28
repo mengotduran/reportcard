@@ -19,6 +19,7 @@ export const createStudentApi = async (data: {
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string
+  directLevel2Entry?: boolean
 }) => {
   const res = await api.post('/students', data)
   return res.data
@@ -31,8 +32,14 @@ export const updateStudentApi = async (id: string, data: {
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string
+  directLevel2Entry?: boolean
 }) => {
   const res = await api.put(`/students/${id}`, data)
+  return res.data
+}
+
+export const bulkPromoteStudentsApi = async (studentIds: string[]): Promise<{ promoted: number; message: string }> => {
+  const res = await api.post('/students/bulk-promote', { studentIds })
   return res.data
 }
 

@@ -18,6 +18,7 @@ interface School {
   logo: string | null
   coverImage: string | null
   coverImages: string[]
+  repeatThreshold?: number | null
 }
 
 interface AuthState {

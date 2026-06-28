@@ -273,7 +273,8 @@ export default function FeesPage() {
                   <tbody>
                     {pageItems.map((s, i) => {
                       const r = row(s.studentId)
-                      const disabled = data!.feeAmount === 0 || s.balance === 0
+                      const rowFee = isHnd ? (s.fee ?? data!.feeAmount) : data!.feeAmount
+                      const disabled = rowFee === 0 || s.balance === 0
                       const hasEntry = Number(r.amount) > 0
                       return (
                         <tr key={s.studentId} className={`group transition ${hasEntry ? 'bg-primary/5' : 'hover:bg-muted/60'}`}>
@@ -283,9 +284,12 @@ export default function FeesPage() {
                             <span className="block text-xs text-muted-foreground">{s.studentIdCode}</span>
                           </td>
                           <td className="px-4 py-2.5 text-right border-b border-border whitespace-nowrap">
-                            {data!.feeAmount > 0
-                              ? <span className={`text-sm font-semibold ${isHnd ? 'text-indigo-600' : 'text-foreground'}`}>{formatXAF(data!.feeAmount)}</span>
-                              : <span className="text-muted-foreground text-sm">—</span>}
+                            {(() => {
+                              const rowFee = isHnd ? (s.fee ?? data!.feeAmount) : data!.feeAmount
+                              return rowFee > 0
+                                ? <span className={`text-sm font-semibold ${isHnd ? 'text-indigo-600' : 'text-foreground'}`}>{formatXAF(rowFee)}</span>
+                                : <span className="text-muted-foreground text-sm">—</span>
+                            })()}
                           </td>
                           <td className="px-4 py-2.5 text-right text-sm text-emerald-600 font-semibold whitespace-nowrap border-b border-border">{formatXAF(s.paid)}</td>
                           <td className="px-4 py-2.5 text-right text-sm font-medium text-foreground whitespace-nowrap border-b border-border">{formatXAF(s.balance)}</td>
