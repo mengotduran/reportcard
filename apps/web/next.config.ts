@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  allowedDevOrigins: ['192.168.1.137'],
   // Only set for the offline-install build (see scripts/offline-build/ —
   // mirrors the same env-var-gated approach used for apps/api). Leaving
   // this unset for the normal build keeps Vercel's behavior byte-identical

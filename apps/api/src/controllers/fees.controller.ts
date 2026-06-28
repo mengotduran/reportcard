@@ -43,7 +43,45 @@ async function loadClassFees(schoolId: string): Promise<ClassFeeInfo[]> {
   return prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, feeAmount: true, hasStream: true } })
 }
 
-/** GET /api/fees/student/:studentId — ledger + balance for the current session. */
+// ── HND 2-year program fee helpers ──────────────────────────────────────────
+
+/** True for HND Level 1 and Level 2 classes. Level 3 (Degree) is a separate program. */
+function isHndClass(classLevel: string): boolean {
+  return / - Level [12]$/i.test(classLevel)
+}
+
+/** Given any HND class name, returns the Level 1 version (where the program fee lives). */
+function toLevel1ClassName(classLevel: string): string {
+  return classLevel.replace(/ - Level \d+$/i, ' - Level 1')
+}
+
+/**
+ * Builds a map from each HND class name → the fee that student owes in total.
+ *
+ * Level 1: full 2-year program fee (set on the Level 1 class by admin).
+ * Level 2: half that fee — covers students who join the program directly at Level 2.
+ *   Students who started at Level 1 already paid (or part-paid) toward 650 000;
+ *   their all-session payment sum is still compared against 325 000 here, so any
+ *   overpayment from Level 1 simply leaves a zero balance in Level 2.
+ */
+function buildHndFeeMap(classes: ClassFeeInfo[]): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const c of classes) {
+    if (!isHndClass(c.name)) continue
+    const l1Name = toLevel1ClassName(c.name)
+    const l1Fee = classes.find((x) => x.name === l1Name)?.feeAmount ?? 0
+    if (/ - Level 1$/i.test(c.name)) {
+      // Level 1: show the full program fee (falls back to own feeAmount if set)
+      map.set(c.name, l1Fee || c.feeAmount)
+    } else {
+      // Level 2: half the Level 1 program fee
+      map.set(c.name, l1Fee > 0 ? Math.round(l1Fee / 2) : c.feeAmount)
+    }
+  }
+  return map
+}
+
+/** GET /api/fees/student/:studentId — ledger + balance. HND students see the full 2-year program fee across all sessions. */
 export const getStudentFees = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -55,21 +93,35 @@ export const getStudentFees = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const session = await currentSession(schoolId)
-    const due = makeFeeResolver(await loadClassFees(schoolId))(student.classLevel)
+    const [session, classes] = await Promise.all([
+      currentSession(schoolId),
+      loadClassFees(schoolId),
+    ])
 
-    const payments = session
+    const hndFeeMap = buildHndFeeMap(classes)
+    const hnd = isHndClass(student.classLevel)
+    const due = hnd ? (hndFeeMap.get(student.classLevel) ?? 0) : makeFeeResolver(classes)(student.classLevel)
+
+    // HND: sum all payments ever made (both Level 1 and Level 2 sessions).
+    // Others: scope to current session only.
+    const payments = hnd
       ? await prisma.feePayment.findMany({
-          where: { studentId, session },
+          where: { studentId },
           orderBy: [{ paidOn: 'asc' }, { createdAt: 'asc' }],
         })
-      : []
+      : session
+        ? await prisma.feePayment.findMany({
+            where: { studentId, session },
+            orderBy: [{ paidOn: 'asc' }, { createdAt: 'asc' }],
+          })
+        : []
 
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0)
     const balance = Math.max(0, due - totalPaid)
 
     res.json({
       session,
+      isHndProgram: hnd,
       student: { id: student.id, name: student.name, studentId: student.studentId, classLevel: student.classLevel },
       due,
       totalPaid,
@@ -157,17 +209,24 @@ export const deletePayment = async (req: AuthRequest, res: Response) => {
 
 /**
  * GET /api/fees/class/:classLevel — roster for one class with each student's
- * paid/balance/status for the current session (drives the per-class fees grid).
+ * paid/balance/status. HND Level 1/2 classes show the 2-year program fee
+ * and sum payments across all sessions.
  */
 export const getClassFees = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const classLevel = decodeURIComponent(String(req.params.classLevel))
-    const session = await currentSession(schoolId)
+    const [session, classes] = await Promise.all([
+      currentSession(schoolId),
+      loadClassFees(schoolId),
+    ])
 
-    const classes = await loadClassFees(schoolId)
+    const hnd = isHndClass(classLevel)
+    const hndFeeMap = hnd ? buildHndFeeMap(classes) : null
     const cls = classes.find((c) => c.name === classLevel)
-    const feeAmount = cls ? cls.feeAmount : makeFeeResolver(classes)(classLevel)
+    const feeAmount = hnd
+      ? (hndFeeMap!.get(classLevel) ?? 0)
+      : cls ? cls.feeAmount : makeFeeResolver(classes)(classLevel)
 
     // For a streamed class ("Form 4") the students are "Form 4 Arts"/"Form 4 Science".
     const studentWhere = cls?.hasStream
@@ -181,10 +240,14 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
     })
 
     const paidByStudent = new Map<string, number>()
-    if (session && students.length) {
+    if (students.length) {
+      const studentIds = students.map((s) => s.id)
       const grouped = await prisma.feePayment.groupBy({
         by: ['studentId'],
-        where: { schoolId, session, studentId: { in: students.map((s) => s.id) } },
+        // HND: sum all sessions; others: current session only
+        where: hnd
+          ? { schoolId, studentId: { in: studentIds } }
+          : { schoolId, session: session ?? '__none__', studentId: { in: studentIds } },
         _sum: { amount: true },
       })
       for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)
@@ -202,7 +265,7 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
       }
     })
 
-    res.json({ session, classLevel, feeAmount, students: rows })
+    res.json({ session, isHndProgram: hnd, classLevel, feeAmount, students: rows })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -276,15 +339,15 @@ export const addBulkPayments = async (req: AuthRequest, res: Response) => {
 }
 
 /**
- * GET /api/fees/overview — per-student balance for the current session, used to
- * badge the student list. One pass: class fees + grouped payment sums.
+ * GET /api/fees/overview — per-student balance used to badge the student list.
+ * HND Level 1/2 students: 2-year program fee + all-session payment sum.
+ * Everyone else: current-session fee + current-session payments.
  */
 export const getFeesOverview = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const session = await currentSession(schoolId)
-
-    const [students, classes] = await Promise.all([
+    const [session, students, classes] = await Promise.all([
+      currentSession(schoolId),
       prisma.student.findMany({
         where: { schoolId, isActive: true },
         select: { id: true, classLevel: true },
@@ -293,19 +356,35 @@ export const getFeesOverview = async (req: AuthRequest, res: Response) => {
     ])
 
     const feeFor = makeFeeResolver(classes)
+    const hndFeeMap = buildHndFeeMap(classes)
+
+    const hndIds = students.filter((s) => isHndClass(s.classLevel)).map((s) => s.id)
+    const stdIds = students.filter((s) => !isHndClass(s.classLevel)).map((s) => s.id)
 
     const paidByStudent = new Map<string, number>()
-    if (session) {
+
+    // HND students: sum across ALL sessions
+    if (hndIds.length) {
       const grouped = await prisma.feePayment.groupBy({
         by: ['studentId'],
-        where: { schoolId, session },
+        where: { schoolId, studentId: { in: hndIds } },
+        _sum: { amount: true },
+      })
+      for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)
+    }
+
+    // Non-HND students: current session only
+    if (session && stdIds.length) {
+      const grouped = await prisma.feePayment.groupBy({
+        by: ['studentId'],
+        where: { schoolId, session, studentId: { in: stdIds } },
         _sum: { amount: true },
       })
       for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)
     }
 
     const result = students.map((s) => {
-      const due = feeFor(s.classLevel)
+      const due = isHndClass(s.classLevel) ? (hndFeeMap.get(s.classLevel) ?? 0) : feeFor(s.classLevel)
       const paid = paidByStudent.get(s.id) ?? 0
       return { studentId: s.id, due, paid, balance: Math.max(0, due - paid), status: feeStatus(due, paid) }
     })

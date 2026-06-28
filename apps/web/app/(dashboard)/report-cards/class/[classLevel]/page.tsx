@@ -9,6 +9,7 @@ import { useT, useLang } from '@/lib/i18n'
 import { downloadCsv, datedFilename } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { useAuthStore } from '@/lib/store/auth.store'
 
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
@@ -18,9 +19,11 @@ export default function ClassSubjectsPage() {
   const lang = useLang()
   const params = useParams()
   const searchParams = useSearchParams()
+  const { school } = useAuthStore()
   const classLevel = decodeURIComponent(String(params.classLevel))
   const termId = searchParams.get('termId') ?? ''
   const termName = searchParams.get('termName') ?? ''
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [selectedSeq, setSelectedSeq] = useState(0)
@@ -70,7 +73,12 @@ export default function ClassSubjectsPage() {
           <ArrowLeft size={20} />
         </button>
         <div className="flex-1">
-          <h2 className="text-xl font-bold text-foreground">{classLevel}</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-xl font-bold text-foreground">{classLevel}</h2>
+            {isUniversity && termName && (
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">{termName}</span>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
         </div>
         <button onClick={handleExportMarks} disabled={exporting}
@@ -81,7 +89,9 @@ export default function ClassSubjectsPage() {
 
       {/* Sequence selector */}
       <div className="bg-card rounded-xl border border-border p-5 mb-5">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">{t('Select Sequence')}</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          {isUniversity ? t('Select Assessment') : t('Select Sequence')}
+        </p>
         <div className="flex gap-3">
           {[0, 1].map((i) => (
             <button key={i} onClick={() => setSelectedSeq(i)}
@@ -90,7 +100,7 @@ export default function ClassSubjectsPage() {
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground hover:border-border'
               }`}>
-              {seqFull(termName, i, lang)}
+              {isUniversity ? (i === 0 ? t('CA (30)') : t('Exam (70)')) : seqFull(termName, i, lang)}
             </button>
           ))}
         </div>

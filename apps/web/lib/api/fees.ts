@@ -15,6 +15,7 @@ export interface FeePayment {
 
 export interface StudentFees {
   session: string | null
+  isHndProgram?: boolean
   student: { id: string; name: string; studentId: string; classLevel: string }
   due: number
   totalPaid: number
@@ -65,6 +66,7 @@ export interface ClassFeeRow {
 
 export interface ClassFees {
   session: string | null
+  isHndProgram?: boolean
   classLevel: string
   feeAmount: number
   students: ClassFeeRow[]

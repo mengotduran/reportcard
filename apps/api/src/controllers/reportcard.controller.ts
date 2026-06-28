@@ -456,7 +456,7 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
     }
 
     // Rule 3 — general remarks are required for every report card
-    if (!reportCard.remarks?.trim()) {
+    if (!reportCard.remarks?.trim() && !reportCard.remarksFr?.trim()) {
       const who = classMaster ? 'the class master' : 'an admin / vice-principal'
       res.status(400).json({ message: `Cannot publish — general remarks have not been added yet (${who} must write them).` })
       return

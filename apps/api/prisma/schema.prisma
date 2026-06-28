@@ -37,8 +37,9 @@ model School {
   classLevels        ClassLevel[]
   classListTemplate  ClassListTemplate?
   excelTemplates     ExcelTemplate[]
-  feePayments        FeePayment[]
-  gradingScale       GradingScale?
+  feePayments              FeePayment[]
+  hndRegistrationPayments  HndRegistrationPayment[]
+  gradingScale             GradingScale?
   reportCards        ReportCard[]
   reportCardTemplate ReportCardTemplate?
   parentSchool       ParentSchool?       @relation(fields: [parentSchoolId], references: [id])
@@ -80,9 +81,10 @@ model ClassLevel {
   hasStream    Boolean  @default(false)
   order        Int      @default(0)
   createdAt    DateTime @default(now())
-  feeAmount    Int      @default(0)
-  maxScore     Int      @default(20)
-  school       School   @relation(fields: [schoolId], references: [id])
+  feeAmount            Int      @default(0)
+  maxScore             Int      @default(20)
+  hndRegistrationFee   Int?
+  school               School   @relation(fields: [schoolId], references: [id])
 
   @@unique([schoolId, name])
 }
@@ -117,14 +119,31 @@ model Student {
   updatedAt     DateTime      @updatedAt
   gender        String?
   status        StudentStatus @default(ACTIVE)
-  feePayments   FeePayment[]
-  reportCards   ReportCard[]
-  school        School        @relation(fields: [schoolId], references: [id])
+  feePayments              FeePayment[]
+  hndRegistrationPayments  HndRegistrationPayment[]
+  reportCards              ReportCard[]
+  school                   School        @relation(fields: [schoolId], references: [id])
 
   @@unique([schoolId, studentId])
 }
 
 model FeePayment {
+  id         String   @id @default(uuid())
+  schoolId   String
+  studentId  String
+  session    String
+  amount     Int
+  paidOn     DateTime
+  note       String?
+  recordedBy String?
+  createdAt  DateTime @default(now())
+  school     School   @relation(fields: [schoolId], references: [id])
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, session])
+}
+
+model HndRegistrationPayment {
   id         String   @id @default(uuid())
   schoolId   String
   studentId  String

@@ -17,6 +17,7 @@ import classListTemplateRoutes from './routes/classlisttemplate.routes'
 import gradingScaleRoutes from './routes/gradingscale.routes'
 import demoRoutes from './routes/demo.routes'
 import feesRoutes from './routes/fees.routes'
+import hndRegistrationRoutes from './routes/hndRegistration.routes'
 import backupRoutes from './routes/backup.routes'
 import excelTemplateRoutes from './routes/excelTemplate.routes'
 import { UPLOAD_DIR } from './config/uploads'
@@ -48,6 +49,7 @@ app.use('/api/report-card-template', reportCardTemplateRoutes)
 app.use('/api/class-list-template', classListTemplateRoutes)
 app.use('/api/grading-scale', gradingScaleRoutes)
 app.use('/api/fees', feesRoutes)
+app.use('/api/hnd-registration', hndRegistrationRoutes)
 app.use('/api/demo', demoRoutes)
 app.use('/api/backup', backupRoutes)
 app.use('/api/excel-templates', excelTemplateRoutes)

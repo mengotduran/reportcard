@@ -11,7 +11,7 @@ import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
 import { getTemplateApi, TemplateConfig, TemplateName, DEFAULT_CONFIG, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
-import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
+import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
 import { gradeFromScore } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
@@ -306,9 +306,26 @@ export default function ReportCardDetailPage() {
   if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">Loading report card...</div>
   if (!reportCard) return <div className="text-center py-12 text-muted-foreground text-sm">Report card not found.</div>
 
+  const isUniversity = reportCard.school.type === 'UNIVERSITY'
+
+  // Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors PrintableReportCard logic
+  const semGpaInfo = (() => {
+    let pts = 0, cr = 0
+    for (const subj of subjects) {
+      const e = entries.find(x => x.subjectId === subj.id)
+      if (e?.score == null) continue
+      const gp = gradePointForScore20(e.score, gradingRanges)
+      if (gp == null) continue
+      const c = subj.credit ?? 0
+      pts += gp * c; cr += c
+    }
+    return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
+  })()
+  const cgpa = studentCgpa ?? semGpaInfo.gpa
+
   // Publish readiness checks
   const allSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
-  const hasRemarks = !!reportCard.remarks?.trim()
+  const hasRemarks = !!(reportCard.remarks?.trim() || reportCard.remarksFr?.trim())
   const canPublish = allSeqsFilled && hasRemarks
   // Class master can only give remarks once ALL sequences for this report card are filled
   const canEditRemarks = isClassMaster && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
@@ -454,22 +471,45 @@ export default function ReportCardDetailPage() {
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-card rounded-xl border border-border p-4 text-center">
-          <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
-          <p className="text-xs text-muted-foreground mt-1">{tr('Subjects')}</p>
-        </div>
-        <div className="bg-card rounded-xl border border-border p-4 text-center">
-          <p className="text-2xl font-bold text-foreground">{average.toFixed(1)}</p>
-          <p className="text-xs text-muted-foreground mt-1">{tr('Terms Average')}</p>
-        </div>
-        <div className="bg-card rounded-xl border border-border p-4 text-center">
-          <p className="text-2xl font-bold text-foreground">{gradeFromScore(average, avgMaxScore, gradingRanges).grade}</p>
-          <p className="text-xs text-muted-foreground mt-1">{tr('Overall Grade')}</p>
-        </div>
-        <div className="bg-card rounded-xl border border-border p-4 text-center">
-          <p className="text-2xl font-bold text-foreground">{reportCard.position != null ? ordinal(reportCard.position) : '—'}</p>
-          <p className="text-xs text-muted-foreground mt-1">{tr('Class Position')}</p>
-        </div>
+        {isUniversity ? (
+          <>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Courses')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{semGpaInfo.gpa.toFixed(2)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Semester GPA')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{cgpa.toFixed(2)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Cumulative GPA')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-lg font-bold text-foreground leading-tight">{classificationForGpa(cgpa, classificationBands)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Classification')}</p>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Subjects')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{average.toFixed(1)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Terms Average')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{gradeFromScore(average, avgMaxScore, gradingRanges).grade}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Overall Grade')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{reportCard.position != null ? ordinal(reportCard.position) : '—'}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Class Position')}</p>
+            </div>
+          </>
+        )}
       </div>
 
 
@@ -492,7 +532,15 @@ export default function ReportCardDetailPage() {
               <thead className="border-b border-gray-100 dark:border-border">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Subject')}</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Score')}</th>
+                  {isUniversity ? (
+                    <>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">CA / 30</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Exam / 70</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Total / 100</th>
+                    </>
+                  ) : (
+                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Score')}</th>
+                  )}
                   <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Coeff')}</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Grade')}</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Remarks')}</th>
@@ -501,20 +549,41 @@ export default function ReportCardDetailPage() {
               <tbody className="divide-y divide-border">
                 {subjects.map((subject) => {
                   const entry = entries.find(e => e.subjectId === subject.id)
+                  const bothFilled = entry?.seq1Score != null && entry?.seq2Score != null
                   return (
                     <tr key={subject.id} className="hover:bg-muted dark:hover:bg-muted">
                       <td className="px-4 py-3 text-sm font-medium text-foreground">{subject.name}</td>
-                      <td className="px-4 py-3">
-                        {entry?.seq1Score == null || entry?.seq2Score == null
-                          ? <span className="text-sm text-muted-foreground">—</span>
-                          : <span className="text-sm text-foreground">{entry?.score ?? 0}<span className="text-muted-foreground text-xs ml-1">/{subject.maxScore}</span></span>
-                        }
-                      </td>
+                      {isUniversity ? (
+                        <>
+                          <td className="px-4 py-3">
+                            {entry?.seq1Score != null
+                              ? <span className="text-sm text-foreground">{entry.seq1Score}<span className="text-muted-foreground text-xs ml-1">/30</span></span>
+                              : <span className="text-sm text-muted-foreground">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {entry?.seq2Score != null
+                              ? <span className="text-sm text-foreground">{entry.seq2Score}<span className="text-muted-foreground text-xs ml-1">/70</span></span>
+                              : <span className="text-sm text-muted-foreground">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {bothFilled
+                              ? <span className="text-sm font-semibold text-foreground">{entry!.score ?? 0}<span className="text-muted-foreground text-xs ml-1 font-normal">/100</span></span>
+                              : <span className="text-sm text-muted-foreground">—</span>}
+                          </td>
+                        </>
+                      ) : (
+                        <td className="px-4 py-3">
+                          {!bothFilled
+                            ? <span className="text-sm text-muted-foreground">—</span>
+                            : <span className="text-sm text-foreground">{entry?.score ?? 0}<span className="text-muted-foreground text-xs ml-1">/{subject.maxScore}</span></span>
+                          }
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-center">
                         <span className="text-xs font-semibold text-muted-foreground bg-muted px-2 py-1 rounded-full">×{subject.coefficient ?? 1}</span>
                       </td>
                       <td className="px-4 py-3">
-                        {entry?.seq1Score == null || entry?.seq2Score == null
+                        {!bothFilled
                           ? <span className="text-sm text-muted-foreground">—</span>
                           : (() => {
                               const gr = gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges)
@@ -529,9 +598,7 @@ export default function ReportCardDetailPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-sm text-muted-foreground dark:text-muted-foreground">
-                          {entry?.seq1Score == null || entry?.seq2Score == null
-                            ? '—'
-                            : gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges).remark || '—'}
+                          {!bothFilled ? '—' : gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges).remark || '—'}
                         </span>
                       </td>
                     </tr>

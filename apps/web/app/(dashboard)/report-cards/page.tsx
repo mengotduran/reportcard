@@ -8,7 +8,7 @@ import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
 import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
-import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download, Scroll, FileSpreadsheet } from 'lucide-react'
+import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download, Scroll, FileSpreadsheet, Search } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -356,6 +356,7 @@ export default function ReportCardsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [filterTermId, setFilterTermId] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [form, setForm] = useState({ studentId: '', termId: '' })
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
@@ -512,6 +513,7 @@ export default function ReportCardsPage() {
 
   const handleFilterChange = (termId: string) => {
     setFilterTermId(termId)
+    setSearchQuery('')
     fetchReportCards(termId || undefined)
   }
 
@@ -559,8 +561,12 @@ export default function ReportCardsPage() {
   // Active term chip, or every term of the active year when "All Terms" is selected.
   const exportTargetTerms = () => (filterTermId ? visibleTerms.filter((t) => t.id === filterTermId) : visibleTerms)
 
-  // Paginate the table; reset to page 1 when the year or term filter changes.
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(reportCards, 15, `${activeSession}|${filterTermId}`)
+  const filteredCards = searchQuery
+    ? reportCards.filter(rc => rc.student.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : reportCards
+
+  // Paginate the table; reset to page 1 when the year, term, or search changes.
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(filteredCards, 15, `${activeSession}|${filterTermId}|${searchQuery}`)
 
   type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null; isActive?: boolean }
 
@@ -719,6 +725,22 @@ export default function ReportCardsPage() {
         ))}
       </div>
 
+      <div className="relative mb-4 max-w-sm">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          placeholder={tr('Search student...')}
+          className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        {searchQuery && (
+          <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition">
+            <X size={13} />
+          </button>
+        )}
+      </div>
+
       {isAdmin && (
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <span className="text-xs text-muted-foreground">
@@ -741,6 +763,11 @@ export default function ReportCardsPage() {
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <FileText size={32} className="mx-auto mb-2 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">{tr('No report cards yet.')}</p>
+        </div>
+      ) : filteredCards.length === 0 ? (
+        <div className="bg-card rounded-xl border border-border text-center py-12">
+          <Search size={32} className="mx-auto mb-2 text-muted-foreground" />
+          <p className="text-muted-foreground text-sm">{tr('No students match')} &ldquo;{searchQuery}&rdquo;</p>
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">

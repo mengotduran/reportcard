@@ -19,7 +19,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
 export const createClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, feeAmount } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee } = req.body
 
     if (!name?.trim()) {
       res.status(400).json({ message: 'Class name is required' })
@@ -39,6 +39,11 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    const isLevel2 = /- Level 2$/i.test(name.trim())
+    const regFee = isLevel2 && hndRegistrationFee !== undefined && hndRegistrationFee !== null && hndRegistrationFee !== ''
+      ? Math.max(0, Math.round(Number(hndRegistrationFee)) || 0)
+      : null
+
     const level = await prisma.classLevel.create({
       data: {
         schoolId, name: name.trim(),
@@ -47,6 +52,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         order: order ?? 0,
         maxScore: maxScore ? Number(maxScore) : 20,
         feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0),
+        hndRegistrationFee: regFee,
       },
     })
     res.status(201).json({ message: 'Class created', classLevel: level })
@@ -60,7 +66,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, feeAmount } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee } = req.body
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) {
@@ -87,6 +93,9 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         ...(order !== undefined ? { order } : {}),
         ...(maxScore !== undefined ? { maxScore: Number(maxScore) } : {}),
         ...(feeAmount !== undefined ? { feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0) } : {}),
+        ...(hndRegistrationFee !== undefined
+          ? { hndRegistrationFee: hndRegistrationFee === null || hndRegistrationFee === '' ? null : Math.max(0, Math.round(Number(hndRegistrationFee)) || 0) }
+          : {}),
       },
     })
 

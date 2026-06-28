@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
@@ -15,6 +15,21 @@ import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 
 type RowEntry = { amount: string; date: string; note: string }
+type UniLevel = 'Level 1' | 'Level 2' | 'Level 3'
+const UNI_LEVELS: UniLevel[] = ['Level 1', 'Level 2', 'Level 3']
+
+function deptFromClassName(name: string): string {
+  if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
+  if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
+  return name
+}
+
+function levelFromClassName(name: string): UniLevel | null {
+  if (/ - Level 1$/i.test(name)) return 'Level 1'
+  if (/ - Level 2$/i.test(name)) return 'Level 2'
+  if (name.startsWith('Degree ')) return 'Level 3'
+  return null
+}
 
 function StatusBadge({ status, balance, t }: { status: FeeStatus; balance: number; t: (s: string) => string }) {
   if (status === 'NONE') return <span className="text-muted-foreground text-sm">—</span>
@@ -25,27 +40,49 @@ function StatusBadge({ status, balance, t }: { status: FeeStatus; balance: numbe
 
 export default function FeesPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const today = new Date().toISOString().slice(0, 10)
-  const [classes, setClasses] = useState<ClassLevel[]>([])
+
+  const [classes, setClasses]         = useState<ClassLevel[]>([])
   const [activeClass, setActiveClass] = useState('')
-  const [data, setData] = useState<ClassFees | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [rows, setRows] = useState<Record<string, RowEntry>>({})
-  const [saving, setSaving] = useState(false)
-  const [search, setSearch] = useState('')
-  const [historyFor, setHistoryFor] = useState<{ id: string; name: string } | null>(null)
+  const [activeUniLevel, setActiveUniLevel] = useState<UniLevel>('Level 1')
+  const [data, setData]               = useState<ClassFees | null>(null)
+  const [loading, setLoading]         = useState(false)
+  const [rows, setRows]               = useState<Record<string, RowEntry>>({})
+  const [saving, setSaving]           = useState(false)
+  const [search, setSearch]           = useState('')
+  const [historyFor, setHistoryFor]   = useState<{ id: string; name: string } | null>(null)
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
     getClassLevelsApi().then((d) => {
       const sorted = d.classLevels.sort((a, b) => a.order - b.order)
       setClasses(sorted)
-      if (sorted.length && !activeClass) selectClass(sorted[0].name)
+      if (sorted.length && !activeClass) {
+        // For university, pick first class in Level 1; for others, just pick first
+        const first = isUniversity
+          ? sorted.find((c) => levelFromClassName(c.name) === 'Level 1')
+          : sorted[0]
+        if (first) selectClass(first.name)
+      }
     }).catch(() => {})
   }, [isAuthenticated])
+
+  // Classes visible in the current level tab (university) or all classes (non-university)
+  const visibleClasses = useMemo(() =>
+    isUniversity ? classes.filter((c) => levelFromClassName(c.name) === activeUniLevel) : classes,
+  [isUniversity, classes, activeUniLevel])
+
+  // When switching level tabs, auto-select first class in that level
+  const handleLevelTab = (lv: UniLevel) => {
+    setActiveUniLevel(lv)
+    const first = classes.find((c) => levelFromClassName(c.name) === lv)
+    if (first) selectClass(first.name)
+    else { setActiveClass(''); setData(null) }
+  }
 
   const selectClass = async (name: string) => {
     setActiveClass(name)
@@ -101,13 +138,24 @@ export default function FeesPage() {
   const enteredCount = Object.values(rows).filter((r) => Number(r.amount) > 0).length
   const { page, setPage, totalPages, pageItems, total, pageSize, start } = usePagination(visible, 15, `${activeClass}|${search}`)
 
+  const isHnd = data?.isHndProgram ?? false
+  // Label shown in the "Total fee" column header
+  const feeScopeLabel = isHnd ? '2-year program' : isUniversity ? 'annual' : ''
+  // Subtitle in the page header
+  const scopeNote = isHnd
+    ? 'HND 2-year program fee · all sessions combined'
+    : data?.session
+      ? `${t('Current session')}: ${data.session}`
+      : ''
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-foreground">{t('School Fees')}</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {t('Record fee payments per class.')}{data?.session ? ` · ${data.session}` : ''}
+            {t('Record fee payments per class.')}
+            {scopeNote ? <> · <span className={isHnd ? 'text-indigo-600 font-medium' : ''}>{scopeNote}</span></> : null}
           </p>
         </div>
         {activeClass && (
@@ -118,15 +166,57 @@ export default function FeesPage() {
         )}
       </div>
 
-      {/* Class picker */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {classes.map((c) => (
-          <button key={c.id} onClick={() => selectClass(c.name)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === c.name ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
-            {c.name}
-          </button>
-        ))}
-      </div>
+      {/* University: level tabs + department pills */}
+      {isUniversity && (
+        <div className="mb-4 space-y-3">
+          <div className="flex gap-2">
+            {UNI_LEVELS.map((lv) => {
+              const count = classes.filter((c) => levelFromClassName(c.name) === lv).length
+              return (
+                <button key={lv} onClick={() => handleLevelTab(lv)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ${
+                    activeUniLevel === lv ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  }`}>
+                  {lv}
+                  {lv !== 'Level 3' && (
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeUniLevel === lv ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
+                      {lv === 'Level 2' ? 'HND' : 'HND I'}
+                    </span>
+                  )}
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full ${activeUniLevel === lv ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
+                    {count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          {/* Department pills within the active level */}
+          <div className="flex flex-wrap gap-2">
+            {visibleClasses.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No departments in {activeUniLevel} yet.</p>
+            ) : visibleClasses.map((c) => (
+              <button key={c.id} onClick={() => selectClass(c.name)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${
+                  activeClass === c.name ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}>
+                {deptFromClassName(c.name)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Non-university: flat class picker */}
+      {!isUniversity && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {classes.map((c) => (
+            <button key={c.id} onClick={() => selectClass(c.name)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === c.name ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {!activeClass ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
@@ -141,6 +231,16 @@ export default function FeesPage() {
               className="w-full pl-9 pr-4 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
 
+          {/* HND context banner */}
+          {isHnd && (
+            <div className="mb-3 flex items-center gap-2 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-lg px-4 py-2.5">
+              <span className="inline-flex px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-semibold">2-year program</span>
+              <p className="text-xs text-indigo-700 dark:text-indigo-300">
+                The fee shown is the <strong>total HND program fee</strong> covering both Level 1 and Level 2. Paid amounts include all installments across both years.
+              </p>
+            </div>
+          )}
+
           <div className="bg-card rounded-xl border border-border overflow-hidden">
             {loading ? (
               <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading...')}</div>
@@ -153,7 +253,14 @@ export default function FeesPage() {
                     <tr className="bg-muted">
                       <th className="sticky left-0 z-10 w-12 bg-muted text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide border-b border-border">#</th>
                       <th className="sticky left-12 z-10 bg-muted text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-b border-border">{t('Name')}</th>
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-b border-border">{t('Total fee')}</th>
+                      <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-b border-border">
+                        {t('Total fee')}
+                        {feeScopeLabel && (
+                          <span className={`ml-1 normal-case font-normal text-[10px] px-1.5 py-0.5 rounded-full ${isHnd ? 'bg-indigo-100 text-indigo-600' : 'bg-muted-foreground/10 text-muted-foreground'}`}>
+                            {feeScopeLabel}
+                          </span>
+                        )}
+                      </th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-b border-border">{t('Paid')}</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-b border-border">{t('Balance')}</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-b border-border">{t('Status')}</th>
@@ -175,7 +282,11 @@ export default function FeesPage() {
                             <span className="text-sm font-medium text-foreground whitespace-nowrap">{s.name}</span>
                             <span className="block text-xs text-muted-foreground">{s.studentIdCode}</span>
                           </td>
-                          <td className="px-4 py-2.5 text-right text-sm text-foreground whitespace-nowrap border-b border-border">{data!.feeAmount > 0 ? formatXAF(data!.feeAmount) : '—'}</td>
+                          <td className="px-4 py-2.5 text-right border-b border-border whitespace-nowrap">
+                            {data!.feeAmount > 0
+                              ? <span className={`text-sm font-semibold ${isHnd ? 'text-indigo-600' : 'text-foreground'}`}>{formatXAF(data!.feeAmount)}</span>
+                              : <span className="text-muted-foreground text-sm">—</span>}
+                          </td>
                           <td className="px-4 py-2.5 text-right text-sm text-emerald-600 font-semibold whitespace-nowrap border-b border-border">{formatXAF(s.paid)}</td>
                           <td className="px-4 py-2.5 text-right text-sm font-medium text-foreground whitespace-nowrap border-b border-border">{formatXAF(s.balance)}</td>
                           <td className="px-4 py-2.5 whitespace-nowrap border-b border-border"><StatusBadge status={s.status} balance={s.balance} t={t} /></td>

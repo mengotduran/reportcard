@@ -2,7 +2,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -17,8 +17,9 @@ const ADMIN_NAV = [
   { icon: GraduationCap,   label: 'Classes',      href: '/classes' },
   { icon: BookOpen,        label: 'Subjects',     href: '/subjects' },
   { icon: Calendar,        label: 'Terms',        href: '/terms' },
-  { icon: Wallet,          label: 'Fees',         href: '/fees' },
-  { icon: FileText,        label: 'Report Cards', href: '/report-cards' },
+  { icon: Wallet,          label: 'Fees',             href: '/fees' },
+  { icon: BookMarked,      label: 'HND Registration', href: '/hnd-registration', universityOnly: true },
+  { icon: FileText,        label: 'Report Cards',     href: '/report-cards' },
   { icon: Palette,         label: 'Card Design',  href: '/report-card-design' },
   { icon: ClipboardList,   label: 'Class List',   href: '/class-list-design' },
   { icon: Star,            label: 'Grading',      href: '/grading-scale' },
@@ -81,7 +82,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
   const navItems = school?.type === 'UNIVERSITY'
     ? baseNavItems.map((item) => UNIVERSITY_NAV_LABELS[item.label] ? { ...item, label: UNIVERSITY_NAV_LABELS[item.label] } : item)
-    : baseNavItems
+    : baseNavItems.filter((item) => !(item as { universityOnly?: boolean }).universityOnly)
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 

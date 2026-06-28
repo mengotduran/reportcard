@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
@@ -38,11 +38,32 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   DISMISSED: 'bg-red-100 text-red-700',
 }
 
-const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '' }
+const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '' }
+
+// Helpers for parsing university class level names
+function univDept(classLevel: string): string {
+  if (classLevel.startsWith('HND ')) return classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
+  if (classLevel.startsWith('Degree ')) return classLevel.replace(/^Degree /, '')
+  return classLevel
+}
+function univLevel(classLevel: string): string {
+  if (/ - Level 2$/i.test(classLevel)) return 'Level 2'
+  if (/ - Level 1$/i.test(classLevel)) return 'Level 1'
+  if (classLevel.startsWith('Degree ')) return 'Level 3'
+  return ''
+}
+function univLevelBadge(classLevel: string) {
+  const lv = univLevel(classLevel)
+  if (lv === 'Level 1') return { label: 'L1', cls: 'bg-blue-100 text-blue-700' }
+  if (lv === 'Level 2') return { label: 'L2', cls: 'bg-indigo-100 text-indigo-700' }
+  if (lv === 'Level 3') return { label: 'L3', cls: 'bg-purple-100 text-purple-700' }
+  return null
+}
 
 export default function StudentsPage() {
   const router = useRouter()
-  const { isAuthenticated, activeSession, setActiveSession } = useAuthStore()
+  const { isAuthenticated, activeSession, setActiveSession, school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const [students, setStudents] = useState<Student[]>([])
@@ -197,6 +218,23 @@ export default function StudentsPage() {
   const selectedClassDef = definedClasses.find((c) => c.name === form.classLevel)
   const needsStream = selectedClassDef?.hasStream ?? false
 
+  // University two-step picker: unique departments, then available levels per dept
+  const uniDepts = useMemo(() =>
+    isUniversity ? Array.from(new Set(definedClasses.map((c) => univDept(c.name)))).sort() : [],
+  [isUniversity, definedClasses])
+
+  const uniLevelsForDept = useMemo(() => {
+    if (!isUniversity || !form.uniDept) return []
+    return definedClasses
+      .filter((c) => univDept(c.name) === form.uniDept)
+      .map((c) => ({ label: univLevel(c.name), classLevel: c.name }))
+      .filter((x) => x.label)
+      .sort((a, b) => {
+        const order: Record<string, number> = { 'Level 1': 0, 'Level 2': 1, 'Level 3': 2 }
+        return (order[a.label] ?? 3) - (order[b.label] ?? 3)
+      })
+  }, [isUniversity, form.uniDept, definedClasses])
+
   const openAdd = () => {
     setEditingId(null)
     setForm(emptyForm)
@@ -219,6 +257,8 @@ export default function StudentsPage() {
       guardianName: s.guardianName || '',
       guardianPhone: s.guardianPhone || '',
       guardianEmail: s.guardianEmail || '',
+      uniDept: isUniversity ? univDept(baseClass) : '',
+      uniLevel: isUniversity ? univLevel(baseClass) : '',
     })
     setError('')
     setShowModal(true)
@@ -234,6 +274,10 @@ export default function StudentsPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (isUniversity && (!form.uniDept || !form.uniLevel || !form.classLevel)) {
+      setError('Please select a department and level.')
+      return
+    }
     if (needsStream && !form.stream) {
       setError(t('Please select a stream (Arts or Science)'))
       return
@@ -518,7 +562,8 @@ export default function StudentsPage() {
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Name')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Student ID')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Class')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{isUniversity ? 'Department' : t('Class')}</th>
+                {isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Level</th>}
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Gender')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Fees')}</th>
@@ -538,7 +583,19 @@ export default function StudentsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{s.classLevel}</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    {isUniversity ? univDept(s.classLevel) : s.classLevel}
+                  </td>
+                  {isUniversity && (
+                    <td className="px-4 py-3">
+                      {(() => {
+                        const b = univLevelBadge(s.classLevel)
+                        return b
+                          ? <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${b.cls}`}>{b.label}</span>
+                          : <span className="text-muted-foreground text-sm">—</span>
+                      })()}
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.gender ? t(s.gender) : '—'}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.guardianName || '—'}</td>
                   <td className="px-4 py-3">
@@ -606,23 +663,64 @@ export default function StudentsPage() {
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted" />
                 </div>
               )}
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Class')}</label>
-                {definedClasses.length > 0 ? (
-                  <select
-                    value={form.classLevel}
-                    onChange={(e) => setForm({ ...form, classLevel: e.target.value, stream: '' })}
-                    required
-                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="">{t('Select class')}</option>
-                    {definedClasses.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-                  </select>
-                ) : (
-                  <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
-                    {t('No classes defined yet — go to the Classes page to add them.')}
+              {isUniversity ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-foreground mb-1">Department <span className="text-destructive">*</span></label>
+                    {uniDepts.length > 0 ? (
+                      <select
+                        value={form.uniDept}
+                        onChange={(e) => {
+                          const dept = e.target.value
+                          setForm({ ...form, uniDept: dept, uniLevel: '', classLevel: '' })
+                        }}
+                        required
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                        <option value="">Select department</option>
+                        {uniDepts.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    ) : (
+                      <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted">
+                        No departments defined yet — go to the Departments page to add them.
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                  {form.uniDept && (
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-2">Level <span className="text-destructive">*</span></label>
+                      <div className="flex flex-wrap gap-3">
+                        {uniLevelsForDept.map(({ label, classLevel }) => (
+                          <label key={label} className="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="uniLevel" value={label} required
+                              checked={form.uniLevel === label}
+                              onChange={() => setForm({ ...form, uniLevel: label, classLevel })}
+                              className="accent-primary" />
+                            <span className="text-sm text-foreground">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Class')}</label>
+                  {definedClasses.length > 0 ? (
+                    <select
+                      value={form.classLevel}
+                      onChange={(e) => setForm({ ...form, classLevel: e.target.value, stream: '' })}
+                      required
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                      <option value="">{t('Select class')}</option>
+                      {definedClasses.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+                  ) : (
+                    <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
+                      {t('No classes defined yet — go to the Classes page to add them.')}
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-foreground mb-2">{t('Gender')} <span className="text-destructive">*</span></label>
                 <div className="flex gap-6">

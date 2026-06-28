@@ -32,19 +32,21 @@ export default function MarksEntryScreen() {
     termName: string; subjectName: string; sequence: string
   }>()
   const navigation = useNavigation()
-  const { user } = useAuthStore()
+  const { user, school } = useAuthStore()
   const { colors, isDark } = useTheme()
   const t = useT()
   const lang = useLang()
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
-  const seqLabel = seqFull(termName, seqIndex, lang)
+  const isUniversity = school?.type === 'UNIVERSITY'
+  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : 'Exam') : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
   const decodedSubjectName = decodeURIComponent(subjectName)
 
   const [rows, setRows] = useState<Row[]>([])
   const [maxScore, setMaxScore] = useState(20)
+  const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -102,7 +104,7 @@ export default function MarksEntryScreen() {
     let clean = value.replace(/[^0-9.]/g, '')
     const firstDot = clean.indexOf('.')
     if (firstDot !== -1) clean = clean.slice(0, firstDot + 1) + clean.slice(firstDot + 1).replace(/\./g, '')
-    if (clean !== '' && clean !== '.' && Number(clean) > maxScore) clean = String(maxScore)
+    if (clean !== '' && clean !== '.' && Number(clean) > effectiveMax) clean = String(effectiveMax)
     setRows((prev) => prev.map((r) => r.studentId === studentId ? { ...r, score: clean } : r))
   }
 
@@ -167,8 +169,8 @@ export default function MarksEntryScreen() {
   }
 
   const filled = rows.filter((r) => r.score !== '').length
-  const otherSeqLabel = seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
-  const otherSeqShort = seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
+  const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
+  const otherSeqShort = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
 
   const handleCopyFromOther = () => {
     const hasCurrent = rows.some((r) => r.score !== '')
@@ -206,7 +208,14 @@ export default function MarksEntryScreen() {
         <>
         {/* Info bar */}
         <View style={s.infoBar}>
-          <Text style={s.infoText}>{decodedClass} · {filled}/{rows.length} {t('filled')}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+            <Text style={s.infoText}>{decodedClass} · {filled}/{rows.length} {t('filled')}</Text>
+            {isUniversity && termName ? (
+              <View style={{ backgroundColor: '#FEF2F1', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(240,62,47,0.2)' }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#F03E2F' }}>{termName}</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={s.seqPill}>{seqLabel}</Text>
         </View>
 
@@ -232,14 +241,14 @@ export default function MarksEntryScreen() {
           <View style={s.headerRow}>
             <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
             <View style={s.colName}><Text style={s.headerText}>{t('STUDENT NAME')}</Text></View>
-            <View style={s.colScore}><Text style={s.headerText}>{t('MARKS /')} {maxScore}</Text></View>
+            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : 'MARKS / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
             <View style={s.colRemark}><Text style={s.headerText}>{t('PERFORMANCE')}</Text></View>
           </View>
 
           {rows.map((row, index) => {
             const num = Number(row.score)
             const hasScore = row.score !== ''
-            const g = hasScore ? gradeFromScore(num, maxScore, gradingRanges) : null
+            const g = hasScore ? gradeFromScore(num, effectiveMax, gradingRanges) : null
             const isActive = activeCell === row.studentId
 
             return (
@@ -257,7 +266,7 @@ export default function MarksEntryScreen() {
                   </View>
                   {row.otherSeqScore !== null && (
                     <Text style={s.otherSeq}>
-                      {seqIndex === 0 ? 'Seq2' : 'Seq1'}: {row.otherSeqScore}
+                      {otherSeqShort}: {row.otherSeqScore}
                     </Text>
                   )}
                 </View>
@@ -280,7 +289,7 @@ export default function MarksEntryScreen() {
                     onFocus={() => setActiveCell(row.studentId)}
                     onBlur={() => setActiveCell(null)}
                     keyboardType="decimal-pad"
-                    maxLength={String(maxScore).length + 1}
+                    maxLength={String(effectiveMax).length + 1}
                     placeholder="--"
                     placeholderTextColor="#9ca3af"
                     returnKeyType="next"
