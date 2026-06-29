@@ -171,7 +171,7 @@ export interface TranscriptEntry {
 
 export interface TranscriptReportCard {
   id: string
-  term: { id: string; name: string; session: string }
+  term: { id: string; name: string; session: string; printingEnabled?: boolean }
   entries: TranscriptEntry[]
   average?: number | null
   remarks?: string | null

@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { loginApi } from '@/lib/api/auth'
 import { useAuthStore } from '@/lib/store/auth.store'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -12,40 +12,40 @@ let _email = ''
 let _password = ''
 
 export default function LoginPage() {
-  // Initialise from module cache so values survive remounts
   const [email, setEmail] = useState(_email)
   const [password, setPassword] = useState(_password)
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
+  const [errorKey, setErrorKey] = useState(0)
   const [loading, setLoading] = useState(false)
   const setAuth = useAuthStore((s) => s.setAuth)
-  const errorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  // Keep module cache in sync
-  const handleEmailChange = (v: string) => { _email = v; setEmail(v) }
-  const handlePasswordChange = (v: string) => { _password = v; setPassword(v) }
-
-  // Auto-dismiss toast after 4 s
-  useEffect(() => {
-    if (!error) return
-    clearTimeout(errorTimer.current)
-    errorTimer.current = setTimeout(() => setError(''), 4000)
-    return () => clearTimeout(errorTimer.current)
-  }, [error])
+  const handleEmailChange = (v: string) => {
+    _email = v; setEmail(v)
+    if (error) setError('')
+  }
+  const handlePasswordChange = (v: string) => {
+    _password = v; setPassword(v)
+    if (error) setError('')
+  }
 
   const handleLogin = async () => {
     if (!email.trim() || !password) return
     setError('')
     setLoading(true)
+    const start = Date.now()
     try {
       const data = await loginApi(email.trim(), password)
       setAuth(data.user, data.school, data.token)
-      // Clear cache on success then hard-navigate (avoids router subscription issues)
       _email = ''
       _password = ''
       window.location.href = '/dashboard'
     } catch {
-      setError('One of your credentials is incorrect. Please check and try again.')
+      // Always show the spinner for at least 500 ms so users know the request happened
+      const elapsed = Date.now() - start
+      if (elapsed < 500) await new Promise<void>((r) => setTimeout(r, 500 - elapsed))
+      setError('Incorrect email or password. Please try again.')
+      setErrorKey((k) => k + 1)
       setLoading(false)
     }
   }
@@ -57,21 +57,15 @@ export default function LoginPage() {
         <ThemeToggle />
       </div>
 
-      {/* Toast — absolutely positioned, zero layout impact on the card */}
-      {error && (
-        <div
-          className="fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 bg-destructive text-white text-sm font-medium px-4 py-3 rounded-xl shadow-lg max-w-xs text-center"
-          style={{ animation: 'slideDown 0.15s ease-out forwards' }}
-        >
-          <AlertCircle size={15} className="flex-shrink-0" />
-          {error}
-        </div>
-      )}
-
       <style>{`
-        @keyframes slideDown {
-          from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
-          to   { opacity: 1; transform: translateX(-50%) translateY(0);   }
+        @keyframes shake {
+          0%, 100% { transform: translateX(0);   }
+          15%       { transform: translateX(-5px); }
+          30%       { transform: translateX(5px);  }
+          45%       { transform: translateX(-4px); }
+          60%       { transform: translateX(4px);  }
+          75%       { transform: translateX(-2px); }
+          90%       { transform: translateX(2px);  }
         }
       `}</style>
 
@@ -89,7 +83,6 @@ export default function LoginPage() {
           <p className="text-white/60 mt-1.5 text-sm">Sign in to your school account</p>
         </div>
 
-        {/* Card — no error box inside, layout is static */}
         <div className="bg-card border border-border rounded-xl p-6 space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -131,6 +124,18 @@ export default function LoginPage() {
               </button>
             </div>
           </div>
+
+          {/* Inline error — keyed so the shake animation re-fires on every failed attempt */}
+          {error && (
+            <div
+              key={errorKey}
+              className="flex items-start gap-2.5 p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-destructive text-sm"
+              style={{ animation: 'shake 0.5s ease-out' }}
+            >
+              <AlertCircle size={15} className="flex-shrink-0 mt-0.5" />
+              {error}
+            </div>
+          )}
 
           <button
             type="button"

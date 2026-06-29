@@ -104,6 +104,9 @@ self.__SERVER_FILES_MANIFEST={
       }
     },
     "outputFileTracingRoot": "/home/topg/Documents/allprojects/reportcard_system/reportcard-app",
+    "allowedDevOrigins": [
+      "192.168.1.137"
+    ],
     "cacheComponents": false,
     "cacheLife": {
       "default": {

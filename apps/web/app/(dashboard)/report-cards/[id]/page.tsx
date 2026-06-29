@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardApi, saveEntriesApi, publishReportCardApi, unpublishReportCardApi, grantEditPermissionApi, revokeEditPermissionApi, updateRemarksApi, generateRemarksApi, remarkSourceLabel, getReadinessDetailApi, ReadinessDetail } from '@/lib/api/reportcards'
@@ -76,51 +77,14 @@ export default function ReportCardDetailPage() {
   const handlePrint = useCallback(() => {
     const el = document.getElementById('report-card-printable')
     if (!el) return
-
-    const pw = window.open('', '_blank', 'width=900,height=700')
-    if (!pw) { alert('Allow popups for this site to enable printing.'); return }
-
-    // Make relative /uploads/... paths absolute so they load in the isolated window
-    const origin = window.location.origin
-    const html = el.outerHTML.replace(/\bsrc="(\/[^"]+)"/g, `src="${origin}$1"`)
-
-    pw.document.write(`<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Report Card</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #fff; }
-  @page { margin: 0; size: A4 portrait; }
-  @media print {
-    html, body { margin: 0; padding: 0; }
-    #report-card-printable {
-      position: relative !important;
-      overflow: hidden !important;
-      print-color-adjust: exact !important;
-      -webkit-print-color-adjust: exact !important;
-    }
-    #report-card-printable tbody tr,
-    #report-card-printable tbody td { background-color: transparent !important; }
-  }
-</style>
-</head>
-<body>${html}</body>
-</html>`)
-    pw.document.close()
-    pw.focus()
-
-    // Wait for all images to finish loading before triggering print
-    const imgs = Array.from(pw.document.images)
-    const tryPrint = () => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }
-
+    const imgs = Array.from(el.getElementsByTagName('img'))
+    const doPrint = () => window.print()
     if (imgs.length === 0) {
-      setTimeout(tryPrint, 250)
+      setTimeout(doPrint, 200)
     } else {
       let done = 0
       imgs.forEach(img => {
-        const tick = () => { if (++done === imgs.length) setTimeout(tryPrint, 250) }
+        const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
         if (img.complete) tick()
         else { img.onload = tick; img.onerror = tick }
       })
@@ -336,7 +300,7 @@ export default function ReportCardDetailPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-6">
+<div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => router.push('/report-cards')}
           className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition"
@@ -715,25 +679,27 @@ export default function ReportCardDetailPage() {
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
 
-      {/* Hidden printable section — only visible during window.print() */}
-      <div style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden', visibility: 'hidden' }}>
-        <PrintableReportCard
-          school={reportCard.school}
-          student={reportCard.student}
-          term={reportCard.term}
-          subjects={subjects}
-          entries={entries}
-          generalRemarks={generalRemarks}
-          generalRemarksFr={generalRemarksFr}
-          average={average}
-          position={reportCard.position}
-          config={templateConfig}
-          gradeBands={gradingRanges}
-          classificationBands={classificationBands}
-          cgpa={studentCgpa ?? undefined}
-          subjectStats={subjectStats}
-        />
-      </div>
+      {createPortal(
+        <div className="rc-print-portal">
+          <PrintableReportCard
+            school={reportCard.school}
+            student={reportCard.student}
+            term={reportCard.term}
+            subjects={subjects}
+            entries={entries}
+            generalRemarks={generalRemarks}
+            generalRemarksFr={generalRemarksFr}
+            average={average}
+            position={reportCard.position}
+            config={templateConfig}
+            gradeBands={gradingRanges}
+            classificationBands={classificationBands}
+            cgpa={studentCgpa ?? undefined}
+            subjectStats={subjectStats}
+          />
+        </div>,
+        document.body
+      )}
     </div>
   )
 }

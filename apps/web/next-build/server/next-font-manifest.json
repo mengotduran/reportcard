@@ -27,6 +27,9 @@
     "[project]/apps/web/app/(dashboard)/grading-scale/page": [
       "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
     ],
+    "[project]/apps/web/app/(dashboard)/hnd-registration/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
     "[project]/apps/web/app/(dashboard)/report-card-design/page": [
       "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
     ],
@@ -40,6 +43,9 @@
       "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
     ],
     "[project]/apps/web/app/(dashboard)/report-cards/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/apps/web/app/(dashboard)/report-cards/transcript/[studentId]/page": [
       "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
     ],
     "[project]/apps/web/app/(dashboard)/settings/page": [

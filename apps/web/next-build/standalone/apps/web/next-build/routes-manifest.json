@@ -54,6 +54,14 @@
       "namedRegex": "^/report\\-cards/class/(?<nxtPclassLevel>[^/]+?)/(?<nxtPsubjectId>[^/]+?)(?:/)?$"
     },
     {
+      "page": "/report-cards/transcript/[studentId]",
+      "regex": "^/report\\-cards/transcript/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPstudentId": "nxtPstudentId"
+      },
+      "namedRegex": "^/report\\-cards/transcript/(?<nxtPstudentId>[^/]+?)(?:/)?$"
+    },
+    {
       "page": "/report-cards/[id]",
       "regex": "^/report\\-cards/([^/]+?)(?:/)?$",
       "routeKeys": {
@@ -136,6 +144,12 @@
       "regex": "^/grading\\-scale(?:/)?$",
       "routeKeys": {},
       "namedRegex": "^/grading\\-scale(?:/)?$"
+    },
+    {
+      "page": "/hnd-registration",
+      "regex": "^/hnd\\-registration(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hnd\\-registration(?:/)?$"
     },
     {
       "page": "/login",
