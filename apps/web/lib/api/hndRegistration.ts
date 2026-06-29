@@ -3,6 +3,13 @@ import { FeePayment } from './fees'
 
 export type RegStatus = 'COMPLETE' | 'PARTIAL' | 'UNPAID'
 
+export interface DepartmentFeeRow {
+  department: string
+  classLevel: string
+  fee: number
+  isDefault: boolean
+}
+
 export interface HndRegRow {
   studentId: string
   name: string
@@ -18,6 +25,7 @@ export interface HndRegRow {
 export interface HndRegList {
   session: string | null
   defaultFee: number
+  departments: DepartmentFeeRow[]
   students: HndRegRow[]
 }
 
@@ -51,5 +59,10 @@ export const addHndRegistrationPaymentApi = async (
 
 export const deleteHndRegistrationPaymentApi = async (paymentId: string) => {
   const res = await api.delete(`/hnd-registration/payments/${paymentId}`)
+  return res.data
+}
+
+export const updateDepartmentFeeApi = async (classLevel: string, fee: number | null): Promise<DepartmentFeeRow> => {
+  const res = await api.patch('/hnd-registration/department-fee', { classLevel, fee })
   return res.data
 }

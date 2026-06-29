@@ -124,30 +124,32 @@ export default function HndRegistrationModal({
               </div>
             </div>
 
-            <div className="bg-muted/50 border border-border rounded-xl p-4 mb-4 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
-              <div>
+            <div className="bg-muted/50 border border-border rounded-xl p-4 mb-4 grid grid-cols-3 gap-x-4 gap-y-3">
+              <div className="min-w-0">
                 <span className="text-xs text-muted-foreground block">Student ID</span>
-                <span className="text-sm text-foreground font-medium">{data.student.studentId}</span>
+                <span className="text-sm text-foreground font-medium truncate block">{data.student.studentId}</span>
               </div>
-              <div>
+              <div className="min-w-0 col-span-2 sm:col-span-1">
                 <span className="text-xs text-muted-foreground block">Department</span>
-                <span className="text-sm text-foreground font-medium">{data.student.classLevel}</span>
+                <span className="text-sm text-foreground font-medium break-words">
+                  {data.student.classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')}
+                </span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-xs text-muted-foreground block">Session</span>
-                <span className="text-sm text-foreground font-medium">{data.session || '—'}</span>
+                <span className="text-sm text-foreground font-medium truncate block">{data.session || '—'}</span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-xs text-muted-foreground block">Installments</span>
                 <span className="text-sm text-foreground font-medium">{data.payments.length}</span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-xs text-muted-foreground block">Last payment</span>
-                <span className="text-sm text-foreground font-medium">
+                <span className="text-sm text-foreground font-medium truncate block">
                   {data.payments.length ? fmtDate(data.payments[data.payments.length - 1].paidOn) : '—'}
                 </span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-xs text-muted-foreground block">Status</span>
                 {chip && <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${chip.cls}`}>{chip.label}</span>}
               </div>

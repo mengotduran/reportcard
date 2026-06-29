@@ -15,7 +15,7 @@ interface RawRC {
   id: string; status: string; remarks?: string; average?: number | null
   position?: number | null; cgpa?: number | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
-  term: { id: string; name: string; session: string }
+  term: { id: string; name: string; session: string; printingEnabled?: boolean }
   entries: RawEntry[]
 }
 
@@ -30,7 +30,7 @@ export default function PrintClassPage() {
   const [config, setConfig] = useState<TemplateConfig | null>(null)
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [classBands, setClassBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
-  const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready'>('loading')
+  const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready' | 'blocked'>('loading')
 
   useEffect(() => {
     const load = async () => {
@@ -42,6 +42,7 @@ export default function PrintClassPage() {
         ])
         const published: RawRC[] = rcData.reportCards.filter((rc: RawRC) => rc.status === 'PUBLISHED')
         if (published.length === 0) { setStatus('empty'); return }
+        if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
 
         const saved = tplData.config as Partial<TemplateConfig> | undefined
         const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
@@ -70,9 +71,10 @@ export default function PrintClassPage() {
     })
   }, [status])
 
-  if (status === 'loading') return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>Loading report cards…</div>
-  if (status === 'empty')  return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>No published report cards for {classLevel}.</div>
-  if (status === 'error')  return <div style={{ fontFamily: 'sans-serif', padding: 40, color: 'red' }}>Failed to load report cards.</div>
+  if (status === 'loading')  return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>Loading report cards…</div>
+  if (status === 'empty')   return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>No published report cards for {classLevel}.</div>
+  if (status === 'error')   return <div style={{ fontFamily: 'sans-serif', padding: 40, color: 'red' }}>Failed to load report cards.</div>
+  if (status === 'blocked') return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8 }}>Printing has been disabled for this term by your administrator.</div>
   if (!config) return null
 
   const schoolData = { name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null }

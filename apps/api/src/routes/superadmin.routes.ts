@@ -3,6 +3,7 @@ import {
   getOverview, getAllSchools, getSchoolAdmins, getSchoolDetail,
   createStandaloneSchool, createParentSchool, addSectionToParent, addSectionToSchool,
   toggleSchoolActive, toggleParentSchoolActive, deleteSchool, updateSchool,
+  toggleTermPrinting,
 } from '../controllers/superadmin.controller'
 import { protect, restrictTo } from '../middleware/auth'
 
@@ -24,5 +25,7 @@ router.delete('/schools/:id', deleteSchool)
 router.post('/parent-schools', createParentSchool)
 router.post('/parent-schools/:id/sections', addSectionToParent)
 router.patch('/parent-schools/:id/toggle', toggleParentSchoolActive)
+
+router.patch('/terms/:termId/printing', toggleTermPrinting)
 
 export default router

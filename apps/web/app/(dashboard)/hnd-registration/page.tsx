@@ -2,9 +2,9 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getHndRegistrationListApi, HndRegList, HndRegRow, RegStatus } from '@/lib/api/hndRegistration'
+import { getHndRegistrationListApi, updateDepartmentFeeApi, HndRegList, HndRegRow, DepartmentFeeRow, RegStatus } from '@/lib/api/hndRegistration'
 import { formatXAF } from '@/lib/api/fees'
-import { BookMarked, Search, X } from 'lucide-react'
+import { BookMarked, Search, X, Pencil, Check } from 'lucide-react'
 import HndRegistrationModal from '@/components/ui/HndRegistrationModal'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
@@ -28,6 +28,9 @@ export default function HndRegistrationPage() {
   const [activeDept, setActiveDept] = useState<string>('ALL')
   const [search, setSearch] = useState('')
   const [detailFor, setDetailFor] = useState<{ id: string; name: string } | null>(null)
+  const [editingFee, setEditingFee] = useState<string | null>(null)   // classLevel being edited
+  const [feeInput, setFeeInput] = useState('')
+  const [savingFee, setSavingFee] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -70,6 +73,31 @@ export default function HndRegistrationPage() {
     }
   }, [data, activeDept])
 
+  const handleEditFee = (dept: DepartmentFeeRow) => {
+    setEditingFee(dept.classLevel)
+    setFeeInput(dept.isDefault ? '' : String(dept.fee))
+  }
+
+  const handleSaveFee = async (classLevel: string) => {
+    const val = feeInput.trim()
+    const fee = val === '' ? null : Math.round(Number(val))
+    if (val !== '' && (!Number.isFinite(fee) || fee! < 0)) {
+      showToast('Enter a valid fee amount (or leave blank to use the default)', 'error')
+      return
+    }
+    setSavingFee(true)
+    try {
+      await updateDepartmentFeeApi(classLevel, fee)
+      await load()
+      setEditingFee(null)
+      showToast('Registration fee updated')
+    } catch {
+      showToast('Failed to update fee', 'error')
+    } finally {
+      setSavingFee(false)
+    }
+  }
+
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
@@ -96,6 +124,61 @@ export default function HndRegistrationPage() {
           </div>
         ))}
       </div>
+
+      {/* Registration fees per department */}
+      {data && data.departments.length > 0 && (
+        <div className="bg-card border border-border rounded-xl p-4 mb-6">
+          <h3 className="text-sm font-semibold text-foreground mb-3">Registration Fee per Department</h3>
+          <div className="divide-y divide-border">
+            {data.departments.map((dept) => (
+              <div key={dept.classLevel} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+                <span className="flex-1 text-sm font-medium text-foreground">{dept.department}</span>
+                {editingFee === dept.classLevel ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="500"
+                      placeholder={String(data.defaultFee)}
+                      value={feeInput}
+                      onChange={(e) => setFeeInput(e.target.value)}
+                      autoFocus
+                      className="w-32 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">XAF</span>
+                    <button
+                      onClick={() => handleSaveFee(dept.classLevel)}
+                      disabled={savingFee}
+                      className="flex items-center gap-1 bg-primary text-white text-xs px-3 py-1.5 rounded-lg hover:bg-[#d63429] disabled:opacity-50 transition">
+                      <Check size={12} /> {savingFee ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => setEditingFee(null)}
+                      className="text-xs px-3 py-1.5 border border-border rounded-lg text-muted-foreground hover:text-foreground transition">
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className={`text-sm ${dept.isDefault ? 'text-muted-foreground' : 'font-semibold text-foreground'}`}>
+                      {formatXAF(dept.fee)}
+                      {dept.isDefault && <span className="text-xs ml-1">(default)</span>}
+                    </span>
+                    <button
+                      onClick={() => handleEditFee(dept)}
+                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition">
+                      <Pencil size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-3">
+            Default: {formatXAF(data.defaultFee)}. Leave blank to use the default.
+          </p>
+        </div>
+      )}
 
       {/* Department filter pills */}
       {departments.length > 1 && (

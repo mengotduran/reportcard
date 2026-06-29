@@ -197,10 +197,11 @@ model Term {
   session     String
   startDate   DateTime
   endDate     DateTime
-  isCurrent   Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  reportCards ReportCard[]
-  school      School       @relation(fields: [schoolId], references: [id])
+  isCurrent       Boolean      @default(false)
+  printingEnabled Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  reportCards     ReportCard[]
+  school          School       @relation(fields: [schoolId], references: [id])
 }
 
 model ReportCard {

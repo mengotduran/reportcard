@@ -30,7 +30,7 @@ interface ReportCard {
   marksEditGrantedTo: string | null
   remarksEditGrantedTo: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
-  term: { id: string; name: string; session: string }
+  term: { id: string; name: string; session: string; printingEnabled?: boolean }
   school: { name: string; type: string; language?: string; logo?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
@@ -418,12 +418,18 @@ export default function ReportCardDetailPage() {
                 </>
               )}
               {isAdmin && (
-                <button
-                  onClick={handlePrint}
-                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
-                >
-                  <Printer size={14} /> {tr('Print / Save PDF')}
-                </button>
+                reportCard.term.printingEnabled === false ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground bg-muted border border-border px-3 py-2 rounded-lg" title="Printing has been disabled for this term by your administrator">
+                    <Printer size={14} /> {tr('Printing disabled')}
+                  </span>
+                ) : (
+                  <button
+                    onClick={handlePrint}
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                  >
+                    <Printer size={14} /> {tr('Print / Save PDF')}
+                  </button>
+                )
               )}
             </div>
           ) : (

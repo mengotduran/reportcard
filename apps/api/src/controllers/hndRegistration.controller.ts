@@ -79,7 +79,16 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
       }
     })
 
-    res.json({ session, defaultFee: HND_REGISTRATION_FEE, students: rows })
+    const departments = level2Classes
+      .map((cl) => ({
+        department: deptFromLevel2Class(cl.name),
+        classLevel: cl.name,
+        fee: cl.hndRegistrationFee ?? HND_REGISTRATION_FEE,
+        isDefault: cl.hndRegistrationFee == null,
+      }))
+      .sort((a, b) => a.department.localeCompare(b.department))
+
+    res.json({ session, defaultFee: HND_REGISTRATION_FEE, departments, students: rows })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -183,6 +192,53 @@ export const deleteHndRegistrationPayment = async (req: AuthRequest, res: Respon
     if (!payment) { res.status(404).json({ message: 'Payment not found' }); return }
     await prisma.hndRegistrationPayment.delete({ where: { id: paymentId } })
     res.json({ message: 'Payment removed', studentId: payment.studentId })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+/**
+ * PATCH /api/hnd-registration/department-fee
+ * Set or update the HND registration fee for a Level 2 class/department.
+ * Body: { classLevel: string, fee: number | null }
+ * fee = null → resets to the school default (65,000 XAF).
+ */
+export const updateDepartmentFee = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    if (!(await assertUniversity(schoolId, res))) return
+
+    const { classLevel, fee } = req.body
+    if (!classLevel || typeof classLevel !== 'string') {
+      res.status(400).json({ message: 'classLevel is required' })
+      return
+    }
+
+    const feeVal =
+      fee === null || fee === '' || fee === undefined
+        ? null
+        : Math.max(0, Math.round(Number(fee)))
+
+    if (feeVal !== null && !Number.isFinite(feeVal)) {
+      res.status(400).json({ message: 'Invalid fee value' })
+      return
+    }
+
+    const cls = await prisma.classLevel.findFirst({ where: { schoolId, name: classLevel } })
+    if (!cls) {
+      res.status(404).json({ message: 'Class not found' })
+      return
+    }
+
+    await prisma.classLevel.update({ where: { id: cls.id }, data: { hndRegistrationFee: feeVal } })
+    res.json({
+      message: 'Registration fee updated',
+      department: deptFromLevel2Class(classLevel),
+      classLevel,
+      fee: feeVal ?? HND_REGISTRATION_FEE,
+      isDefault: feeVal == null,
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

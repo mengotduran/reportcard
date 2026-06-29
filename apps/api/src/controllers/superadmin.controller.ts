@@ -364,7 +364,7 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
 
     if (!school) { res.status(404).json({ message: 'School not found' }); return }
 
-    const [classCounts, usersByRole, subjectCount, rcByStatus] = await Promise.all([
+    const [classCounts, usersByRole, subjectCount, rcByStatus, terms] = await Promise.all([
       prisma.student.groupBy({
         by: ['classLevel'],
         where: { schoolId, isActive: true },
@@ -381,6 +381,11 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
         by: ['status'],
         where: { schoolId },
         _count: true,
+      }),
+      prisma.term.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, session: true, isCurrent: true, printingEnabled: true },
+        orderBy: [{ session: 'desc' }, { startDate: 'asc' }],
       }),
     ])
 
@@ -405,7 +410,27 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
       staff: usersByRole.map(u => ({ role: u.role, count: u._count })),
       subjects: subjectCount,
       reportCards: rcByStatus.map(r => ({ status: r.status, count: r._count })),
+      terms,
     })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+/** PATCH /api/superadmin/terms/:termId/printing — enable or disable report card printing for a term. */
+export const toggleTermPrinting = async (req: Request, res: Response) => {
+  const termId = String(req.params.termId)
+  const { printingEnabled } = req.body
+  if (typeof printingEnabled !== 'boolean') {
+    res.status(400).json({ message: 'printingEnabled must be a boolean' })
+    return
+  }
+  try {
+    const term = await prisma.term.findUnique({ where: { id: termId } })
+    if (!term) { res.status(404).json({ message: 'Term not found' }); return }
+    const updated = await prisma.term.update({ where: { id: termId }, data: { printingEnabled } })
+    res.json({ message: 'Printing setting updated', term: { id: updated.id, name: updated.name, session: updated.session, printingEnabled: updated.printingEnabled } })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

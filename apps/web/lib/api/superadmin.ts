@@ -94,6 +94,14 @@ export const getSchoolAdminsApi = async (schoolId: string): Promise<{
   return res.data
 }
 
+export interface TermRow {
+  id: string
+  name: string
+  session: string
+  isCurrent: boolean
+  printingEnabled: boolean
+}
+
 export interface SchoolDetail {
   school: {
     id: string; name: string; type: string; email: string; phone: string | null
@@ -105,9 +113,15 @@ export interface SchoolDetail {
   staff: { role: string; count: number }[]
   subjects: number
   reportCards: { status: string; count: number }[]
+  terms: TermRow[]
 }
 
 export const getSchoolDetailApi = async (schoolId: string): Promise<SchoolDetail> => {
   const res = await api.get(`/superadmin/schools/${schoolId}/detail`)
   return res.data
+}
+
+export const toggleTermPrintingApi = async (termId: string, printingEnabled: boolean): Promise<TermRow> => {
+  const res = await api.patch(`/superadmin/terms/${termId}/printing`, { printingEnabled })
+  return res.data.term
 }
