@@ -749,6 +749,58 @@ const FR: Record<string, string> = {
   'Female': 'Féminin',
   'Please select the student\'s gender.': 'Veuillez sélectionner le sexe de l\'élève.',
   'marks': 'notes',
+
+  // ── Terms page — lifecycle banners ──────────────────────────────────────────
+  'Academic year': 'Année académique',
+  'is active': 'est active',
+  'When school is done for the year, end the academic year to unlock promotions and compute PASS/REPEAT decisions.': 'Quand l\'école a terminé l\'année, clôturez l\'année académique pour débloquer les promotions et calculer les décisions ADMIS/REDOUBLÉ.',
+  'End Academic Year': 'Clôturer l\'Année Académique',
+  'No active academic year': 'Aucune année académique active',
+  'Start a new academic year to activate a session and allow report cards, fees, and promotions.': 'Démarrez une nouvelle année académique pour activer une session et permettre les bulletins, les frais et les promotions.',
+  'Start New Year': 'Démarrer Nouvelle Année',
+  'All sessions:': 'Toutes les sessions :',
+  '· active': '· active',
+
+  // ── Terms page — end year modal ─────────────────────────────────────────────
+  'You are closing': 'Vous clôturez',
+  'This will:': 'Cela va :',
+  'Unset the current term — no term will be active': 'Désactiver le trimestre actuel — aucun trimestre ne sera actif',
+  'Unset the current semester — no semester will be active': 'Désactiver le semestre actuel — aucun semestre ne sera actif',
+  'Auto-compute PASS / REPEAT on all report cards': 'Calculer automatiquement ADMIS / REDOUBLÉ sur tous les bulletins',
+  'min CGPA:': 'CGPA min :',
+  'min average:': 'moyenne min :',
+  'No pass threshold set — decisions won\'t be auto-computed (configure in Settings)': 'Aucun seuil de passage défini — les décisions ne seront pas calculées automatiquement (configurer dans Paramètres)',
+  'No CGPA threshold set — decisions won\'t be auto-computed (configure in Settings)': 'Aucun seuil CGPA défini — les décisions ne seront pas calculées automatiquement (configurer dans Paramètres)',
+  'Unlock the': 'Débloquer l\'action',
+  'Promote to Level 2': 'Promouvoir au Niveau 2',
+  'action for university students': 'pour les étudiants universitaires',
+  'You can still view and edit report cards after closing. Individual term records stay intact.': 'Vous pouvez toujours consulter et modifier les bulletins après la clôture. Les enregistrements de trimestres restent intacts.',
+  'You can still view and edit report cards after closing. Individual semester records stay intact.': 'Vous pouvez toujours consulter et modifier les bulletins après la clôture. Les enregistrements de semestres restent intacts.',
+  'Yes, end the year': 'Oui, clôturer l\'année',
+  'Ending year...': 'Clôture en cours...',
+  'closed': 'clôturé',
+  'report card': 'bulletin',
+  'report cards': 'bulletins',
+  'updated with PASS/REPEAT decisions': 'mis à jour avec les décisions ADMIS/REDOUBLÉ',
+  'Failed to end academic year': 'Échec de la clôture de l\'année académique',
+
+  // ── Terms page — new year wizard ────────────────────────────────────────────
+  'Start New Academic Year': 'Démarrer une Nouvelle Année Académique',
+  'Session Name': 'Nom de la Session',
+  'Use the format YYYY/YYYY (e.g. 2025/2026)': 'Utilisez le format AAAA/AAAA (ex. 2025/2026)',
+  '– Remove': '– Supprimer',
+  '+ Add': '+ Ajouter',
+  'name': 'nom',
+  'Start': 'Début',
+  'End': 'Fin',
+  '↑ This term will be set as current automatically': '↑ Ce trimestre sera défini comme actuel automatiquement',
+  '↑ This semester will be set as current automatically': '↑ Ce semestre sera défini comme actuel automatiquement',
+  'Starting...': 'Démarrage...',
+  'new year': 'nouvelle année',
+  'Please fill in all start and end dates.': 'Veuillez remplir toutes les dates de début et de fin.',
+  'Failed to start new academic year': 'Échec du démarrage de la nouvelle année académique',
+  'started — first': 'démarrée — premier',
+  'set as current': 'défini comme actuel',
 }
 
 const DICTS: Record<Lang, Record<string, string>> = { EN: {}, FR }
@@ -758,9 +810,11 @@ export function translate(en: string, lang: Lang): string {
   return DICTS[lang][en] ?? en
 }
 
-/** Reads the current UI language from the logged-in user's school (EN default). */
+/** UI language: user's personal preference first, then school language, then EN. */
 export function useLang(): Lang {
-  const lang = useAuthStore((s) => s.school?.language)
+  const userLang   = useAuthStore((s) => s.user?.preferredLanguage)
+  const schoolLang = useAuthStore((s) => s.school?.language)
+  const lang = userLang ?? schoolLang
   return lang === 'FR' ? 'FR' : 'EN'
 }
 

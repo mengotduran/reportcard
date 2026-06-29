@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import {
   getOverviewApi, toggleSchoolActiveApi, toggleParentSchoolActiveApi,
   createStandaloneSchoolApi, createParentSchoolApi, addSectionToParentApi,
-  deleteSchoolApi, updateSchoolApi, addSectionToSchoolApi, getSchoolAdminsApi,
+  deleteSchoolApi, deleteParentSchoolApi, updateSchoolApi, addSectionToSchoolApi, getSchoolAdminsApi,
   OverviewData, ParentSchool, SchoolSection,
 } from '@/lib/api/superadmin'
 import { resetUserPasswordApi } from '@/lib/api/auth'
@@ -104,6 +104,7 @@ export default function SuperAdminPage() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [toggleTarget, setToggleTarget] = useState<{ id: string; name: string; isActive: boolean; kind: 'school' | 'parent' } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; students: number; reportCards: number } | null>(null)
+  const [deleteParentTarget, setDeleteParentTarget] = useState<{ id: string; name: string } | null>(null)
   const [editTarget, setEditTarget] = useState<SchoolSection | null>(null)
   const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', address: '', subdomain: '', type: '', language: 'EN' })
   const [showAddSectionInEdit, setShowAddSectionInEdit] = useState(false)
@@ -259,6 +260,19 @@ export default function SuperAdminPage() {
     }
   }
 
+  const handleDeleteParentSchool = async () => {
+    if (!deleteParentTarget) return
+    try {
+      await deleteParentSchoolApi(deleteParentTarget.id)
+      showToast('Parent school deleted successfully')
+      setDeleteParentTarget(null)
+      fetchData()
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to delete parent school', 'error')
+      setDeleteParentTarget(null)
+    }
+  }
+
   const handleCreateStandalone = async (e: React.FormEvent) => {
     e.preventDefault(); setFormError(''); setSaving(true)
     try {
@@ -370,6 +384,15 @@ export default function SuperAdminPage() {
                     className={`text-xs px-3 py-1.5 rounded-lg transition ${parent.isActive ? 'text-destructive bg-destructive/10 hover:bg-destructive/10' : 'text-green-600 bg-green-50 hover:bg-green-100'}`}>
                     {parent.isActive ? 'Deactivate All' : 'Activate All'}
                   </button>
+                  {parent.sections.length === 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteParentTarget({ id: parent.id, name: parent.name }) }}
+                      className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition flex-shrink-0"
+                      title="Delete parent school"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                   {expanded[parent.id] ? <ChevronDown size={16} className="text-muted-foreground" /> : <ChevronRight size={16} className="text-muted-foreground" />}
                 </div>
 
@@ -811,6 +834,16 @@ export default function SuperAdminPage() {
         confirmColor="red"
         onConfirm={handleDeleteSchool}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmModal
+        isOpen={!!deleteParentTarget}
+        title="Delete Parent School"
+        message={deleteParentTarget ? `Permanently delete "${deleteParentTarget.name}"? This cannot be undone.` : ''}
+        confirmLabel="Delete Permanently"
+        confirmColor="red"
+        onConfirm={handleDeleteParentSchool}
+        onCancel={() => setDeleteParentTarget(null)}
       />
 
       <ConfirmModal

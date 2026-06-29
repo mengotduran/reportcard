@@ -7,7 +7,7 @@ import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import { useT } from '@/lib/i18n'
-import { getMeApi } from '@/lib/api/auth'
+import { getMeApi, updateLanguagePreferenceApi } from '@/lib/api/auth'
 import { getAcademicYearsApi } from '@/lib/api/dashboard'
 
 const ADMIN_NAV = [
@@ -47,14 +47,17 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, school, logout, updateSchool, activeSession, setActiveSession } = useAuthStore()
+  const { user, school, logout, updateSchool, updateUser, activeSession, setActiveSession } = useAuthStore()
   const t = useT()
 
-  // Refresh school once so persisted pre-i18n sessions pick up `language`.
+  // Refresh user+school once so persisted sessions pick up preferredLanguage and school language.
   useEffect(() => {
-    if (!user || isSuperAdmin) return
-    if (school?.language) return
-    getMeApi().then((me) => { if (me.school) updateSchool(me.school) }).catch(() => {})
+    if (!user) return
+    if (school?.language && user.preferredLanguage != null) return
+    getMeApi().then((me) => {
+      if (me.school) updateSchool(me.school)
+      if (me.preferredLanguage != null) updateUser({ preferredLanguage: me.preferredLanguage })
+    }).catch(() => {})
   }, [user])
 
   // Make sure the app-wide active academic year is set to a valid year
@@ -85,6 +88,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     : baseNavItems.filter((item) => !(item as { universityOnly?: boolean }).universityOnly)
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'
+
+  const handleLangToggle = async (lang: 'EN' | 'FR') => {
+    updateUser({ preferredLanguage: lang })
+    updateLanguagePreferenceApi(lang).catch(() => {})
+  }
 
   // Close the mobile drawer whenever the route changes
   useEffect(() => { setMobileNavOpen(false) }, [pathname])
@@ -182,6 +191,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span className="text-[13px] text-muted-foreground">{t('Appearance')}</span>
               <ThemeToggle compact />
             </div>
+
+            {!isSuperAdmin && (
+              <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
+                <span className="text-[13px] text-muted-foreground">{t('Language')}</span>
+                <div className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
+                  {(['EN', 'FR'] as const).map((lang) => (
+                    <button
+                      key={lang}
+                      onClick={() => handleLangToggle(lang)}
+                      className={`text-[11px] font-semibold px-2 py-0.5 rounded transition-colors ${
+                        currentLang === lang
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {lang}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <button
               onClick={() => { logout(); router.push('/login') }}

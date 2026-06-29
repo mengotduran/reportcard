@@ -31,7 +31,7 @@ model School {
   coverImage         String?
   parentSchoolId     String?
   language           String              @default("EN")
-  coverImages        String[]
+  coverImages        String[]            @default([])
   acronym            String?
   batch              Int?
   repeatThreshold    Float?
@@ -91,16 +91,17 @@ model ClassLevel {
 }
 
 model User {
-  id               String           @id @default(uuid())
-  schoolId         String?
-  name             String
-  email            String           @unique
-  password         String
-  role             UserRole
-  isActive         Boolean          @default(true)
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  masterClassLevel String?
+  id                String           @id @default(uuid())
+  schoolId          String?
+  name              String
+  email             String           @unique
+  password          String
+  role              UserRole
+  isActive          Boolean          @default(true)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  masterClassLevel  String?
+  preferredLanguage String           @default("EN")
   reportCards      ReportCard[]
   teacherSubjects  TeacherSubject[]
   school           School?          @relation(fields: [schoolId], references: [id])

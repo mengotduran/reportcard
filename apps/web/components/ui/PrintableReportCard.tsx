@@ -1,6 +1,7 @@
 import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
-import { useT } from '@/lib/i18n'
+import { gradeForScore20 } from '@/lib/grading'
+import { translate } from '@/lib/i18n'
 
 export interface PrintEntry {
   subjectId: string
@@ -81,9 +82,19 @@ function Logo({ url, size, color }: { url?: string | null; size: number; color: 
   return null
 }
 
+function entryGrade(e: PrintEntry | undefined, bands: GradeRange[]): string {
+  if (!e || e.score == null) return '—'
+  return gradeForScore20(e.score, bands).grade || '—'
+}
+function entryRemark(e: PrintEntry | undefined, bands: GradeRange[]): string {
+  if (!e || e.score == null) return '—'
+  return gradeForScore20(e.score, bands).remark || '—'
+}
+
 // ─── Classic ─────────────────────────────────────────────────────────────────
-function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
-  const t = useT()
+function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -129,8 +140,8 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
                 {cfg.showSeq1 && <td style={cell({ textAlign: 'center' })}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={cell({ textAlign: 'center' })}>{e?.seq2Score ?? '—'}</td>}
                 <td style={cell({ textAlign: 'center', fontWeight: 'bold' })}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{e?.grade || '—'}</td>}
-                {cfg.showRemarks && <td style={cell({ color: '#555' })}>{e?.remarks || '—'}</td>}
+                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{entryGrade(e, bands)}</td>}
+                {cfg.showRemarks && <td style={cell({ color: '#555' })}>{entryRemark(e, bands)}</td>}
               </tr>
             )
           })}
@@ -176,8 +187,9 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
 }
 
 // ─── Bilingual ────────────────────────────────────────────────────────────────
-function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
-  const t = useT()
+function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -225,8 +237,8 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', borderRight: '1px solid #e5e7eb' }}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{e?.grade || '—'}</td>}
-                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{e?.remarks || '—'}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{entryGrade(e, bands)}</td>}
+                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{entryRemark(e, bands)}</td>}
               </tr>
             )
           })}
@@ -274,8 +286,9 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
 }
 
 // ─── Modern ───────────────────────────────────────────────────────────────────
-function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
-  const t = useT()
+function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -334,9 +347,9 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
                   {cfg.showSeq2 && <td style={{ padding: '9px 8px', textAlign: 'center', color: '#6b7280' }}>{e?.seq2Score ?? '—'}</td>}
                   <td style={{ padding: '9px 8px', textAlign: 'center', fontWeight: '700', color: cfg.primaryColor }}>{e?.score ?? 0}</td>
                   {cfg.showGrade && <td style={{ padding: '9px 8px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{e?.grade || '—'}</span>
+                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{entryGrade(e, bands)}</span>
                   </td>}
-                  {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{e?.remarks || '—'}</td>}
+                  {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{entryRemark(e, bands)}</td>}
                 </tr>
               )
             })}
@@ -383,8 +396,9 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
 }
 
 // ─── Official ─────────────────────────────────────────────────────────────────
-function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg }: any) {
-  const t = useT()
+function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const border = `2px solid ${cfg.primaryColor}`
@@ -444,8 +458,8 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.grade || '—'}</td>}
-                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{e?.remarks || '—'}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{entryGrade(e, bands)}</td>}
+                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{entryRemark(e, bands)}</td>}
               </tr>
             )
           })}
@@ -498,7 +512,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
 
 // ─── Sections-based renderer ─────────────────────────────────────────────────
 function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfig }) {
-  const t = useT()
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg } = props
   const lang: 'EN' | 'FR' = school.language === 'FR' ? 'FR' : 'EN'
   const sections = (cfg as any).sections as LayoutSection[]
@@ -522,6 +536,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const bands = props.gradeBands ?? []
   const classBands = props.classificationBands ?? DEFAULT_CLASSIFICATION_BANDS
   const subjectStats = props.subjectStats ?? {}
+
   // Semester GPA (university): Σ(grade point × credit) / Σ(credit) over graded
   // courses, computed from the actual marks so live cards match the seed. Credits
   // = credit hours attempted this semester (courses with a mark).
@@ -649,8 +664,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           case 'seq1':         return e?.seq1Score ?? '—'
           case 'seq2':         return e?.seq2Score ?? '—'
           case 'score':        return e?.score ?? 0
-          case 'grade':        return e?.grade || '—'
-          case 'remarks':      return e?.remarks || '—'
+          case 'grade':        return entryGrade(e, bands)
+          case 'remarks':      return entryRemark(e, bands)
           case 'code':         return courseCode(subj, i)
           case 'credit':       return subj.credit ?? '—'
           case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
@@ -682,8 +697,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             case 'seq1':         return e?.seq1Score ?? '—'
             case 'seq2':         return e?.seq2Score ?? '—'
             case 'score':        return e?.score ?? 0
-            case 'grade':        return e?.grade || '—'
-            case 'remarks':      return e?.remarks || '—'
+            case 'grade':        return entryGrade(e, bands)
+            case 'remarks':      return entryRemark(e, bands)
             case 'code':         return courseCode(subj, si)
             case 'credit':       return subj.credit ?? '—'
             case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
@@ -848,6 +863,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     }
 
     if (sec.type === 'grading_legend') {
+      if (school.type !== 'UNIVERSITY') return null
       const s = sec as GradingLegendSec
       const gradeRows = [...bands].filter(b => b.gradePoint != null).sort((a, b) => b.minScore - a.minScore)
       const bandRows  = [...CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)

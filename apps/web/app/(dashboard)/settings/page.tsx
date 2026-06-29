@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages } from 'lucide-react'
 import api from '@/lib/api/client'
+import { updateLanguagePreferenceApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -21,7 +22,7 @@ import { getClassLevelsApi } from '@/lib/api/classLevels'
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { school, updateSchool } = useAuthStore()
+  const { school, updateSchool, user, updateUser } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const logoRef = useRef<HTMLInputElement>(null)
@@ -611,6 +612,43 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      {/* Language Preference */}
+      <div className="bg-card rounded-xl border border-border p-6 mb-4">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <Languages size={18} className="text-primary" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-semibold text-foreground">{t('Interface Language')}</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              {t('Choose the language you see in the dashboard. Printed report cards always use the school\'s official language.')}
+            </p>
+            <div className="flex gap-2 mt-4">
+              {(['EN', 'FR'] as const).map((lang) => {
+                const active = (user?.preferredLanguage ?? school?.language ?? 'EN') === lang
+                return (
+                  <button
+                    key={lang}
+                    onClick={async () => {
+                      updateUser({ preferredLanguage: lang })
+                      await updateLanguagePreferenceApi(lang).catch(() => {})
+                      showToast(lang === 'FR' ? 'Langue changée en français' : 'Language changed to English')
+                    }}
+                    className={`px-5 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+                      active
+                        ? 'bg-primary text-white border-primary'
+                        : 'border-border text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {lang === 'EN' ? 'English' : 'Français'}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

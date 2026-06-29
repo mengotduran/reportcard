@@ -7,6 +7,7 @@ interface User {
   email: string
   role: string
   masterClassLevel?: string | null
+  preferredLanguage?: string | null
 }
 
 interface School {

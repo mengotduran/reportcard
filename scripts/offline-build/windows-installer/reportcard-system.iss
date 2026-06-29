@@ -2,7 +2,7 @@
 ; installer .exe: Inno Setup compiler is Windows-only, compiled here via
 ; Wine — see DEPLOYMENT_ARCHITECTURE.md section 16.
 #define MyAppName "ReportCard System"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "ReportCard System"
 
 [Setup]

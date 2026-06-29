@@ -53,6 +53,7 @@ export const createStandaloneSchool = async (req: Request, res: Response) => {
         phone,
         address: city,
         subdomain: subdomain.toLowerCase(),
+        coverImages: [],
         users: {
           create: { name: adminName, email: adminEmail, password: hashed, role: 'SCHOOL_ADMIN' },
         },
@@ -103,28 +104,32 @@ export const createParentSchool = async (req: Request, res: Response) => {
       if (dupUser) { res.status(400).json({ message: `Admin email ${s.adminEmail} already exists` }); return }
     }
 
-    const parent = await prisma.parentSchool.create({ data: { name, city, country } })
+    const hashed = await Promise.all(sections.map((s) => bcrypt.hash(s.adminPassword, 12)))
 
-    const created = await Promise.all(
-      sections.map(async (s) => {
-        const hashed = await bcrypt.hash(s.adminPassword, 12)
-        return prisma.school.create({
-          data: {
-            parentSchoolId: parent.id,
-            name: `${name} — ${s.type}`,
-            type: s.type as any,
-            language: s.language === 'FR' ? 'FR' : 'EN',
-            email: s.schoolEmail,
-            phone: s.phone,
-            subdomain: s.subdomain.toLowerCase(),
-            users: {
-              create: { name: s.adminName, email: s.adminEmail, password: hashed, role: 'SCHOOL_ADMIN' },
+    const { parent, created } = await prisma.$transaction(async (tx) => {
+      const parent = await tx.parentSchool.create({ data: { name, city, country } })
+      const created = await Promise.all(
+        sections.map((s, i) =>
+          tx.school.create({
+            data: {
+              parentSchoolId: parent.id,
+              name: `${name} — ${s.type}`,
+              type: s.type as any,
+              language: s.language === 'FR' ? 'FR' : 'EN',
+              email: s.schoolEmail,
+              phone: s.phone,
+              subdomain: s.subdomain.toLowerCase(),
+              coverImages: [],
+              users: {
+                create: { name: s.adminName, email: s.adminEmail, password: hashed[i], role: 'SCHOOL_ADMIN' },
+              },
             },
-          },
-          include: { ...schoolInclude },
-        })
-      })
-    )
+            include: { ...schoolInclude },
+          })
+        )
+      )
+      return { parent, created }
+    })
 
     res.status(201).json({ message: 'Parent school and sections created', parent, sections: created })
   } catch (error) {
@@ -160,6 +165,7 @@ export const addSectionToParent = async (req: Request, res: Response) => {
         email: schoolEmail,
         phone,
         subdomain: subdomain.toLowerCase(),
+        coverImages: [],
         users: {
           create: { name: adminName, email: adminEmail, password: hashed, role: 'SCHOOL_ADMIN' },
         },
@@ -318,6 +324,25 @@ export const deleteSchool = async (req: Request, res: Response) => {
     await prisma.school.delete({ where: { id } })
 
     res.json({ message: 'School deleted' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const deleteParentSchool = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const parent = await prisma.parentSchool.findUnique({
+      where: { id },
+      include: { sections: { select: { id: true } } },
+    })
+    if (!parent) { res.status(404).json({ message: 'Parent school not found' }); return }
+    if (parent.sections.length > 0) {
+      res.status(400).json({ message: 'Delete all sections before deleting the parent school' }); return
+    }
+    await prisma.parentSchool.delete({ where: { id } })
+    res.json({ message: 'Parent school deleted' })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

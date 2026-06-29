@@ -110,6 +110,7 @@ export const login = async (req: Request, res: Response) => {
         email: user.email,
         role: user.role,
         masterClassLevel: user.masterClassLevel ?? null,
+        preferredLanguage: user.preferredLanguage,
       },
       school: user.school ? {
         id: user.school.id,
@@ -147,8 +148,24 @@ export const getMe = async (req: AuthRequest, res: Response) => {
       email: user.email,
       role: user.role,
       masterClassLevel: user.masterClassLevel ?? null,
+      preferredLanguage: user.preferredLanguage,
       school: user.school,
     })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Update preferred UI language for the logged-in user
+export const updatePreferredLanguage = async (req: AuthRequest, res: Response) => {
+  try {
+    const { language } = req.body
+    if (language !== 'EN' && language !== 'FR') {
+      res.status(400).json({ message: 'language must be EN or FR' }); return
+    }
+    await prisma.user.update({ where: { id: req.user!.id }, data: { preferredLanguage: language } })
+    res.json({ preferredLanguage: language })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

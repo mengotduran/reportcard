@@ -9,9 +9,11 @@
 import init from '../../prisma/sqlite/migrations/20260624111054_init/migration.sql'
 import addSubjectTerm from '../../prisma/sqlite/migrations/20260625000000_add_subject_term/migration.sql'
 import addStudentStatus from '../../prisma/sqlite/migrations/20260625010000_add_student_status/migration.sql'
+import addNewFields from '../../prisma/sqlite/migrations/20260629000000_add_new_fields/migration.sql'
 
 export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260624111054_init', sql: init },
   { name: '20260625000000_add_subject_term', sql: addSubjectTerm },
   { name: '20260625010000_add_student_status', sql: addStudentStatus },
+  { name: '20260629000000_add_new_fields', sql: addNewFields },
 ]

@@ -351,8 +351,8 @@ export default function GradingScalePage() {
         </div>
       )}
 
-      {/* Legend entries */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
+      {/* Legend entries — university only */}
+      {isUniversity && <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
         <div className="flex items-center justify-between px-4 py-3 bg-muted border-b border-border">
           <div>
             <span className="text-sm font-semibold text-foreground">{t('Legend Entries')}</span>
@@ -394,7 +394,7 @@ export default function GradingScalePage() {
             )}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {/* Live tester */}
       {!isUniversity && (

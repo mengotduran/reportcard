@@ -80,6 +80,11 @@ export const deleteSchoolApi = async (id: string) => {
   return res.data
 }
 
+export const deleteParentSchoolApi = async (id: string) => {
+  const res = await api.delete(`/superadmin/parent-schools/${id}`)
+  return res.data
+}
+
 export const addSectionToParentApi = async (parentId: string, data: {
   type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword: string
 }) => {

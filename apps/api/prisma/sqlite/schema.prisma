@@ -69,19 +69,24 @@ model School {
   isActive       Boolean    @default(true)
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+  acronym        String?
+  batch          Int?
+  repeatThreshold Float?
 
   parentSchool   ParentSchool? @relation(fields: [parentSchoolId], references: [id])
 
-  users               User[]
-  students            Student[]
-  subjects            Subject[]
-  terms               Term[]
-  reportCards         ReportCard[]
-  classLevels         ClassLevel[]
-  reportCardTemplate  ReportCardTemplate?
-  classListTemplate   ClassListTemplate?
-  gradingScale        GradingScale?
-  feePayments         FeePayment[]
+  users                    User[]
+  students                 Student[]
+  subjects                 Subject[]
+  terms                    Term[]
+  reportCards              ReportCard[]
+  classLevels              ClassLevel[]
+  reportCardTemplate       ReportCardTemplate?
+  classListTemplate        ClassListTemplate?
+  gradingScale             GradingScale?
+  feePayments              FeePayment[]
+  hndRegistrationPayments  HndRegistrationPayment[]
+  excelTemplates           ExcelTemplate[]
 }
 
 model GradingScale {
@@ -112,14 +117,16 @@ model ClassListTemplate {
 }
 
 model ClassLevel {
-  id        String   @id @default(uuid())
-  schoolId  String
-  name      String
-  hasStream Boolean  @default(false)
-  order     Int      @default(0)
-  maxScore  Int      @default(20)
-  feeAmount Int      @default(0) // total fee for this class per academic session, in XAF
-  createdAt DateTime @default(now())
+  id                 String   @id @default(uuid())
+  schoolId           String
+  name               String
+  abbreviation       String?
+  hasStream          Boolean  @default(false)
+  order              Int      @default(0)
+  maxScore           Int      @default(20)
+  feeAmount          Int      @default(0) // total fee for this class per academic session, in XAF
+  hndRegistrationFee Int?
+  createdAt          DateTime @default(now())
 
   school School @relation(fields: [schoolId], references: [id])
 
@@ -127,16 +134,17 @@ model ClassLevel {
 }
 
 model User {
-  id               String   @id @default(uuid())
-  schoolId         String?
-  name             String
-  email            String   @unique
-  password         String
-  role             UserRole
-  masterClassLevel String?
-  isActive         Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                String   @id @default(uuid())
+  schoolId          String?
+  name              String
+  email             String   @unique
+  password          String
+  role              UserRole
+  masterClassLevel  String?
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  preferredLanguage String   @default("EN")
 
   school          School?          @relation(fields: [schoolId], references: [id])
   reportCards     ReportCard[]
@@ -156,14 +164,17 @@ model Student {
   // isActive stays the single source of truth every existing "active students
   // only" query already filters on — status is a richer label layered on
   // top, kept in sync by setStudentStatus, not a replacement.
-  isActive      Boolean       @default(true)
-  status        StudentStatus @default(ACTIVE)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  isActive          Boolean       @default(true)
+  directLevel2Entry Boolean       @default(false)
+  isRepeatingLevel  Boolean       @default(false)
+  status            StudentStatus @default(ACTIVE)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
-  school      School       @relation(fields: [schoolId], references: [id])
-  reportCards ReportCard[]
-  feePayments FeePayment[]
+  school                   School                   @relation(fields: [schoolId], references: [id])
+  reportCards              ReportCard[]
+  feePayments              FeePayment[]
+  hndRegistrationPayments  HndRegistrationPayment[]
 
   @@unique([schoolId, studentId])
 }
@@ -185,10 +196,40 @@ model FeePayment {
   @@index([studentId, session])
 }
 
+model HndRegistrationPayment {
+  id         String   @id @default(uuid())
+  schoolId   String
+  studentId  String
+  session    String
+  amount     Int
+  paidOn     DateTime
+  note       String?
+  recordedBy String?
+  createdAt  DateTime @default(now())
+
+  school  School  @relation(fields: [schoolId], references: [id])
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, session])
+}
+
+model ExcelTemplate {
+  id          String   @id @default(uuid())
+  schoolId    String
+  name        String
+  fileData    Bytes
+  classLevels Json     @default("[]") // String[] on Postgres — SQLite has no scalar-list column type
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
 model Subject {
   id          String   @id @default(uuid())
   schoolId    String
   name        String
+  code        String?
   classLevel  String
   maxScore    Int      @default(20)
   coefficient Int      @default(1)
@@ -219,14 +260,15 @@ model TeacherSubject {
 }
 
 model Term {
-  id        String   @id @default(uuid())
-  schoolId  String
-  name      String
-  session   String
-  startDate DateTime
-  endDate   DateTime
-  isCurrent Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id              String   @id @default(uuid())
+  schoolId        String
+  name            String
+  session         String
+  startDate       DateTime
+  endDate         DateTime
+  isCurrent       Boolean  @default(false)
+  printingEnabled Boolean  @default(true)
+  createdAt       DateTime @default(now())
 
   school      School       @relation(fields: [schoolId], references: [id])
   reportCards ReportCard[]
@@ -242,15 +284,16 @@ model ReportCard {
   totalScore          Float?
   average             Float?
   position            Int?
-  remarks             String?
-  remarksFr           String?
-  remarksAiEn         String?
-  remarksAiFr         String?
-  remarksSource       String?
-  marksEditGrantedTo    String?
-  remarksEditGrantedTo  String?
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
+  remarks              String?
+  remarksFr            String?
+  remarksAiEn          String?
+  remarksAiFr          String?
+  remarksSource        String?
+  marksEditGrantedTo   String?
+  remarksEditGrantedTo String?
+  decision             String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   student   Student       @relation(fields: [studentId], references: [id])
   school    School        @relation(fields: [schoolId], references: [id])
