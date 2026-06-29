@@ -61,6 +61,11 @@ await build({
   plugins: [offlineSwaps],
   loader: { '.sql': 'text' },
   logLevel: 'info',
+  // Obfuscate the bundled source so the SEA blob is not human-readable if
+  // someone extracts it. Does not affect runtime behaviour at all.
+  minify: true,
+  minifyIdentifiers: true,
+  minifySyntax: true,
 })
 
 console.log('Offline bundle written to dist-offline/server.js')

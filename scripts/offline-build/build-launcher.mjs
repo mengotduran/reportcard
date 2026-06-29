@@ -24,6 +24,9 @@ export async function buildLauncher() {
     format: 'cjs',
     target: 'node22',
     logLevel: 'info',
+    minify: true,
+    minifyIdentifiers: true,
+    minifySyntax: true,
   })
 
   fs.writeFileSync(
