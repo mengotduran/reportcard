@@ -33,6 +33,7 @@ export const updateStudentApi = async (id: string, data: {
   guardianPhone?: string
   guardianEmail?: string
   directLevel2Entry?: boolean
+  isRepeatingLevel?: boolean
 }) => {
   const res = await api.put(`/students/${id}`, data)
   return res.data

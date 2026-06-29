@@ -90,7 +90,10 @@ export const getStudentFees = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const studentId = String(req.params.studentId)
 
-    const student = await prisma.student.findFirst({ where: { id: studentId, schoolId } })
+    const student = await prisma.student.findFirst({
+      where: { id: studentId, schoolId },
+      select: { id: true, name: true, studentId: true, classLevel: true, directLevel2Entry: true, isRepeatingLevel: true },
+    })
     if (!student) {
       res.status(404).json({ message: 'Student not found' })
       return
@@ -102,11 +105,13 @@ export const getStudentFees = async (req: AuthRequest, res: Response) => {
     ])
 
     const hnd = isHndClass(student.classLevel)
-    const due = resolveStudentFee(student as { classLevel: string; directLevel2Entry: boolean }, classes)
+    // Repeating Level 1 students pay a fresh annual fee scoped to the current session.
+    const isRepeatingYear = hnd && student.isRepeatingLevel
+    const due = resolveStudentFee(student, classes)
 
-    // HND: sum all payments ever made (both Level 1 and Level 2 sessions).
-    // Others: scope to current session only.
-    const payments = hnd
+    // HND (non-repeating): sum all payments ever made across both Level 1 and Level 2 sessions.
+    // HND repeating or non-HND: scope to current session only.
+    const payments = (hnd && !isRepeatingYear)
       ? await prisma.feePayment.findMany({
           where: { studentId },
           orderBy: [{ paidOn: 'asc' }, { createdAt: 'asc' }],
@@ -123,7 +128,8 @@ export const getStudentFees = async (req: AuthRequest, res: Response) => {
 
     res.json({
       session,
-      isHndProgram: hnd,
+      isHndProgram: hnd && !isRepeatingYear,
+      isRepeatingYear,
       student: { id: student.id, name: student.name, studentId: student.studentId, classLevel: student.classLevel },
       due,
       totalPaid,
@@ -238,27 +244,44 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
 
     const students = await prisma.student.findMany({
       where: studentWhere,
-      select: { id: true, name: true, studentId: true, directLevel2Entry: true },
+      select: { id: true, name: true, studentId: true, directLevel2Entry: true, isRepeatingLevel: true },
       orderBy: { name: 'asc' },
     })
 
     const paidByStudent = new Map<string, number>()
     if (students.length) {
       const studentIds = students.map((s) => s.id)
-      const grouped = await prisma.feePayment.groupBy({
-        by: ['studentId'],
-        // HND: sum all sessions; others: current session only
-        where: hnd
-          ? { schoolId, studentId: { in: studentIds } }
-          : { schoolId, session: session ?? '__none__', studentId: { in: studentIds } },
-        _sum: { amount: true },
-      })
-      for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)
+      if (hnd) {
+        // HND: non-repeating students sum all sessions; repeating students scope to current session.
+        const nonRepeatIds = students.filter((s) => !s.isRepeatingLevel).map((s) => s.id)
+        const repeatIds = students.filter((s) => s.isRepeatingLevel).map((s) => s.id)
+        if (nonRepeatIds.length) {
+          const g = await prisma.feePayment.groupBy({
+            by: ['studentId'],
+            where: { schoolId, studentId: { in: nonRepeatIds } },
+            _sum: { amount: true },
+          })
+          for (const r of g) paidByStudent.set(r.studentId, r._sum.amount ?? 0)
+        }
+        if (repeatIds.length && session) {
+          const g = await prisma.feePayment.groupBy({
+            by: ['studentId'],
+            where: { schoolId, session, studentId: { in: repeatIds } },
+            _sum: { amount: true },
+          })
+          for (const r of g) paidByStudent.set(r.studentId, r._sum.amount ?? 0)
+        }
+      } else {
+        const grouped = await prisma.feePayment.groupBy({
+          by: ['studentId'],
+          where: { schoolId, session: session ?? '__none__', studentId: { in: studentIds } },
+          _sum: { amount: true },
+        })
+        for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)
+      }
     }
 
     const rows = students.map((s) => {
-      // Per-student fee: carry-over Level 2 students see the Level 1 program fee;
-      // direct Level 2 entrants see the Level 2 class's own fee.
       const studentFee = hnd
         ? resolveStudentFee({ classLevel, directLevel2Entry: s.directLevel2Entry }, classes)
         : feeAmount
@@ -267,6 +290,7 @@ export const getClassFees = async (req: AuthRequest, res: Response) => {
         studentId: s.id,
         name: s.name,
         studentIdCode: s.studentId,
+        isRepeatingYear: hnd && s.isRepeatingLevel,
         fee: studentFee,
         paid,
         balance: Math.max(0, studentFee - paid),
@@ -359,31 +383,30 @@ export const getFeesOverview = async (req: AuthRequest, res: Response) => {
       currentSession(schoolId),
       prisma.student.findMany({
         where: { schoolId, isActive: true },
-        select: { id: true, classLevel: true, directLevel2Entry: true },
+        select: { id: true, classLevel: true, directLevel2Entry: true, isRepeatingLevel: true },
       }),
       loadClassFees(schoolId),
     ])
 
-    const hndIds = students.filter((s) => isHndClass(s.classLevel)).map((s) => s.id)
-    const stdIds = students.filter((s) => !isHndClass(s.classLevel)).map((s) => s.id)
+    // HND non-repeating: sum all sessions. HND repeating + non-HND: current session only.
+    const hndNonRepeatIds = students.filter((s) => isHndClass(s.classLevel) && !s.isRepeatingLevel).map((s) => s.id)
+    const sessionScopedIds = students.filter((s) => !isHndClass(s.classLevel) || s.isRepeatingLevel).map((s) => s.id)
 
     const paidByStudent = new Map<string, number>()
 
-    // HND students: sum across ALL sessions
-    if (hndIds.length) {
+    if (hndNonRepeatIds.length) {
       const grouped = await prisma.feePayment.groupBy({
         by: ['studentId'],
-        where: { schoolId, studentId: { in: hndIds } },
+        where: { schoolId, studentId: { in: hndNonRepeatIds } },
         _sum: { amount: true },
       })
       for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)
     }
 
-    // Non-HND students: current session only
-    if (session && stdIds.length) {
+    if (session && sessionScopedIds.length) {
       const grouped = await prisma.feePayment.groupBy({
         by: ['studentId'],
-        where: { schoolId, session, studentId: { in: stdIds } },
+        where: { schoolId, session, studentId: { in: sessionScopedIds } },
         _sum: { amount: true },
       })
       for (const g of grouped) paidByStudent.set(g.studentId, g._sum.amount ?? 0)

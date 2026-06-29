@@ -193,7 +193,7 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry, isRepeatingLevel } = req.body
 
     const student = await prisma.student.findFirst({ where: { id, schoolId } })
     if (!student) {
@@ -203,7 +203,13 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
 
     const updated = await prisma.student.update({
       where: { id },
-      data: { name, classLevel, ...(gender !== undefined ? { gender } : {}), guardianName, guardianPhone, guardianEmail, ...(directLevel2Entry !== undefined ? { directLevel2Entry: !!directLevel2Entry } : {}) }
+      data: {
+        name, classLevel,
+        ...(gender !== undefined ? { gender } : {}),
+        guardianName, guardianPhone, guardianEmail,
+        ...(directLevel2Entry !== undefined ? { directLevel2Entry: !!directLevel2Entry } : {}),
+        ...(isRepeatingLevel !== undefined ? { isRepeatingLevel: !!isRepeatingLevel } : {}),
+      }
     })
 
     res.json({ message: 'Student updated', student: updated })
@@ -282,7 +288,7 @@ export const bulkPromoteStudents = async (req: AuthRequest, res: Response) => {
 
     await prisma.$transaction(
       toUpdate.map(({ id, newLevel }) =>
-        prisma.student.update({ where: { id }, data: { classLevel: newLevel, directLevel2Entry: false } }),
+        prisma.student.update({ where: { id }, data: { classLevel: newLevel, directLevel2Entry: false, isRepeatingLevel: false } }),
       ),
     )
 

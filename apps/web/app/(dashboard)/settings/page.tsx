@@ -340,23 +340,29 @@ export default function SettingsPage() {
           <GraduationCap size={16} /> {t('Academic Decisions (PASS / REPEAT)')}
         </h3>
         <p className="text-sm text-muted-foreground mb-4">
-          {t('Set the minimum annual average a student needs to pass. When you end the academic year, PASS or REPEAT is written automatically on every report card.')}
+          {isUniversity
+            ? t('Set the minimum CGPA a student needs to continue. When you end the academic year, PASS or REPEAT is written automatically on every report card based on each student\'s cumulative GPA.')
+            : t('Set the minimum annual average a student needs to pass. When you end the academic year, PASS or REPEAT is written automatically on every report card.')}
         </p>
         <div className="flex items-end gap-3">
           <div className="flex-1 max-w-xs">
             <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              {isUniversity ? t('Min average to pass (0 – 100)') : t('Min average to pass (0 – 20)')}
+              {isUniversity ? t('Min CGPA to continue') : t('Min average to pass (0 – 20)')}
             </label>
             <input
               type="number"
-              min={0} max={isUniversity ? 100 : 20} step={0.5}
-              placeholder={t('e.g. 10')}
+              min={0} max={isUniversity ? 4 : 20} step={isUniversity ? 0.1 : 0.5}
+              placeholder={isUniversity ? 'e.g. 2.0' : 'e.g. 10'}
               value={thresholdValue}
               onChange={(e) => setThresholdValue(e.target.value)}
               className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              {thresholdValue !== '' ? `Students averaging below ${thresholdValue} will be marked REPEAT.` : t('Leave blank to disable auto-decisions.')}
+              {thresholdValue !== ''
+                ? isUniversity
+                  ? `Students with CGPA below ${thresholdValue} will be marked REPEAT.`
+                  : `Students averaging below ${thresholdValue} will be marked REPEAT.`
+                : t('Leave blank to disable auto-decisions.')}
             </p>
           </div>
           <button
@@ -417,7 +423,11 @@ export default function SettingsPage() {
 
       {/* Excel Transcript Templates — university only */}
       {isUniversity && (
-        <div className="bg-card rounded-xl border border-border p-6 mb-4">
+        <div className="relative bg-card rounded-xl border border-border p-6 mb-4">
+          <div className="absolute inset-0 rounded-xl bg-card/60 backdrop-blur-[1px] z-10 flex items-center justify-center">
+            <span className="bg-muted border border-border text-muted-foreground text-xs font-semibold px-4 py-1.5 rounded-full">Coming soon</span>
+          </div>
+          <div className="opacity-40 pointer-events-none">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
@@ -571,6 +581,7 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+          </div>
         </div>
       )}
 

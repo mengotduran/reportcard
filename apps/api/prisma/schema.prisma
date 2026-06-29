@@ -117,6 +117,7 @@ model Student {
   guardianEmail String?
   isActive            Boolean       @default(true)
   directLevel2Entry   Boolean       @default(false)
+  isRepeatingLevel    Boolean       @default(false)
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   gender              String?

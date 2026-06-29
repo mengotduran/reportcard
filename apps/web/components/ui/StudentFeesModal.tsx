@@ -1,10 +1,11 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { X, Plus, Trash2, Wallet } from 'lucide-react'
+import { X, Plus, Trash2, Wallet, RefreshCw } from 'lucide-react'
 import {
   getStudentFeesApi, addFeePaymentApi, deleteFeePaymentApi, formatXAF,
   StudentFees, FeeStatus,
 } from '@/lib/api/fees'
+import { updateStudentApi } from '@/lib/api/students'
 import { useT, useLocaleCode } from '@/lib/i18n'
 
 function statusChip(status: FeeStatus, t: (s: string) => string) {
@@ -36,6 +37,7 @@ export default function StudentFeesModal({
   const [paidOn, setPaidOn] = useState(() => new Date().toISOString().slice(0, 10))
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [togglingRepeat, setTogglingRepeat] = useState(false)
   const [error, setError] = useState('')
 
   const load = async () => {
@@ -84,6 +86,21 @@ export default function StudentFeesModal({
     }
   }
 
+  const handleToggleRepeat = async () => {
+    if (!data) return
+    setTogglingRepeat(true)
+    setError('')
+    try {
+      await updateStudentApi(data.student.id, { isRepeatingLevel: !data.isRepeatingYear })
+      await load()
+      onChanged?.()
+    } catch {
+      setError(t('Failed to update repeat year status.'))
+    } finally {
+      setTogglingRepeat(false)
+    }
+  }
+
   const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' })
 
   // Running balance per row (Excel-style): due minus cumulative paid.
@@ -100,7 +117,11 @@ export default function StudentFeesModal({
               <h3 className="font-semibold text-foreground text-lg leading-tight">{t('School Fees')}</h3>
               <p className="text-xs text-muted-foreground">
                 {studentName}
-                {data?.isHndProgram ? ' · HND program (all sessions)' : data?.session ? ` · ${data.session}` : ''}
+                {data?.isRepeatingYear
+                  ? ` · Repeat Year · ${data.session ?? '—'}`
+                  : data?.isHndProgram
+                    ? ' · HND program (all sessions)'
+                    : data?.session ? ` · ${data.session}` : ''}
               </p>
             </div>
           </div>
@@ -139,9 +160,9 @@ export default function StudentFeesModal({
                 <span className="text-sm text-foreground font-medium">{data.student.classLevel}</span>
               </div>
               <div>
-                <span className="text-xs text-muted-foreground block">{data.isHndProgram ? 'Program' : t('Session')}</span>
+                <span className="text-xs text-muted-foreground block">{(data.isHndProgram || data.isRepeatingYear) ? 'Program' : t('Session')}</span>
                 <span className="text-sm text-foreground font-medium">
-                  {data.isHndProgram ? 'HND (2 years)' : (data.session || '—')}
+                  {data.isRepeatingYear ? 'HND – Repeat Year' : data.isHndProgram ? 'HND (2 years)' : (data.session || '—')}
                 </span>
               </div>
               <div>
@@ -157,6 +178,28 @@ export default function StudentFeesModal({
                 {chip && <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${chip.cls}`}>{chip.label}</span>}
               </div>
             </div>
+
+            {/* Repeat Year toggle — Level 1 HND only */}
+            {(data.isHndProgram || data.isRepeatingYear) && / - Level 1$/i.test(data.student.classLevel) && (
+              <div className={`flex items-center justify-between rounded-xl border px-4 py-3 mb-4 ${data.isRepeatingYear ? 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800' : 'bg-muted border-border'}`}>
+                <div>
+                  <p className="text-sm font-medium text-foreground">Repeat Year</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {data.isRepeatingYear
+                      ? `Fee is scoped to ${data.session ?? 'current session'} only. Prior year payments are preserved but not counted.`
+                      : 'Enable if this student failed and is repeating Level 1. Creates a fresh annual fee obligation.'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleToggleRepeat}
+                  disabled={togglingRepeat}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition disabled:opacity-50 ${data.isRepeatingYear ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-muted-foreground/15 text-foreground hover:bg-muted-foreground/25'}`}
+                >
+                  <RefreshCw size={12} className={togglingRepeat ? 'animate-spin' : ''} />
+                  {data.isRepeatingYear ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            )}
 
             {/* Ledger */}
             <div className="border border-border rounded-xl overflow-hidden mb-4">

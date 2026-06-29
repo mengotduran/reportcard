@@ -7,12 +7,14 @@ export interface GradeResult {
   bgColor: string
 }
 
-// score    - raw score (e.g. 15 out of 20)
-// maxScore - maximum possible score for this subject (e.g. 20)
-// ranges   - the school's custom grading scale (defined on the /20 scale)
+// score    - raw score (e.g. 15 out of 20, or 75 out of 100)
+// maxScore - maximum possible score for this subject
+// ranges   - the school's custom grading scale (auto-detected: /20 for secondary, /100 for university)
 export function gradeFromScore(score: number, maxScore: number, ranges: GradeRange[]): GradeResult {
-  const score20 = maxScore > 0 ? (score / maxScore) * 20 : 0
-  return gradeForScore20(score20, ranges)
+  // Detect scale from ranges: if any boundary exceeds 20 it's a /100 university scale.
+  const rangeScale = ranges.length > 0 && ranges.some(r => r.maxScore > 20) ? 100 : 20
+  const normalizedScore = maxScore > 0 ? (score / maxScore) * rangeScale : 0
+  return gradeForScore20(normalizedScore, ranges)
 }
 
 /** Grade for a mark already on the /20 scale (e.g. a term average out of 20). */

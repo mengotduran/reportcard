@@ -385,10 +385,18 @@ export default function TermsPage() {
             <ul className="text-sm text-muted-foreground space-y-1.5 mb-4 pl-4 list-disc">
               <li>Unset the current {isUniversity ? 'semester' : 'term'} — no term will be active</li>
               {school?.repeatThreshold != null && (
-                <li>Auto-compute PASS / REPEAT on all report cards (threshold: <strong className="text-foreground">{school.repeatThreshold}</strong>)</li>
+                <li>
+                  Auto-compute PASS / REPEAT on all report cards
+                  {isUniversity
+                    ? <> (min CGPA: <strong className="text-foreground">{school.repeatThreshold}</strong>)</>
+                    : <> (min average: <strong className="text-foreground">{school.repeatThreshold}</strong>)</>
+                  }
+                </li>
               )}
               {school?.repeatThreshold == null && (
-                <li className="text-amber-600 dark:text-amber-400">No pass threshold set — decisions won't be auto-computed (configure in Settings)</li>
+                <li className="text-amber-600 dark:text-amber-400">
+                  No {isUniversity ? 'CGPA' : 'pass'} threshold set — decisions won't be auto-computed (configure in Settings)
+                </li>
               )}
               <li>Unlock the <strong className="text-foreground">Promote to Level 2</strong> action for university students</li>
             </ul>

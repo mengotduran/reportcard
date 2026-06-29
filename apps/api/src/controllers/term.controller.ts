@@ -113,37 +113,98 @@ export const endAcademicYear = async (req: AuthRequest, res: Response) => {
     // Unset isCurrent for all terms in this session
     await prisma.term.updateMany({ where: { schoolId, session }, data: { isCurrent: false } })
 
-    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { repeatThreshold: true } })
+    const school = await prisma.school.findUnique({
+      where: { id: schoolId },
+      select: { type: true, repeatThreshold: true },
+    })
     let decisionsSet = 0
 
     if (school?.repeatThreshold != null) {
       const threshold = school.repeatThreshold
-
-      // Load all report cards in the session (via term join)
       const termsInSession = await prisma.term.findMany({ where: { schoolId, session }, select: { id: true } })
       const termIds = termsInSession.map((t) => t.id)
 
-      const cards = await prisma.reportCard.findMany({
-        where: { schoolId, termId: { in: termIds }, average: { not: null } },
-        select: { id: true, studentId: true, average: true },
-      })
+      if (school.type === 'UNIVERSITY') {
+        // University: use CGPA — Σ(gradePoint × credit) / Σ(credit) across ALL
+        // published entries for each student (cumulative, not session-scoped).
+        const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
+        const rawRanges: any[] = gradingScale?.ranges
+          ? (Array.isArray((gradingScale.ranges as any).ranges)
+              ? (gradingScale.ranges as any).ranges
+              : gradingScale.ranges as any)
+          : []
+        const uniRanges = rawRanges
+          .filter((r: any) => r.gradePoint != null)
+          .sort((a: any, b: any) => b.minScore - a.minScore)
 
-      // Compute per-student annual average (mean of their term averages)
-      const byStudent = new Map<string, { ids: string[]; sum: number; count: number }>()
-      for (const c of cards) {
-        const entry = byStudent.get(c.studentId) ?? { ids: [], sum: 0, count: 0 }
-        entry.ids.push(c.id)
-        entry.sum += c.average!
-        entry.count += 1
-        byStudent.set(c.studentId, entry)
-      }
+        // Get all students who have a report card in this session
+        const sessionCards = await prisma.reportCard.findMany({
+          where: { schoolId, termId: { in: termIds } },
+          select: { id: true, studentId: true },
+        })
+        const studentIds = [...new Set(sessionCards.map((c) => c.studentId))]
+        const cardIdsByStudent = new Map<string, string[]>()
+        for (const c of sessionCards) {
+          const arr = cardIdsByStudent.get(c.studentId) ?? []
+          arr.push(c.id)
+          cardIdsByStudent.set(c.studentId, arr)
+        }
 
-      // Write decision on all report cards for each student
-      for (const { ids, sum, count } of byStudent.values()) {
-        const annualAvg = sum / count
-        const decision = annualAvg >= threshold ? 'PASS' : 'REPEAT'
-        await prisma.reportCard.updateMany({ where: { id: { in: ids } }, data: { decision } })
-        decisionsSet += ids.length
+        // Fetch all published entries for these students (cumulative CGPA)
+        const entries = await prisma.reportEntry.findMany({
+          where: {
+            reportCard: { studentId: { in: studentIds }, schoolId, status: 'PUBLISHED' },
+            score: { not: null },
+          },
+          include: {
+            subject: { select: { credit: true } },
+            reportCard: { select: { studentId: true } },
+          },
+        })
+
+        const wpMap = new Map<string, { wp: number; cr: number }>()
+        for (const e of entries) {
+          const sid = (e.reportCard as any).studentId
+          const credit = (e.subject as any).credit ?? 0
+          const match = uniRanges.find((r: any) => e.score! >= r.minScore && e.score! <= r.maxScore)
+          if (!match || credit === 0) continue
+          const prev = wpMap.get(sid) ?? { wp: 0, cr: 0 }
+          wpMap.set(sid, { wp: prev.wp + match.gradePoint * credit, cr: prev.cr + credit })
+        }
+
+        for (const studentId of studentIds) {
+          const wp = wpMap.get(studentId)
+          const cgpa = wp && wp.cr > 0 ? wp.wp / wp.cr : null
+          if (cgpa == null) continue
+          const decision = cgpa >= threshold ? 'PASS' : 'REPEAT'
+          const ids = cardIdsByStudent.get(studentId) ?? []
+          if (ids.length) {
+            await prisma.reportCard.updateMany({ where: { id: { in: ids } }, data: { decision } })
+            decisionsSet += ids.length
+          }
+        }
+      } else {
+        // Primary / Secondary: use session annual average (mean of term averages)
+        const cards = await prisma.reportCard.findMany({
+          where: { schoolId, termId: { in: termIds }, average: { not: null } },
+          select: { id: true, studentId: true, average: true },
+        })
+
+        const byStudent = new Map<string, { ids: string[]; sum: number; count: number }>()
+        for (const c of cards) {
+          const entry = byStudent.get(c.studentId) ?? { ids: [], sum: 0, count: 0 }
+          entry.ids.push(c.id)
+          entry.sum += c.average!
+          entry.count += 1
+          byStudent.set(c.studentId, entry)
+        }
+
+        for (const { ids, sum, count } of byStudent.values()) {
+          const annualAvg = sum / count
+          const decision = annualAvg >= threshold ? 'PASS' : 'REPEAT'
+          await prisma.reportCard.updateMany({ where: { id: { in: ids } }, data: { decision } })
+          decisionsSet += ids.length
+        }
       }
     }
 

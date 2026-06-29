@@ -16,6 +16,7 @@ export interface FeePayment {
 export interface StudentFees {
   session: string | null
   isHndProgram?: boolean
+  isRepeatingYear?: boolean
   student: { id: string; name: string; studentId: string; classLevel: string }
   due: number
   totalPaid: number
