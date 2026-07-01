@@ -511,7 +511,7 @@ export default function ReportCardDetailPage() {
                   ) : (
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Score')}</th>
                   )}
-                  <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Coeff')}</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{isUniversity ? tr('Credit') : tr('Coeff')}</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Grade')}</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Remarks')}</th>
                 </tr>
@@ -550,7 +550,9 @@ export default function ReportCardDetailPage() {
                         </td>
                       )}
                       <td className="px-4 py-3 text-center">
-                        <span className="text-xs font-semibold text-muted-foreground bg-muted px-2 py-1 rounded-full">×{subject.coefficient ?? 1}</span>
+                        <span className="text-xs font-semibold text-muted-foreground bg-muted px-2 py-1 rounded-full">
+                          {isUniversity ? (subject.credit ?? 0) : `×${subject.coefficient ?? 1}`}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         {!bothFilled

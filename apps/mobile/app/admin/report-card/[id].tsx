@@ -418,6 +418,7 @@ export default function AdminReportCardDetail() {
   const hasRemarks = !!reportCard.remarks?.trim()
   const canPublish = allSeqsFilled && hasRemarks
   const isFr = reportCard.school?.language === 'FR'
+  const isUniversity = reportCard.school?.type === 'UNIVERSITY'
   // Admin can write the general remarks once every offered subject is marked.
   const canAdminEditRemarks = isDraft && allSeqsFilled
 
@@ -638,14 +639,17 @@ export default function AdminReportCardDetail() {
               const entry = reportCard.entries.find((e) => e.subject.id === subject.id)
               const unfilled = !entry || (entry.seq1Score == null || entry.seq2Score == null)
               const maxScore = subject.maxScore ?? 20
-              const coeff = subject.coefficient ?? 1
               const gr = unfilled ? null : gradeFromScore(entry!.score ?? 0, maxScore, gradingRanges)
               return (
                 <View key={subject.id} style={[styles.scoreCard, gr && { borderLeftWidth: 3, borderLeftColor: gr.color }]}>
                   <View style={styles.scoreCardInner}>
                     <View style={styles.scoreLeft}>
                       <Text style={styles.scoreSubjectName}>{subject.name}</Text>
-                      <Text style={styles.scoreCoeff}>Coeff ×{coeff} · {tr('max')} {maxScore}</Text>
+                      <Text style={styles.scoreCoeff}>
+                        {isUniversity
+                          ? `${tr('Credit')} ${subject.credit ?? 0} · ${tr('max')} ${maxScore}`
+                          : `Coeff ×${subject.coefficient ?? 1} · ${tr('max')} ${maxScore}`}
+                      </Text>
                     </View>
                     <View style={styles.scoreRight}>
                       <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : colors.text }]}>

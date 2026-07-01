@@ -29,6 +29,7 @@ export interface Subject {
   classLevel: string
   maxScore: number
   coefficient: number
+  credit?: number | null
   compulsory?: boolean
   term?: string | null
 }

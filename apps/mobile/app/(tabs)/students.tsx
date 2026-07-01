@@ -6,7 +6,8 @@ import {
   TouchableOpacity, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getStudents, createStudent, updateStudent, setStudentStatus, Student, StudentStatus } from '@/lib/api/students'
+import * as DocumentPicker from 'expo-document-picker'
+import { getStudents, createStudent, updateStudent, setStudentStatus, Student, StudentStatus, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { getSubjects } from '@/lib/api/reportcards'
 import { getTerms } from '@/lib/api/terms'
@@ -311,12 +312,223 @@ function CreateStudentModal({
   )
 }
 
+function ImportStudentsModal({
+  visible,
+  onClose,
+  onImported,
+  isUniversity,
+}: {
+  visible: boolean
+  onClose: () => void
+  onImported: () => void
+  isUniversity: boolean
+}) {
+  const { colors } = useTheme()
+  const t = useT()
+  const [preview, setPreview] = useState<ImportPreviewResult | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [committing, setCommitting] = useState(false)
+  const [fileName, setFileName] = useState('')
+  const [importError, setImportError] = useState('')
+
+  const reset = () => {
+    setPreview(null); setFileName(''); setImportError('')
+  }
+
+  const handleClose = () => { reset(); onClose() }
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/csv',
+          'text/comma-separated-values',
+          'application/csv',
+        ],
+        copyToCacheDirectory: true,
+      })
+      if (result.canceled || !result.assets?.length) return
+      const asset = result.assets[0]
+      setFileName(asset.name)
+      setImportError('')
+      setPreview(null)
+      setPreviewing(true)
+      try {
+        const mimeType = asset.mimeType ?? (asset.name.endsWith('.csv') ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        const data = await previewStudentImportApi(asset.uri, asset.name, mimeType)
+        setPreview(data)
+      } catch (err: any) {
+        setImportError(err?.response?.data?.message ?? t('Failed to read that file. Make sure it is a valid .xlsx or .csv file.'))
+      } finally {
+        setPreviewing(false)
+      }
+    } catch { /* user cancelled */ }
+  }
+
+  const handleCommit = async () => {
+    if (!preview || preview.valid.length === 0) return
+    setCommitting(true)
+    try {
+      const result = await commitStudentImportApi(preview.valid)
+      const parts = [`${t('Imported')} ${result.created} ${t('students')}`]
+      if (result.failed.length > 0) parts.push(`${result.failed.length} ${t('failed')}`)
+      if (result.feesRecorded > 0) parts.push(`${result.feesRecorded} ${t('fee payments recorded')}`)
+      Alert.alert(t('Import complete'), parts.join('\n'), [{ text: 'OK', onPress: () => { handleClose(); onImported() } }])
+    } catch (err: any) {
+      setImportError(err?.response?.data?.message ?? t('Failed to import students'))
+    } finally {
+      setCommitting(false)
+    }
+  }
+
+  const importStyles = StyleSheet.create({
+    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+    sheet: { backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '85%' },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+    title: { fontSize: 17, fontWeight: '700', color: colors.text },
+    desc: { fontSize: 13, color: colors.textMuted, marginBottom: 16, lineHeight: 19 },
+    pickBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingVertical: 13, marginBottom: 16, backgroundColor: colors.bgSecondary },
+    pickBtnText: { fontSize: 14, fontWeight: '600', color: colors.text },
+    fileName: { fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: -10, marginBottom: 14 },
+    error: { backgroundColor: '#fee2e2', borderRadius: 10, padding: 12, marginBottom: 12 },
+    errorText: { fontSize: 13, color: '#dc2626' },
+    resultRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+    resultText: { fontSize: 14, color: colors.text },
+    carryOverList: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, overflow: 'hidden', marginBottom: 12, maxHeight: 160 },
+    carryOverItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+    carryOverName: { fontSize: 12, color: colors.text, flex: 1, marginRight: 8 },
+    matchBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+    matchBadgeMatricule: { backgroundColor: '#dcfce7' },
+    matchBadgeName: { backgroundColor: '#fef9c3' },
+    matchBadgeTextMatricule: { fontSize: 10, fontWeight: '600', color: '#15803d' },
+    matchBadgeTextName: { fontSize: 10, fontWeight: '600', color: '#854d0e' },
+    errorList: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, overflow: 'hidden', marginBottom: 12, maxHeight: 120 },
+    errorItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+    errorItemText: { fontSize: 12, color: colors.textMuted },
+    actions: { flexDirection: 'row', gap: 10, marginTop: 8 },
+    cancelBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+    cancelText: { fontSize: 14, fontWeight: '600', color: colors.text },
+    commitBtn: { flex: 1, backgroundColor: '#F03E2F', borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+    commitBtnDisabled: { opacity: 0.5 },
+    commitText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  })
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
+      <View style={importStyles.overlay}>
+        <View style={importStyles.sheet}>
+          <View style={importStyles.header}>
+            <Text style={importStyles.title}>{t('Import Students')}</Text>
+            <TouchableOpacity onPress={handleClose}>
+              <Ionicons name="close" size={22} color="#6b7280" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <Text style={importStyles.desc}>
+              {isUniversity
+                ? t('Upload an Excel or CSV roster. For Level 2 classes, include the Matricule column — students whose matricule or name already exist are detected as carry-overs and will not be duplicated.')
+                : t('Upload an Excel or CSV roster to add students in one go.')}
+            </Text>
+
+            <TouchableOpacity style={importStyles.pickBtn} onPress={handlePickFile} disabled={previewing}>
+              <Ionicons name="document-outline" size={18} color={colors.text} />
+              <Text style={importStyles.pickBtnText}>{previewing ? t('Reading file...') : t('Choose file (.xlsx or .csv)')}</Text>
+            </TouchableOpacity>
+            {!!fileName && <Text style={importStyles.fileName}>{fileName}</Text>}
+
+            {!!importError && (
+              <View style={importStyles.error}>
+                <Text style={importStyles.errorText}>{importError}</Text>
+              </View>
+            )}
+
+            {preview && !previewing && (
+              <>
+                {preview.headerError ? (
+                  <View style={importStyles.error}>
+                    <Text style={importStyles.errorText}>{preview.headerError}</Text>
+                  </View>
+                ) : (
+                  <>
+                    <View style={importStyles.resultRow}>
+                      <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
+                      <Text style={importStyles.resultText}>{preview.valid.length} {t('students ready to import')}</Text>
+                    </View>
+
+                    {preview.carryOvers && preview.carryOvers.length > 0 && (
+                      <>
+                        <View style={importStyles.resultRow}>
+                          <Ionicons name="information-circle" size={18} color="#2563eb" />
+                          <Text style={[importStyles.resultText, { color: '#2563eb' }]}>
+                            {preview.carryOvers.length} {t('already in system (carry-overs) — will be skipped')}
+                          </Text>
+                        </View>
+                        <ScrollView style={importStyles.carryOverList} nestedScrollEnabled>
+                          {preview.carryOvers.map((c: CarryOverRow) => (
+                            <View key={c.row} style={importStyles.carryOverItem}>
+                              <Text style={importStyles.carryOverName} numberOfLines={1}>{c.name}</Text>
+                              <View style={[importStyles.matchBadge, c.matchType === 'matricule' ? importStyles.matchBadgeMatricule : importStyles.matchBadgeName]}>
+                                <Text style={c.matchType === 'matricule' ? importStyles.matchBadgeTextMatricule : importStyles.matchBadgeTextName}>
+                                  {c.matchType === 'matricule' ? t('Matricule match') : t('Name match')}
+                                </Text>
+                              </View>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    )}
+
+                    {preview.errors.length > 0 && (
+                      <>
+                        <View style={importStyles.resultRow}>
+                          <Ionicons name="warning" size={18} color="#dc2626" />
+                          <Text style={[importStyles.resultText, { color: '#dc2626' }]}>
+                            {preview.errors.length} {t('rows have problems and will be skipped')}
+                          </Text>
+                        </View>
+                        <ScrollView style={importStyles.errorList} nestedScrollEnabled>
+                          {preview.errors.map((e) => (
+                            <View key={e.row} style={importStyles.errorItem}>
+                              <Text style={importStyles.errorItemText}>{t('Row')} {e.row}: {e.reason}</Text>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            <View style={importStyles.actions}>
+              <TouchableOpacity style={importStyles.cancelBtn} onPress={handleClose}>
+                <Text style={importStyles.cancelText}>{t('Cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[importStyles.commitBtn, (!preview || preview.valid.length === 0 || committing) && importStyles.commitBtnDisabled]}
+                onPress={handleCommit}
+                disabled={!preview || preview.valid.length === 0 || committing}
+              >
+                {committing
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={importStyles.commitText}>{t('Import')} {preview?.valid.length ?? 0} {t('students')}</Text>}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
 export default function StudentsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
-  const { user, activeSession, setActiveSession } = useAuthStore()
+  const { user, activeSession, setActiveSession, school } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   const [students, setStudents] = useState<Student[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
@@ -331,6 +543,7 @@ export default function StudentsScreen() {
   const [createVisible, setCreateVisible] = useState(false)
   const [feesStudent, setFeesStudent] = useState<Student | null>(null)
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
+  const [importVisible, setImportVisible] = useState(false)
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
 
@@ -464,12 +677,18 @@ export default function StudentsScreen() {
         </View>
       )}
 
-      {isAdmin && filtered.length > 0 && (
+      {isAdmin && (
         <View style={styles.exportBar}>
-          <TouchableOpacity style={styles.exportBtn} onPress={handleExport}>
-            <Ionicons name="download-outline" size={15} color="#F03E2F" />
-            <Text style={styles.exportText}>{t('Export CSV')}</Text>
+          <TouchableOpacity style={styles.exportBtn} onPress={() => setImportVisible(true)}>
+            <Ionicons name="cloud-upload-outline" size={15} color="#F03E2F" />
+            <Text style={styles.exportText}>{t('Import')}</Text>
           </TouchableOpacity>
+          {filtered.length > 0 && (
+            <TouchableOpacity style={[styles.exportBtn, { marginLeft: 8 }]} onPress={handleExport}>
+              <Ionicons name="download-outline" size={15} color="#F03E2F" />
+              <Text style={styles.exportText}>{t('Export CSV')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -551,6 +770,13 @@ export default function StudentsScreen() {
         onClose={() => setCreateVisible(false)}
         onCreated={handleStudentCreated}
         classList={classList}
+      />
+
+      <ImportStudentsModal
+        visible={importVisible}
+        onClose={() => setImportVisible(false)}
+        onImported={handleStudentCreated}
+        isUniversity={isUniversity}
       />
     </View>
   )

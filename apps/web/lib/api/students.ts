@@ -65,8 +65,18 @@ export interface ParsedStudentRow {
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string
+  matricule?: string
+  directLevel2Entry?: boolean
   feePaid?: number
   paymentDate?: string
+}
+
+export interface CarryOverRow {
+  row: number
+  name: string
+  classLevel: string
+  matricule?: string
+  matchType: 'matricule' | 'name'
 }
 
 export interface ImportRowError { row: number; reason: string }
@@ -74,6 +84,7 @@ export interface ImportRowError { row: number; reason: string }
 export interface ImportPreviewResult {
   valid: ParsedStudentRow[]
   errors: ImportRowError[]
+  carryOvers?: CarryOverRow[]
   headerError?: string
 }
 

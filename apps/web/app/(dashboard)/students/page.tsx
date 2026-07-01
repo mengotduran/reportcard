@@ -5,7 +5,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import {
   getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, StudentStatus,
   bulkPromoteStudentsApi,
-  downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult,
+  downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
 import { getSubjectsApi } from '@/lib/api/subjects'
@@ -824,7 +824,9 @@ export default function StudentsPage() {
               </button>
             </div>
             <p className="text-sm text-muted-foreground mb-4">
-              {t('Already have a student list in Excel? Upload it here instead of adding students one at a time. You can also include a Fee Paid column for students who already paid part of their fees.')}
+              {isUniversity
+                ? t('Upload an Excel or CSV roster to add students in one go. For Level 2 classes, include the Matricule column — students whose matricule or name already exist in the system are detected as carry-overs and will not be duplicated.')
+                : t('Already have a student list in Excel? Upload it here instead of adding students one at a time. You can also include a Fee Paid column for students who already paid part of their fees.')}
             </p>
 
             <button onClick={handleDownloadTemplate}
@@ -860,6 +862,24 @@ export default function StudentsPage() {
                       <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
                       {importPreview.valid.length} {t('students ready to import')}
                     </div>
+                    {importPreview.carryOvers && importPreview.carryOvers.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 mb-2">
+                          <CheckCircle2 size={16} className="flex-shrink-0" />
+                          {importPreview.carryOvers.length} {t('already in system (carry-overs) — will be skipped')}
+                        </div>
+                        <div className="bg-muted rounded-lg border border-border max-h-36 overflow-y-auto">
+                          {importPreview.carryOvers.map((c: CarryOverRow) => (
+                            <div key={c.row} className="px-3 py-2 text-xs text-muted-foreground border-b border-border last:border-0 flex items-center justify-between gap-2">
+                              <span>{c.name} <span className="text-foreground/50">— {c.classLevel}</span></span>
+                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${c.matchType === 'matricule' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'}`}>
+                                {c.matchType === 'matricule' ? t('Matricule match') : t('Name match')}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {importPreview.errors.length > 0 && (
                       <div>
                         <div className="flex items-center gap-2 text-sm text-destructive mb-2">

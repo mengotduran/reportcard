@@ -306,8 +306,11 @@ export const bulkPromoteStudents = async (req: AuthRequest, res: Response) => {
 export const downloadStudentImportTemplate = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const classes = await prisma.classLevel.findMany({ where: { schoolId }, orderBy: { order: 'asc' }, select: { name: true } })
-    const buffer = await buildImportTemplate(classes.map((c) => c.name))
+    const [school, classes] = await Promise.all([
+      prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, orderBy: { order: 'asc' }, select: { name: true } }),
+    ])
+    const buffer = await buildImportTemplate(classes.map((c) => c.name), school?.type === 'UNIVERSITY')
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', 'attachment; filename="student-import-template.xlsx"')
     res.send(buffer)
@@ -320,14 +323,28 @@ export const downloadStudentImportTemplate = async (req: AuthRequest, res: Respo
 // Parses + validates only — writes nothing. The admin reviews the result
 // (and fixes the file if needed) before anything is actually created, so a
 // re-upload of a corrected file can never produce duplicate students.
+// For university schools, existing students are passed so Level 2 carry-overs
+// can be detected by matricule or name match before anything is created.
 export const previewStudentImport = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const file = (req as any).file as Express.Multer.File | undefined
     if (!file) { res.status(400).json({ message: 'No file uploaded' }); return }
 
-    const classes = await prisma.classLevel.findMany({ where: { schoolId }, select: { name: true } })
-    const result = await previewStudentRows(file.buffer, file.originalname, classes.map((c) => c.name))
+    const [school, classes] = await Promise.all([
+      prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true } }),
+    ])
+
+    let existingStudents: { name: string; studentId: string }[] | undefined
+    if (school?.type === 'UNIVERSITY') {
+      existingStudents = await prisma.student.findMany({
+        where: { schoolId, isActive: true },
+        select: { name: true, studentId: true },
+      })
+    }
+
+    const result = await previewStudentRows(file.buffer, file.originalname, classes.map((c) => c.name), existingStudents)
     res.json(result)
   } catch (error) {
     console.error(error)
@@ -370,6 +387,7 @@ export const commitStudentImport = async (req: AuthRequest, res: Response) => {
           data: {
             schoolId, studentId, name: r.name, classLevel: r.classLevel, gender: r.gender,
             guardianName: r.guardianName, guardianPhone: r.guardianPhone, guardianEmail: r.guardianEmail,
+            directLevel2Entry: !!r.directLevel2Entry,
           },
         })
         created++

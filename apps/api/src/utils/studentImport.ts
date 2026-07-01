@@ -8,6 +8,10 @@ export interface ParsedStudentRow {
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string
+  matricule?: string
+  // Set to true for university Level 2 students that have no existing match —
+  // they are new direct entrants and pay only the Level 2 class fee.
+  directLevel2Entry?: boolean
   // Most students transferring in have already paid some part of the class
   // fee — feePaid is optional, recorded as one FeePayment if present (see
   // commitStudentImport in student.controller.ts). paymentDate falls back to
@@ -15,6 +19,16 @@ export interface ParsedStudentRow {
   // empty (a typo in a financial figure shouldn't be silently swallowed).
   feePaid?: number
   paymentDate?: string
+}
+
+export interface CarryOverRow {
+  row: number
+  name: string
+  classLevel: string
+  matricule?: string
+  // 'matricule' means an exact studentId match was found; 'name' means only a
+  // name match was found (lower confidence — admin should verify in preview).
+  matchType: 'matricule' | 'name'
 }
 
 export interface ImportRowError {
@@ -25,6 +39,9 @@ export interface ImportRowError {
 export interface ImportPreviewResult {
   valid: ParsedStudentRow[]
   errors: ImportRowError[]
+  // University Level 2 students whose name or matricule matched an existing
+  // student — they are already in the system and will NOT be re-created.
+  carryOvers?: CarryOverRow[]
   // Set instead of per-row errors when the file's headers don't match any
   // known column at all — one clear message beats N identical row errors.
   headerError?: string
@@ -39,11 +56,13 @@ const HEADER_ALIASES: Record<string, string[]> = {
   guardianName: ['guardianname', 'parentname', 'guardian', 'parent'],
   guardianPhone: ['guardianphone', 'parentphone', 'phone', 'guardiancontact', 'contact', 'phonenumber'],
   guardianEmail: ['guardianemail', 'parentemail', 'email'],
+  matricule: ['matricule', 'studentid', 'matric', 'studentmatricule', 'matriculeno', 'idnumber', 'registrationno'],
   feePaid: ['feepaid', 'fee', 'amountpaid', 'paid', 'feesalreadypaid', 'feepaidxaf'],
   paymentDate: ['paymentdate', 'datepaid', 'paiddate', 'feedate'],
 }
 
 const normalize = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+const normalizeName = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim()
 
 function fieldForHeader(header: string): string | null {
   const norm = normalize(header)
@@ -144,7 +163,18 @@ async function parseXlsx(buffer: Buffer): Promise<RawRow[]> {
 // list. Does NOT write to the database — see commitStudentImport in
 // student.controller.ts for that (separate step so nothing is created until
 // the admin reviews and confirms the preview).
-export async function previewStudentRows(buffer: Buffer, filename: string, validClassNames: string[]): Promise<ImportPreviewResult> {
+//
+// existingStudents: pass the school's current student list when importing for
+// a university. For each Level 2 row, the function checks if the student is
+// already in the system (carry-over from Level 1) by matching matricule first
+// then name. Carry-overs go into the returned carryOvers array and are NOT
+// included in valid — they will not be re-created on commit.
+export async function previewStudentRows(
+  buffer: Buffer,
+  filename: string,
+  validClassNames: string[],
+  existingStudents?: { name: string; studentId: string }[],
+): Promise<ImportPreviewResult> {
   const ext = filename.toLowerCase().split('.').pop()
   const rawRows = ext === 'csv' ? parseCsv(buffer.toString('utf-8')) : await parseXlsx(buffer)
 
@@ -164,6 +194,7 @@ export async function previewStudentRows(buffer: Buffer, filename: string, valid
 
   const valid: ParsedStudentRow[] = []
   const errors: ImportRowError[] = []
+  const carryOvers: CarryOverRow[] = []
 
   for (const { rowNumber, data } of rawRows) {
     const mapped: Record<string, string> = {}
@@ -206,29 +237,71 @@ export async function previewStudentRows(buffer: Buffer, filename: string, valid
       if (!isNaN(d.getTime())) paymentDate = d.toISOString()
     }
 
+    const matricule = mapped.matricule?.trim() || undefined
+
+    // For university Level 2 classes: check if this student already exists
+    // in the school (carry-over from Level 1). Matricule match is checked
+    // first (exact, case-insensitive) then name match (normalized whitespace
+    // and case). Carry-overs are already in the system — they are NOT added
+    // to valid and will not be re-created during commit.
+    const isLevel2 = /- level 2$/i.test(matchedClass)
+    if (isLevel2 && existingStudents && existingStudents.length > 0) {
+      let matchType: 'matricule' | 'name' | null = null
+
+      if (matricule) {
+        const normMatricule = matricule.toLowerCase()
+        if (existingStudents.some((s) => s.studentId.toLowerCase() === normMatricule)) {
+          matchType = 'matricule'
+        }
+      }
+
+      if (!matchType) {
+        const normName = normalizeName(name)
+        if (existingStudents.some((s) => normalizeName(s.name) === normName)) {
+          matchType = 'name'
+        }
+      }
+
+      if (matchType) {
+        carryOvers.push({ row: rowNumber, name, classLevel: matchedClass, matricule, matchType })
+        continue
+      }
+
+      // No match — new student entering directly at Level 2
+      valid.push({
+        row: rowNumber, name, classLevel: matchedClass, gender, matricule,
+        guardianName: mapped.guardianName?.trim() || undefined,
+        guardianPhone: mapped.guardianPhone?.trim() || undefined,
+        guardianEmail: mapped.guardianEmail?.trim() || undefined,
+        feePaid, paymentDate, directLevel2Entry: true,
+      })
+      continue
+    }
+
     valid.push({
-      row: rowNumber,
-      name,
-      classLevel: matchedClass,
-      gender,
+      row: rowNumber, name, classLevel: matchedClass, gender, matricule,
       guardianName: mapped.guardianName?.trim() || undefined,
       guardianPhone: mapped.guardianPhone?.trim() || undefined,
       guardianEmail: mapped.guardianEmail?.trim() || undefined,
-      feePaid,
-      paymentDate,
+      feePaid, paymentDate,
     })
   }
 
-  return { valid, errors }
+  return { valid, errors, carryOvers: carryOvers.length > 0 ? carryOvers : undefined }
 }
 
 // Builds the downloadable .xlsx template — headers + one example row + a
 // reference sheet listing the school's actual class names (so whoever fills
 // it in knows the exact accepted spelling).
-export async function buildImportTemplate(validClassNames: string[]): Promise<Buffer> {
+export async function buildImportTemplate(validClassNames: string[], isUniversity = false): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('Students')
-  sheet.columns = [
+
+  const columns: Partial<ExcelJS.Column>[] = []
+  if (isUniversity) {
+    columns.push({ header: 'Matricule (optional)', key: 'matricule', width: 22 })
+  }
+  columns.push(
     { header: 'Name', key: 'name', width: 28 },
     { header: 'Class', key: 'classLevel', width: 28 },
     { header: 'Gender', key: 'gender', width: 12 },
@@ -237,8 +310,10 @@ export async function buildImportTemplate(validClassNames: string[]): Promise<Bu
     { header: 'Guardian Email', key: 'guardianEmail', width: 24 },
     { header: 'Fee Paid', key: 'feePaid', width: 14 },
     { header: 'Payment Date', key: 'paymentDate', width: 16 },
-  ]
-  sheet.addRow({
+  )
+  sheet.columns = columns
+
+  const exampleRow: Record<string, any> = {
     name: 'Nguemo Alice',
     classLevel: validClassNames[0] ?? 'Form 1',
     gender: 'Female',
@@ -247,8 +322,19 @@ export async function buildImportTemplate(validClassNames: string[]): Promise<Bu
     guardianEmail: 'guardian@email.com',
     feePaid: 50000,
     paymentDate: '2026-01-15',
-  })
+  }
+  if (isUniversity) exampleRow.matricule = ''
+  sheet.addRow(exampleRow)
   sheet.getRow(1).font = { bold: true }
+
+  if (isUniversity) {
+    const noteSheet = workbook.addWorksheet('Notes')
+    noteSheet.columns = [{ header: 'Level 2 import note', key: 'note', width: 80 }]
+    noteSheet.getRow(1).font = { bold: true }
+    noteSheet.addRow({ note: 'For Level 2 classes: include the Matricule so the system can detect carry-over students.' })
+    noteSheet.addRow({ note: 'Students whose matricule (or name) matches an existing record are carry-overs and will NOT be re-created.' })
+    noteSheet.addRow({ note: 'Students with no match are treated as new direct Level 2 entrants and are charged the Level 2 class fee only.' })
+  }
 
   if (validClassNames.length > 0) {
     const classSheet = workbook.addWorksheet('Valid Classes')
