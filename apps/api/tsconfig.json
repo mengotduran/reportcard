@@ -12,5 +12,12 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  // Offline-installer-only files: they import a SQLite Prisma Client generated
+  // to ./generated/sqlite-client by a SEPARATE `prisma generate --schema=prisma/
+  // sqlite/schema.prisma` step that only the offline build pipeline
+  // (scripts/offline-build, esbuild-bundled) runs. The normal cloud build here
+  // (`prisma generate && tsc`, e.g. on Railway) only generates the default
+  // Postgres client, so tsc would fail on these with "Cannot find module" —
+  // excluded since nothing in the cloud runtime imports them anyway.
+  "exclude": ["node_modules", "src/config/prisma.sqlite.ts", "src/config/sqliteMigrate.ts", "src/config/sqliteMigrations.ts", "src/scripts/sqliteSmokeTest.ts"]
 }
