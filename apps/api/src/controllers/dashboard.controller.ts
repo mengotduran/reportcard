@@ -105,6 +105,27 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
   }
 }
 
+/** Distinct academic years (term sessions) for the school, newest first. */
+export const getAcademicYears = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId
+    if (!schoolId) { res.status(400).json({ message: 'No school' }); return }
+
+    const terms = await prisma.term.findMany({ where: { schoolId }, select: { session: true, isCurrent: true } })
+    const map = new Map<string, boolean>()
+    for (const t of terms) {
+      if (!map.has(t.session)) map.set(t.session, false)
+      if (t.isCurrent) map.set(t.session, true)
+    }
+    const academicYears = Array.from(map, ([session, current]) => ({ session, current }))
+      .sort((a, b) => b.session.localeCompare(a.session))
+    res.json({ academicYears })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const getDashboardStats = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId
@@ -114,20 +135,45 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const [students, teachers, reportCards, subjects] = await Promise.all([
-      prisma.student.count({ where: { schoolId, isActive: true } }),
+    // Academic year (session) to report on — defaults to the current term's session.
+    let session = req.query.session ? String(req.query.session) : null
+    if (!session) {
+      const cur = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { session: true } })
+      session = cur?.session ?? null
+    }
+
+    if (!session) {
+      // No terms yet — fall back to the live roster + school-wide counts.
+      const [students, teachers, subjects] = await Promise.all([
+        prisma.student.count({ where: { schoolId, isActive: true } }),
+        prisma.user.count({ where: { schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] } } }),
+        prisma.subject.count({ where: { schoolId } }),
+      ])
+      res.json({ students, teachers, reportCards: 0, subjects, session: null })
+      return
+    }
+
+    // Everything is scoped to the chosen academic year. A "year" is defined by the
+    // classes that actually ran it (the classes of students who have report cards
+    // that session); subjects + teachers are limited to those classes.
+    const yearStudents = await prisma.student.findMany({
+      where: { schoolId, reportCards: { some: { term: { session } } } },
+      select: { classLevel: true },
+    })
+    const classLevels = [...new Set(yearStudents.map((s) => s.classLevel))]
+
+    const [reportCards, subjects, teachers] = await Promise.all([
+      prisma.reportCard.count({ where: { schoolId, term: { session } } }),
+      prisma.subject.count({ where: { schoolId, classLevel: { in: classLevels } } }),
       prisma.user.count({
         where: {
-          schoolId,
-          isActive: true,
-          role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] },
+          schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] },
+          teacherSubjects: { some: { subject: { classLevel: { in: classLevels } } } },
         },
       }),
-      prisma.reportCard.count({ where: { schoolId } }),
-      prisma.subject.count({ where: { schoolId } }),
     ])
 
-    res.json({ students, teachers, reportCards, subjects })
+    res.json({ students: yearStudents.length, teachers, reportCards, subjects, session })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

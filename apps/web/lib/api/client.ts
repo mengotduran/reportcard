@@ -1,7 +1,21 @@
 import axios from 'axios'
 
+// Cloud/dev builds always set NEXT_PUBLIC_API_URL (baked in at build time),
+// so this resolves exactly as before for them. The offline/local install
+// build deliberately leaves it unset instead of baking in a LAN IP that
+// would go stale on every network change — the browser already knows the
+// right host (it's the same machine serving this page, just a different
+// port), so derive the API origin from that at runtime instead.
+function resolveBaseURL(): string | undefined {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:5000/api`
+  }
+  return undefined
+}
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL: resolveBaseURL(),
 })
 
 api.interceptors.request.use((config) => {

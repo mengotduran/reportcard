@@ -2,18 +2,24 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
+import { useT } from '@/lib/i18n'
+import { getMeApi, updateLanguagePreferenceApi } from '@/lib/api/auth'
+import { getAcademicYearsApi } from '@/lib/api/dashboard'
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
+  { icon: CalendarRange,   label: 'Academic Year', href: '/academic-year' },
   { icon: Users,           label: 'Students',     href: '/students' },
   { icon: GraduationCap,   label: 'Classes',      href: '/classes' },
   { icon: BookOpen,        label: 'Subjects',     href: '/subjects' },
   { icon: Calendar,        label: 'Terms',        href: '/terms' },
-  { icon: FileText,        label: 'Report Cards', href: '/report-cards' },
+  { icon: Wallet,          label: 'Fees',             href: '/fees' },
+  { icon: BookMarked,      label: 'HND Registration', href: '/hnd-registration', examRegistration: true },
+  { icon: FileText,        label: 'Report Cards',     href: '/report-cards' },
   { icon: Palette,         label: 'Card Design',  href: '/report-card-design' },
   { icon: ClipboardList,   label: 'Class List',   href: '/class-list-design' },
   { icon: Star,            label: 'Grading',      href: '/grading-scale' },
@@ -41,14 +47,61 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, school, logout } = useAuthStore()
+  const { user, school, logout, updateSchool, updateUser, activeSession, setActiveSession } = useAuthStore()
+  const t = useT()
+
+  // Refresh user+school once so persisted sessions pick up preferredLanguage and school language.
+  useEffect(() => {
+    if (!user) return
+    if (school?.language && user.preferredLanguage != null) return
+    getMeApi().then((me) => {
+      if (me.school) updateSchool(me.school)
+      if (me.preferredLanguage != null) updateUser({ preferredLanguage: me.preferredLanguage })
+    }).catch(() => {})
+  }, [user])
+
+  // Make sure the app-wide active academic year is set to a valid year
+  // (defaults to the live/current one). Persisted, so an activated year sticks.
+  useEffect(() => {
+    if (!user || isSuperAdmin) return
+    getAcademicYearsApi().then(({ academicYears }) => {
+      const live = academicYears.find((y) => y.current)?.session ?? academicYears[0]?.session
+      if (live && (!activeSession || !academicYears.some((y) => y.session === activeSession))) setActiveSession(live)
+    }).catch(() => {})
+  }, [user])
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
   const isClassMaster = user?.role === 'CLASS_MASTER'
-  const navItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
+  const baseNavItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
+  // Universities use different wording for the same routes/data — just relabel the nav.
+  // Keyed by label (not href) since "Classes" appears on multiple hrefs across the
+  // admin/teacher/class-master nav arrays above, all meaning the same ClassLevel entity.
+  const UNIVERSITY_NAV_LABELS: Record<string, string> = {
+    'Terms': 'Semesters',
+    'Subjects': 'Courses',
+    'Classes': 'Departments',
+    'My Class': 'My Department',
+  }
+  // Secondary schools track exam (GCE) registration too — same feature, different label.
+  const SECONDARY_NAV_LABELS: Record<string, string> = {
+    'HND Registration': 'GCE Registration',
+  }
+  const navItems = baseNavItems
+    .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY')
+    .map((item) => {
+      if (school?.type === 'UNIVERSITY' && UNIVERSITY_NAV_LABELS[item.label]) return { ...item, label: UNIVERSITY_NAV_LABELS[item.label] }
+      if (school?.type === 'SECONDARY' && SECONDARY_NAV_LABELS[item.label]) return { ...item, label: SECONDARY_NAV_LABELS[item.label] }
+      return item
+    })
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'
+
+  const handleLangToggle = async (lang: 'EN' | 'FR') => {
+    updateUser({ preferredLanguage: lang })
+    updateLanguagePreferenceApi(lang).catch(() => {})
+  }
 
   // Close the mobile drawer whenever the route changes
   useEffect(() => { setMobileNavOpen(false) }, [pathname])
@@ -100,7 +153,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </span>
               </div>
               <span className="text-[10px] font-semibold tracking-widest uppercase text-muted-foreground">
-                {isSuperAdmin ? 'Superadmin' : (school?.type || '')}
+                {isSuperAdmin ? 'Superadmin' : (school?.type ? t(school.type) : '')}
               </span>
             </div>
             {/* Close button — mobile only */}
@@ -124,7 +177,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   }`}
                 >
                   <item.icon size={14} className={isActive ? 'text-primary' : ''} />
-                  {item.label}
+                  {t(item.label)}
                 </button>
               )
             })}
@@ -138,20 +191,41 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[13px] font-medium text-foreground truncate">{user?.name}</p>
-                <p className="text-[11px] text-muted-foreground truncate">{user?.role?.replace(/_/g, ' ')}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{user?.role ? t(user.role.replace(/_/g, ' ')) : ''}</p>
               </div>
             </div>
 
             <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
-              <span className="text-[13px] text-muted-foreground">Appearance</span>
+              <span className="text-[13px] text-muted-foreground">{t('Appearance')}</span>
               <ThemeToggle compact />
             </div>
+
+            {!isSuperAdmin && (
+              <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
+                <span className="text-[13px] text-muted-foreground">{t('Language')}</span>
+                <div className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
+                  {(['EN', 'FR'] as const).map((lang) => (
+                    <button
+                      key={lang}
+                      onClick={() => handleLangToggle(lang)}
+                      className={`text-[11px] font-semibold px-2 py-0.5 rounded transition-colors ${
+                        currentLang === lang
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {lang}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <button
               onClick={() => { logout(); router.push('/login') }}
               className="w-full flex items-center gap-2 px-3 py-[7px] text-[13px] text-muted-foreground hover:text-destructive hover:bg-muted rounded-md transition-colors"
             >
-              <LogOut size={13} /> Logout
+              <LogOut size={13} /> {t('Logout')}
             </button>
           </div>
         </aside>

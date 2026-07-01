@@ -1,9 +1,16 @@
 import api from './client'
 
-export const getDashboardStatsApi = async (): Promise<{
-  students: number; teachers: number; reportCards: number; subjects: number
+export const getDashboardStatsApi = async (session?: string): Promise<{
+  students: number; teachers: number; reportCards: number; subjects: number; session: string | null
 }> => {
-  const res = await api.get('/dashboard/stats')
+  const res = await api.get('/dashboard/stats', { params: session ? { session } : {} })
+  return res.data
+}
+
+export interface AcademicYear { session: string; current: boolean }
+
+export const getAcademicYearsApi = async (): Promise<{ academicYears: AcademicYear[] }> => {
+  const res = await api.get('/dashboard/academic-years')
   return res.data
 }
 

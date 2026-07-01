@@ -1,5 +1,5 @@
 // app/(tabs)/report-cards.tsx
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, FlatList, TouchableOpacity,
@@ -11,6 +11,7 @@ import { getCurrentTerm, getClassLevels, getClassOverview, getAllReportCards, bu
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
@@ -97,6 +98,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 function TeacherReportCards() {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const router = useRouter()
   const { user } = useAuthStore()
   const isClassMaster = user?.role === 'CLASS_MASTER'
@@ -127,9 +129,9 @@ function TeacherReportCards() {
       setClasses(summaries)
     } catch (err: any) {
       if (err?.response?.status === 404) {
-        setError('No active term set. Please set a current term from the web app.')
+        setError(t('No active term set. Please set a current term from the web app.'))
       } else {
-        setError('Failed to load data.')
+        setError(t('Failed to load data.'))
       }
     }
   }, [])
@@ -172,7 +174,7 @@ function TeacherReportCards() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="people-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No classes found. Add students first.</Text>
+            <Text style={styles.emptyText}>{t('No classes found. Add students first.')}</Text>
           </View>
         }
         renderItem={({ item }) => {
@@ -190,7 +192,7 @@ function TeacherReportCards() {
                 </View>
                 <View style={styles.cardInfo}>
                   <Text style={styles.className}>{item.classLevel}</Text>
-                  <Text style={styles.classMeta}>{item.total} student{item.total !== 1 ? 's' : ''}</Text>
+                  <Text style={styles.classMeta}>{item.total} {item.total !== 1 ? t('students') : t('student')}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
               </View>
@@ -201,9 +203,9 @@ function TeacherReportCards() {
                     <View style={[styles.progressFill, { width: `${progress * 100}%` as any }]} />
                   </View>
                   <View style={styles.statsRow}>
-                    <Text style={styles.statFilled}>{item.filled} filled</Text>
-                    {pending > 0 && <Text style={styles.statPending}>{pending} pending</Text>}
-                    {isClassMaster && <Text style={styles.statPublished}>{item.published} published</Text>}
+                    <Text style={styles.statFilled}>{item.filled} {t('filled')}</Text>
+                    {pending > 0 && <Text style={styles.statPending}>{pending} {t('pending')}</Text>}
+                    {isClassMaster && <Text style={styles.statPublished}>{item.published} {t('published')}</Text>}
                   </View>
                 </>
               )}
@@ -218,7 +220,9 @@ function TeacherReportCards() {
 function AdminReportCards() {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const router = useRouter()
+  const { activeSession } = useAuthStore()
   const [reportCards, setReportCards] = useState<AdminReportCard[]>([])
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
   const [selectedTermId, setSelectedTermId] = useState<string | null>(null)
@@ -228,36 +232,47 @@ function AdminReportCards() {
   const [error, setError] = useState('')
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
 
+  // Only the active academic year's terms.
+  const visibleTerms = terms.filter((tm) => tm.session === activeSession)
+
   const fetchData = useCallback(async (termId?: string | null) => {
     try {
       setError('')
       const [rcData, termData] = await Promise.all([
-        getAllReportCards(termId ? { termId } : {}),
+        getAllReportCards(termId ? { termId } : { session: activeSession ?? undefined }),
         getTerms(),
       ])
       setReportCards(rcData.reportCards as AdminReportCard[])
       setTerms(termData.terms)
-      if (!selectedTermId) {
-        const current = termData.terms.find(t => t.isCurrent)
-        if (current) setSelectedTermId(current.id)
-      }
     } catch {
-      setError('Failed to load report cards.')
+      setError(t('Failed to load report cards.'))
     }
-  }, [])
+  }, [activeSession])
+
+  // Default the selected term to the active year's live term — once per year, so
+  // a manual "All Terms" choice isn't reset every refresh.
+  const initializedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeSession || !terms.length) return
+    const yearTerms = terms.filter((tm) => tm.session === activeSession)
+    if (selectedTermId && !yearTerms.some((tm) => tm.id === selectedTermId)) {
+      setSelectedTermId(null); initializedFor.current = null; return
+    }
+    if (initializedFor.current !== activeSession) {
+      initializedFor.current = activeSession
+      setSelectedTermId(yearTerms.find((tm) => tm.isCurrent)?.id ?? null)
+    }
+  }, [activeSession, terms])
 
   useEffect(() => {
     fetchData(selectedTermId).finally(() => setLoading(false))
-  }, [fetchData])
+  }, [fetchData, selectedTermId])
 
   useFocusEffect(useCallback(() => {
     fetchData(selectedTermId)
   }, [fetchData, selectedTermId]))
 
-  const handleTermSelect = (id: string) => {
-    setSelectedTermId(id)
-    fetchData(id)
-  }
+  const handleTermSelect = (id: string) => setSelectedTermId(id || null)
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -266,22 +281,26 @@ function AdminReportCards() {
   }
 
   const handleBulkPublish = (classLevel: string) => {
-    if (!selectedTermId) { Alert.alert('No term selected'); return }
+    if (!selectedTermId) { Alert.alert(t('No term selected')); return }
     Alert.alert(
-      'Publish All',
-      `Publish all eligible report cards for ${classLevel}?`,
+      t('Publish All'),
+      `${t('Publish all eligible report cards for')} ${classLevel}?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('Cancel'), style: 'cancel' },
         {
-          text: 'Publish',
+          text: t('Publish'),
           onPress: async () => {
             setBulkPublishing(classLevel)
             try {
               const result = await bulkPublish(classLevel, selectedTermId)
-              Alert.alert('Done', `Published: ${result.published}, Skipped: ${result.skipped}`)
+              const names = result.issues.slice(0, 3).map((i) => i.student).join(', ')
+              const detail = result.published === 0 && result.issues.length > 0
+                ? `\n${t('Still incomplete')}: ${names}${result.issues.length > 3 ? '…' : ''}`
+                : ''
+              Alert.alert(t('Done'), `${t('Published')}: ${result.published}, ${t('Skipped')}: ${result.skipped}${detail}`)
               fetchData(selectedTermId)
             } catch (e: any) {
-              Alert.alert('Error', e?.response?.data?.message || 'Failed to publish.')
+              Alert.alert(t('Error'), e?.response?.data?.message || t('Failed to publish.'))
             } finally { setBulkPublishing(null) }
           },
         },
@@ -308,17 +327,25 @@ function AdminReportCards() {
 
   return (
     <View style={styles.container}>
-      {/* Term filter */}
-      {terms.length > 0 && (
+      {/* Term filter (active academic year only) */}
+      {visibleTerms.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
           style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}>
-          {terms.map(t => (
-            <TouchableOpacity key={t.id} onPress={() => handleTermSelect(t.id)}
+          <TouchableOpacity onPress={() => handleTermSelect('')}
+            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+              borderColor: !selectedTermId ? '#F03E2F' : colors.border,
+              backgroundColor: !selectedTermId ? '#FEF2F1' : colors.card }}>
+            <Text style={{ fontSize: 12, fontWeight: '600', color: !selectedTermId ? '#F03E2F' : colors.textSecondary }}>
+              {t('All Terms')}
+            </Text>
+          </TouchableOpacity>
+          {visibleTerms.map(tm => (
+            <TouchableOpacity key={tm.id} onPress={() => handleTermSelect(tm.id)}
               style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
-                borderColor: selectedTermId === t.id ? '#F03E2F' : colors.border,
-                backgroundColor: selectedTermId === t.id ? '#FEF2F1' : colors.card }}>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: selectedTermId === t.id ? '#F03E2F' : colors.textSecondary }}>
-                {t.name}
+                borderColor: selectedTermId === tm.id ? '#F03E2F' : colors.border,
+                backgroundColor: selectedTermId === tm.id ? '#FEF2F1' : colors.card }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: selectedTermId === tm.id ? '#F03E2F' : colors.textSecondary }}>
+                {tm.name}
               </Text>
             </TouchableOpacity>
           ))}
@@ -329,7 +356,7 @@ function AdminReportCards() {
         <Ionicons name="search-outline" size={16} color="#9ca3af" />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search by name, class or term..."
+          placeholder={t('Search by name, class or term...')}
           value={search}
           onChangeText={setSearch}
           placeholderTextColor="#9ca3af"
@@ -352,7 +379,7 @@ function AdminReportCards() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="document-text-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No report cards found</Text>
+            <Text style={styles.emptyText}>{t('No report cards found')}</Text>
           </View>
         }
         renderItem={({ item: classLevel }) => {
@@ -369,7 +396,7 @@ function AdminReportCards() {
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#16a34a', opacity: bulkPublishing === classLevel ? 0.5 : 1 }}>
                     {bulkPublishing === classLevel
                       ? <ActivityIndicator size="small" color="#fff" />
-                      : <><Ionicons name="send-outline" size={11} color="#fff" /><Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>Publish All</Text></>
+                      : <><Ionicons name="send-outline" size={11} color="#fff" /><Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>{t('Publish All')}</Text></>
                     }
                   </TouchableOpacity>
                 )}
@@ -396,7 +423,7 @@ function AdminReportCards() {
                       )}
                       <View style={[styles.statusBadge, isPublished ? styles.publishedBadge : styles.draftBadge]}>
                         <Text style={[styles.statusText, { color: isPublished ? '#16a34a' : '#92400e' }]}>
-                          {isPublished ? 'Published' : 'Draft'}
+                          {isPublished ? t('Published') : t('Draft')}
                         </Text>
                       </View>
                     </View>

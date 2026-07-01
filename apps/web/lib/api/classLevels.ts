@@ -3,9 +3,12 @@ import api from './client'
 export interface ClassLevel {
   id: string
   name: string
+  abbreviation?: string | null
   hasStream: boolean
   order: number
   maxScore: number
+  feeAmount: number
+  hndRegistrationFee?: number | null
 }
 
 export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }> => {
@@ -13,12 +16,12 @@ export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }
   return res.data
 }
 
-export const createClassLevelApi = async (data: { name: string; hasStream: boolean; order?: number; maxScore?: number }) => {
+export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }
 
-export const updateClassLevelApi = async (id: string, data: { name?: string; hasStream?: boolean; order?: number; maxScore?: number }) => {
+export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null }) => {
   const res = await api.put(`/class-levels/${id}`, data)
   return res.data
 }

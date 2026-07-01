@@ -9,13 +9,14 @@ export interface GradeRange {
   color: string
 }
 
+// Ranges on the /20 mark scale teachers & report cards use (boundary → higher grade).
 export const DEFAULT_RANGES: GradeRange[] = [
-  { id: '1', minScore: 90, maxScore: 100, grade: 'A+', remark: 'Excellent',     color: '#15803d' },
-  { id: '2', minScore: 75, maxScore: 89,  grade: 'A',  remark: 'Very Good',     color: '#16a34a' },
-  { id: '3', minScore: 60, maxScore: 74,  grade: 'B',  remark: 'Good',          color: '#F03E2F' },
-  { id: '4', minScore: 50, maxScore: 59,  grade: 'C',  remark: 'Average',       color: '#ca8a04' },
-  { id: '5', minScore: 40, maxScore: 49,  grade: 'D',  remark: 'Below Average', color: '#ea580c' },
-  { id: '6', minScore: 0,  maxScore: 39,  grade: 'F',  remark: 'Fail',          color: '#dc2626' },
+  { id: '1', minScore: 18, maxScore: 20, grade: 'A+', remark: 'Excellent',   color: '#15803d' },
+  { id: '2', minScore: 16, maxScore: 18, grade: 'A',  remark: 'Very Good',   color: '#16a34a' },
+  { id: '3', minScore: 14, maxScore: 16, grade: 'B',  remark: 'Good',        color: '#F03E2F' },
+  { id: '4', minScore: 12, maxScore: 14, grade: 'C',  remark: 'Fairly Good', color: '#ca8a04' },
+  { id: '5', minScore: 10, maxScore: 12, grade: 'D',  remark: 'Average',     color: '#ea580c' },
+  { id: '6', minScore: 0,  maxScore: 10, grade: 'F',  remark: 'Fail',        color: '#dc2626' },
 ]
 
 export interface GradeResult {
@@ -25,10 +26,10 @@ export interface GradeResult {
 }
 
 export function gradeFromScore(score: number, maxScore: number, ranges: GradeRange[]): GradeResult {
-  const pct = maxScore > 0 ? (score / maxScore) * 100 : 0
+  const score20 = maxScore > 0 ? (score / maxScore) * 20 : 0
   const list = ranges.length > 0 ? ranges : DEFAULT_RANGES
   const sorted = [...list].sort((a, b) => b.minScore - a.minScore)
-  const match = sorted.find(r => pct >= r.minScore && pct <= r.maxScore)
+  const match = sorted.find(r => score20 >= r.minScore && score20 <= r.maxScore)
   return match
     ? { grade: match.grade, remark: match.remark, color: match.color }
     : { grade: 'N/A', remark: '—', color: '#6b7280' }

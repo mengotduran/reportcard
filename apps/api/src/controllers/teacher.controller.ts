@@ -7,11 +7,15 @@ import { demoLimitBlock } from '../config/demo'
 export const getTeachers = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
+    // Optional ?term= for university semester scoping (filters to teachers who
+    // have at least one course assignment in that semester via TeacherSubject).
+    const term = req.query.term ? String(req.query.term) : undefined
     const teachers = await prisma.user.findMany({
       where: {
         schoolId,
         isActive: true,
-        role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'VICE_PRINCIPAL'] }
+        role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] },
+        ...(term ? { teacherSubjects: { some: { subject: { term } } } } : {}),
       },
       select: { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true },
       orderBy: { name: 'asc' }

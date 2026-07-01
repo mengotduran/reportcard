@@ -10,6 +10,7 @@ import { getSubjects, Subject } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { seqFull } from '@/lib/sequences'
+import { useT, useLang } from '@/lib/i18n'
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -73,10 +74,12 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 export default function ClassScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
+  const lang = useLang()
   const { classLevel, termId, termName } = useLocalSearchParams<{ classLevel: string; termId: string; termName: string }>()
   const router = useRouter()
   const navigation = useNavigation()
-  const { user } = useAuthStore()
+  const { user, school } = useAuthStore()
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedSeq, setSelectedSeq] = useState(0)
@@ -84,6 +87,7 @@ export default function ClassScreen() {
   const decodedClass = decodeURIComponent(classLevel)
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isMasterOfThisClass = isClassMaster && user?.masterClassLevel === decodedClass
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   useEffect(() => {
     navigation.setOptions({ title: decodedClass })
@@ -92,11 +96,13 @@ export default function ClassScreen() {
   useFocusEffect(useCallback(() => {
     getSubjects()
       .then((data) => {
-        const filtered = data.subjects.filter((s) => s.classLevel === decodedClass)
+        // A course scoped to one semester (university) only counts for that
+        // semester; a subject with no term (primary/secondary) always counts.
+        const filtered = data.subjects.filter((s) => s.classLevel === decodedClass && (s.term == null || s.term === termName))
         setSubjects(filtered)
       })
       .finally(() => setLoading(false))
-  }, [decodedClass]))
+  }, [decodedClass, termName]))
 
   return (
     <View style={styles.container}>
@@ -114,14 +120,23 @@ export default function ClassScreen() {
           activeOpacity={0.8}
         >
           <Ionicons name="chatbubble-ellipses-outline" size={16} color="#7c3aed" />
-          <Text style={styles.remarksBarText}>Add / Edit General Remarks for {decodedClass}</Text>
+          <Text style={styles.remarksBarText}>{t('Add / Edit General Remarks for')} {decodedClass}</Text>
           <Ionicons name="chevron-forward" size={15} color="#7c3aed" />
         </TouchableOpacity>
       )}
 
       {/* Sequence selector */}
       <View style={styles.seqContainer}>
-        <Text style={styles.seqLabel}>Select Sequence</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <Text style={[styles.seqLabel, { marginBottom: 0 }]}>
+            {isUniversity ? t('Select Assessment') : t('Select Sequence')}
+          </Text>
+          {isUniversity && termName ? (
+            <View style={{ backgroundColor: '#FEF2F1', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(240,62,47,0.2)' }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#F03E2F' }}>{termName}</Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.seqRow}>
           {[0, 1].map((i) => (
             <TouchableOpacity
@@ -131,7 +146,7 @@ export default function ClassScreen() {
               activeOpacity={0.7}
             >
               <Text style={[styles.seqBtnText, selectedSeq === i && styles.seqBtnTextActive]}>
-                {seqFull(termName, i)}
+                {isUniversity ? (i === 0 ? t('CA (30)') : t('Exam (70)')) : seqFull(termName, i, lang)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -146,7 +161,7 @@ export default function ClassScreen() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="book-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>No subjects found for {decodedClass}</Text>
+            <Text style={styles.emptyText}>{t('No subjects found for')} {decodedClass}</Text>
           </View>
         }
         renderItem={({ item }) => (

@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi } from '@/lib/api/reportcards'
 import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig } from '@/lib/api/reportCardTemplate'
+import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
 interface RawEntry {
@@ -12,9 +13,10 @@ interface RawEntry {
 }
 interface RawRC {
   id: string; status: string; remarks?: string; average?: number | null
-  position?: number | null
+  position?: number | null; cgpa?: number | null
+  classSize?: number | null; classAverage?: number | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
-  term: { id: string; name: string; session: string }
+  term: { id: string; name: string; session: string; printingEnabled?: boolean }
   entries: RawEntry[]
 }
 
@@ -27,21 +29,27 @@ export default function PrintClassPage() {
 
   const [cards, setCards] = useState<RawRC[]>([])
   const [config, setConfig] = useState<TemplateConfig | null>(null)
-  const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready'>('loading')
+  const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [classBands, setClassBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
+  const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready' | 'blocked'>('loading')
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [rcData, tplData] = await Promise.all([
+        const [rcData, tplData, scaleData] = await Promise.all([
           getReportCardsApi({ termId, classLevel }),
           getTemplateApi().catch(() => ({ config: {} })),
+          getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: [], legendRows: [] })),
         ])
         const published: RawRC[] = rcData.reportCards.filter((rc: RawRC) => rc.status === 'PUBLISHED')
         if (published.length === 0) { setStatus('empty'); return }
+        if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
 
         const saved = tplData.config as Partial<TemplateConfig> | undefined
         const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
         setConfig(saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : base)
+        if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
+        if (scaleData.classificationBands?.length > 0) setClassBands(scaleData.classificationBands)
         setCards(published)
         setStatus('ready')
       } catch {
@@ -64,12 +72,34 @@ export default function PrintClassPage() {
     })
   }, [status])
 
-  if (status === 'loading') return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>Loading report cards…</div>
-  if (status === 'empty')  return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>No published report cards for {classLevel}.</div>
-  if (status === 'error')  return <div style={{ fontFamily: 'sans-serif', padding: 40, color: 'red' }}>Failed to load report cards.</div>
+  if (status === 'loading')  return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>Loading report cards…</div>
+  if (status === 'empty')   return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#555' }}>No published report cards for {classLevel}.</div>
+  if (status === 'error')   return <div style={{ fontFamily: 'sans-serif', padding: 40, color: 'red' }}>Failed to load report cards.</div>
+  if (status === 'blocked') return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8 }}>Printing has been disabled for this term by your administrator.</div>
   if (!config) return null
 
-  const schoolData = { name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null }
+  const schoolData = {
+    name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null,
+    email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
+  }
+
+  // Compute class-wide min/avg/max per subject from all loaded cards
+  const classSubjectStats: Record<string, { min: number; avg: number; max: number }> = (() => {
+    const bySubject: Record<string, number[]> = {}
+    for (const rc of cards) {
+      for (const e of rc.entries) {
+        if (e.score == null) continue
+        if (!bySubject[e.subject.id]) bySubject[e.subject.id] = []
+        bySubject[e.subject.id].push(e.score)
+      }
+    }
+    const stats: Record<string, { min: number; avg: number; max: number }> = {}
+    for (const [sid, scores] of Object.entries(bySubject)) {
+      const sum = scores.reduce((a, b) => a + b, 0)
+      stats[sid] = { min: Math.min(...scores), max: Math.max(...scores), avg: sum / scores.length }
+    }
+    return stats
+  })()
 
   return (
     <>
@@ -102,7 +132,13 @@ export default function PrintClassPage() {
               generalRemarks={rc.remarks ?? ''}
               average={rc.average ?? 0}
               position={rc.position ?? null}
+              classSize={rc.classSize ?? null}
+              classAverage={rc.classAverage ?? null}
               config={config}
+              gradeBands={gradingRanges}
+              classificationBands={classBands}
+              cgpa={rc.cgpa ?? undefined}
+              subjectStats={classSubjectStats}
             />
           </div>
         )

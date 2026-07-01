@@ -1,0 +1,2 @@
+ALTER TABLE "Student" ADD COLUMN "gender" TEXT;
+ALTER TABLE "Subject" ADD COLUMN "compulsory" BOOLEAN NOT NULL DEFAULT true;

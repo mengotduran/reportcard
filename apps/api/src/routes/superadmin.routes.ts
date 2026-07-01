@@ -2,7 +2,8 @@ import { Router } from 'express'
 import {
   getOverview, getAllSchools, getSchoolAdmins, getSchoolDetail,
   createStandaloneSchool, createParentSchool, addSectionToParent, addSectionToSchool,
-  toggleSchoolActive, toggleParentSchoolActive, deleteSchool, updateSchool,
+  toggleSchoolActive, toggleParentSchoolActive, deleteSchool, deleteParentSchool, updateSchool,
+  toggleTermPrinting,
 } from '../controllers/superadmin.controller'
 import { protect, restrictTo } from '../middleware/auth'
 
@@ -22,7 +23,10 @@ router.post('/schools/:id/sections', addSectionToSchool)
 router.delete('/schools/:id', deleteSchool)
 
 router.post('/parent-schools', createParentSchool)
+router.delete('/parent-schools/:id', deleteParentSchool)
 router.post('/parent-schools/:id/sections', addSectionToParent)
 router.patch('/parent-schools/:id/toggle', toggleParentSchoolActive)
+
+router.patch('/terms/:termId/printing', toggleTermPrinting)
 
 export default router

@@ -18,12 +18,14 @@ export function seqNumber(termName: string | null | undefined, seqIndex: number)
 }
 
 const ORDINALS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
+const ORDINALS_FR = ['Première', 'Deuxième', 'Troisième', 'Quatrième', 'Cinquième', 'Sixième', 'Septième', 'Huitième']
 
-export function seqShort(termName: string | null | undefined, seqIndex: number): string {
-  return `Seq ${seqNumber(termName, seqIndex)}`
+export function seqShort(termName: string | null | undefined, seqIndex: number, lang: 'EN' | 'FR' = 'EN'): string {
+  return `${lang === 'FR' ? 'Séq' : 'Seq'} ${seqNumber(termName, seqIndex)}`
 }
 
-export function seqFull(termName: string | null | undefined, seqIndex: number): string {
+export function seqFull(termName: string | null | undefined, seqIndex: number, lang: 'EN' | 'FR' = 'EN'): string {
   const num = seqNumber(termName, seqIndex)
+  if (lang === 'FR') return `${ORDINALS_FR[num - 1] ?? `${num}e`} Séquence`
   return `${ORDINALS[num - 1] ?? num} Sequence`
 }

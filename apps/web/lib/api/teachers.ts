@@ -1,7 +1,7 @@
 import api from './client'
 
-export const getTeachersApi = async () => {
-  const res = await api.get('/teachers')
+export const getTeachersApi = async (params?: { term?: string }) => {
+  const res = await api.get('/teachers', { params })
   return res.data
 }
 

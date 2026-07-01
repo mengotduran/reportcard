@@ -1,4 +1,7 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine } from '@/lib/api/reportCardTemplate'
+import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
+import { gradeForScore20 } from '@/lib/grading'
+import { translate } from '@/lib/i18n'
 
 export interface PrintEntry {
   subjectId: string
@@ -9,24 +12,41 @@ export interface PrintEntry {
   remarks: string
 }
 
-interface PrintSubject { id: string; name: string }
+interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null }
-  student: { name: string; studentId: string; classLevel: string; guardianName?: string }
+  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null }
+  student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string }
   term: { name: string; session: string }
   subjects: PrintSubject[]
   entries: PrintEntry[]
   generalRemarks: string
+  generalRemarksFr?: string
   average: number
   position?: number | null
+  classSize?: number | null       // students ranked this term/class — denominator next to Position
+  classAverage?: number | null    // mean average of that same ranked population
+  annualAverage?: number | null   // final term of the session only (non-university)
+  annualPosition?: number | null  // class rank by annual average, final term only
+  annualClassSize?: number | null // denominator next to Annual Position
   config?: Partial<TemplateConfig>
+  gradeBands?: GradeRange[]           // school grading scale; for university transcripts the bands carry gradePoint
+  classificationBands?: ClassificationBand[] // CGPA classification bands (university)
+  cgpa?: number                       // cumulative GPA (university), if known
+  subjectStats?: Record<string, { min: number; avg: number; max: number }> // class-wide per-subject stats
 }
 
 function ordinalPos(n: number): string {
   const s = ['th', 'st', 'nd', 'rd']
   const v = n % 100
   return n + (s[(v - 20) % 10] || s[v] || s[0])
+}
+
+// Labels are authored "Français / English"; a school is one language, so show that side.
+function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
+  if (typeof label !== 'string' || !label.includes(' / ')) return label
+  const [fr, en] = label.split(' / ')
+  return (lang === 'FR' ? fr : en).trim()
 }
 
 function hexToRgb(hex: string) {
@@ -67,8 +87,19 @@ function Logo({ url, size, color }: { url?: string | null; size: number; color: 
   return null
 }
 
+function entryGrade(e: PrintEntry | undefined, bands: GradeRange[]): string {
+  if (!e || e.score == null) return '—'
+  return gradeForScore20(e.score, bands).grade || '—'
+}
+function entryRemark(e: PrintEntry | undefined, bands: GradeRange[]): string {
+  if (!e || e.score == null) return '—'
+  return gradeForScore20(e.score, bands).remark || '—'
+}
+
 // ─── Classic ─────────────────────────────────────────────────────────────────
-function Classic({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -82,7 +113,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
       <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
       <div style={{ textAlign: 'center', borderBottom: `3px solid ${cfg.primaryColor}`, paddingBottom: '16px', marginBottom: '20px' }}>
         {school.logo && <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Logo url={school.logo} size={60} color={cfg.primaryColor} /></div>}
-        {cfg.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase' }}>{school.type} SCHOOL</p>}
+        {cfg.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase' }}>{t(school.type)} {t('SCHOOL')}</p>}
         <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px', color: cfg.primaryColor }}>{school.name}</h1>
         {cfg.schoolSubtitle && <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#555' }}>{cfg.schoolSubtitle}</p>}
         <h2 style={{ fontSize: '14px', fontWeight: 'bold', margin: '10px 0 0', letterSpacing: '3px', color: cfg.primaryColor }}>{cfg.reportTitle}</h2>
@@ -90,19 +121,19 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '20px', backgroundColor: `rgba(${rgb},0.05)`, padding: '12px', border: `1px solid rgba(${rgb},0.3)` }}>
         {[['Student Name', student.name], ['Student ID', student.studentId], ['Class', student.classLevel], ['Guardian', student.guardianName || '—'], ['Term', term.name], ['Session', term.session]].map(([k, v]) => (
-          <div key={k}><span style={{ fontWeight: 'bold' }}>{k}:</span> {v}</div>
+          <div key={k}><span style={{ fontWeight: 'bold' }}>{t(k)}:</span> {v}</div>
         ))}
       </div>
 
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '20px', fontSize: '12px' }}>
         <thead>
           <tr style={{ backgroundColor: cfg.primaryColor, color: '#fff' }}>
-            <th style={{ padding: '8px 10px', textAlign: 'left' }}>Subject</th>
-            {cfg.showSeq1 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>Seq. 1</th>}
-            {cfg.showSeq2 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>Seq. 2</th>}
-            <th style={{ padding: '8px 10px', textAlign: 'center' }}>Score</th>
-            {cfg.showGrade && <th style={{ padding: '8px 10px', textAlign: 'center' }}>Grade</th>}
-            {cfg.showRemarks && <th style={{ padding: '8px 10px', textAlign: 'left' }}>Remarks</th>}
+            <th style={{ padding: '8px 10px', textAlign: 'left' }}>{t('Subject')}</th>
+            {cfg.showSeq1 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Seq. 1')}</th>}
+            {cfg.showSeq2 && <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Seq. 2')}</th>}
+            <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Score')}</th>
+            {cfg.showGrade && <th style={{ padding: '8px 10px', textAlign: 'center' }}>{t('Grade')}</th>}
+            {cfg.showRemarks && <th style={{ padding: '8px 10px', textAlign: 'left' }}>{t('Remarks')}</th>}
           </tr>
         </thead>
         <tbody>
@@ -114,8 +145,8 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
                 {cfg.showSeq1 && <td style={cell({ textAlign: 'center' })}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={cell({ textAlign: 'center' })}>{e?.seq2Score ?? '—'}</td>}
                 <td style={cell({ textAlign: 'center', fontWeight: 'bold' })}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{e?.grade || '—'}</td>}
-                {cfg.showRemarks && <td style={cell({ color: '#555' })}>{e?.remarks || '—'}</td>}
+                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{entryGrade(e, bands)}</td>}
+                {cfg.showRemarks && <td style={cell({ color: '#555' })}>{entryRemark(e, bands)}</td>}
               </tr>
             )
           })}
@@ -126,19 +157,33 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
         {[
           { label: 'Total Score', value: total },
           cfg.showAverage && { label: 'Average', value: `${average.toFixed(1)}` },
-          cfg.showPosition && { label: 'Position', value: position != null ? `${position}` : '—' },
+          cfg.showPosition && { label: 'Position', value: position != null ? `${position}${classSize ? `/${classSize}` : ''}` : '—' },
         ].filter(Boolean).map((item: any) => (
           <div key={item.label} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '10px', textAlign: 'center' }}>
             <div style={{ fontSize: '20px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.value}</div>
-            <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>{item.label}</div>
+            <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>{t(item.label)}</div>
           </div>
         ))}
       </div>
 
+      {annualAverage != null && (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: '10px', marginBottom: '20px' }}>
+          {[
+            { label: 'Annual Average', value: `${annualAverage.toFixed(1)}` },
+            annualPosition != null && { label: 'Annual Position', value: `${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}` },
+          ].filter(Boolean).map((item: any) => (
+            <div key={item.label} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '10px', textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+              <div style={{ fontSize: '20px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.value}</div>
+              <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>{t(item.label)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {cfg.showGeneralRemarks && (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '12px', marginBottom: '28px' }}>
-          <div style={{ fontWeight: 'bold', marginBottom: '5px', color: cfg.primaryColor }}>General Remarks</div>
-          <div style={{ color: '#444', minHeight: '36px' }}>{generalRemarks || '—'}</div>
+          <div style={{ fontWeight: 'bold', marginBottom: '5px', color: cfg.primaryColor }}>{t('General Remarks')}</div>
+          <div style={{ color: '#444', minHeight: '36px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )}
 
@@ -161,7 +206,9 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, ave
 }
 
 // ─── Bilingual ────────────────────────────────────────────────────────────────
-function Bilingual({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -177,7 +224,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
         {cfg.schoolSubtitle && <p style={{ margin: '0 0 4px', fontSize: '11px', letterSpacing: '1px', opacity: 0.85 }}>{cfg.schoolSubtitle}</p>}
         {school.logo && <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Logo url={school.logo} size={56} color={cfg.primaryColor} /></div>}
         <h1 style={{ fontSize: '22px', fontWeight: 'bold', margin: '0 0 6px' }}>{school.name}</h1>
-        {cfg.showSchoolType && <p style={{ margin: '0 0 10px', fontSize: '11px', opacity: 0.8 }}>{school.type} SCHOOL / ÉCOLE {school.type}</p>}
+        {cfg.showSchoolType && <p style={{ margin: '0 0 10px', fontSize: '11px', opacity: 0.8 }}>{t(school.type)} {t('SCHOOL')} / ÉCOLE {school.type}</p>}
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.4)', paddingTop: '10px' }}>
           <h2 style={{ fontSize: '13px', fontWeight: 'bold', margin: 0, letterSpacing: '1px' }}>{cfg.reportTitle}</h2>
         </div>
@@ -185,7 +232,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', marginBottom: '16px', border: `1px solid ${cfg.primaryColor}`, padding: '10px' }}>
         {[['Nom / Name', student.name], ['Matricule / ID', student.studentId], ['Classe / Class', student.classLevel], ['Tuteur / Guardian', student.guardianName || '—'], ['Terme / Term', term.name], ['Session / Year', term.session]].map(([k, v]) => (
-          <div key={k} style={{ padding: '2px 0' }}><span style={{ fontWeight: 'bold' }}>{k}:</span> {v}</div>
+          <div key={k} style={{ padding: '2px 0' }}><span style={{ fontWeight: 'bold' }}>{t(k)}:</span> {v}</div>
         ))}
       </div>
 
@@ -209,8 +256,8 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', borderRight: '1px solid #e5e7eb' }}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{e?.grade || '—'}</td>}
-                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{e?.remarks || '—'}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{entryGrade(e, bands)}</td>}
+                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{entryRemark(e, bands)}</td>}
               </tr>
             )
           })}
@@ -221,7 +268,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
         {[
           { fr: 'Score Total', en: 'Total Score', val: total },
           cfg.showAverage && { fr: 'Moyenne', en: 'Average', val: `${average.toFixed(1)}` },
-          cfg.showPosition && { fr: 'Rang', en: 'Position', val: position != null ? `${position}` : '—' },
+          cfg.showPosition && { fr: 'Rang', en: 'Position', val: position != null ? `${position}${classSize ? `/${classSize}` : ''}` : '—' },
         ].filter(Boolean).map((item: any) => (
           <div key={item.en} style={{ border: `2px solid ${cfg.primaryColor}`, padding: '8px', textAlign: 'center' }}>
             <div style={{ fontSize: '18px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.val}</div>
@@ -230,10 +277,24 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
         ))}
       </div>
 
+      {annualAverage != null && (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: '8px', marginBottom: '16px' }}>
+          {[
+            { fr: 'Moyenne Annuelle', en: 'Annual Average', val: `${annualAverage.toFixed(1)}` },
+            annualPosition != null && { fr: 'Rang Annuel', en: 'Annual Position', val: `${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}` },
+          ].filter(Boolean).map((item: any) => (
+            <div key={item.en} style={{ border: `2px solid ${cfg.primaryColor}`, padding: '8px', textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.val}</div>
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>{item.fr} / {item.en}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {cfg.showGeneralRemarks && (
         <div style={{ border: `1px solid ${cfg.primaryColor}`, padding: '10px', marginBottom: '24px' }}>
           <div style={{ fontWeight: 'bold', marginBottom: '4px', color: cfg.primaryColor }}>Observations / General Remarks</div>
-          <div style={{ minHeight: '32px' }}>{generalRemarks || '—'}</div>
+          <div style={{ minHeight: '32px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )}
 
@@ -258,7 +319,9 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, a
 }
 
 // ─── Modern ───────────────────────────────────────────────────────────────────
-function Modern({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const sigLabels = [
@@ -299,12 +362,12 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '20px' }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${cfg.primaryColor}` }}>
-              <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Subject</th>
-              {cfg.showSeq1 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Seq 1</th>}
-              {cfg.showSeq2 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Seq 2</th>}
-              <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Score</th>
-              {cfg.showGrade && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Grade</th>}
-              {cfg.showRemarks && <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>Remarks</th>}
+              <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Subject')}</th>
+              {cfg.showSeq1 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Seq 1')}</th>}
+              {cfg.showSeq2 && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Seq 2')}</th>}
+              <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Score')}</th>
+              {cfg.showGrade && <th style={{ padding: '8px 8px', textAlign: 'center', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Grade')}</th>}
+              {cfg.showRemarks && <th style={{ padding: '8px 0', textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: cfg.primaryColor }}>{t('Remarks')}</th>}
             </tr>
           </thead>
           <tbody>
@@ -317,9 +380,9 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
                   {cfg.showSeq2 && <td style={{ padding: '9px 8px', textAlign: 'center', color: '#6b7280' }}>{e?.seq2Score ?? '—'}</td>}
                   <td style={{ padding: '9px 8px', textAlign: 'center', fontWeight: '700', color: cfg.primaryColor }}>{e?.score ?? 0}</td>
                   {cfg.showGrade && <td style={{ padding: '9px 8px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{e?.grade || '—'}</span>
+                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{entryGrade(e, bands)}</span>
                   </td>}
-                  {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{e?.remarks || '—'}</td>}
+                  {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{entryRemark(e, bands)}</td>}
                 </tr>
               )
             })}
@@ -330,19 +393,33 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
           {[
             { label: 'Total Score', value: total },
             cfg.showAverage && { label: 'Average', value: `${average.toFixed(1)}` },
-            cfg.showPosition && { label: 'Position', value: position != null ? `#${position}` : '—' },
+            cfg.showPosition && { label: 'Position', value: position != null ? `#${position}${classSize ? `/${classSize}` : ''}` : '—' },
           ].filter(Boolean).map((item: any) => (
             <div key={item.label} style={{ backgroundColor: `rgba(${rgb},0.08)`, borderRadius: '8px', padding: '14px', textAlign: 'center' }}>
               <div style={{ fontSize: '22px', fontWeight: '800', color: cfg.primaryColor }}>{item.value}</div>
-              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{item.label}</div>
+              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{t(item.label)}</div>
             </div>
           ))}
         </div>
 
+        {annualAverage != null && (
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: '12px', marginBottom: '20px' }}>
+            {[
+              { label: 'Annual Average', value: `${annualAverage.toFixed(1)}` },
+              annualPosition != null && { label: 'Annual Position', value: `#${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}` },
+            ].filter(Boolean).map((item: any) => (
+              <div key={item.label} style={{ backgroundColor: cfg.primaryColor, borderRadius: '8px', padding: '14px', textAlign: 'center' }}>
+                <div style={{ fontSize: '22px', fontWeight: '800', color: '#fff' }}>{item.value}</div>
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{t(item.label)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {cfg.showGeneralRemarks && (
           <div style={{ backgroundColor: 'transparent', borderRadius: '8px', padding: '14px', marginBottom: '24px', borderLeft: `3px solid ${cfg.primaryColor}` }}>
-            <div style={{ fontWeight: '600', marginBottom: '5px', color: cfg.primaryColor, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>General Remarks</div>
-            <div style={{ color: '#374151', minHeight: '28px' }}>{generalRemarks || '—'}</div>
+            <div style={{ fontWeight: '600', marginBottom: '5px', color: cfg.primaryColor, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>{t('General Remarks')}</div>
+            <div style={{ color: '#374151', minHeight: '28px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
           </div>
         )}
 
@@ -366,7 +443,9 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, aver
 }
 
 // ─── Official ─────────────────────────────────────────────────────────────────
-function Official({ school, student, term, subjects, entries, generalRemarks, average, position, cfg }: any) {
+function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
+  const bands: GradeRange[] = gradeBands ?? []
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
   const border = `2px solid ${cfg.primaryColor}`
@@ -409,12 +488,12 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '16px', border }}>
         <thead>
           <tr style={{ backgroundColor: cfg.primaryColor, color: '#fff' }}>
-            <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>Subject</th>
-            {cfg.showSeq1 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Seq. 1</th>}
-            {cfg.showSeq2 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Seq. 2</th>}
-            <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Score</th>
-            {cfg.showGrade && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>Grade</th>}
-            {cfg.showRemarks && <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>Remarks</th>}
+            <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Subject')}</th>
+            {cfg.showSeq1 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Seq. 1')}</th>}
+            {cfg.showSeq2 && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Seq. 2')}</th>}
+            <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Score')}</th>
+            {cfg.showGrade && <th style={{ padding: '7px 8px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Grade')}</th>}
+            {cfg.showRemarks && <th style={{ padding: '7px 10px', textAlign: 'left', border: '1px solid rgba(255,255,255,0.3)' }}>{t('Remarks')}</th>}
           </tr>
         </thead>
         <tbody>
@@ -426,8 +505,8 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.score ?? 0}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.grade || '—'}</td>}
-                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{e?.remarks || '—'}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{entryGrade(e, bands)}</td>}
+                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{entryRemark(e, bands)}</td>}
               </tr>
             )
           })}
@@ -445,16 +524,31 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
             </>}
             {cfg.showPosition && <>
               <td style={{ padding: '6px 10px', fontWeight: 'bold', border, backgroundColor: `rgba(${rgb},0.05)` }}>Position</td>
-              <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{position != null ? position : '—'}</td>
+              <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{position != null ? `${position}${classSize ? `/${classSize}` : ''}` : '—'}</td>
             </>}
           </tr>
         </tbody>
       </table>
 
+      {annualAverage != null && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '16px', border }}>
+          <tbody>
+            <tr>
+              <td style={{ padding: '6px 10px', fontWeight: 'bold', width: '33%', border, backgroundColor: `rgba(${rgb},0.05)` }}>Annual Average</td>
+              <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{annualAverage.toFixed(1)}</td>
+              {annualPosition != null && <>
+                <td style={{ padding: '6px 10px', fontWeight: 'bold', border, backgroundColor: `rgba(${rgb},0.05)` }}>Annual Position</td>
+                <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{annualPosition}{annualClassSize ? `/${annualClassSize}` : ''}</td>
+              </>}
+            </tr>
+          </tbody>
+        </table>
+      )}
+
       {cfg.showGeneralRemarks && (
         <div style={{ border, padding: '10px', marginBottom: '24px' }}>
           <div style={{ fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '1px' }}>General Remarks / Observations Générales</div>
-          <div style={{ minHeight: '36px' }}>{generalRemarks || '—'}</div>
+          <div style={{ minHeight: '36px' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )}
 
@@ -480,7 +574,9 @@ function Official({ school, student, term, subjects, entries, generalRemarks, av
 
 // ─── Sections-based renderer ─────────────────────────────────────────────────
 function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfig }) {
-  const { school, student, term, subjects, entries, generalRemarks, average, position, cfg } = props
+  const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
+  const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, classAverage, annualAverage, annualPosition, annualClassSize, cfg } = props
+  const lang: 'EN' | 'FR' = school.language === 'FR' ? 'FR' : 'EN'
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
   const rgb = hexToRgb(color)
@@ -491,6 +587,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       'student.studentId': student.studentId,
       'student.classLevel': student.classLevel,
       'student.guardianName': student.guardianName || '—',
+      'student.gender': student.gender || '—',
       'term.name': term.name,
       'term.session': term.session,
       'school.name': school.name,
@@ -498,12 +595,38 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     return m[field] ?? field
   }
 
+  const bands = props.gradeBands ?? []
+  const classBands = props.classificationBands ?? DEFAULT_CLASSIFICATION_BANDS
+  const subjectStats = props.subjectStats ?? {}
+
+  // Semester GPA (university): Σ(grade point × credit) / Σ(credit) over graded
+  // courses, computed from the actual marks so live cards match the seed. Credits
+  // = credit hours attempted this semester (courses with a mark).
+  const gpaInfo = (() => {
+    let pts = 0, cr = 0
+    for (const subj of subjects) {
+      const e = entries.find(x => x.subjectId === subj.id)
+      if (e?.score == null) continue
+      const gp = gradePointForScore20(e.score, bands)
+      if (gp == null) continue
+      const c = subj.credit ?? 0
+      pts += gp * c; cr += c
+    }
+    return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
+  })()
+  const cgpa = props.cgpa ?? gpaInfo.gpa
+
   const resolveStat = (field: string) => {
     const total = entries.reduce((s, e) => s + e.score, 0)
-    if (field === 'total')    return String(total)
-    if (field === 'average')  return average.toFixed(1)
-    if (field === 'position') return position != null ? ordinalPos(position) : '—'
-    if (field === 'grade')    return calculateGrade((average / 20) * 100)
+    if (field === 'total')          return String(total)
+    if (field === 'average')        return average.toFixed(1)
+    if (field === 'position')       return position != null ? `${ordinalPos(position)}${classSize ? `/${classSize}` : ''}` : '—'
+    if (field === 'classAverage')   return classAverage != null ? classAverage.toFixed(1) : '—'
+    if (field === 'grade')          return calculateGrade((average / 20) * 100)
+    if (field === 'gpa')            return gpaInfo.gpa.toFixed(2)
+    if (field === 'cgpa')           return cgpa.toFixed(2)
+    if (field === 'credits')        return String(gpaInfo.credits)
+    if (field === 'classification') return classificationForGpa(cgpa, classBands)
     return '—'
   }
 
@@ -513,12 +636,48 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       const logoSize = s.logoSize || 60
       const logoEl = school.logo ? <Logo url={school.logo} size={logoSize} color={color} /> : null
 
+      const contactLine = buildOfficialContactLine(school, s)
+      const contactLineEl = contactLine
+        ? <p style={{ textAlign: 'center', fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>{contactLine}</p>
+        : null
+
+      // Official Cameroon-style header: French block | logo | English block, then title.
+      // Every line, both sides, uses the same font/size/weight — the block's own
+      // longest line sets its width, shorter lines center within it (plain
+      // center-align does exactly this; no per-line special-casing). The logo
+      // is absolutely positioned so a bigger logo never stretches the text rows.
+      if (s.officialHeader) {
+        const toHtml = (lines: string[]) =>
+          lines.map(line =>
+            `<div style="font-family:Arial,sans-serif;font-size:10px;font-weight:bold;line-height:1.5;text-align:center;">${line || '&nbsp;'}</div>`
+          ).join('')
+
+        const leftLines  = (s.leftText  || '').split('\n')
+        const rightLines = (s.rightText || '').split('\n')
+
+        return (
+          <div style={{ borderBottom: `3px solid ${color}`, paddingBottom: 12, marginBottom: 16 }}>
+            <div style={{ position: 'relative', minHeight: logoSize }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
+                <div dangerouslySetInnerHTML={{ __html: toHtml(leftLines) }} />
+                <div />
+                <div dangerouslySetInnerHTML={{ __html: toHtml(rightLines) }} />
+              </div>
+              <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{s.showLogo && logoEl}</div>
+            </div>
+            {contactLineEl}
+            {s.reportTitle && <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '10px 0 0', letterSpacing: 3, color, textAlign: 'center' }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />}
+          </div>
+        )
+      }
+
       const textBlock = (
         <div style={{ flex: 1 }}>
-          {s.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: 11, color: s.schoolTypeColor || '#666', letterSpacing: 2, textTransform: 'uppercase' }}>{school.type} SCHOOL</p>}
+          {s.showSchoolType && <p style={{ margin: '0 0 2px', fontSize: 11, color: s.schoolTypeColor || '#666', letterSpacing: 2, textTransform: 'uppercase' }}>{t(school.type)} {t('SCHOOL')}</p>}
           <h1 style={{ fontSize: 22, fontWeight: 'bold', margin: '0 0 4px', color: s.schoolNameColor || color }}>{school.name}</h1>
           {s.subtitle && <p style={{ margin: '0 0 6px', fontSize: 12, color: '#555' }} dangerouslySetInnerHTML={{ __html: s.subtitle }} />}
           <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '8px 0 0', letterSpacing: 3, color }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />
+          {contactLineEl}
         </div>
       )
 
@@ -546,7 +705,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.columns}, 1fr)`, gap: '5px 12px', background: `rgba(${rgb},0.05)`, padding: 12, border: `1px solid rgba(${rgb},0.25)`, marginBottom: 16, fontSize: 12 }}>
           {s.rows.map(row => (
             <div key={row.id}>
-              <span style={{ fontWeight: 'bold' }} dangerouslySetInnerHTML={{ __html: row.label + ':' }} />
+              <span style={{ fontWeight: 'bold' }} dangerouslySetInnerHTML={{ __html: localizeLabel(row.label, lang) + ':' }} />
               {' '}<span style={{ color: row.valueColor ?? undefined }}>{resolveField(row.field)}</span>
             </div>
           ))}
@@ -562,20 +721,159 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         const h = hdrs[k]; if (!h) return fallback
         return h.replace(/<[^>]*>/g, '') // strip any color spans for print header text
       }
+      const cols = marksColumnOrder(s)
+      const META: Record<string, { fb: string; align: 'left' | 'center' }> = {
+        subject: { fb: 'Subject', align: 'left' }, coef: { fb: 'Coef', align: 'center' },
+        seq1: { fb: 'Seq 1', align: 'center' }, seq2: { fb: 'Seq 2', align: 'center' },
+        score: { fb: 'Score', align: 'center' }, grade: { fb: 'Grade', align: 'center' },
+        remarks: { fb: 'Remarks', align: 'left' },
+        code: { fb: 'Code', align: 'center' }, credit: { fb: 'Credit', align: 'center' },
+        gradePoint: { fb: 'GP', align: 'center' }, weighted: { fb: 'Weight', align: 'center' },
+        evaluation: { fb: 'Evaluation', align: 'left' },
+        juryDecision: { fb: 'Jury Decision', align: 'center' },
+      }
+      // Grade point (/4.0) + weighted point from the GPA grading scale (university).
+      const gradePointOf = (e?: PrintEntry): number | null =>
+        e?.score == null ? null : gradePointForScore20(e.score, bands)
+      const courseCode = (subj: PrintSubject, i: number): string => {
+        if (subj.code?.trim()) return subj.code.trim()
+        const init = subj.name.replace(/[^A-Za-z ]/g, '').split(/\s+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 4)
+        return `${init || 'C'}${String(i + 1).padStart(2, '0')}`
+      }
+      const evalForGpa = (gpa: number): string =>
+        classificationForGpa(gpa, classBands).toUpperCase()
+      const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
+        switch (k) {
+          case 'subject':      return subj.name
+          case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
+          case 'seq1':         return e?.seq1Score ?? '—'
+          case 'seq2':         return e?.seq2Score ?? '—'
+          case 'score':        return e?.score ?? 0
+          case 'grade':        return entryGrade(e, bands)
+          case 'remarks':      return entryRemark(e, bands)
+          case 'code':         return courseCode(subj, i)
+          case 'credit':       return subj.credit ?? '—'
+          case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
+          case 'weighted':     { const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1) }
+          case 'evaluation':   { const gp = gradePointOf(e); return gp == null ? '—' : evalForGpa(gp) }
+          case 'juryDecision': return !e ? 'FAIL' : juryDecisionForScore(e.score, bands)
+          case 'min':          { const st = subjectStats[subj.id]; return st != null ? st.min.toFixed(1) : '—' }
+          case 'avg':          { const st = subjectStats[subj.id]; return st != null ? st.avg.toFixed(1) : '—' }
+          case 'max':          { const st = subjectStats[subj.id]; return st != null ? st.max.toFixed(1) : '—' }
+          default: return ''
+        }
+      }
+
+      // ── Template mode: SpreadsheetTable with _isDataRow repeat ───────────────
+      if (s.template) {
+        const tpl = s.template
+        const dataRowIdx = tpl.rows.findIndex((r: SheetRow) => r._isDataRow)
+        const headerRows = tpl.rows.slice(0, dataRowIdx >= 0 ? dataRowIdx : tpl.rows.length)
+        const dataRowTpl = dataRowIdx >= 0 ? tpl.rows[dataRowIdx] : null
+        const footerRows = dataRowIdx >= 0 ? tpl.rows.slice(dataRowIdx + 1) : []
+
+        const resolveMarksField = (field: string, subj: PrintSubject, e: PrintEntry | undefined, si: number): React.ReactNode => {
+          if (!field.startsWith('m:')) return resolveStat(field)
+          const k = field.slice(2)
+          switch (k) {
+            case 'sn':           return String(si + 1)
+            case 'subject':      return subj.name
+            case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
+            case 'seq1':         return e?.seq1Score ?? '—'
+            case 'seq2':         return e?.seq2Score ?? '—'
+            case 'score':        return e?.score ?? 0
+            case 'grade':        return entryGrade(e, bands)
+            case 'remarks':      return entryRemark(e, bands)
+            case 'code':         return courseCode(subj, si)
+            case 'credit':       return subj.credit ?? '—'
+            case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
+            case 'weighted':     { const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1) }
+            case 'evaluation':   { const gp = gradePointOf(e); return gp == null ? '—' : evalForGpa(gp) }
+            case 'juryDecision': return !e ? 'FAIL' : juryDecisionForScore(e.score, bands)
+            case 'min':          { const st = subjectStats[subj.id]; return st != null ? st.min.toFixed(1) : '—' }
+            case 'avg':          { const st = subjectStats[subj.id]; return st != null ? st.avg.toFixed(1) : '—' }
+            case 'max':          { const st = subjectStats[subj.id]; return st != null ? st.max.toFixed(1) : '—' }
+            default: return ''
+          }
+        }
+
+        // Pixel widths for known narrow fields; flex fields (subject, subject_fr) get no width
+        // so tableLayout:fixed distributes the remaining space to them automatically.
+        const NARROW_PX: Record<string, number> = {
+          'm:sn': 28, 'm:code': 44, 'm:seq1': 44, 'm:seq2': 44,
+          'm:score': 50, 'm:grade': 40, 'm:gradePoint': 34,
+          'm:credit': 38, 'm:coef': 38, 'm:weighted': 44,
+          'm:min': 38, 'm:avg': 38, 'm:max': 38,
+          'm:evaluation': 96,
+        }
+        const FLEX_FIELDS = new Set(['m:subject', 'm:subject_fr'])
+
+        const dataRowFields: string[] = dataRowTpl?.cells.map((c: SheetCell) => c.field ?? '') ?? []
+
+        const renderTplRow = (row: SheetRow, resolver: (f: string) => React.ReactNode, key?: string, isHdr = false) => (
+          <tr key={key ?? row.id}>
+            {row.cells.map((c: SheetCell, ci: number) => {
+              if (c._consumed) return null
+              const content = c.field ? resolver(c.field) : (c.text ?? '')
+              // Determine column type from data-row field so header cells also benefit
+              const colField = isHdr ? (dataRowFields[ci] ?? '') : (c.field ?? '')
+              const isFlex   = FLEX_FIELDS.has(colField)
+              return (
+                <td key={ci} colSpan={c.colSpan ?? 1} rowSpan={c.rowSpan ?? 1}
+                  style={{
+                    padding: isHdr ? '4px 3px' : (isFlex ? '5px 6px' : '5px 4px'),
+                    textAlign: c.align ?? (isFlex ? 'left' : 'center'),
+                    fontWeight: c.bold ? 'bold' : 'normal',
+                    fontStyle: c.italic ? 'italic' : 'normal',
+                    textDecoration: c.underline ? 'underline' : 'none',
+                    fontSize: isHdr ? (c.fontSize ?? 9) : (c.fontSize ?? 'inherit'),
+                    backgroundColor: c.bgColor ?? 'transparent',
+                    color: c.textColor ?? 'inherit',
+                    border: '1px solid #d1d5db',
+                    lineHeight: isHdr ? 1.2 : 1.4,
+                    // data cells in narrow cols stay on one line; clip any overflow
+                    ...(!isHdr && !isFlex ? { whiteSpace: 'nowrap' as const, overflow: 'hidden' as const } : {}),
+                  }}>
+                  {content}
+                </td>
+              )
+            })}
+          </tr>
+        )
+
+        const colCount = tpl.colCount || (dataRowTpl?.cells.length ?? 1)
+        return (
+          <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', marginBottom: 16, fontSize: colCount > 8 ? 10 : 12 }}>
+            <colgroup>
+              {dataRowFields.map((field, ci) => {
+                const px = NARROW_PX[field]
+                return <col key={ci} style={px ? { width: `${px}px` } : {}} />
+              })}
+            </colgroup>
+            {headerRows.length > 0 && (
+              <thead>
+                {headerRows.map((row: SheetRow) => renderTplRow(row, () => '', undefined, true))}
+              </thead>
+            )}
+            <tbody>
+              {subjects.map((subj, si) => {
+                if (!dataRowTpl) return null
+                const e = entries.find(x => x.subjectId === subj.id)
+                return renderTplRow(dataRowTpl, field => resolveMarksField(field, subj, e, si), `subj_${si}`)
+              })}
+              {footerRows.map((row: SheetRow) => renderTplRow(row, resolveStat))}
+            </tbody>
+          </table>
+        )
+      }
+
       return (
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: 12 }}>
           <thead>
             <tr style={{ backgroundColor: color }}>
-              {[
-                { k: 'subject', fb: 'Subject', align: 'left'   as const, pad: '7px 10px' },
-                ...(s.showSeq1 ? [{ k: 'seq1', fb: 'Seq 1', align: 'center' as const, pad: '7px 8px' }] : []),
-                ...(s.showSeq2 ? [{ k: 'seq2', fb: 'Seq 2', align: 'center' as const, pad: '7px 8px' }] : []),
-                { k: 'score',   fb: 'Score',   align: 'center' as const, pad: '7px 8px' },
-                ...(s.showGrade   ? [{ k: 'grade',   fb: 'Grade',   align: 'center' as const, pad: '7px 8px'  }] : []),
-                ...(s.showRemarks ? [{ k: 'remarks', fb: 'Remarks', align: 'left'   as const, pad: '7px 10px' }] : []),
-              ].map(col => (
-                <th key={col.k} style={{ padding: col.pad, textAlign: col.align, color: s.headerColor || '#fff' }}>
-                  {hText(col.k, col.fb)}
+              {cols.map(k => (
+                <th key={k} style={{ padding: META[k].align === 'left' ? '7px 10px' : '7px 8px', textAlign: META[k].align, color: s.headerColor || '#fff' }}>
+                  {hText(k, META[k].fb)}
                 </th>
               ))}
             </tr>
@@ -585,12 +883,11 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
               const e = entries.find(x => x.subjectId === subj.id)
               return (
                 <tr key={subj.id} style={{ background: i % 2 === 0 ? 'transparent' : `rgba(${rgb},0.04)`, borderBottom: '1px solid #e5e7eb' }}>
-                  <td style={{ padding: '6px 10px', color: cc.subject }}>{subj.name}</td>
-                  {s.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', color: cc.seq1 }}>{e?.seq1Score ?? '—'}</td>}
-                  {s.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', color: cc.seq2 }}>{e?.seq2Score ?? '—'}</td>}
-                  <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cc.score || color }}>{e?.score ?? 0}</td>
-                  {s.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cc.grade }}>{e?.grade || '—'}</td>}
-                  {s.showRemarks && <td style={{ padding: '6px 10px', color: cc.remarks || '#555' }}>{e?.remarks || '—'}</td>}
+                  {cols.map(k => (
+                    <td key={k} style={{ padding: META[k].align === 'left' ? '6px 10px' : '6px 8px', textAlign: META[k].align, fontWeight: k === 'score' || k === 'grade' ? 'bold' : undefined, color: cc[k] || (k === 'score' ? color : k === 'remarks' ? '#555' : undefined) }}>
+                      {cell(k, subj, e, i)}
+                    </td>
+                  ))}
                 </tr>
               )
             })}
@@ -602,14 +899,35 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     if (sec.type === 'summary') {
       const s = sec as SummarySec
       return (
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.boxes.length || 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
-          {s.boxes.map(box => (
-            <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 'bold', color: s.valueColor || color }}>{resolveStat(box.field)}</div>
-              <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: box.label }} />
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.boxes.length || 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
+            {s.boxes.map(box => {
+              const boxLabel = box.field === 'gpa' ? `${term.name} GPA` : box.label
+              return (
+                <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 'bold', color: s.valueColor || color }}>{resolveStat(box.field)}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: localizeLabel(boxLabel, lang) }} />
+                </div>
+              )
+            })}
+          </div>
+          {/* Annual average/position: only present when this is the session's final
+              term (non-university) — see reportcard.controller.ts getReportCard(s). */}
+          {annualAverage != null && (
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
+              <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+                <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualAverage.toFixed(1)}</div>
+                <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{lang === 'FR' ? 'Moyenne Annuelle' : 'Annual Average'}</div>
+              </div>
+              {annualPosition != null && (
+                <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+                  <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualPosition}{annualClassSize ? `/${annualClassSize}` : ''}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{lang === 'FR' ? 'Rang Annuel' : 'Annual Position'}</div>
+                </div>
+              )}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )
     }
 
@@ -617,8 +935,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       const s = sec as RemarksSec
       return (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 12, marginBottom: 16 }}>
-          <div style={{ fontWeight: 'bold', marginBottom: 5, color }} dangerouslySetInnerHTML={{ __html: s.label }} />
-          <div style={{ minHeight: 36, color: '#444' }}>{generalRemarks || '—'}</div>
+          <div style={{ fontWeight: 'bold', marginBottom: 5, color }} dangerouslySetInnerHTML={{ __html: localizeLabel(s.label, lang) }} />
+          <div style={{ minHeight: 36, color: '#444' }}>{generalRemarks || generalRemarksFr || '—'}</div>
         </div>
       )
     }
@@ -631,7 +949,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           {s.lines.map(line => (
             <div key={line.id} style={{ textAlign: 'center' }}>
               <div style={{ borderBottom: '1px solid #111', height: 40, marginBottom: 5 }} />
-              <div style={{ fontSize: 11, color: '#555' }} dangerouslySetInnerHTML={{ __html: line.label }} />
+              <div style={{ fontSize: 11, color: '#555' }} dangerouslySetInnerHTML={{ __html: localizeLabel(line.label, lang) }} />
             </div>
           ))}
         </div>
@@ -644,6 +962,140 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <div style={{ textAlign: s.align, fontSize: 12, color: '#555', padding: '6px 0', borderTop: '1px solid #f1f5f9', marginBottom: 8 }}
           dangerouslySetInnerHTML={{ __html: s.content }}
         />
+      )
+    }
+
+    if (sec.type === 'grading_legend') {
+      const s = sec as GradingLegendSec
+      // University grading scales carry a gradePoint (/4.0) per band; a plain
+      // secondary/primary scale doesn't, so it isn't filtered — every band is
+      // shown as-is (grade, mark range, remark) with no GPA-specific columns.
+      const isUniv    = bands.some(b => b.gradePoint != null)
+      const gradeRows = isUniv
+        ? [...bands].filter(b => b.gradePoint != null).sort((a, b) => b.minScore - a.minScore)
+        : [...bands].sort((a, b) => b.minScore - a.minScore)
+      const bandRows  = [...CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
+      const bHidCols: string[] = (s as any).hiddenCols ?? []
+      const bHidRows: number[] = (s as any).hiddenRowIndices ?? []
+      const vGrade  = ['grade','mark','gp'].filter(c => !bHidCols.includes(c))
+      const pShowGS = s.showGradeSystem    && vGrade.length > 0
+      const pShowCL = s.showClassification && !bHidCols.includes('classification')
+      const lastGC  = vGrade[vGrade.length - 1] ?? ''
+      const maxRows = Math.max(s.showGradeSystem ? gradeRows.length : 0, s.showClassification ? bandRows.length : 0)
+      const sepR: React.CSSProperties = { borderRight: '1px solid #9ca3af' }
+      const mCell: React.CSSProperties  = { padding: '2px 6px', fontSize: 10, borderBottom: '1px solid #eef2f7', borderRight: '1px solid #e5e7eb', textAlign: 'center' as const }
+      const mCellL: React.CSSProperties = { ...mCell, textAlign: 'left' as const }
+      const mHdr: React.CSSProperties   = { ...mCell,  fontWeight: 'bold', backgroundColor: `rgba(${rgb},0.08)` }
+      const mHdrL: React.CSSProperties  = { ...mCellL, fontWeight: 'bold', backgroundColor: `rgba(${rgb},0.08)` }
+      const leftLayout:  'columns' | 'rows' = (s as any).leftLayout  ?? 'columns'
+      const rightLayout: 'columns' | 'rows' = (s as any).rightLayout ?? 'columns'
+
+      // Migrate old MiniTable format → SpreadsheetTable on the fly
+      const toSheet = (t: any): SpreadsheetTable => {
+        if ('colCount' in t) return t as SpreadsheetTable
+        return {
+          id: t.id, title: t.title ?? '', colCount: 2,
+          rows: (t.rows ?? []).map((r: any) => ({
+            id: r.id ?? `pr_${r.label}`,
+            cells: [{ text: r.label ?? '', bold: true, align: 'left' as const }, r.field ? { field: r.field as string } : { text: '' }],
+          })),
+        }
+      }
+
+      const builtinTable: SpreadsheetTable | null = (s as any).builtinTable ? toSheet((s as any).builtinTable) : null
+      const leftTables:  SpreadsheetTable[] = ((s as any).leftTables  ?? []).map(toSheet)
+      const rightTables: SpreadsheetTable[] = ((s as any).rightTables ?? []).map(toSheet)
+
+      const renderSpreadsheet = (st: SpreadsheetTable, resolver: (f: string) => React.ReactNode) => (
+        <table key={st.id} style={{ borderCollapse: 'collapse', border: `1px solid rgba(${rgb},0.3)`, flex: 1 }}>
+          {st.title && (
+            <thead>
+              <tr><th colSpan={st.colCount} style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center' }}>{st.title}</th></tr>
+            </thead>
+          )}
+          <tbody>
+            {st.rows.map(row => (
+              <tr key={row.id}>
+                {row.cells.map((cell: SheetCell, ci: number) => {
+                  if (cell._consumed) return null
+                  const rawText = cell.text ?? ''
+                  const resolvedText = /semester gpa/i.test(rawText) ? `${term.name} GPA` : rawText
+                  const content = cell.field ? resolver(cell.field) : resolvedText
+                  return (
+                    <td key={ci} colSpan={cell.colSpan ?? 1} rowSpan={cell.rowSpan ?? 1}
+                      style={{
+                        ...mCell,
+                        textAlign: cell.align ?? (ci === 0 ? 'left' : 'center'),
+                        fontWeight: cell.bold ? 'bold' : 'normal',
+                        fontStyle: cell.italic ? 'italic' : 'normal',
+                        textDecoration: cell.underline ? 'underline' : 'none',
+                        fontSize: cell.fontSize ?? 10,
+                        backgroundColor: cell.bgColor ?? 'transparent',
+                        color: cell.textColor ?? (cell.field ? color : 'inherit'),
+                      }}>
+                      {content}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )
+      return (
+        <div style={{ marginTop: 14, marginBottom: 12 }}>
+          {s.title && <div style={{ fontWeight: 'bold', fontSize: 12, color, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>{s.title}</div>}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+            {/* LEFT — built-in grade table + optional extra tables */}
+            <div style={{ flex: '1.6', display: 'flex', flexDirection: leftLayout === 'rows' ? 'column' : 'row', gap: 8, alignItems: 'flex-start' }}>
+            {builtinTable
+              ? renderSpreadsheet(builtinTable, resolveStat)
+              : (pShowGS || pShowCL) && maxRows > 0 && (
+                <table style={{ borderCollapse: 'collapse', border: `1px solid rgba(${rgb},0.3)`, flex: 1 }}>
+                  <thead>
+                    <tr>
+                      {pShowGS && <th colSpan={vGrade.length} style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center', ...(pShowCL ? sepR : {}) }}>Grade System</th>}
+                      {pShowCL && <th style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center' }}>Classification</th>}
+                    </tr>
+                    <tr>
+                      {pShowGS && vGrade.includes('grade') && <th style={{ ...mHdr, ...(lastGC === 'grade' && pShowCL ? sepR : {}) }}>Grade</th>}
+                      {pShowGS && vGrade.includes('mark')  && <th style={{ ...mHdr, ...(lastGC === 'mark'  && pShowCL ? sepR : {}) }}>Mark</th>}
+                      {pShowGS && vGrade.includes('gp')    && <th style={{ ...mHdr, ...(lastGC === 'gp'    && pShowCL ? sepR : {}) }}>{isUniv ? 'GP' : 'Remark'}</th>}
+                      {pShowCL && <th style={mHdrL}>GPA / Remark</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: maxRows }, (_, i) => i)
+                      .filter(i => !bHidRows.includes(i))
+                      .map(i => {
+                        const gr = gradeRows[i], br = bandRows[i]
+                        return (
+                          <tr key={i}>
+                            {pShowGS && vGrade.includes('grade') && <td style={{ ...mCell, fontWeight: gr ? 'bold' : 'normal', color: gr?.color ?? 'inherit', ...(lastGC === 'grade' && pShowCL ? sepR : {}) }}>{gr?.grade ?? ''}</td>}
+                            {pShowGS && vGrade.includes('mark')  && <td style={{ ...mCell, ...(lastGC === 'mark'  && pShowCL ? sepR : {}) }}>{gr ? `${gr.minScore}–${gr.maxScore}` : ''}</td>}
+                            {pShowGS && vGrade.includes('gp')    && <td style={{ ...mCell, ...(lastGC === 'gp'    && pShowCL ? sepR : {}) }}>{gr ? (isUniv ? (gr.gradePoint ?? 0).toFixed(1) : gr.remark) : ''}</td>}
+                            {pShowCL && <td style={mCellL}>{br ? <>{br.min.toFixed(2)}–{br.max.toFixed(2)} / <strong>{br.label}</strong></> : ''}</td>}
+                          </tr>
+                        )
+                      })}
+                  </tbody>
+                </table>
+              )
+            }
+            {leftTables.map(st => renderSpreadsheet(st, resolveStat))}
+            </div>
+            {/* RIGHT — configurable spreadsheet tables (university only) */}
+            {isUniv && rightTables.length > 0 && (
+              <div style={{ flex: '1', display: 'flex', flexDirection: rightLayout === 'rows' ? 'column' : 'row', gap: 8 }}>
+                {rightTables.map(st => renderSpreadsheet(st, resolveStat))}
+              </div>
+            )}
+          </div>
+          {s.showLegend && (
+            <div style={{ fontSize: 10, color: '#555', marginTop: 8, lineHeight: 1.5 }}
+              dangerouslySetInnerHTML={{ __html: s.legendText || DEFAULT_TRANSCRIPT_LEGEND }} />
+          )}
+        </div>
       )
     }
 

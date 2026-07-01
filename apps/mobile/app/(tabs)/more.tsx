@@ -4,13 +4,17 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { useT } from '@/lib/i18n'
 import ThemeToggle from '@/components/ThemeToggle'
 
 const MENU_ITEMS = [
+  { label: 'Academic Year', icon: 'calendar-number-outline' as const, route: '/admin/academic-year' },
   { label: 'Teachers', icon: 'people-outline' as const, route: '/admin/teachers' },
   { label: 'Classes', icon: 'school-outline' as const, route: '/admin/classes' },
   { label: 'Subjects', icon: 'book-outline' as const, route: '/admin/subjects' },
   { label: 'Terms', icon: 'calendar-outline' as const, route: '/admin/terms' },
+  { label: 'School Fees', icon: 'wallet-outline' as const, route: '/admin/fees' },
+  { label: 'HND Registration', icon: 'bookmark-outline' as const, route: '/admin/exam-registration', examRegistration: true },
   { label: 'Grading Scale', icon: 'stats-chart-outline' as const, route: '/admin/grading' },
   { label: 'Settings', icon: 'settings-outline' as const, route: '/admin/settings' },
   { label: 'Report Card Design', icon: 'laptop-outline' as const, route: '/admin/report-card-design' },
@@ -89,9 +93,27 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 
 export default function MoreScreen() {
   const { colors, isDark } = useTheme()
+  const t = useT()
   const styles = makeStylesStyles(colors)
   const router = useRouter()
   const { school } = useAuthStore()
+  // Universities use different wording for the same routes/data — just relabel the menu.
+  const UNIVERSITY_MENU_LABELS: Record<string, string> = {
+    '/admin/terms': 'Semesters',
+    '/admin/subjects': 'Courses',
+    '/admin/classes': 'Departments',
+  }
+  // Secondary schools track exam (GCE) registration too — same feature, different label.
+  const SECONDARY_MENU_LABELS: Record<string, string> = {
+    '/admin/exam-registration': 'GCE Registration',
+  }
+  const menuItems = MENU_ITEMS
+    .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY')
+    .map((item) => {
+      if (school?.type === 'UNIVERSITY' && UNIVERSITY_MENU_LABELS[item.route]) return { ...item, label: UNIVERSITY_MENU_LABELS[item.route] }
+      if (school?.type === 'SECONDARY' && SECONDARY_MENU_LABELS[item.route]) return { ...item, label: SECONDARY_MENU_LABELS[item.route] }
+      return item
+    })
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -100,14 +122,14 @@ export default function MoreScreen() {
           <Ionicons name="business-outline" size={20} color="#F03E2F" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.schoolName}>{school?.name ?? 'School'}</Text>
-          <Text style={styles.schoolType}>{school?.type ? `${school.type} SCHOOL` : 'Admin Panel'}</Text>
+          <Text style={styles.schoolName}>{school?.name ?? t('School')}</Text>
+          <Text style={styles.schoolType}>{school?.type ? `${t(school.type)} ${t('SCHOOL')}` : t('Admin Panel')}</Text>
         </View>
       </View>
 
-<Text style={styles.sectionLabel}>MANAGEMENT</Text>
+<Text style={styles.sectionLabel}>{t('MANAGEMENT')}</Text>
 
-      {MENU_ITEMS.map((item) => (
+      {menuItems.map((item) => (
         <TouchableOpacity
           key={item.route}
           style={styles.card}
@@ -117,7 +139,7 @@ export default function MoreScreen() {
           <View style={styles.iconBox}>
             <Ionicons name={item.icon} size={22} color="#F03E2F" />
           </View>
-          <Text style={styles.cardLabel}>{item.label}</Text>
+          <Text style={styles.cardLabel}>{t(item.label)}</Text>
           <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
         </TouchableOpacity>
       ))}

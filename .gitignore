@@ -29,12 +29,26 @@ ios/
 .env.test.local
 .env.production.local
 .env.*.local
+.env.local-install
 apps/api/.env
 apps/web/.env*
 apps/mobile/.env*
 
 # Uploaded files (user-generated content, managed separately)
 apps/api/uploads/
+
+# SQLite offline build — generated client, local dev db file, build outputs
+apps/api/generated/
+apps/api/prisma/sqlite/dev.db
+apps/api/dist-offline/
+apps/api/release/
+apps/web/release/
+/release/
+scripts/offline-build/dist-launcher/
+scripts/offline-build/.node-windows-install/
+scripts/offline-build/.cache/
+apps/api/scripts/offline-build/.cross-install/
+installer-output/
 
 # Logs
 logs/

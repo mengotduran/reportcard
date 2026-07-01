@@ -14,6 +14,7 @@ import {
 import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { seqFull, seqShort } from '@/lib/sequences'
+import { useT, useLang } from '@/lib/i18n'
 
 interface Row {
   studentId: string
@@ -31,17 +32,21 @@ export default function MarksEntryScreen() {
     termName: string; subjectName: string; sequence: string
   }>()
   const navigation = useNavigation()
-  const { user } = useAuthStore()
+  const { user, school } = useAuthStore()
   const { colors, isDark } = useTheme()
+  const t = useT()
+  const lang = useLang()
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
-  const seqLabel = seqFull(termName, seqIndex)
+  const isUniversity = school?.type === 'UNIVERSITY'
+  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : 'Exam') : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
   const decodedSubjectName = decodeURIComponent(subjectName)
 
   const [rows, setRows] = useState<Row[]>([])
   const [maxScore, setMaxScore] = useState(20)
+  const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -94,9 +99,13 @@ export default function MarksEntryScreen() {
   }, [fetchData]))
 
   const updateScore = (studentId: string, value: string) => {
-    const clean = value.replace(/[^0-9]/g, '')
-    const num = Math.min(maxScore, Number(clean))
-    setRows((prev) => prev.map((r) => r.studentId === studentId ? { ...r, score: clean === '' ? '' : String(num) } : r))
+    // Allow digits + a single decimal point (e.g. 15.5); clamp to maxScore only
+    // when already above it, without reformatting (keeps a trailing "." typeable).
+    let clean = value.replace(/[^0-9.]/g, '')
+    const firstDot = clean.indexOf('.')
+    if (firstDot !== -1) clean = clean.slice(0, firstDot + 1) + clean.slice(firstDot + 1).replace(/\./g, '')
+    if (clean !== '' && clean !== '.' && Number(clean) > effectiveMax) clean = String(effectiveMax)
+    setRows((prev) => prev.map((r) => r.studentId === studentId ? { ...r, score: clean } : r))
   }
 
   const editableRows = rows.filter(r => !r.isLocked)
@@ -150,18 +159,18 @@ export default function MarksEntryScreen() {
         })
       )
 
-      Alert.alert('Saved', 'Marks saved for all students.')
+      Alert.alert(t('Saved'), t('Marks saved for all students.'))
       fetchData()
     } catch {
-      Alert.alert('Error', 'Failed to save marks.')
+      Alert.alert(t('Error'), t('Failed to save marks.'))
     } finally {
       setSaving(false)
     }
   }
 
   const filled = rows.filter((r) => r.score !== '').length
-  const otherSeqLabel = seqFull(termName, seqIndex === 0 ? 1 : 0)
-  const otherSeqShort = seqShort(termName, seqIndex === 0 ? 1 : 0)
+  const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
+  const otherSeqShort = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
 
   const handleCopyFromOther = () => {
     const hasCurrent = rows.some((r) => r.score !== '')
@@ -176,14 +185,14 @@ export default function MarksEntryScreen() {
     }
     if (hasCurrent) {
       Alert.alert(
-        `Copy from ${otherSeqLabel}`,
-        'This will overwrite all current marks with the other sequence scores. Continue?',
-        [{ text: 'Cancel', style: 'cancel' }, { text: 'Copy', onPress: doCopy }]
+        `${t('Copy from')} ${otherSeqLabel}`,
+        t('This will overwrite all current marks with the other sequence scores. Continue?'),
+        [{ text: t('Cancel'), style: 'cancel' }, { text: t('Copy'), onPress: doCopy }]
       )
     } else {
       const hasOther = rows.some((r) => r.otherSeqScore !== null)
       if (!hasOther) {
-        Alert.alert('No data', `${otherSeqLabel} has no marks yet.`)
+        Alert.alert(t('No data'), `${otherSeqLabel} ${t('has no marks yet.')}`)
         return
       }
       doCopy()
@@ -199,7 +208,14 @@ export default function MarksEntryScreen() {
         <>
         {/* Info bar */}
         <View style={s.infoBar}>
-          <Text style={s.infoText}>{decodedClass} · {filled}/{rows.length} filled</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+            <Text style={s.infoText}>{decodedClass} · {filled}/{rows.length} {t('filled')}</Text>
+            {isUniversity && termName ? (
+              <View style={{ backgroundColor: '#FEF2F1', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(240,62,47,0.2)' }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#F03E2F' }}>{termName}</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={s.seqPill}>{seqLabel}</Text>
         </View>
 
@@ -207,7 +223,7 @@ export default function MarksEntryScreen() {
         {publishedCount > 0 && (
           <View style={s.lockBanner}>
             <Text style={s.lockBannerText}>
-              🔒 {publishedCount === rows.length ? 'All cards published' : `${publishedCount} card(s) published`} — contact admin to edit
+              🔒 {publishedCount === rows.length ? t('All cards published') : `${publishedCount} ${t('card(s) published')}`} — {t('contact admin to edit')}
             </Text>
           </View>
         )}
@@ -215,7 +231,7 @@ export default function MarksEntryScreen() {
         {/* Copy bar — always visible */}
         <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
           <Ionicons name="copy-outline" size={15} color="#7c3aed" />
-          <Text style={s.copyBarText}>Copy marks from {otherSeqShort} → fill here</Text>
+          <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
           <Ionicons name="chevron-forward" size={14} color="#7c3aed" />
         </TouchableOpacity>
 
@@ -224,15 +240,15 @@ export default function MarksEntryScreen() {
           {/* Header */}
           <View style={s.headerRow}>
             <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
-            <View style={s.colName}><Text style={s.headerText}>STUDENT NAME</Text></View>
-            <View style={s.colScore}><Text style={s.headerText}>MARKS / {maxScore}</Text></View>
-            <View style={s.colRemark}><Text style={s.headerText}>PERFORMANCE</Text></View>
+            <View style={s.colName}><Text style={s.headerText}>{t('STUDENT NAME')}</Text></View>
+            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : 'MARKS / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
+            <View style={s.colRemark}><Text style={s.headerText}>{t('PERFORMANCE')}</Text></View>
           </View>
 
           {rows.map((row, index) => {
             const num = Number(row.score)
             const hasScore = row.score !== ''
-            const g = hasScore ? gradeFromScore(num, maxScore, gradingRanges) : null
+            const g = hasScore ? gradeFromScore(num, effectiveMax, gradingRanges) : null
             const isActive = activeCell === row.studentId
 
             return (
@@ -250,7 +266,7 @@ export default function MarksEntryScreen() {
                   </View>
                   {row.otherSeqScore !== null && (
                     <Text style={s.otherSeq}>
-                      {seqIndex === 0 ? 'Seq2' : 'Seq1'}: {row.otherSeqScore}
+                      {otherSeqShort}: {row.otherSeqScore}
                     </Text>
                   )}
                 </View>
@@ -272,8 +288,8 @@ export default function MarksEntryScreen() {
                     onChangeText={(v) => updateScore(row.studentId, v)}
                     onFocus={() => setActiveCell(row.studentId)}
                     onBlur={() => setActiveCell(null)}
-                    keyboardType="numeric"
-                    maxLength={String(maxScore).length + 1}
+                    keyboardType="decimal-pad"
+                    maxLength={String(effectiveMax).length + 1}
                     placeholder="--"
                     placeholderTextColor="#9ca3af"
                     returnKeyType="next"
@@ -312,7 +328,7 @@ export default function MarksEntryScreen() {
           <TouchableOpacity style={[s.saveBtn, (saving || editableRows.length === 0) && s.disabled]} onPress={handleSaveAll} disabled={saving || editableRows.length === 0} activeOpacity={0.8}>
             {saving
               ? <ActivityIndicator color="#fff" />
-              : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? 'All Cards Published' : 'Save All Marks'}</Text></>}
+              : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? t('All Cards Published') : t('Save All Marks')}</Text></>}
           </TouchableOpacity>
         </View>
         </>

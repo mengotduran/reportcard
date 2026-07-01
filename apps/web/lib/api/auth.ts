@@ -32,8 +32,13 @@ export const resetUserPasswordApi = async (userId: string, newPassword: string) 
 
 export const getMeApi = async (): Promise<{
   id: string; name: string; email: string; role: string
-  masterClassLevel: string | null; school: any
+  masterClassLevel: string | null; preferredLanguage: string; school: any
 }> => {
   const res = await api.get('/auth/me')
   return res.data
+}
+
+export const updateLanguagePreferenceApi = async (language: 'EN' | 'FR') => {
+  const res = await api.patch('/auth/me/language', { language })
+  return res.data as { preferredLanguage: string }
 }

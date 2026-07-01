@@ -7,7 +7,7 @@ import { AuthRequest } from '../middleware/auth'
 // Register a new school + admin account
 export const registerSchool = async (req: Request, res: Response) => {
   try {
-    const { schoolName, schoolType, schoolEmail, schoolPhone, schoolAddress, subdomain, adminName, adminEmail, adminPassword } = req.body
+    const { schoolName, schoolType, schoolEmail, schoolPhone, schoolAddress, subdomain, adminName, adminEmail, adminPassword, language } = req.body
 
     // Check if school email or subdomain already exists
     const existingSchool = await prisma.school.findFirst({
@@ -32,6 +32,7 @@ export const registerSchool = async (req: Request, res: Response) => {
       data: {
         name: schoolName,
         type: schoolType,
+        language: language === 'FR' ? 'FR' : 'EN',
         email: schoolEmail,
         phone: schoolPhone,
         address: schoolAddress,
@@ -109,11 +110,13 @@ export const login = async (req: Request, res: Response) => {
         email: user.email,
         role: user.role,
         masterClassLevel: user.masterClassLevel ?? null,
+        preferredLanguage: user.preferredLanguage,
       },
       school: user.school ? {
         id: user.school.id,
         name: user.school.name,
         type: user.school.type,
+        language: user.school.language,
         subdomain: user.school.subdomain,
         logo: user.school.logo,
         coverImage: user.school.coverImage,
@@ -145,8 +148,24 @@ export const getMe = async (req: AuthRequest, res: Response) => {
       email: user.email,
       role: user.role,
       masterClassLevel: user.masterClassLevel ?? null,
+      preferredLanguage: user.preferredLanguage,
       school: user.school,
     })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Update preferred UI language for the logged-in user
+export const updatePreferredLanguage = async (req: AuthRequest, res: Response) => {
+  try {
+    const { language } = req.body
+    if (language !== 'EN' && language !== 'FR') {
+      res.status(400).json({ message: 'language must be EN or FR' }); return
+    }
+    await prisma.user.update({ where: { id: req.user!.id }, data: { preferredLanguage: language } })
+    res.json({ preferredLanguage: language })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

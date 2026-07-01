@@ -1,10 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { getSchoolDetailApi, SchoolDetail } from '@/lib/api/superadmin'
+import { getSchoolDetailApi, toggleTermPrintingApi, SchoolDetail, TermRow } from '@/lib/api/superadmin'
 import {
   ArrowLeft, Users, BookOpen, FileText, CheckCircle, Clock,
-  School, Building2, Layers, MapPin, Mail, Phone, Globe
+  School, Building2, Layers, MapPin, Mail, Phone, Globe, Printer
 } from 'lucide-react'
 
 const TYPE_COLORS: Record<string, string> = {
@@ -27,6 +27,7 @@ export default function SchoolDetailPage() {
   const [detail, setDetail] = useState<SchoolDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [togglingTerm, setTogglingTerm] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -42,6 +43,21 @@ export default function SchoolDetailPage() {
       <p className="text-destructive text-sm">{error || 'School not found.'}</p>
     </div>
   )
+
+  const handleTogglePrinting = async (term: TermRow) => {
+    setTogglingTerm(term.id)
+    try {
+      const updated = await toggleTermPrintingApi(term.id, !term.printingEnabled)
+      setDetail(prev => prev ? {
+        ...prev,
+        terms: prev.terms.map(t => t.id === updated.id ? { ...t, printingEnabled: updated.printingEnabled } : t),
+      } : prev)
+    } catch {
+      setError('Failed to update printing setting.')
+    } finally {
+      setTogglingTerm(null)
+    }
+  }
 
   const { school, classes, staff, subjects, reportCards } = detail
   const published = reportCards.find(r => r.status === 'PUBLISHED')?.count ?? 0
@@ -169,6 +185,55 @@ export default function SchoolDetailPage() {
               </div>
             </div>
           </div>
+
+          {/* Terms & Printing */}
+          {detail.terms.length > 0 && (
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+                <Printer size={15} className="text-muted-foreground" />
+                <h3 className="font-semibold text-foreground text-sm">
+                  Report Card Printing — by {school.type === 'UNIVERSITY' ? 'Semester' : 'Term'}
+                </h3>
+              </div>
+              {Object.entries(
+                detail.terms.reduce<Record<string, TermRow[]>>((acc, t) => {
+                  ;(acc[t.session] ??= []).push(t)
+                  return acc
+                }, {}),
+              ).map(([session, terms]) => (
+                <div key={session}>
+                  <div className="px-5 py-2 bg-muted/40 border-b border-border">
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{session}</span>
+                  </div>
+                  {terms.map((term) => (
+                    <div key={term.id} className="flex items-center justify-between px-5 py-3 border-b border-border last:border-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-foreground font-medium">{term.name}</span>
+                        {term.isCurrent && (
+                          <span className="text-[10px] font-semibold bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">Current</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleTogglePrinting(term)}
+                        disabled={togglingTerm === term.id}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 focus:outline-none ${
+                          term.printingEnabled ? 'bg-primary' : 'bg-muted-foreground/30'
+                        }`}
+                        title={term.printingEnabled ? 'Printing enabled — click to disable' : 'Printing disabled — click to enable'}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                          term.printingEnabled ? 'translate-x-4' : 'translate-x-1'
+                        }`} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground px-5 py-3 border-t border-border">
+                When disabled, the Print button is hidden from report cards for that {school.type === 'UNIVERSITY' ? 'semester' : 'term'}.
+              </p>
+            </div>
+          )}
 
           {/* School info */}
           <div className="bg-card border border-border rounded-xl overflow-hidden">

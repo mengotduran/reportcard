@@ -13,6 +13,7 @@
     "mobile:clean": "npm run dev --workspace apps/mobile -- -c"
   },
   "devDependencies": {
+    "node-windows": "^1.0.0-beta.8",
     "turbo": "latest"
   }
 }

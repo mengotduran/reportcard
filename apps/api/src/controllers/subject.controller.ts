@@ -35,16 +35,17 @@ export const getSubjects = async (req: AuthRequest, res: Response) => {
 export const createSubject = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, coefficient } = req.body
+    const { name, classLevel, code, coefficient, credit, term } = req.body
+    const termValue = term != null && term !== '' ? String(term) : null
 
     const limit = await demoLimitBlock(schoolId, 'subjects')
     if (limit) { res.status(403).json({ message: limit }); return }
 
     const existing = await prisma.subject.findFirst({
-      where: { schoolId, name, classLevel }
+      where: { schoolId, name, classLevel, term: termValue }
     })
     if (existing) {
-      res.status(400).json({ message: 'Subject already exists for this class level' })
+      res.status(400).json({ message: termValue ? 'Subject already exists for this class level and term' : 'Subject already exists for this class level' })
       return
     }
 
@@ -55,7 +56,9 @@ export const createSubject = async (req: AuthRequest, res: Response) => {
     const maxScore = classLevel_?.maxScore ?? 20
 
     const subject = await prisma.subject.create({
-      data: { schoolId, name, classLevel, maxScore, coefficient: coefficient ? Number(coefficient) : 1 }
+      data: { schoolId, name, classLevel, maxScore, coefficient: coefficient ? Number(coefficient) : 1,
+        code: code?.trim() || null,
+        credit: credit != null && credit !== '' ? Number(credit) : null, term: termValue }
     })
     res.status(201).json({ message: 'Subject created', subject })
   } catch (error) {
@@ -68,7 +71,7 @@ export const updateSubject = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, coefficient } = req.body
+    const { name, classLevel, code, coefficient, credit, term } = req.body
 
     const subject = await prisma.subject.findFirst({ where: { id, schoolId } })
     if (!subject) {
@@ -80,7 +83,10 @@ export const updateSubject = async (req: AuthRequest, res: Response) => {
       where: { id },
       data: {
         name, classLevel,
+        ...(code !== undefined ? { code: code?.trim() || null } : {}),
         ...(coefficient !== undefined ? { coefficient: Number(coefficient) } : {}),
+        ...(credit !== undefined ? { credit: credit != null && credit !== '' ? Number(credit) : null } : {}),
+        ...(term !== undefined ? { term: term != null && term !== '' ? String(term) : null } : {}),
       }
     })
     res.json({ message: 'Subject updated', subject: updated })

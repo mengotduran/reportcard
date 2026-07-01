@@ -9,11 +9,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getReportCard, getSubjects, saveEntries, publishReportCard,
-  ReportCardDetail, Subject,
+  getReadinessDetail, ReportCardDetail, Subject, ReadinessDetail,
 } from '@/lib/api/reportcards'
 import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { useT } from '@/lib/i18n'
 
 interface Entry { subjectId: string; score: string; grade: string; remarks: string }
 
@@ -148,6 +149,7 @@ function ordinal(n: number): string {
 export default function ReportCardDetailScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
+  const t = useT()
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
   const { user } = useAuthStore()
@@ -156,6 +158,7 @@ export default function ReportCardDetailScreen() {
   const [entries, setEntries] = useState<Entry[]>([])
   const [remarks, setRemarks] = useState('')
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -169,7 +172,13 @@ export default function ReportCardDetailScreen() {
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
     setReportCard(rc)
     setRemarks(rc.remarks || '')
-    const classSubjects = subjectData.subjects.filter((s) => s.classLevel === rc.student.classLevel)
+    if (user?.role !== 'CLASS_MASTER') getReadinessDetail(id).then(setReadiness).catch(() => {})
+    // A course scoped to one semester (university) only counts for that
+    // semester; a subject with no term (primary/secondary) always counts.
+    const classSubjects = subjectData.subjects.filter((s) =>
+      s.classLevel === rc.student.classLevel
+      && (s.term == null || s.term === rc.term.name)
+      && (s.compulsory !== false || rc.entries.some((e) => e.subject.id === s.id)))
     setSubjects(classSubjects)
     setEntries(
       classSubjects.map((s) => {
@@ -212,10 +221,10 @@ export default function ReportCardDetailScreen() {
           return { subjectId: e.subjectId, score, grade: g.grade, remarks: e.remarks }
         }),
       })
-      Alert.alert('Saved', 'Report card saved successfully.')
+      Alert.alert(t('Saved'), t('Report card saved successfully.'))
       fetchData()
     } catch {
-      Alert.alert('Error', 'Failed to save report card.')
+      Alert.alert(t('Error'), t('Failed to save report card.'))
     } finally {
       setSaving(false)
     }
@@ -223,21 +232,21 @@ export default function ReportCardDetailScreen() {
 
   const handlePublish = () => {
     Alert.alert(
-      'Publish Report Card',
-      `Publish ${reportCard?.student.name}'s report card? This cannot be undone.`,
+      t('Publish Report Card'),
+      `${t('Publish the report card for')} ${reportCard?.student.name}? ${t('This cannot be undone.')}`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('Cancel'), style: 'cancel' },
         {
-          text: 'Publish',
+          text: t('Publish'),
           style: 'default',
           onPress: async () => {
             setPublishing(true)
             try {
               await publishReportCard(id)
-              Alert.alert('Published', 'Report card published successfully.')
+              Alert.alert(t('Published'), t('Report card published successfully.'))
               fetchData()
             } catch {
-              Alert.alert('Error', 'Failed to publish report card.')
+              Alert.alert(t('Error'), t('Failed to publish report card.'))
             } finally {
               setPublishing(false)
             }
@@ -261,7 +270,10 @@ export default function ReportCardDetailScreen() {
   // Publish readiness — same rules as admin and web
   const allSeqsFilled = entries.length > 0 && entries.every(e => e.score !== '' && e.score != null)
   const hasRemarks = !!reportCard.remarks?.trim()
-  const canPublish = allSeqsFilled && hasRemarks
+  // Positions are class-relative — every other active student in this class + term
+  // must also be complete (or already published) before this one can publish.
+  const classReady = readiness ? readiness.otherStudentsBlocking === 0 : false
+  const canPublish = allSeqsFilled && hasRemarks && classReady
 
   // Class master can only add remarks once ALL sequences are filled
   const canEditRemarks = !isClassMaster || (isDraft && allSeqsFilled)
@@ -302,7 +314,7 @@ export default function ReportCardDetailScreen() {
             color={isDraft ? '#854d0e' : '#15803d'}
           />
           <Text style={[styles.statusText, { color: isDraft ? '#854d0e' : '#15803d' }]}>
-            {isDraft ? 'Draft' : 'Published'}
+            {isDraft ? t('Draft') : t('Published')}
           </Text>
         </View>
       </View>
@@ -310,9 +322,12 @@ export default function ReportCardDetailScreen() {
       {/* Summary */}
       <View style={styles.summaryRow}>
         {[
-          { label: 'Terms Average', value: average.toFixed(1) },
-          { label: 'Overall Grade', value: gradeFromScore(average, avgMaxScore, gradingRanges).remark || gradeFromScore(average, avgMaxScore, gradingRanges).grade },
-          { label: 'Position', value: reportCard.position != null ? ordinal(reportCard.position) : '—' },
+          { label: t('Terms Average'), value: average.toFixed(1) },
+          { label: t('Overall Grade'), value: gradeFromScore(average, avgMaxScore, gradingRanges).remark || gradeFromScore(average, avgMaxScore, gradingRanges).grade },
+          { label: t('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
+          ...(reportCard.classAverage != null ? [{ label: t('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
+          ...(reportCard.annualAverage != null ? [{ label: t('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
+          ...(reportCard.annualPosition != null ? [{ label: t('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
         ].map((item) => (
           <View key={item.label} style={styles.summaryCard}>
             <Text style={styles.summaryValue}>{item.value}</Text>
@@ -323,7 +338,7 @@ export default function ReportCardDetailScreen() {
 
       {/* Subjects */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Subject Scores</Text>
+        <Text style={styles.sectionTitle}>{t('Subject Scores')}</Text>
         {subjects.map((subject) => {
           const entry = entries.find((e) => e.subjectId === subject.id)
           const isFilled = entry?.score !== '' && entry?.score != null
@@ -355,18 +370,6 @@ export default function ReportCardDetailScreen() {
                   <Text style={{ fontSize: 12, color: colors.textMuted }}>--</Text>
                 )}
               </View>
-              {isDraft && (
-                <TextInput
-                  style={styles.remarksInput}
-                  value={entry?.remarks ?? ''}
-                  onChangeText={(v) => updateRemarks(subject.id, v)}
-                  placeholder="Remark..."
-                  placeholderTextColor="#9ca3af"
-                />
-              )}
-              {!isDraft && entry?.remarks ? (
-                <Text style={styles.remarksReadOnly}>{entry.remarks}</Text>
-              ) : null}
             </View>
           )
         })}
@@ -374,21 +377,21 @@ export default function ReportCardDetailScreen() {
 
       {/* General Remarks */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>General Remarks</Text>
+        <Text style={styles.sectionTitle}>{t('General Remarks')}</Text>
         {canEditRemarks && isDraft ? (
           <TextInput
             style={styles.generalRemarksInput}
             value={remarks}
             onChangeText={setRemarks}
-            placeholder="Overall remarks..."
+            placeholder={t('Overall remarks...')}
             placeholderTextColor="#9ca3af"
             multiline
             numberOfLines={3}
           />
         ) : isClassMaster && !allSeqsFilled ? (
           <View style={{ backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 8, padding: 10 }}>
-            <Text style={{ fontSize: 12, color: '#d97706', fontWeight: '600' }}>Cannot add remarks yet</Text>
-            <Text style={{ fontSize: 11, color: '#92400e', marginTop: 2 }}>All subject sequences must be filled first.</Text>
+            <Text style={{ fontSize: 12, color: '#d97706', fontWeight: '600' }}>{t('Cannot add remarks yet')}</Text>
+            <Text style={{ fontSize: 11, color: '#92400e', marginTop: 2 }}>{t('All subject sequences must be filled first.')}</Text>
           </View>
         ) : (
           <Text style={styles.remarksReadOnly}>{reportCard.remarks || '—'}</Text>
@@ -406,18 +409,23 @@ export default function ReportCardDetailScreen() {
           >
             {saving
               ? <ActivityIndicator color="#374151" size="small" />
-              : <><Ionicons name="save-outline" size={16} color="#374151" /><Text style={styles.saveBtnText}>Save Draft</Text></>}
+              : <><Ionicons name="save-outline" size={16} color="#374151" /><Text style={styles.saveBtnText}>{t('Save Draft')}</Text></>}
           </TouchableOpacity>
           {user?.role !== 'CLASS_MASTER' && (
             <>
               {!canPublish && (
                 <View style={{ flexDirection: 'row', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: allSeqsFilled ? '#dcfce7' : '#fee2e2' }}>
-                    <Text style={{ fontSize: 9, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>{allSeqsFilled ? '✓' : '✗'} Sequences</Text>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>{allSeqsFilled ? '✓' : '✗'} {t('Sequences')}</Text>
                   </View>
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: hasRemarks ? '#dcfce7' : '#fee2e2' }}>
-                    <Text style={{ fontSize: 9, fontWeight: '700', color: hasRemarks ? '#16a34a' : '#ef4444' }}>{hasRemarks ? '✓' : '✗'} Remarks</Text>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: hasRemarks ? '#16a34a' : '#ef4444' }}>{hasRemarks ? '✓' : '✗'} {t('Remarks')}</Text>
                   </View>
+                  {readiness && (
+                    <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: classReady ? '#dcfce7' : '#fee2e2' }}>
+                      <Text style={{ fontSize: 9, fontWeight: '700', color: classReady ? '#16a34a' : '#ef4444' }}>{classReady ? '✓' : '✗'} {t('Whole class')}{!classReady ? ` (${readiness.otherStudentsBlocking})` : ''}</Text>
+                    </View>
+                  )}
                 </View>
               )}
               <TouchableOpacity
@@ -428,7 +436,7 @@ export default function ReportCardDetailScreen() {
               >
                 {publishing
                   ? <ActivityIndicator color="#fff" size="small" />
-                  : <><Ionicons name="send-outline" size={16} color="#fff" /><Text style={styles.publishBtnText}>Publish</Text></>}
+                  : <><Ionicons name="send-outline" size={16} color="#fff" /><Text style={styles.publishBtnText}>{t('Publish')}</Text></>}
               </TouchableOpacity>
             </>
           )}

@@ -1,0 +1,47 @@
+# Single-device offline install — builds the api and web images from one
+# Dockerfile (see docker-compose.local.yml, target: api / target: web).
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json turbo.json tsconfig.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY apps/mobile/package.json apps/mobile/package.json
+RUN npm ci
+
+# ---------------------------------------------------------------------------
+FROM deps AS api-build
+COPY packages packages
+COPY apps/api apps/api
+WORKDIR /app/apps/api
+# prisma.config.ts requires DATABASE_URL to be resolvable just to load the
+# config (prisma generate doesn't actually connect) — a placeholder is fine,
+# the real one is injected at container runtime via docker-compose.
+ENV DATABASE_URL=postgresql://build:build@localhost:5432/build
+RUN npm run build
+
+FROM node:22-alpine AS api
+WORKDIR /app
+COPY --from=api-build /app/node_modules ./node_modules
+COPY --from=api-build /app/packages ./packages
+COPY --from=api-build /app/apps/api ./apps/api
+WORKDIR /app/apps/api
+EXPOSE 5000
+CMD ["npm", "run", "start"]
+
+# ---------------------------------------------------------------------------
+FROM deps AS web-build
+COPY packages packages
+COPY apps/web apps/web
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+WORKDIR /app/apps/web
+RUN npm run build
+
+FROM node:22-alpine AS web
+WORKDIR /app
+COPY --from=web-build /app/node_modules ./node_modules
+COPY --from=web-build /app/packages ./packages
+COPY --from=web-build /app/apps/web ./apps/web
+WORKDIR /app/apps/web
+EXPOSE 3000
+CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]

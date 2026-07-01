@@ -6,6 +6,7 @@ export interface SchoolSection {
   id: string
   name: string
   type: string
+  language?: string
   email: string
   subdomain: string
   phone: string | null
@@ -54,6 +55,7 @@ export const getSchoolAdmins = async (schoolId: string): Promise<{
 export const createStandaloneSchool = async (data: {
   schoolName: string
   schoolType: string
+  language?: string
   schoolEmail: string
   subdomain: string
   adminName: string

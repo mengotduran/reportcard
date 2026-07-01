@@ -51,6 +51,7 @@ export async function resetDemoSchool() {
   if (existing) {
     const schoolId = existing.id
     // Children first — most relations are onDelete: Restrict.
+    await prisma.feePayment.deleteMany({ where: { schoolId } })
     await prisma.reportEntry.deleteMany({ where: { reportCard: { schoolId } } })
     await prisma.reportCard.deleteMany({ where: { schoolId } })
     await prisma.teacherSubject.deleteMany({ where: { subject: { schoolId } } })
@@ -105,9 +106,11 @@ export async function resetDemoSchool() {
 
   // --- Class levels ---------------------------------------------------------
   const classNames = ['Form 1', 'Form 2', 'Form 3']
+  // Junior classes pay a bit less — showcases per-class fees.
+  const classFees = [150000, 165000, 180000]
   await Promise.all(
     classNames.map((name, i) =>
-      prisma.classLevel.create({ data: { schoolId, name, order: i + 1, maxScore: 20 } })
+      prisma.classLevel.create({ data: { schoolId, name, order: i + 1, maxScore: 20, feeAmount: classFees[i] } })
     )
   )
 

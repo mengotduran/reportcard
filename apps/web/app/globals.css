@@ -120,20 +120,30 @@ button:disabled, [disabled] {
 
 aside ::-webkit-scrollbar-track { background: transparent; }
 
+/* ── Print portals — off-screen so content renders/images load, never visible on screen ── */
+.rc-print-portal,
+.transcript-print-portal {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 210mm;
+  pointer-events: none;
+}
+
 /* ── Print ────────────────────────────────────────────────────────────────── */
 @media print {
   @page { margin: 0; size: A4 portrait; }
-  html, body { margin: 0 !important; padding: 0 !important; }
-  body > *:not(#report-card-printable) { display: none !important; }
-  #report-card-printable {
-    display: block !important;
-    visibility: visible !important;
-    position: relative !important;
-    overflow: hidden !important;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
+  * { print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; box-sizing: border-box; }
+  html, body { margin: 0 !important; padding: 0 !important; background: white !important; }
+  body > *:not(.rc-print-portal):not(.transcript-print-portal) { display: none !important; }
+  .rc-print-portal,
+  .transcript-print-portal {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    pointer-events: auto;
   }
-  #report-card-printable * { visibility: visible !important; }
-  #report-card-printable tbody tr,
-  #report-card-printable tbody td { background-color: transparent !important; }
+  .rc-print-portal tbody tr,
+  .rc-print-portal tbody td { background-color: transparent !important; }
 }

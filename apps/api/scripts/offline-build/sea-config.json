@@ -1,0 +1,5 @@
+{
+  "main": "dist-offline/server.js",
+  "output": "dist-offline/sea-prep.blob",
+  "disableExperimentalSEAWarning": true
+}

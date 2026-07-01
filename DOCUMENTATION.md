@@ -1,6 +1,6 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-06-15 (Per-section designs + editable class-list canvas)
+> Last updated: 2026-06-15 (Demo tenant + caps · remarks required for all classes · letter grades)
 > This document is updated every time a new feature or change is made.
 
 ---
@@ -25,6 +25,7 @@
 16. [Web App Pages](#16-web-app-pages)
 17. [Mobile App Screens](#17-mobile-app-screens)
 18. [Known Behaviours & Rules](#18-known-behaviours--rules)
+19. [Demo Tenant](#19-demo-tenant)
 
 ---
 
@@ -124,8 +125,8 @@ npx prisma studio          # View data at localhost:5555
 
 | Role | Creates cards | Fills marks | General remarks | Admin access |
 |------|---|---|---|---|
-| `SCHOOL_ADMIN` | ✓ | ✗ | ✗ | ✓ Full |
-| `VICE_PRINCIPAL` | ✓ | ✗ | ✗ | ✓ Most |
+| `SCHOOL_ADMIN` | ✓ | ✗ | ✓ if class has no master | ✓ Full |
+| `VICE_PRINCIPAL` | ✓ | ✗ | ✓ if class has no master | ✓ Most |
 | `CLASS_MASTER` | ✓ auto | ✓ assigned subjects | ✓ their master class | ✗ |
 | `CLASS_TEACHER` | ✓ auto | ✓ assigned subjects | ✗ | ✗ |
 | `STUDENT` | (future) | — | — | — |
@@ -137,7 +138,8 @@ npx prisma studio          # View data at localhost:5555
 - **CLASS_TEACHER and CLASS_MASTER** auto-create a report card silently when they first save marks for a student
 - **CLASS_MASTER** has a `masterClassLevel` field — the one class they manage general remarks for
 - A CLASS_MASTER can teach subjects in multiple classes but is master of only ONE class
-- **Admin is read-only for marks** — they view everything but don't fill marks or remarks
+- **Admin is read-only for marks** — they view everything but don't fill marks. They **can** write the general remarks when the class has no class master (otherwise remarks are master-only)
+- **General remarks are required for every class before publishing** (see §9 Publish rules)
 - **Subject exclusivity** — a subject in a class belongs to exactly one teacher. Assigning it to Teacher B silently removes it from Teacher A (admin sees a notice)
 
 ### Navigation per role (web)
@@ -206,11 +208,16 @@ Base URL: `http://localhost:5000/api`
 | GET | `/report-cards` | All | List report cards |
 | GET | `/report-cards/:id` | All | Get single report card with entries |
 | POST | `/report-cards` | Admin, CLASS_TEACHER, CLASS_MASTER | Create a report card |
-| PUT | `/report-cards/:id/entries` | Admin, CLASS_TEACHER, CLASS_MASTER | Save subject marks; auto-fills entry.remarks from grading scale |
-| PUT | `/report-cards/:id/remarks` | Admin, CLASS_MASTER | Update general remarks only |
-| PUT | `/report-cards/:id/publish` | Admin only | Publish a report card |
-| DELETE | `/report-cards/:id` | Admin | Delete a report card |
+| PUT | `/report-cards/:id/entries` | Admin, CLASS_TEACHER, CLASS_MASTER | Save subject marks; auto-fills entry.grade + entry.remarks from grading scale |
+| PUT | `/report-cards/:id/remarks` | Admin, VP, CLASS_MASTER | Update general remarks only (admin/VP used when class has no master) |
+| PUT | `/report-cards/:id/publish` | Admin, VP | Publish one card — enforces subjects + all sequences + general remarks |
+| PUT | `/report-cards/:id/unpublish` | Admin, VP | Unpublish (unlocks for editing) |
+| POST | `/report-cards/bulk-publish` | Admin, VP | Publish a whole class; skips + reports students not ready |
+| PUT | `/report-cards/:id/grant-edit` · `/revoke-edit` | Admin, VP | Grant/revoke one-time edit on a published card |
+| DELETE | `/report-cards/:id` | Admin, VP | Delete a report card |
 | GET | `/report-cards/class-overview` | All | Students + card status for a class/term |
+| GET | `/report-cards/class-readiness?termId` | Admin, VP | Per-class publish readiness (drives bulk-publish gating) |
+| GET | `/report-cards/:id/readiness-detail` | Admin, VP | Which teacher is missing marks / who must write remarks |
 
 ### Teachers
 | Method | Route | Description |
@@ -241,6 +248,14 @@ Base URL: `http://localhost:5000/api`
 | PATCH | `/superadmin/schools/:id/toggle` | Activate / deactivate a school |
 | PATCH | `/superadmin/parent-schools/:id/toggle` | Activate / deactivate a parent group |
 
+### Demo Tenant
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/demo/reset` | Wipe & reseed the demo school. Guarded by `x-demo-secret` header (or `?key=`) === env `DEMO_RESET_SECRET`. Returns 503 if the secret is unset. Only ever touches the demo tenant. |
+| GET | `/demo/credentials` | Public — returns the demo logins |
+
+See §19 Demo Tenant for the full picture.
+
 ---
 
 ## 7. Grading & Mark Calculation
@@ -253,17 +268,20 @@ The teacher fills in marks for **Sequence 1** and **Sequence 2**, both out of th
 Subject average = (Seq1 + Seq2) / 2   →   e.g. 15/20
 ```
 
-### Per-subject grade/remark (auto-filled)
+### Per-subject grade & remark (auto-filled)
 
-When marks are saved, the API automatically fills `ReportEntry.remarks` from the grading scale:
+When marks are saved, the API looks up the percentage in the school's grading scale and stores BOTH the **letter grade** (`ReportEntry.grade`, e.g. "A") and the **remark** (`ReportEntry.remarks`, e.g. "Very Good"):
 
 ```
 Percentage = (subject_average / maxScore) × 100   →   e.g. 75%
 ```
 
-The remark text (e.g. "Very Good") is looked up from the school's grading scale and stored. Teachers can edit it afterward.
+The letter grade and remark both come from the school's grading-scale ranges (the design) — not hardcoded thresholds (`getGradeLetter`/`getAutoRemark` in the API; falls back to the default scale if none is configured).
 
-**The grade column on all screens shows the live-calculated remark** (recalculated from current scale each time the page loads — stale stored values are ignored).
+**What shows where:**
+- **Grade** column (report card detail, all 5 print templates, "Overall Grade" card) → the **letter** (A, B, C…).
+- **Remarks** column → the remark word ("Good", "Very Good").
+- **PERFORMANCE** column on the marks-entry page → the remark word (live performance text), by design.
 
 **Badge style**: squared corners (borderRadius 4px), not circular pills — applied on both web and mobile.
 
@@ -311,6 +329,95 @@ Auto-recalculated for all students in the same class/term every time any teacher
 
 ---
 
+### University GPA Algorithm (CITEC-style, /100 marks)
+
+University schools use a **different grading system** from primary/secondary:
+
+- Marks are entered **out of 100** (CA /30 + Exam /70 = /100). `ClassLevel.maxScore = 100`.
+- There are no coefficients — instead each course has a **Credit** value (`Subject.credit`).
+- There are no Seq1/Seq2 sequences — a single `score` (the total /100) is stored.
+
+#### Step 1 — Grade Point lookup
+
+The **Grade Point (GP)** is read from the school's grading scale (the `/grading-scale` page). Default scale:
+
+| Mark /100 | Grade | Grade Point (GP) |
+|-----------|-------|-----------------|
+| 90 – 100  | A+    | 4.00 |
+| 80 – 89   | A     | 3.70 |
+| 70 – 79   | B+    | 3.30 |
+| 60 – 69   | B     | 3.00 |
+| 55 – 59   | C+    | 2.30 |
+| 50 – 54   | C     | 2.00 |
+| 45 – 49   | D+    | 1.50 |
+| 40 – 44   | D     | 1.30 |
+|  0 – 39   | F     | 0.00 |
+
+#### Step 2 — Weighted Point
+
+```
+Weighted Point (WP) = Credit × Grade Point
+```
+
+**Example**: Course with Credit=14, Mark=75 → GP=3.30 → WP = 14 × 3.30 = 46.20
+
+#### Step 3 — Semester GPA
+
+```
+Semester GPA = Σ(WP for all courses in semester) / Σ(Credits for all courses in semester)
+```
+
+All courses registered in the semester are included, **including failed courses (F, GP=0)**.
+
+#### Step 4 — CGPA (Cumulative GPA)
+
+```
+CGPA = Σ(WP for ALL courses, both semesters) / Σ(Credits for ALL courses, both semesters)
+```
+
+Again, every registered course (pass or fail) is included — this matches standard university practice.
+
+#### Step 5 — Overall Credits Earned
+
+```
+Overall Credits Earned = Σ(all credits registered, both semesters)
+```
+
+This is total registered credits, **not** just passed credits. The transcript prints this as a summary statistic.
+
+#### Step 6 — Classification
+
+The CGPA maps to a classification (shown as the transcript "REMARK"):
+
+| CGPA Range  | Classification  |
+|-------------|----------------|
+| 3.60 – 4.00 | Distinction    |
+| 2.80 – 3.59 | Upper Credit   |
+| 2.40 – 2.79 | Lower Credit   |
+| 2.00 – 2.39 | Pass           |
+| 0.00 – 1.99 | Fail           |
+
+#### Verification example (from CITEC real transcript)
+
+- Semester 1: Σ(WP) = 153.7, Σ(Credits) = 60 → Sem1 GPA = 153.7/60 = 2.56
+- Semester 2: Σ(WP) = 157.4, Σ(Credits) = 60 → Sem2 GPA = 157.4/60 = 2.62
+- CGPA = (153.7 + 157.4) / (60 + 60) = 311.1 / 120 = **2.59 → Lower Credit** ✓
+
+#### Annual Transcript
+
+The annual transcript is a separate print format that combines both semesters. It is accessed from the report-cards list via the scroll icon (university schools only) next to each student's row. The transcript page is at `/report-cards/transcript/[studentId]?session=XXXX/XXXX`.
+
+The transcript shows:
+1. School header + student info (name, matricule, department, session, sex)
+2. **First Semester table**: CODE | TITLE | CREDIT | MARK /100 | GRADE | GP | WP | REMARK
+3. Per-semester totals row + Semester GPA
+4. **Second Semester table** (same columns)
+5. Bottom section (3 side-by-side panels): Grade System table · Classification table · Legend
+6. Overall summary: Credits Earned + CGPA + Remark classification
+7. Signature lines: Dean of Studies + Registrar
+
+---
+
 ## 8. Subjects & Coefficients
 
 Each subject has:
@@ -331,13 +438,28 @@ Each subject has:
 |------|-----|------|
 | 1 | **Admin** | Creates report card explicitly for student + term (or auto-created by teacher on first save) |
 | 2 | **CLASS_TEACHER / CLASS_MASTER** | Fills marks (Seq1, Seq2) via marks entry page for their assigned subjects |
-| 3 | **API** | Auto-fills per-subject remarks from grading scale on every save |
-| 4 | **CLASS_MASTER** | Adds/edits general remarks for all students in their master class |
+| 3 | **API** | Auto-fills per-subject grade + remark from grading scale on every save |
+| 4 | **CLASS_MASTER** (or **Admin/VP** if the class has no master) | Adds/edits general remarks for all students in the class |
 | 5 | **Admin** | Reviews everything and publishes the report card |
 
-### Admin view (read-only)
+### Publish rules (enforced server-side, single + bulk)
 
-The admin report card detail page is fully **read-only** for marks and remarks. Admin sees subject scores, grades (live-calculated), coefficients, per-subject remarks, general remarks, average, and position. Admin can only **Publish**.
+A report card can only be published when **ALL** of these are true — checked in the API, not just the UI:
+
+1. The class has at least one **subject**.
+2. **Every subject has both sequences filled** (Seq1 AND Seq2) — i.e. every teacher has filled their marks. A subject with no assigned teacher still blocks until its marks are entered.
+3. The report card has **general remarks** — **required for every class** (updated 2026-06-15; previously only classes with a class master).
+
+The bulk **"Publish Class"** action checks the whole class: the dropdown button is disabled until every student passes, and the API reports per-student `issues` (missing sequences / missing remarks / no subjects) for any it skips.
+
+### Who writes general remarks
+
+- Class **has** a class master → only that master writes the general remarks (as before).
+- Class has **no** class master → **SCHOOL_ADMIN / VICE_PRINCIPAL** write the general remarks themselves, on the report-card detail page (a "Save Remarks" box appears). This keeps every class publishable.
+
+### Admin view
+
+The admin report card detail page is **read-only for marks**. Admin sees subject scores, letter grades, coefficients, per-subject remarks, general remarks, average, and position, and can **Publish**. Admin/VP can also **write the general remarks** when the class has no class master (otherwise remarks are master-only).
 
 ### Marks entry (teacher / class master)
 
@@ -553,7 +675,9 @@ On the report card detail page, **Print / Save PDF**:
 | Behaviour | Detail |
 |-----------|--------|
 | **Marks don't overwrite general remarks** | Teacher saving marks never touches `ReportCard.remarks` |
-| **Grade uses live grading scale** | Grade/remark always recalculated from current scale on page load — stale stored `entry.remarks` ignored everywhere (web + mobile) |
+| **Grade column shows the letter** | Report card Grade columns show the letter grade (A, B, C…), not the remark word. Remarks columns show the word. The marks-entry "PERFORMANCE" column shows the word by design |
+| **Grade/remark from grading scale** | API derives both the letter grade and the remark from the school's grading-scale ranges on save (`getGradeLetter`/`getAutoRemark`); the detail page recomputes the displayed grade from the current scale |
+| **Remarks required for ALL classes** | Publishing (single + bulk) requires general remarks for every class. Admin/VP write them when a class has no master |
 | **No stale remarks on save** | Marks save never sends existing `entry.remarks` to the API — API always auto-fills from current grading scale |
 | **Position auto-updates** | Every `saveEntries` call recalculates positions for all students in the class |
 | **Auto-remarks on save** | API auto-fills `ReportEntry.remarks` from grading scale remark when marks are saved |
@@ -567,4 +691,33 @@ On the report card detail page, **Print / Save PDF**:
 | **Stream support** | `ClassLevel.hasStream = true` → student registration shows Arts/Science; baked into classLevel string |
 | **Subject filter** | Teachers and class masters see only their assigned subjects (API enforces this for all teacher-type roles) |
 | **Report card auto-creation** | Created automatically when teacher/class master first saves marks for a student who doesn't have one |
-| **Admin is read-only for marks** | Admin cannot edit marks or remarks — only publish. Mobile admin section not yet implemented. |
+| **Admin is read-only for marks** | Admin cannot edit marks. Admin/VP CAN write general remarks when the class has no master. Mobile admin remarks-writing not yet implemented. |
+| **Demo school resource caps** | The demo tenant only (subdomain `demo`) is capped: 20 students, 20 subjects, 10 teachers, 10 cover images. Real schools are unlimited. See §19 |
+
+---
+
+## 19. Demo Tenant
+
+A disposable **demo school** lets people (e.g. recruiters) explore the live app without harming real data. Because the app is multi-tenant (every query scoped by `schoolId`), a demo `SCHOOL_ADMIN` can only ever see/edit the demo school — never another school's data. The demo is **never** given a SUPERADMIN (the only cross-tenant role).
+
+### Identity
+- The demo school is identified by **`subdomain = 'demo'`** ("Greenfield Demo Secondary", SECONDARY).
+- Default logins (both password `demo1234`): `recruiter@demo.com` (SCHOOL_ADMIN), `teacher@demo.com` (CLASS_MASTER of Form 1).
+
+### Seed & reset
+- `apps/api/src/scripts/seedDemo.ts` → `resetDemoSchool()` wipes ALL demo-school data (FK-safe order) and reseeds: 3 classes (Form 1–3), 5 subjects each, 3 terms, ~14 students, report cards in mixed states (published / ready-to-publish / missing sequences) to showcase the workflow.
+- Run it: `npm run seed:demo` (dev) / `npm run seed:demo:prod` (after build), or `POST /api/demo/reset` with the `x-demo-secret` header.
+- Point a scheduler (e.g. a free external cron) at `POST /api/demo/reset` to keep the demo clean automatically.
+
+### Resource caps (demo school ONLY)
+Enforced server-side in `apps/api/src/config/demo.ts` (`demoLimitBlock`) — returns `403` once a cap is hit, and `null` (no limit) for every real school:
+
+| Resource | Cap |
+|----------|-----|
+| Students | 20 |
+| Subjects | 20 |
+| Teachers (active CLASS_TEACHER/CLASS_MASTER/VP) | 10 |
+| Cover images (logo + cover + gallery) | 10 |
+
+### Config
+- Env var `DEMO_RESET_SECRET` guards the reset endpoint (returns 503 if unset — a safe default).
