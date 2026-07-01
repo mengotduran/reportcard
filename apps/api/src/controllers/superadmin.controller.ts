@@ -268,7 +268,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
 export const updateSchool = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id)
-    const { name, email, phone, address, subdomain, type, language } = req.body
+    const { name, email, phone, address, website, subdomain, type, language } = req.body
     const lang = language === undefined ? undefined : (language === 'FR' ? 'FR' : 'EN')
 
     const school = await prisma.school.findUnique({ where: { id } })
@@ -293,7 +293,7 @@ export const updateSchool = async (req: Request, res: Response) => {
 
     const updated = await prisma.school.update({
       where: { id },
-      data: { name, email, phone, address, subdomain: subdomain?.toLowerCase(), type, ...(lang !== undefined ? { language: lang } : {}) },
+      data: { name, email, phone, address, website, subdomain: subdomain?.toLowerCase(), type, ...(lang !== undefined ? { language: lang } : {}) },
       include: schoolInclude,
     })
     res.json({ message: 'School updated', school: updated })

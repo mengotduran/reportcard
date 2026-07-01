@@ -10,6 +10,7 @@ import {
 } from '@/lib/api/hndRegistration'
 import { formatXAF } from '@/lib/api/fees'
 import { useLocaleCode } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
 
 function statusChip(status: RegStatus) {
   const map: Record<RegStatus, { label: string; cls: string }> = {
@@ -32,6 +33,8 @@ export default function HndRegistrationModal({
   onChanged?: () => void
 }) {
   const locale = useLocaleCode()
+  const { school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
   const [data, setData] = useState<HndRegDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [amount, setAmount] = useState('')
@@ -96,7 +99,7 @@ export default function HndRegistrationModal({
           <div className="flex items-center gap-2">
             <BookMarked size={20} className="text-primary" />
             <div>
-              <h3 className="font-semibold text-foreground text-lg leading-tight">HND Registration</h3>
+              <h3 className="font-semibold text-foreground text-lg leading-tight">{isUniversity ? 'HND Registration' : 'GCE Registration'}</h3>
               <p className="text-xs text-muted-foreground">{studentName}{data?.session ? ` · ${data.session}` : ''}</p>
             </div>
           </div>
@@ -130,7 +133,7 @@ export default function HndRegistrationModal({
                 <span className="text-sm text-foreground font-medium truncate block">{data.student.studentId}</span>
               </div>
               <div className="min-w-0 col-span-2 sm:col-span-1">
-                <span className="text-xs text-muted-foreground block">Department</span>
+                <span className="text-xs text-muted-foreground block">{isUniversity ? 'Department' : 'Class'}</span>
                 <span className="text-sm text-foreground font-medium break-words">
                   {data.student.classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')}
                 </span>

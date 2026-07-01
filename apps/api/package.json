@@ -8,7 +8,8 @@
     "seed:demo": "ts-node src/scripts/seedDemo.ts",
     "seed:demo:prod": "node dist/scripts/seedDemo.js",
     "seed:university": "ts-node src/scripts/seedUniversity.ts",
-    "seed:realistic": "ts-node src/scripts/seedRealistic.ts"
+    "seed:realistic": "ts-node src/scripts/seedRealistic.ts",
+    "seed:raygen": "ts-node src/scripts/seedRaygen.ts"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.8.0",

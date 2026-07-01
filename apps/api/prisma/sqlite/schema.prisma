@@ -62,6 +62,7 @@ model School {
   email          String     @unique
   phone          String?
   address        String?
+  website        String?
   logo           String?
   coverImage     String?
   coverImages    Json       @default("[]") // String[] on Postgres — SQLite has no scalar-list column type

@@ -4,8 +4,11 @@ import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
 
 export const HND_REGISTRATION_FEE = 65_000
+// Default GCE exam-registration fee for secondary schools (Form 5 → O Level, Upper Sixth → A Level).
+export const GCE_REGISTRATION_FEE = 20_000
 
 type RegStatus = 'COMPLETE' | 'PARTIAL' | 'UNPAID'
+type EligibleSchoolType = 'UNIVERSITY' | 'SECONDARY'
 
 function regStatus(paid: number, fee: number): RegStatus {
   if (paid >= fee) return 'COMPLETE'
@@ -17,13 +20,33 @@ function deptFromLevel2Class(classLevel: string): string {
   return classLevel.replace(/^HND /, '').replace(/ - Level 2$/, '')
 }
 
-async function assertUniversity(schoolId: string, res: Response): Promise<boolean> {
+// A class requires exam registration when: it's a university's final (Level 2) HND
+// class, or a secondary school's Form 5 (O Level) / Upper Sixth (A Level) class —
+// including any stream suffix, e.g. "Form 5 Science", "Upper Sixth Arts".
+export function isRegistrationClass(schoolType: string | undefined, classLevel: string): boolean {
+  if (schoolType === 'UNIVERSITY') return /- Level 2$/i.test(classLevel)
+  if (schoolType === 'SECONDARY') return /^Form\s?5\b/i.test(classLevel) || /^Upper\s?Sixth\b/i.test(classLevel)
+  return false
+}
+
+function defaultFeeFor(schoolType: EligibleSchoolType): number {
+  return schoolType === 'SECONDARY' ? GCE_REGISTRATION_FEE : HND_REGISTRATION_FEE
+}
+
+// Group label shown per class in the list/fee-editor: university strips the "HND …
+// - Level 2" wrapper down to the bare department name; secondary class names are
+// already a readable label ("Form 5 Science") so they're used as-is.
+function groupLabelFor(schoolType: EligibleSchoolType, classLevel: string): string {
+  return schoolType === 'UNIVERSITY' ? deptFromLevel2Class(classLevel) : classLevel
+}
+
+async function assertEligibleSchool(schoolId: string, res: Response): Promise<EligibleSchoolType | null> {
   const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
-  if (school?.type !== 'UNIVERSITY') {
-    res.status(403).json({ message: 'HND registration is only available for university schools.' })
-    return false
+  if (school?.type !== 'UNIVERSITY' && school?.type !== 'SECONDARY') {
+    res.status(403).json({ message: 'Exam registration is only available for secondary and university schools.' })
+    return null
   }
-  return true
+  return school.type
 }
 
 /**
@@ -33,25 +56,30 @@ async function assertUniversity(schoolId: string, res: Response): Promise<boolea
 export const getHndRegistrationList = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    if (!(await assertUniversity(schoolId, res))) return
+    const schoolType = await assertEligibleSchool(schoolId, res)
+    if (!schoolType) return
 
     const session = await currentSession(schoolId)
+    const defaultFee = defaultFeeFor(schoolType)
 
-    const [students, level2Classes] = await Promise.all([
-      prisma.student.findMany({
-        where: { schoolId, isActive: true, classLevel: { contains: '- Level 2' } },
-        select: { id: true, name: true, studentId: true, classLevel: true },
-        orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
-      }),
-      prisma.classLevel.findMany({
-        where: { schoolId, name: { contains: '- Level 2' } },
-        select: { name: true, hndRegistrationFee: true },
-      }),
-    ])
+    const allClasses = await prisma.classLevel.findMany({
+      where: { schoolId },
+      select: { name: true, hndRegistrationFee: true },
+    })
+    const regClasses = allClasses.filter((cl) => isRegistrationClass(schoolType, cl.name))
+    const regClassNames = regClasses.map((c) => c.name)
+
+    const students = regClassNames.length
+      ? await prisma.student.findMany({
+          where: { schoolId, isActive: true, classLevel: { in: regClassNames } },
+          select: { id: true, name: true, studentId: true, classLevel: true },
+          orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
+        })
+      : []
 
     // Fee per class level (fall back to default if admin hasn't set one yet)
     const classFeeMap = new Map<string, number>()
-    for (const cl of level2Classes) classFeeMap.set(cl.name, cl.hndRegistrationFee ?? HND_REGISTRATION_FEE)
+    for (const cl of regClasses) classFeeMap.set(cl.name, cl.hndRegistrationFee ?? defaultFee)
 
     const paidByStudent = new Map<string, number>()
     if (session && students.length) {
@@ -64,14 +92,14 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
     }
 
     const rows = students.map((s) => {
-      const fee = classFeeMap.get(s.classLevel) ?? HND_REGISTRATION_FEE
+      const fee = classFeeMap.get(s.classLevel) ?? defaultFee
       const paid = paidByStudent.get(s.id) ?? 0
       return {
         studentId: s.id,
         name: s.name,
         studentIdCode: s.studentId,
         classLevel: s.classLevel,
-        department: deptFromLevel2Class(s.classLevel),
+        department: groupLabelFor(schoolType, s.classLevel),
         fee,
         paid,
         balance: Math.max(0, fee - paid),
@@ -79,16 +107,16 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
       }
     })
 
-    const departments = level2Classes
+    const departments = regClasses
       .map((cl) => ({
-        department: deptFromLevel2Class(cl.name),
+        department: groupLabelFor(schoolType, cl.name),
         classLevel: cl.name,
-        fee: cl.hndRegistrationFee ?? HND_REGISTRATION_FEE,
+        fee: cl.hndRegistrationFee ?? defaultFee,
         isDefault: cl.hndRegistrationFee == null,
       }))
       .sort((a, b) => a.department.localeCompare(b.department))
 
-    res.json({ session, defaultFee: HND_REGISTRATION_FEE, departments, students: rows })
+    res.json({ session, schoolType, defaultFee, departments, students: rows })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -102,7 +130,8 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
 export const getStudentHndRegistration = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    if (!(await assertUniversity(schoolId, res))) return
+    const schoolType = await assertEligibleSchool(schoolId, res)
+    if (!schoolType) return
 
     const studentId = String(req.params.studentId)
     const student = await prisma.student.findFirst({ where: { id: studentId, schoolId } })
@@ -112,7 +141,7 @@ export const getStudentHndRegistration = async (req: AuthRequest, res: Response)
       currentSession(schoolId),
       prisma.classLevel.findFirst({ where: { schoolId, name: student.classLevel }, select: { hndRegistrationFee: true } }),
     ])
-    const fee = cls?.hndRegistrationFee ?? HND_REGISTRATION_FEE
+    const fee = cls?.hndRegistrationFee ?? defaultFeeFor(schoolType)
 
     const payments = session
       ? await prisma.hndRegistrationPayment.findMany({
@@ -145,7 +174,7 @@ export const getStudentHndRegistration = async (req: AuthRequest, res: Response)
 export const addHndRegistrationPayment = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    if (!(await assertUniversity(schoolId, res))) return
+    if (!(await assertEligibleSchool(schoolId, res))) return
 
     const studentId = String(req.params.studentId)
     const { amount, paidOn, note } = req.body
@@ -207,11 +236,16 @@ export const deleteHndRegistrationPayment = async (req: AuthRequest, res: Respon
 export const updateDepartmentFee = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    if (!(await assertUniversity(schoolId, res))) return
+    const schoolType = await assertEligibleSchool(schoolId, res)
+    if (!schoolType) return
 
     const { classLevel, fee } = req.body
     if (!classLevel || typeof classLevel !== 'string') {
       res.status(400).json({ message: 'classLevel is required' })
+      return
+    }
+    if (!isRegistrationClass(schoolType, classLevel)) {
+      res.status(400).json({ message: 'This class does not require exam registration.' })
       return
     }
 
@@ -234,9 +268,9 @@ export const updateDepartmentFee = async (req: AuthRequest, res: Response) => {
     await prisma.classLevel.update({ where: { id: cls.id }, data: { hndRegistrationFee: feeVal } })
     res.json({
       message: 'Registration fee updated',
-      department: deptFromLevel2Class(classLevel),
+      department: groupLabelFor(schoolType, classLevel),
       classLevel,
-      fee: feeVal ?? HND_REGISTRATION_FEE,
+      fee: feeVal ?? defaultFeeFor(schoolType),
       isDefault: feeVal == null,
     })
   } catch (error) {

@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
@@ -15,7 +15,7 @@ export interface PrintEntry {
 interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null; language?: string }
+  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null }
   student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string }
   term: { name: string; session: string }
   subjects: PrintSubject[]
@@ -24,6 +24,11 @@ export interface PrintableReportCardProps {
   generalRemarksFr?: string
   average: number
   position?: number | null
+  classSize?: number | null       // students ranked this term/class — denominator next to Position
+  classAverage?: number | null    // mean average of that same ranked population
+  annualAverage?: number | null   // final term of the session only (non-university)
+  annualPosition?: number | null  // class rank by annual average, final term only
+  annualClassSize?: number | null // denominator next to Annual Position
   config?: Partial<TemplateConfig>
   gradeBands?: GradeRange[]           // school grading scale; for university transcripts the bands carry gradePoint
   classificationBands?: ClassificationBand[] // CGPA classification bands (university)
@@ -92,7 +97,7 @@ function entryRemark(e: PrintEntry | undefined, bands: GradeRange[]): string {
 }
 
 // ─── Classic ─────────────────────────────────────────────────────────────────
-function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
@@ -152,7 +157,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
         {[
           { label: 'Total Score', value: total },
           cfg.showAverage && { label: 'Average', value: `${average.toFixed(1)}` },
-          cfg.showPosition && { label: 'Position', value: position != null ? `${position}` : '—' },
+          cfg.showPosition && { label: 'Position', value: position != null ? `${position}${classSize ? `/${classSize}` : ''}` : '—' },
         ].filter(Boolean).map((item: any) => (
           <div key={item.label} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '10px', textAlign: 'center' }}>
             <div style={{ fontSize: '20px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.value}</div>
@@ -160,6 +165,20 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
           </div>
         ))}
       </div>
+
+      {annualAverage != null && (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: '10px', marginBottom: '20px' }}>
+          {[
+            { label: 'Annual Average', value: `${annualAverage.toFixed(1)}` },
+            annualPosition != null && { label: 'Annual Position', value: `${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}` },
+          ].filter(Boolean).map((item: any) => (
+            <div key={item.label} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '10px', textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+              <div style={{ fontSize: '20px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.value}</div>
+              <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>{t(item.label)}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {cfg.showGeneralRemarks && (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: '12px', marginBottom: '28px' }}>
@@ -187,7 +206,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
 }
 
 // ─── Bilingual ────────────────────────────────────────────────────────────────
-function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
@@ -249,7 +268,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
         {[
           { fr: 'Score Total', en: 'Total Score', val: total },
           cfg.showAverage && { fr: 'Moyenne', en: 'Average', val: `${average.toFixed(1)}` },
-          cfg.showPosition && { fr: 'Rang', en: 'Position', val: position != null ? `${position}` : '—' },
+          cfg.showPosition && { fr: 'Rang', en: 'Position', val: position != null ? `${position}${classSize ? `/${classSize}` : ''}` : '—' },
         ].filter(Boolean).map((item: any) => (
           <div key={item.en} style={{ border: `2px solid ${cfg.primaryColor}`, padding: '8px', textAlign: 'center' }}>
             <div style={{ fontSize: '18px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.val}</div>
@@ -257,6 +276,20 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
           </div>
         ))}
       </div>
+
+      {annualAverage != null && (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: '8px', marginBottom: '16px' }}>
+          {[
+            { fr: 'Moyenne Annuelle', en: 'Annual Average', val: `${annualAverage.toFixed(1)}` },
+            annualPosition != null && { fr: 'Rang Annuel', en: 'Annual Position', val: `${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}` },
+          ].filter(Boolean).map((item: any) => (
+            <div key={item.en} style={{ border: `2px solid ${cfg.primaryColor}`, padding: '8px', textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: cfg.primaryColor }}>{item.val}</div>
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>{item.fr} / {item.en}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {cfg.showGeneralRemarks && (
         <div style={{ border: `1px solid ${cfg.primaryColor}`, padding: '10px', marginBottom: '24px' }}>
@@ -286,7 +319,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
 }
 
 // ─── Modern ───────────────────────────────────────────────────────────────────
-function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
@@ -360,7 +393,7 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
           {[
             { label: 'Total Score', value: total },
             cfg.showAverage && { label: 'Average', value: `${average.toFixed(1)}` },
-            cfg.showPosition && { label: 'Position', value: position != null ? `#${position}` : '—' },
+            cfg.showPosition && { label: 'Position', value: position != null ? `#${position}${classSize ? `/${classSize}` : ''}` : '—' },
           ].filter(Boolean).map((item: any) => (
             <div key={item.label} style={{ backgroundColor: `rgba(${rgb},0.08)`, borderRadius: '8px', padding: '14px', textAlign: 'center' }}>
               <div style={{ fontSize: '22px', fontWeight: '800', color: cfg.primaryColor }}>{item.value}</div>
@@ -368,6 +401,20 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
             </div>
           ))}
         </div>
+
+        {annualAverage != null && (
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: '12px', marginBottom: '20px' }}>
+            {[
+              { label: 'Annual Average', value: `${annualAverage.toFixed(1)}` },
+              annualPosition != null && { label: 'Annual Position', value: `#${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}` },
+            ].filter(Boolean).map((item: any) => (
+              <div key={item.label} style={{ backgroundColor: cfg.primaryColor, borderRadius: '8px', padding: '14px', textAlign: 'center' }}>
+                <div style={{ fontSize: '22px', fontWeight: '800', color: '#fff' }}>{item.value}</div>
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '1px' }}>{t(item.label)}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {cfg.showGeneralRemarks && (
           <div style={{ backgroundColor: 'transparent', borderRadius: '8px', padding: '14px', marginBottom: '24px', borderLeft: `3px solid ${cfg.primaryColor}` }}>
@@ -396,7 +443,7 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
 }
 
 // ─── Official ─────────────────────────────────────────────────────────────────
-function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg, gradeBands }: any) {
+function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
@@ -477,11 +524,26 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
             </>}
             {cfg.showPosition && <>
               <td style={{ padding: '6px 10px', fontWeight: 'bold', border, backgroundColor: `rgba(${rgb},0.05)` }}>Position</td>
-              <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{position != null ? position : '—'}</td>
+              <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{position != null ? `${position}${classSize ? `/${classSize}` : ''}` : '—'}</td>
             </>}
           </tr>
         </tbody>
       </table>
+
+      {annualAverage != null && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '16px', border }}>
+          <tbody>
+            <tr>
+              <td style={{ padding: '6px 10px', fontWeight: 'bold', width: '33%', border, backgroundColor: `rgba(${rgb},0.05)` }}>Annual Average</td>
+              <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{annualAverage.toFixed(1)}</td>
+              {annualPosition != null && <>
+                <td style={{ padding: '6px 10px', fontWeight: 'bold', border, backgroundColor: `rgba(${rgb},0.05)` }}>Annual Position</td>
+                <td style={{ padding: '6px 10px', fontWeight: 'bold', textAlign: 'center', border }}>{annualPosition}{annualClassSize ? `/${annualClassSize}` : ''}</td>
+              </>}
+            </tr>
+          </tbody>
+        </table>
+      )}
 
       {cfg.showGeneralRemarks && (
         <div style={{ border, padding: '10px', marginBottom: '24px' }}>
@@ -513,7 +575,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
 // ─── Sections-based renderer ─────────────────────────────────────────────────
 function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfig }) {
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
-  const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, cfg } = props
+  const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, classAverage, annualAverage, annualPosition, annualClassSize, cfg } = props
   const lang: 'EN' | 'FR' = school.language === 'FR' ? 'FR' : 'EN'
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
@@ -558,7 +620,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     const total = entries.reduce((s, e) => s + e.score, 0)
     if (field === 'total')          return String(total)
     if (field === 'average')        return average.toFixed(1)
-    if (field === 'position')       return position != null ? ordinalPos(position) : '—'
+    if (field === 'position')       return position != null ? `${ordinalPos(position)}${classSize ? `/${classSize}` : ''}` : '—'
+    if (field === 'classAverage')   return classAverage != null ? classAverage.toFixed(1) : '—'
     if (field === 'grade')          return calculateGrade((average / 20) * 100)
     if (field === 'gpa')            return gpaInfo.gpa.toFixed(2)
     if (field === 'cgpa')           return cgpa.toFixed(2)
@@ -573,15 +636,36 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       const logoSize = s.logoSize || 60
       const logoEl = school.logo ? <Logo url={school.logo} size={logoSize} color={color} /> : null
 
+      const contactLine = buildOfficialContactLine(school, s)
+      const contactLineEl = contactLine
+        ? <p style={{ textAlign: 'center', fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>{contactLine}</p>
+        : null
+
       // Official Cameroon-style header: French block | logo | English block, then title.
+      // Every line, both sides, uses the same font/size/weight — the block's own
+      // longest line sets its width, shorter lines center within it (plain
+      // center-align does exactly this; no per-line special-casing). The logo
+      // is absolutely positioned so a bigger logo never stretches the text rows.
       if (s.officialHeader) {
+        const toHtml = (lines: string[]) =>
+          lines.map(line =>
+            `<div style="font-family:Arial,sans-serif;font-size:10px;font-weight:bold;line-height:1.5;text-align:center;">${line || '&nbsp;'}</div>`
+          ).join('')
+
+        const leftLines  = (s.leftText  || '').split('\n')
+        const rightLines = (s.rightText || '').split('\n')
+
         return (
           <div style={{ borderBottom: `3px solid ${color}`, paddingBottom: 12, marginBottom: 16 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: 12 }}>
-              <div style={{ fontSize: 10.5, textAlign: 'center', lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: s.leftText || '' }} />
-              <div style={{ textAlign: 'center' }}>{s.showLogo && logoEl}</div>
-              <div style={{ fontSize: 10.5, textAlign: 'center', lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: s.rightText || '' }} />
+            <div style={{ position: 'relative', minHeight: logoSize }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
+                <div dangerouslySetInnerHTML={{ __html: toHtml(leftLines) }} />
+                <div />
+                <div dangerouslySetInnerHTML={{ __html: toHtml(rightLines) }} />
+              </div>
+              <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{s.showLogo && logoEl}</div>
             </div>
+            {contactLineEl}
             {s.reportTitle && <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '10px 0 0', letterSpacing: 3, color, textAlign: 'center' }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />}
           </div>
         )
@@ -593,6 +677,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           <h1 style={{ fontSize: 22, fontWeight: 'bold', margin: '0 0 4px', color: s.schoolNameColor || color }}>{school.name}</h1>
           {s.subtitle && <p style={{ margin: '0 0 6px', fontSize: 12, color: '#555' }} dangerouslySetInnerHTML={{ __html: s.subtitle }} />}
           <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '8px 0 0', letterSpacing: 3, color }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />
+          {contactLineEl}
         </div>
       )
 
@@ -814,17 +899,35 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     if (sec.type === 'summary') {
       const s = sec as SummarySec
       return (
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.boxes.length || 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
-          {s.boxes.map(box => {
-            const boxLabel = box.field === 'gpa' ? `${term.name} GPA` : box.label
-            return (
-              <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 'bold', color: s.valueColor || color }}>{resolveStat(box.field)}</div>
-                <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: localizeLabel(boxLabel, lang) }} />
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.boxes.length || 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
+            {s.boxes.map(box => {
+              const boxLabel = box.field === 'gpa' ? `${term.name} GPA` : box.label
+              return (
+                <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 'bold', color: s.valueColor || color }}>{resolveStat(box.field)}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: localizeLabel(boxLabel, lang) }} />
+                </div>
+              )
+            })}
+          </div>
+          {/* Annual average/position: only present when this is the session's final
+              term (non-university) — see reportcard.controller.ts getReportCard(s). */}
+          {annualAverage != null && (
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
+              <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+                <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualAverage.toFixed(1)}</div>
+                <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{lang === 'FR' ? 'Moyenne Annuelle' : 'Annual Average'}</div>
               </div>
-            )
-          })}
-        </div>
+              {annualPosition != null && (
+                <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
+                  <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualPosition}{annualClassSize ? `/${annualClassSize}` : ''}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{lang === 'FR' ? 'Rang Annuel' : 'Annual Position'}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )
     }
 
@@ -863,11 +966,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     }
 
     if (sec.type === 'grading_legend') {
-      if (school.type !== 'UNIVERSITY') return null
       const s = sec as GradingLegendSec
-      const gradeRows = [...bands].filter(b => b.gradePoint != null).sort((a, b) => b.minScore - a.minScore)
-      const bandRows  = [...CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
+      // University grading scales carry a gradePoint (/4.0) per band; a plain
+      // secondary/primary scale doesn't, so it isn't filtered — every band is
+      // shown as-is (grade, mark range, remark) with no GPA-specific columns.
       const isUniv    = bands.some(b => b.gradePoint != null)
+      const gradeRows = isUniv
+        ? [...bands].filter(b => b.gradePoint != null).sort((a, b) => b.minScore - a.minScore)
+        : [...bands].sort((a, b) => b.minScore - a.minScore)
+      const bandRows  = [...CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
       const bHidCols: string[] = (s as any).hiddenCols ?? []
       const bHidRows: number[] = (s as any).hiddenRowIndices ?? []
       const vGrade  = ['grade','mark','gp'].filter(c => !bHidCols.includes(c))

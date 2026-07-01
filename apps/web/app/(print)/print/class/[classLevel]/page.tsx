@@ -14,6 +14,7 @@ interface RawEntry {
 interface RawRC {
   id: string; status: string; remarks?: string; average?: number | null
   position?: number | null; cgpa?: number | null
+  classSize?: number | null; classAverage?: number | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
   entries: RawEntry[]
@@ -77,7 +78,10 @@ export default function PrintClassPage() {
   if (status === 'blocked') return <div style={{ fontFamily: 'sans-serif', padding: 40, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8 }}>Printing has been disabled for this term by your administrator.</div>
   if (!config) return null
 
-  const schoolData = { name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null }
+  const schoolData = {
+    name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null,
+    email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
+  }
 
   // Compute class-wide min/avg/max per subject from all loaded cards
   const classSubjectStats: Record<string, { min: number; avg: number; max: number }> = (() => {
@@ -128,6 +132,8 @@ export default function PrintClassPage() {
               generalRemarks={rc.remarks ?? ''}
               average={rc.average ?? 0}
               position={rc.position ?? null}
+              classSize={rc.classSize ?? null}
+              classAverage={rc.classAverage ?? null}
               config={config}
               gradeBands={gradingRanges}
               classificationBands={classBands}

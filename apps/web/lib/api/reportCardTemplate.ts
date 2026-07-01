@@ -1,6 +1,6 @@
 import api from './client'
 
-export type TemplateName = 'classic' | 'bilingual' | 'modern' | 'official'
+export type TemplateName = 'classic' | 'bilingual' | 'modern' | 'official' | 'ledger'
 
 // ── Legacy toggle-based config (kept for backward compat) ─────────────────────
 export interface TemplateConfig {
@@ -27,8 +27,9 @@ export interface TemplateConfig {
   bgColor?: string
   // watermark
   watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number }
-  // top-level layout type — 'standard' (section-based designer) or 'transcript' (annual transcript style, university only)
-  layoutType?: 'standard' | 'transcript'
+  // top-level layout type — 'standard' (section-based designer), 'transcript' (annual
+  // transcript style, university only), or 'ledger' (totals-in-table style, non-university only)
+  layoutType?: 'standard' | 'transcript' | 'ledger'
   // settings for the transcript layout
   transcriptConfig?: {
     showGradeSystem?: boolean
@@ -70,7 +71,34 @@ export interface SpreadsheetTable {
   rows: SheetRow[]
 }
 
-export interface HeaderSec     { id: string; type: 'header';       reportTitle: string; subtitle: string; showSchoolType: boolean; showLogo: boolean; logoSize: number; logoPosition: 'left'|'center'|'right'; schoolNameColor?: string; schoolTypeColor?: string; officialHeader?: boolean; leftText?: string; rightText?: string }
+export interface HeaderSec     { id: string; type: 'header';       reportTitle: string; subtitle: string; showSchoolType: boolean; showLogo: boolean; logoSize: number; logoPosition: 'left'|'center'|'right'; schoolNameColor?: string; schoolTypeColor?: string; officialHeader?: boolean; leftText?: string; rightText?: string
+  // Official header only — independent per-field toggles for the contact line.
+  // Each one only takes effect if the school actually has that value on file
+  // (see buildOfficialContactLine); the line is computed live, never stored.
+  showEmail?: boolean; showPhone?: boolean; showAddress?: boolean; showWebsite?: boolean }
+
+// School contact fields used by the Official header's contact line.
+export interface SchoolContactInfo { email?: string; phone?: string | null; address?: string | null; website?: string | null }
+
+/**
+ * Builds the Official header's contact line from the school's real, saved
+ * info — only the fields the admin has switched on AND that actually have a
+ * value are included (a field can't be switched on in the designer unless it
+ * has a value, but this stays defensive either way). Computed fresh every
+ * render (never baked into a stored string), so it can never go stale.
+ */
+export function buildOfficialContactLine(
+  school: SchoolContactInfo | null | undefined,
+  toggles: { showEmail?: boolean; showPhone?: boolean; showAddress?: boolean; showWebsite?: boolean },
+): string {
+  const parts: string[] = []
+  if (toggles.showEmail   && school?.email)   parts.push(`Email: ${school.email}`)
+  if (toggles.showWebsite && school?.website) parts.push(`WEB: ${school.website}`)
+  if (toggles.showPhone   && school?.phone)   parts.push(`TEL: ${school.phone}`)
+  if (toggles.showAddress && school?.address) parts.push(school.address)
+  return parts.join('  |  ')
+}
+
 export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|3; rows: InfoRow[] }
 export interface MarksTableSec { id: string; type: 'marks_table';  showSeq1: boolean; showSeq2: boolean; showCoef?: boolean; showGrade: boolean; showRemarks: boolean; headers?: Record<string,string>; headerColor?: string; colColors?: Record<string,string>; columnOrder?: string[];
   /** When set, the marks table is rendered from this SpreadsheetTable template instead of the default layout. The row marked _isDataRow repeats per subject in the print renderer. */
@@ -226,6 +254,14 @@ export const TEMPLATE_DEFAULTS: Record<TemplateName, TemplateConfig> = {
     principalTitle: 'Headmaster/Headmistress',
     footerText: 'This report is an official academic document of the school.',
   },
+  ledger: {
+    template: 'ledger', primaryColor: '#0f172a',
+    reportTitle: 'STUDENT LEDGER REPORT', schoolSubtitle: '',
+    showSchoolType: true, showSeq1: true, showSeq2: true,
+    showGrade: true, showRemarks: true, showPosition: true, showAverage: true,
+    showGeneralRemarks: true, showTeacherSig: true, showPrincipalSig: true, showParentSig: true,
+    principalTitle: 'Principal', footerText: '',
+  },
 }
 
 export const DEFAULT_CONFIG = TEMPLATE_DEFAULTS.classic
@@ -271,8 +307,9 @@ export function getDefaultLayout(tpl: TemplateName): TemplateConfig & { sections
       id: uid('sum'), type: 'summary',
       boxes: [
         { id: uid('b'), label: 'Total Score', field: 'total' },
-        ...(t.showAverage  ? [{ id: uid('b'), label: isBi ? 'Moyenne / Average'  : 'Average',  field: 'average' }]  : []),
-        ...(t.showPosition ? [{ id: uid('b'), label: isBi ? 'Rang / Position'    : 'Position', field: 'position' }] : []),
+        ...(t.showAverage  ? [{ id: uid('b'), label: isBi ? 'Moyenne / Average'        : 'Average',       field: 'average' }]  : []),
+        ...(t.showPosition ? [{ id: uid('b'), label: isBi ? 'Moyenne de Classe / Class Average' : 'Class Average', field: 'classAverage' }] : []),
+        ...(t.showPosition ? [{ id: uid('b'), label: isBi ? 'Rang / Position'          : 'Position',      field: 'position' }] : []),
       ],
     },
     {
@@ -315,6 +352,105 @@ function buildLayout(opts: {
   return { ...base, primaryColor: opts.primaryColor, reportTitle: opts.reportTitle, schoolSubtitle: opts.subtitle, sections }
 }
 
+/**
+ * "Ledger" layout (non-university): Total Score / Average / Position are rows
+ * INSIDE the marks table itself instead of separate stat boxes below it — a
+ * TOTAL row (mirrors the transcript's course-total row), then a bold colored
+ * "TERM AVERAGE" banner and a "CLASS POSITION" banner (mirrors the transcript's
+ * "SEMESTER GPA:" banner line), all resolved live via the same mechanism the
+ * transcript-style footer rows already use.
+ */
+export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] } {
+  const color = '#0f172a'
+  const cols = ['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const
+  const ts = Date.now()
+
+  const bannerBg = '#f1f5f9'
+
+  const marksTemplate: SpreadsheetTable = {
+    id: `marks_${ts}`,
+    title: '',
+    colCount: cols.length,
+    rows: [
+      {
+        id: `mhdr_${ts}`,
+        cells: cols.map((k) => ({
+          text: MARKS_COL_LABELS[k]?.label ?? k,
+          bold: true,
+          align: MARKS_COL_LABELS[k]?.align ?? 'center',
+          bgColor: color,
+          textColor: '#ffffff',
+        })),
+      },
+      {
+        id: `mdata_${ts + 1}`,
+        _isDataRow: true,
+        cells: cols.map((k) => ({
+          field: `m:${k}`,
+          align: MARKS_COL_LABELS[k]?.align ?? 'center',
+          ...(MARKS_COL_LABELS[k]?.bold ? { bold: true } : {}),
+        })),
+      },
+      // TOTAL row — mirrors the transcript's course-total row.
+      {
+        id: `mfoot_${ts + 2}`,
+        cells: [
+          { text: 'TOTAL', bold: true, colSpan: 4, align: 'left', bgColor: bannerBg },
+          { field: 'total', bold: true, align: 'center', bgColor: bannerBg },
+          { text: '', colSpan: 2, bgColor: bannerBg },
+        ],
+      },
+      // TERM AVERAGE banner — mirrors the transcript's bold "SEMESTER GPA:" line.
+      {
+        id: `mfoot_${ts + 3}`,
+        cells: [
+          { text: 'TERM AVERAGE:', bold: true, colSpan: 6, align: 'right', bgColor: bannerBg, textColor: color },
+          { field: 'average', bold: true, align: 'center', bgColor: bannerBg, textColor: color, fontSize: 15 },
+        ],
+      },
+      // CLASS POSITION banner — same treatment, one row down.
+      {
+        id: `mfoot_${ts + 4}`,
+        cells: [
+          { text: 'CLASS POSITION:', bold: true, colSpan: 6, align: 'right', bgColor: bannerBg, textColor: color },
+          { field: 'position', bold: true, align: 'center', bgColor: bannerBg, textColor: color, fontSize: 15 },
+        ],
+      },
+    ],
+  }
+
+  const sections: LayoutSection[] = [
+    { id: uid('hdr'), type: 'header', reportTitle: 'STUDENT LEDGER REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    {
+      id: uid('info'), type: 'student_info', columns: 2,
+      rows: [
+        { id: uid('r'), label: 'Student Name', field: 'student.name' },
+        { id: uid('r'), label: 'Student ID',    field: 'student.studentId' },
+        { id: uid('r'), label: 'Class',         field: 'student.classLevel' },
+        { id: uid('r'), label: 'Guardian',      field: 'student.guardianName' },
+        { id: uid('r'), label: 'Term',          field: 'term.name' },
+        { id: uid('r'), label: 'Session',       field: 'term.session' },
+      ],
+    },
+    { id: uid('tbl'), type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true, template: marksTemplate },
+    // Same boxed-table look as the university transcript's grading legend —
+    // just the one grade-scale table (no classification/CGPA side table, since
+    // that's a university-only concept).
+    { id: uid('leg'), type: 'grading_legend', title: 'Grading Scale', showGradeSystem: true, showClassification: false, showLegend: false },
+    { id: uid('rem'), type: 'remarks', label: 'General Remarks' },
+    {
+      id: uid('sig'), type: 'signatures',
+      lines: [
+        { id: uid('s'), label: "Class Teacher's Signature" },
+        { id: uid('s'), label: "Principal's Signature" },
+        { id: uid('s'), label: "Parent / Guardian's Signature" },
+      ],
+    },
+  ]
+
+  return { ...TEMPLATE_DEFAULTS.ledger, sections }
+}
+
 /** Default report-card layout tailored to the school's section type. */
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   if (schoolType === 'PRIMARY') return buildLayout({
@@ -331,6 +467,7 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
     marks: { showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true },
     summaryBoxes: [
       { label: 'Average', field: 'average' },
+      { label: 'Class Average', field: 'classAverage' },
       { label: 'Position', field: 'position' },
       { label: 'Conduct', field: 'conduct' },
       { label: 'Attendance', field: 'attendance' },

@@ -14,6 +14,7 @@ const MENU_ITEMS = [
   { label: 'Subjects', icon: 'book-outline' as const, route: '/admin/subjects' },
   { label: 'Terms', icon: 'calendar-outline' as const, route: '/admin/terms' },
   { label: 'School Fees', icon: 'wallet-outline' as const, route: '/admin/fees' },
+  { label: 'HND Registration', icon: 'bookmark-outline' as const, route: '/admin/exam-registration', examRegistration: true },
   { label: 'Grading Scale', icon: 'stats-chart-outline' as const, route: '/admin/grading' },
   { label: 'Settings', icon: 'settings-outline' as const, route: '/admin/settings' },
   { label: 'Report Card Design', icon: 'laptop-outline' as const, route: '/admin/report-card-design' },
@@ -102,9 +103,17 @@ export default function MoreScreen() {
     '/admin/subjects': 'Courses',
     '/admin/classes': 'Departments',
   }
-  const menuItems = school?.type === 'UNIVERSITY'
-    ? MENU_ITEMS.map((item) => UNIVERSITY_MENU_LABELS[item.route] ? { ...item, label: UNIVERSITY_MENU_LABELS[item.route] } : item)
-    : MENU_ITEMS
+  // Secondary schools track exam (GCE) registration too — same feature, different label.
+  const SECONDARY_MENU_LABELS: Record<string, string> = {
+    '/admin/exam-registration': 'GCE Registration',
+  }
+  const menuItems = MENU_ITEMS
+    .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY')
+    .map((item) => {
+      if (school?.type === 'UNIVERSITY' && UNIVERSITY_MENU_LABELS[item.route]) return { ...item, label: UNIVERSITY_MENU_LABELS[item.route] }
+      if (school?.type === 'SECONDARY' && SECONDARY_MENU_LABELS[item.route]) return { ...item, label: SECONDARY_MENU_LABELS[item.route] }
+      return item
+    })
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>

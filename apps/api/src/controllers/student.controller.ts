@@ -5,6 +5,25 @@ import { demoLimitBlock } from '../config/demo'
 import { previewStudentRows, buildImportTemplate, ParsedStudentRow } from '../utils/studentImport'
 import { currentSession } from './fees.controller'
 
+// Every active student should have a report card for the current term as soon
+// as they exist — even with zero marks — so they're never silently missing
+// from class rosters, exports, marks-entry grids, or past-year views (which
+// key off report-card existence, see the "year-aware roster" comment below).
+// Disabled/Dismissed students are excluded by the caller (only invoked when a
+// student becomes/is created ACTIVE). A no-op between academic years, when no
+// term is marked current yet.
+async function ensureReportCardForCurrentTerm(schoolId: string, studentId: string, createdById: string, currentTermId?: string | null) {
+  const termId = currentTermId !== undefined
+    ? currentTermId
+    : (await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { id: true } }))?.id ?? null
+  if (!termId) return
+  await prisma.reportCard.upsert({
+    where: { studentId_termId: { studentId, termId } },
+    update: {},
+    create: { studentId, termId, schoolId, createdById },
+  })
+}
+
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -181,6 +200,7 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
     const student = await prisma.student.create({
       data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry: !!directLevel2Entry }
     })
+    await ensureReportCardForCurrentTerm(schoolId, student.id, req.user!.id)
 
     res.status(201).json({ message: 'Student created', student })
   } catch (error) {
@@ -247,6 +267,11 @@ export const setStudentStatus = async (req: AuthRequest, res: Response) => {
       where: { id },
       data: { status: status as any, isActive: status === 'ACTIVE' },
     })
+    // Reactivated (e.g. un-dismissed) — make sure they're not missing a
+    // current-term report card, same as any newly created active student.
+    if (status === 'ACTIVE' && student.status !== 'ACTIVE') {
+      await ensureReportCardForCurrentTerm(schoolId, id, req.user!.id)
+    }
     res.json({ message: 'Student status updated', student: updated })
   } catch (error) {
     console.error(error)
@@ -372,6 +397,8 @@ export const commitStudentImport = async (req: AuthRequest, res: Response) => {
     const canRecordFees = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(req.user!.role)
     const hasFeeRows = rows.some((r) => r.feePaid != null && r.feePaid > 0)
     const session = canRecordFees && hasFeeRows ? await currentSession(schoolId) : null
+    // Looked up once for the whole batch (not per row) — same current term for every import.
+    const currentTerm = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { id: true } })
 
     let created = 0
     let feesRecorded = 0
@@ -391,6 +418,7 @@ export const commitStudentImport = async (req: AuthRequest, res: Response) => {
           },
         })
         created++
+        await ensureReportCardForCurrentTerm(schoolId, student.id, req.user!.id, currentTerm?.id ?? null)
 
         // Most transferring students have already paid part of the class fee —
         // record it as one installment, same shape as the manual "Add Payment"

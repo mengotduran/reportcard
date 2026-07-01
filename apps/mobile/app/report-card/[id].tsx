@@ -9,7 +9,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getReportCard, getSubjects, saveEntries, publishReportCard,
-  ReportCardDetail, Subject,
+  getReadinessDetail, ReportCardDetail, Subject, ReadinessDetail,
 } from '@/lib/api/reportcards'
 import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
@@ -158,6 +158,7 @@ export default function ReportCardDetailScreen() {
   const [entries, setEntries] = useState<Entry[]>([])
   const [remarks, setRemarks] = useState('')
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -171,6 +172,7 @@ export default function ReportCardDetailScreen() {
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
     setReportCard(rc)
     setRemarks(rc.remarks || '')
+    if (user?.role !== 'CLASS_MASTER') getReadinessDetail(id).then(setReadiness).catch(() => {})
     // A course scoped to one semester (university) only counts for that
     // semester; a subject with no term (primary/secondary) always counts.
     const classSubjects = subjectData.subjects.filter((s) =>
@@ -268,7 +270,10 @@ export default function ReportCardDetailScreen() {
   // Publish readiness — same rules as admin and web
   const allSeqsFilled = entries.length > 0 && entries.every(e => e.score !== '' && e.score != null)
   const hasRemarks = !!reportCard.remarks?.trim()
-  const canPublish = allSeqsFilled && hasRemarks
+  // Positions are class-relative — every other active student in this class + term
+  // must also be complete (or already published) before this one can publish.
+  const classReady = readiness ? readiness.otherStudentsBlocking === 0 : false
+  const canPublish = allSeqsFilled && hasRemarks && classReady
 
   // Class master can only add remarks once ALL sequences are filled
   const canEditRemarks = !isClassMaster || (isDraft && allSeqsFilled)
@@ -319,7 +324,10 @@ export default function ReportCardDetailScreen() {
         {[
           { label: t('Terms Average'), value: average.toFixed(1) },
           { label: t('Overall Grade'), value: gradeFromScore(average, avgMaxScore, gradingRanges).remark || gradeFromScore(average, avgMaxScore, gradingRanges).grade },
-          { label: t('Position'), value: reportCard.position != null ? ordinal(reportCard.position) : '—' },
+          { label: t('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
+          ...(reportCard.classAverage != null ? [{ label: t('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
+          ...(reportCard.annualAverage != null ? [{ label: t('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
+          ...(reportCard.annualPosition != null ? [{ label: t('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
         ].map((item) => (
           <View key={item.label} style={styles.summaryCard}>
             <Text style={styles.summaryValue}>{item.value}</Text>
@@ -413,6 +421,11 @@ export default function ReportCardDetailScreen() {
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: hasRemarks ? '#dcfce7' : '#fee2e2' }}>
                     <Text style={{ fontSize: 9, fontWeight: '700', color: hasRemarks ? '#16a34a' : '#ef4444' }}>{hasRemarks ? '✓' : '✗'} {t('Remarks')}</Text>
                   </View>
+                  {readiness && (
+                    <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: classReady ? '#dcfce7' : '#fee2e2' }}>
+                      <Text style={{ fontSize: 9, fontWeight: '700', color: classReady ? '#16a34a' : '#ef4444' }}>{classReady ? '✓' : '✗'} {t('Whole class')}{!classReady ? ` (${readiness.otherStudentsBlocking})` : ''}</Text>
+                    </View>
+                  )}
                 </View>
               )}
               <TouchableOpacity

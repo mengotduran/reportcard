@@ -18,7 +18,7 @@ const ADMIN_NAV = [
   { icon: BookOpen,        label: 'Subjects',     href: '/subjects' },
   { icon: Calendar,        label: 'Terms',        href: '/terms' },
   { icon: Wallet,          label: 'Fees',             href: '/fees' },
-  { icon: BookMarked,      label: 'HND Registration', href: '/hnd-registration', universityOnly: true },
+  { icon: BookMarked,      label: 'HND Registration', href: '/hnd-registration', examRegistration: true },
   { icon: FileText,        label: 'Report Cards',     href: '/report-cards' },
   { icon: Palette,         label: 'Card Design',  href: '/report-card-design' },
   { icon: ClipboardList,   label: 'Class List',   href: '/class-list-design' },
@@ -83,9 +83,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     'Classes': 'Departments',
     'My Class': 'My Department',
   }
-  const navItems = school?.type === 'UNIVERSITY'
-    ? baseNavItems.map((item) => UNIVERSITY_NAV_LABELS[item.label] ? { ...item, label: UNIVERSITY_NAV_LABELS[item.label] } : item)
-    : baseNavItems.filter((item) => !(item as { universityOnly?: boolean }).universityOnly)
+  // Secondary schools track exam (GCE) registration too — same feature, different label.
+  const SECONDARY_NAV_LABELS: Record<string, string> = {
+    'HND Registration': 'GCE Registration',
+  }
+  const navItems = baseNavItems
+    .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY')
+    .map((item) => {
+      if (school?.type === 'UNIVERSITY' && UNIVERSITY_NAV_LABELS[item.label]) return { ...item, label: UNIVERSITY_NAV_LABELS[item.label] }
+      if (school?.type === 'SECONDARY' && SECONDARY_NAV_LABELS[item.label]) return { ...item, label: SECONDARY_NAV_LABELS[item.label] }
+      return item
+    })
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'

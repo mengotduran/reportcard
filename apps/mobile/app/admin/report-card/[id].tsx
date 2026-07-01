@@ -416,7 +416,10 @@ export default function AdminReportCardDetail() {
   const allSeqsFilled = reportCard.entries.length > 0 &&
     reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null)
   const hasRemarks = !!reportCard.remarks?.trim()
-  const canPublish = allSeqsFilled && hasRemarks
+  // Positions are class-relative — every other active student in this class + term
+  // must also be complete (or already published) before this one can publish.
+  const classReady = readiness ? readiness.otherStudentsBlocking === 0 : false
+  const canPublish = allSeqsFilled && hasRemarks && classReady
   const isFr = reportCard.school?.language === 'FR'
   const isUniversity = reportCard.school?.type === 'UNIVERSITY'
   // Admin can write the general remarks once every offered subject is marked.
@@ -472,7 +475,10 @@ export default function AdminReportCardDetail() {
           { label: tr('Subjects'), value: String(subjects.length || reportCard.entries.length) },
           { label: tr('Terms Average'), value: average.toFixed(1) },
           { label: tr('Overall Grade'), value: gradeResult.remark || gradeResult.grade },
-          { label: tr('Position'), value: reportCard.position != null ? ordinal(reportCard.position) : '—' },
+          { label: tr('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
+          ...(reportCard.classAverage != null ? [{ label: tr('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
+          ...(reportCard.annualAverage != null ? [{ label: tr('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
+          ...(reportCard.annualPosition != null ? [{ label: tr('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
         ].map((item) => (
           <View key={item.label} style={styles.statCard}>
             <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{item.value}</Text>
@@ -499,10 +505,17 @@ export default function AdminReportCardDetail() {
                 {hasRemarks ? '✓' : '✗'} {tr('Remarks')}
               </Text>
             </View>
+            {readiness && (
+              <View style={[styles.readinessBadge, classReady ? styles.readinessOk : styles.readinessFail]}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: classReady ? '#16a34a' : '#ef4444' }}>
+                  {classReady ? '✓' : '✗'} {tr('Whole class')}{!classReady ? ` (${readiness.otherStudentsBlocking})` : ''}
+                </Text>
+              </View>
+            )}
           </View>
         )}
         {/* Action Required attribution panel */}
-        {isDraft && readiness && (readiness.missingSubjects.length > 0 || readiness.missingRemarks) && (
+        {isDraft && readiness && (readiness.missingSubjects.length > 0 || readiness.missingRemarks || readiness.otherStudentsBlocking > 0) && (
           <View style={styles.attributionPanel}>
             <Text style={styles.attributionTitle}>{tr('ACTION REQUIRED')}</Text>
             {readiness.missingSubjects.map(s => (
@@ -521,6 +534,14 @@ export default function AdminReportCardDetail() {
                 <Ionicons name="ellipse" size={6} color="#f59e0b" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
                   {tr('Class Master')} <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> {tr('has not written general remarks')}
+                </Text>
+              </View>
+            )}
+            {readiness.otherStudentsBlocking > 0 && (
+              <View style={styles.attributionRow}>
+                <Ionicons name="ellipse" size={6} color="#ef4444" style={{ marginTop: 4 }} />
+                <Text style={styles.attributionText}>
+                  <Text style={{ fontWeight: '700' }}>{readiness.otherStudentsBlocking}</Text> {tr('other student(s) in this class are still incomplete')} ({readiness.otherStudentsBlockingNames.join(', ')}{readiness.otherStudentsBlocking > readiness.otherStudentsBlockingNames.length ? '…' : ''}) — {tr('all must be graded before this can be published')}
                 </Text>
               </View>
             )}

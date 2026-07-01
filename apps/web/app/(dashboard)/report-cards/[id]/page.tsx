@@ -25,6 +25,11 @@ interface ReportCard {
   totalScore: number | null
   average: number | null
   position: number | null
+  classSize?: number | null
+  classAverage?: number | null
+  annualAverage?: number | null
+  annualPosition?: number | null
+  annualClassSize?: number | null
   remarks: string | null
   remarksFr: string | null
   remarksSource: string | null
@@ -32,7 +37,7 @@ interface ReportCard {
   remarksEditGrantedTo: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
-  school: { name: string; type: string; language?: string; logo?: string | null }
+  school: { name: string; type: string; language?: string; logo?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
 
@@ -290,7 +295,10 @@ export default function ReportCardDetailPage() {
   // Publish readiness checks
   const allSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
   const hasRemarks = !!(reportCard.remarks?.trim() || reportCard.remarksFr?.trim())
-  const canPublish = allSeqsFilled && hasRemarks
+  // Positions are class-relative — every other active student in this class + term
+  // must also be complete (or already published) before this one can publish.
+  const classReady = readiness ? readiness.otherStudentsBlocking === 0 : false
+  const canPublish = allSeqsFilled && hasRemarks && classReady
   // Class master can only give remarks once ALL sequences for this report card are filled
   const canEditRemarks = isClassMaster && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
   // Admin / VP can also write the general remarks — once every offered subject is
@@ -431,6 +439,16 @@ export default function ReportCardDetailPage() {
                       }`}>
                         {hasRemarks ? '✓' : '✗'} {tr('Remarks')}
                       </span>
+                      {readiness && (
+                        <span
+                          title={!classReady ? readiness.otherStudentsBlockingNames.join(', ') : undefined}
+                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
+                            classReady ? 'bg-green-100 text-green-700' : 'bg-destructive/10 text-destructive'
+                          }`}>
+                          {classReady ? '✓' : '✗'} {tr('Whole class')}
+                          {!classReady && ` (${readiness.otherStudentsBlocking})`}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -475,9 +493,27 @@ export default function ReportCardDetailPage() {
               <p className="text-xs text-muted-foreground mt-1">{tr('Overall Grade')}</p>
             </div>
             <div className="bg-card rounded-xl border border-border p-4 text-center">
-              <p className="text-2xl font-bold text-foreground">{reportCard.position != null ? ordinal(reportCard.position) : '—'}</p>
+              <p className="text-2xl font-bold text-foreground">{reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—'}</p>
               <p className="text-xs text-muted-foreground mt-1">{tr('Class Position')}</p>
             </div>
+            {reportCard.classAverage != null && (
+              <div className="bg-card rounded-xl border border-border p-4 text-center">
+                <p className="text-2xl font-bold text-foreground">{reportCard.classAverage.toFixed(1)}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tr('Class Average')}</p>
+              </div>
+            )}
+            {reportCard.annualAverage != null && (
+              <div className="bg-card rounded-xl border border-border p-4 text-center">
+                <p className="text-2xl font-bold text-foreground">{reportCard.annualAverage.toFixed(1)}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tr('Annual Average')}</p>
+              </div>
+            )}
+            {reportCard.annualPosition != null && (
+              <div className="bg-card rounded-xl border border-border p-4 text-center">
+                <p className="text-2xl font-bold text-foreground">{ordinal(reportCard.annualPosition)}{reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tr('Annual Position')}</p>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -693,6 +729,11 @@ export default function ReportCardDetailPage() {
             generalRemarksFr={generalRemarksFr}
             average={average}
             position={reportCard.position}
+            classSize={reportCard.classSize ?? undefined}
+            classAverage={reportCard.classAverage ?? undefined}
+            annualAverage={reportCard.annualAverage ?? undefined}
+            annualPosition={reportCard.annualPosition ?? undefined}
+            annualClassSize={reportCard.annualClassSize ?? undefined}
             config={templateConfig}
             gradeBands={gradingRanges}
             classificationBands={classificationBands}

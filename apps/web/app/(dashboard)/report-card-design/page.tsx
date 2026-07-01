@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
   RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
-  SpreadsheetTable, SheetRow, seedMarksTableSection,
+  SpreadsheetTable, SheetRow, seedMarksTableSection, buildOfficialContactLine,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
@@ -161,6 +161,7 @@ function resolveSummary(field: string, schoolType?: string) {
   if (field === 'average')  return SD_AVG.toFixed(1)
   if (field === 'position') return String(SD.position)
   if (field === 'grade')    return 'B'
+  if (field === 'classAverage') return (SD_AVG - 1.3).toFixed(1)
   return '—'
 }
 
@@ -366,7 +367,8 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 }
 
 // ── Section renderers (edit mode) ─────────────────────────────────────────────
-function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; update: (s: HeaderSec) => void }) {
+
+function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null } | null; update: (s: HeaderSec) => void }) {
   const t = useT()
   const logoSize = sec.logoSize || 60
   const [leftVer,  setLeftVer]  = useState(0)
@@ -404,11 +406,21 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
     </>
   )
 
+  // Computed contact line — same in every header style, never directly
+  // editable (it just reflects whichever toggles above are on).
+  const contactLine = buildOfficialContactLine(school, sec)
+  const ContactLineEl = (sec.showEmail || sec.showPhone || sec.showAddress || sec.showWebsite) ? (
+    <p style={{ textAlign: 'center', fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>
+      {contactLine || t('(Nothing selected above has a value in Settings yet)')}
+    </p>
+  ) : null
+
   const textBlock = (
     <div style={{ flex: 1 }}>
       {SchoolTypeEl}
       {SchoolNameEl}
       {SubtitleEls}
+      {ContactLineEl}
     </div>
   )
 
@@ -423,7 +435,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
         {sec.showLogo && <>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             {t('Size:')}
-            <input type="range" min={32} max={100} value={logoSize} onChange={e => update({ ...sec, logoSize: Number(e.target.value) })} style={{ width: 70 }} />
+            <input type="range" min={32} max={220} value={logoSize} onChange={e => update({ ...sec, logoSize: Number(e.target.value) })} style={{ width: 70 }} />
             {logoSize}px
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -447,11 +459,29 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
               const patch: Partial<HeaderSec> = { officialHeader: on }
               if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${schoolName}\nINSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION`
               if (on && !sec.rightText) patch.rightText = `REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\nREPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTRY OF HIGHER EDUCATION\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR`
-              if (on && !sec.subtitle) patch.subtitle = `Email: school@mail.com  |  WEB: www.school.com  |  TEL: +000 000 000 000  |  P.O.Box 000 City, Country`
               update({ ...sec, ...patch })
             }} />
           {t('Official (logo center)')}
         </label>
+      </div>
+
+      {/* Per-field contact-line toggles — available in every header style, each
+          disabled until that field actually has a value in School Settings.
+          Defaults to on for whatever data exists, until explicitly unchecked. */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, padding: '6px 8px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
+        {([
+          ['showEmail', 'Show Email', !!school?.email],
+          ['showPhone', 'Show Phone', !!school?.phone],
+          ['showAddress', 'Show Address', !!school?.address],
+          ['showWebsite', 'Show Website', !!school?.website],
+        ] as const).map(([key, label, hasData]) => (
+          <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: hasData ? 'pointer' : 'not-allowed', opacity: hasData ? 1 : 0.5 }}
+            title={hasData ? '' : t('Set this in School Settings first')}>
+            <input type="checkbox" disabled={!hasData} checked={hasData && (sec[key] ?? true)}
+              onChange={e => update({ ...sec, [key]: e.target.checked })} />
+            {t(label)}
+          </label>
+        ))}
       </div>
 
       {/* Rendered header */}
@@ -460,51 +490,42 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
         (() => {
           const leftLines  = (sec.leftText  ?? '').split('\n')
           const rightLines = (sec.rightText ?? '').split('\n')
-          const midIdx   = Math.floor(leftLines.length / 2)
-          const blankIdx = rightLines.findIndex(l => l.trim() === '')
-
-          const toHtml = (lines: string[], align: 'left'|'right') =>
-            lines.map((line, i) => {
-              const big     = align === 'left' && i === midIdx
-              const inMin   = align === 'right' && blankIdx >= 0 && i > blankIdx
-              const italic  = align === 'right' && /[a-z]/.test(line)
-              const fs      = big ? 14 : inMin ? 8.5 : 10
-              const fw      = inMin ? 'normal' : 'bold'
-              const fi      = italic ? 'italic' : 'normal'
-              const lh      = big ? 1.1 : 1.45
-              const ls      = big ? '1px' : '0'
-              const mg      = big ? '3px 0' : '0'
-              const mh      = line.trim() ? '' : `min-height:${align==='left'?4:5}px;`
-              const txt     = line || '\u00A0'
-              return `<div style="font-family:Arial,sans-serif;font-size:${fs}px;font-weight:${fw};font-style:${fi};line-height:${lh};letter-spacing:${ls};margin:${mg};text-align:${align};${mh}">${txt}</div>`
+          // Every line, both sides, uses the same font/size/weight \u2014 the block's
+          // own longest line sets its width, shorter lines center within it
+          // (plain center-align does exactly this; no per-line special-casing).
+          const toHtml = (lines: string[]) =>
+            lines.map(line => {
+              const txt = line || '\u00A0'
+              return `<div style="font-family:Arial,sans-serif;font-size:10px;font-weight:bold;line-height:1.5;text-align:center;">${txt}</div>`
             }).join('')
 
           return (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'start', marginBottom: 4 }}>
-                <div
-                  key={leftVer}
-                  contentEditable suppressContentEditableWarning
-                  dangerouslySetInnerHTML={{ __html: toHtml(leftLines, 'left') }}
-                  onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
-                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                  title="Click to edit"
-                />
-                <div style={{ textAlign: 'center', alignSelf: 'center' }}>{LogoEl}</div>
-                <div
-                  key={rightVer + 10000}
-                  contentEditable suppressContentEditableWarning
-                  dangerouslySetInnerHTML={{ __html: toHtml(rightLines, 'right') }}
-                  onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
-                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                  title="Click to edit"
-                />
+              {/* position:relative + absolutely-positioned logo so a bigger
+                  logo never stretches the text columns' row height. */}
+              <div style={{ position: 'relative', minHeight: logoSize, marginBottom: 4 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
+                  <div
+                    key={leftVer}
+                    contentEditable suppressContentEditableWarning
+                    dangerouslySetInnerHTML={{ __html: toHtml(leftLines) }}
+                    onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
+                    style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
+                    title="Click to edit"
+                  />
+                  <div />
+                  <div
+                    key={rightVer + 10000}
+                    contentEditable suppressContentEditableWarning
+                    dangerouslySetInnerHTML={{ __html: toHtml(rightLines) }}
+                    onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
+                    style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
+                    title="Click to edit"
+                  />
+                </div>
+                <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{LogoEl}</div>
               </div>
-              <div style={{ textAlign: 'center', fontSize: 8.5, color: '#444', borderTop: `1px solid ${color}22`, paddingTop: 3, marginTop: 2 }}>
-                <ET value={sec.subtitle} onChange={v => update({ ...sec, subtitle: v })}
-                  placeholder="Email: school@mail.com  |  WEB: www.school.com  |  TEL: 000000000  |  P.O.Box 000 City, Country"
-                  style={{ display: 'block', fontSize: 8.5, color: '#444' }} />
-              </div>
+              {ContactLineEl}
               <div style={{ textAlign: 'center', marginTop: 4 }}>
                 <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                   style={{ display: 'block', fontSize: 14, fontWeight: 'bold', color, letterSpacing: 3, textTransform: 'uppercase' }} />
@@ -515,7 +536,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
       ) : sec.showLogo && sec.logoPosition === 'center' ? (
         <div style={{ textAlign: 'center' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>{LogoEl}</div>
-          {SchoolTypeEl}{SchoolNameEl}{SubtitleEls}
+          {SchoolTypeEl}{SchoolNameEl}{SubtitleEls}{ContactLineEl}
         </div>
       ) : sec.showLogo && sec.logoPosition === 'right' ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>{textBlock}{LogoEl}</div>
@@ -523,7 +544,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, update }
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>{LogoEl}{textBlock}</div>
       ) : (
         <div style={{ textAlign: 'center' }}>
-          {SchoolTypeEl}{SchoolNameEl}{SubtitleEls}
+          {SchoolTypeEl}{SchoolNameEl}{SubtitleEls}{ContactLineEl}
         </div>
       )}
     </div>
@@ -629,12 +650,17 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
   )
 }
 
+// Marks-table keys that only make sense on a university (HND/Degree) grading
+// system — hidden from the key picker for secondary/primary schools.
+const UNIVERSITY_ONLY_MARKS_KEYS = new Set(['m:code', 'm:credit', 'm:gradePoint', 'm:weighted', 'm:juryDecision'])
+
 function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableSec; color: string; schoolType?: string; update: (s: MarksTableSec) => void }) {
   const isUni = schoolType === 'UNIVERSITY'
 
-  // Preview value for each m:* field key (shows row 0 of sample data)
+  // Preview value for each m:* field key (shows row 0 of sample data). Footer
+  // rows (total/average/position/etc.) use the same resolver as Summary boxes.
   const resolveMarksPreviewField = (field: string): string => {
-    if (!field.startsWith('m:')) return ''
+    if (!field.startsWith('m:')) return resolveSummary(field, schoolType)
     const k = field.slice(2)
     if (k === 'sn') return '1'
     if (isUni) {
@@ -685,7 +711,7 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
         resolveField={resolveMarksPreviewField}
         color={color}
         marksKeyMode
-        marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef'))}
+        marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef') && !(!isUni && UNIVERSITY_ONLY_MARKS_KEYS.has(o.value)))}
       />
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap' }}>
         <span>Highlighted row repeats per subject. Double-click any data cell to choose its key.</span>
@@ -707,6 +733,7 @@ function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; co
   ] : [
     { label: 'Total Score', value: 'total' },
     { label: 'Average',     value: 'average' },
+    { label: 'Class Average', value: 'classAverage' },
     { label: 'Position',    value: 'position' },
     { label: 'Grade',       value: 'grade' },
   ]
@@ -1214,6 +1241,7 @@ export default function ReportCardDesignPage() {
   const schoolType = school?.type || 'SECONDARY'
   const schoolLogo = school?.logo ?? null
   const isTranscript = schoolType === 'UNIVERSITY' && config.layoutType === 'transcript'
+  const isLedger = schoolType !== 'UNIVERSITY' && config.layoutType === 'ledger'
   const tc = config.transcriptConfig ?? {}
   const setTc = (patch: Partial<NonNullable<typeof config.transcriptConfig>>) =>
     setConfig(c => ({ ...c, transcriptConfig: { ...c.transcriptConfig, ...patch } }))
@@ -1300,6 +1328,13 @@ export default function ReportCardDesignPage() {
     setBgText(layout.bgColor || '#ffffff')
   }
 
+  const loadLedger = () => {
+    const layout = { ...getLedgerLayout(), layoutType: 'ledger' as const }
+    setConfig(layout)
+    setColorText(layout.primaryColor)
+    setBgText(layout.bgColor || '#ffffff')
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -1334,8 +1369,8 @@ export default function ReportCardDesignPage() {
           <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
         </div>
 
-        {/* Template picker — hidden in transcript mode (fixed layout) */}
-        {!isTranscript && (
+        {/* Template picker — hidden in transcript/ledger mode (those pick their own layout on the right) */}
+        {!isTranscript && !isLedger && (
           <div className="flex gap-1 ml-2">
             {TEMPLATES.map(t => (
               <button key={t.id} onClick={() => loadTemplate(t.id)} title={tr(t.label)}
@@ -1624,8 +1659,9 @@ export default function ReportCardDesignPage() {
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
-        {!isTranscript && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>}
+        {!isTranscript && !isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>}
         {isTranscript && <p className="text-xs text-muted-foreground text-center mb-4">Customize color and toggle sections on the right · The layout is fixed for the transcript style</p>}
+        {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
         <div ref={canvasRef} className="shadow-sm border border-[#e4e4e7] rounded-xl p-10 pl-14" style={{
           fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#111',
@@ -1676,7 +1712,7 @@ export default function ReportCardDesignPage() {
               onDrop={() => handleDrop(i)}
               dragging={dragIndex === i}>
               {sec.type === 'header' && (
-                <RenderHeader sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} update={s => updateSection(i, s)} />
+                <RenderHeader sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={s => updateSection(i, s)} />
               )}
               {sec.type === 'student_info' && (
                 <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} update={s => updateSection(i, s)} />
@@ -1797,6 +1833,86 @@ export default function ReportCardDesignPage() {
         </div>
       )}
 
+      {/* ── Right sidebar: Layout switcher (secondary/primary only) ── */}
+      {schoolType !== 'UNIVERSITY' && (
+        <div className="flex-shrink-0 sticky" style={{ width: 168, top: 110 }}>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
+            <LayoutTemplate size={12} /> Layout
+          </p>
+
+          {/* Standard thumbnail */}
+          <button
+            onClick={() => loadTemplate('classic')}
+            className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: !isLedger ? config.primaryColor : '#e5e7eb', background: !isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
+          >
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 40, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, marginBottom: 3 }}>
+                {[0,1,2,3].map(i => <div key={i} style={{ height: 4, background: '#e5e7eb', borderRadius: 1 }} />)}
+              </div>
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: `${config.primaryColor}22` }}>
+                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                </div>
+                {[0,1,2,3].map(i => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 3, display: 'flex', gap: 2 }}>
+                {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${config.primaryColor}30`, borderRadius: 2 }} />)}
+              </div>
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: !isLedger ? config.primaryColor : '#6b7280' }}>
+              Standard
+            </div>
+          </button>
+
+          {/* Ledger thumbnail — totals folded into the table itself */}
+          <button
+            onClick={loadLedger}
+            className="w-full rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: isLedger ? config.primaryColor : '#e5e7eb', background: isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
+          >
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 40, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr', background: `${config.primaryColor}22` }}>
+                  {['Subject','Sc','Gr','↕'].map(l => <div key={l} style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                </div>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr', borderTop: '1px solid #f0f0f0' }}>
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
+                    <div style={{ fontSize: 5, textAlign: 'center', color: i === 0 ? '#16a34a' : i === 1 ? '#dc2626' : '#6b7280' }}>{i === 0 ? '▲' : i === 1 ? '▼' : '●'}</div>
+                  </div>
+                ))}
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.2fr 1fr 1.2fr 1fr', borderTop: '1px solid #ccc', background: '#f1f5f9' }}>
+                  {['Tot','','Avg','','Pos',''].map((l, i) => (
+                    <div key={i} style={{ fontSize: 4, fontWeight: 'bold', padding: '2px 1px', textAlign: i % 2 === 0 ? 'right' : 'center', color: i % 2 === 1 ? config.primaryColor : '#374151' }}>
+                      {l || '••'}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isLedger ? config.primaryColor : '#6b7280' }}>
+              Ledger
+            </div>
+          </button>
+
+        </div>
+      )}
+
       </div>{/* end flex wrapper */}
       </SheetCtx.Provider>
 
@@ -1815,6 +1931,7 @@ export default function ReportCardDesignPage() {
           </div>
         </>
       )}
+
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
       </div>

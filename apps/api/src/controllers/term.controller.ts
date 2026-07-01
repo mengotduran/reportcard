@@ -2,6 +2,25 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 
+// The moment a term becomes the live/current one, every active student should
+// have a DRAFT report card for it — same reasoning as student creation (see
+// ensureReportCardForCurrentTerm in student.controller.ts): otherwise they only
+// get one lazily, whenever a teacher first enters marks, and are silently
+// missing from rosters/exports/positions until then. One batched createMany,
+// not a per-student loop.
+async function ensureReportCardsForTerm(schoolId: string, termId: string, createdById: string) {
+  const [activeStudents, existingCards] = await Promise.all([
+    prisma.student.findMany({ where: { schoolId, isActive: true }, select: { id: true } }),
+    prisma.reportCard.findMany({ where: { schoolId, termId }, select: { studentId: true } }),
+  ])
+  const existingIds = new Set(existingCards.map((c) => c.studentId))
+  const missing = activeStudents.filter((s) => !existingIds.has(s.id))
+  if (missing.length === 0) return
+  await prisma.reportCard.createMany({
+    data: missing.map((s) => ({ studentId: s.id, termId, schoolId, createdById })),
+  })
+}
+
 export const getCurrentTerm = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -84,6 +103,7 @@ export const setCurrentTerm = async (req: AuthRequest, res: Response) => {
 
     // Set the selected one as current
     const term = await prisma.term.update({ where: { id }, data: { isCurrent: true } })
+    await ensureReportCardsForTerm(schoolId, term.id, req.user!.id)
     res.json({ message: 'Current term updated', term })
   } catch (error) {
     console.error(error)
@@ -263,6 +283,9 @@ export const startNewAcademicYear = async (req: AuthRequest, res: Response) => {
         }),
       ),
     )
+
+    const firstCurrent = created.find((t) => t.isCurrent)
+    if (firstCurrent) await ensureReportCardsForTerm(schoolId, firstCurrent.id, req.user!.id)
 
     res.status(201).json({ session, terms: created })
   } catch (error) {

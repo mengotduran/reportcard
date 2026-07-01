@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { isRegistrationClass } from './hndRegistration.controller'
 
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
@@ -39,8 +40,9 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const isLevel2 = /- Level 2$/i.test(name.trim())
-    const regFee = isLevel2 && hndRegistrationFee !== undefined && hndRegistrationFee !== null && hndRegistrationFee !== ''
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    const regEligible = isRegistrationClass(school?.type, name.trim())
+    const regFee = regEligible && hndRegistrationFee !== undefined && hndRegistrationFee !== null && hndRegistrationFee !== ''
       ? Math.max(0, Math.round(Number(hndRegistrationFee)) || 0)
       : null
 
@@ -84,6 +86,9 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, acronym: true } })
+    const regEligible = isRegistrationClass(school?.type, name?.trim() || level.name)
+
     const updated = await prisma.classLevel.update({
       where: { id },
       data: {
@@ -94,7 +99,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         ...(maxScore !== undefined ? { maxScore: Number(maxScore) } : {}),
         ...(feeAmount !== undefined ? { feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0) } : {}),
         ...(hndRegistrationFee !== undefined
-          ? { hndRegistrationFee: hndRegistrationFee === null || hndRegistrationFee === '' ? null : Math.max(0, Math.round(Number(hndRegistrationFee)) || 0) }
+          ? { hndRegistrationFee: !regEligible || hndRegistrationFee === null || hndRegistrationFee === '' ? null : Math.max(0, Math.round(Number(hndRegistrationFee)) || 0) }
           : {}),
       },
     })
@@ -102,10 +107,6 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
     // Whenever a non-empty abbreviation is explicitly sent, regenerate all student
     // IDs in this class so the matricule always reflects the current abbreviation.
     if (abbreviation?.trim() && updated.abbreviation) {
-      const school = await prisma.school.findUnique({
-        where: { id: schoolId },
-        select: { type: true, acronym: true },
-      })
       if (school?.type === 'UNIVERSITY' && school.acronym) {
         const levelMatch = updated.name.match(/- Level (\d+)$/i)
         const levelSuffix = levelMatch ? levelMatch[1] : ''

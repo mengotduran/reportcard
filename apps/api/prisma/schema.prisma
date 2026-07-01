@@ -23,6 +23,7 @@ model School {
   email              String              @unique
   phone              String?
   address            String?
+  website            String?
   logo               String?
   subdomain          String              @unique
   isActive           Boolean             @default(true)

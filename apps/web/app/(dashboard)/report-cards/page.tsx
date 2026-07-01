@@ -30,6 +30,8 @@ interface RawEntry {
 }
 interface RawRC {
   id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
+  classSize?: number | null
+  annualAverage?: number | null; annualPosition?: number | null; annualClassSize?: number | null
   decision?: string | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; isActive?: boolean }
   term: { id: string; name: string; session: string }
@@ -93,6 +95,7 @@ interface Student { id: string; name: string; classLevel: string; studentId: str
 interface Term { id: string; name: string; session: string; isCurrent: boolean }
 
 const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
+const FILTER_TERM_STORAGE_KEY = 'report-cards-filter-term'
 
 // ── Teacher/Admin class-based view ────────────────────────────────────────────────
 function TeacherClassesView() {
@@ -282,7 +285,7 @@ function TeacherClassesView() {
           {printJob.cards.map((rc) => (
             <div key={rc.id} id={`rc-print-${rc.id}`}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
@@ -291,6 +294,10 @@ function TeacherClassesView() {
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
+                classSize={rc.classSize ?? undefined}
+                annualAverage={rc.annualAverage ?? undefined}
+                annualPosition={rc.annualPosition ?? undefined}
+                annualClassSize={rc.annualClassSize ?? undefined}
                 config={printJob.config}
                 gradeBands={gradeBands}
               />
@@ -357,7 +364,17 @@ export default function ReportCardsPage() {
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [filterTermId, setFilterTermId] = useState('')
+  // Persisted across "open a report card, then hit Back" the same way the page
+  // number is (see usePagination's persistKey) — sessionStorage.getItem returning
+  // null (vs '') is what distinguishes "never chosen yet" from "explicitly chose
+  // All Terms", so fetchAll below knows whether to respect it or apply its own default.
+  const [filterTermId, setFilterTermIdState] = useState(() =>
+    typeof window !== 'undefined' ? sessionStorage.getItem(FILTER_TERM_STORAGE_KEY) ?? '' : ''
+  )
+  const setFilterTermId = (termId: string) => {
+    setFilterTermIdState(termId)
+    if (typeof window !== 'undefined') sessionStorage.setItem(FILTER_TERM_STORAGE_KEY, termId)
+  }
   const [searchQuery, setSearchQuery] = useState('')
   const [form, setForm] = useState({ studentId: '', termId: '' })
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
@@ -487,15 +504,22 @@ export default function ReportCardsPage() {
       ])
       setStudents(stuData.students)
       setTerms(termData.terms)
-      // Default to the active year's live term, else "All Terms" of that year.
+      // Default to the active year's live term, else "All Terms" of that year —
+      // UNLESS the user already had a filter chosen (persisted across navigating
+      // away and back), in which case that's respected instead. sessionStorage
+      // returning null vs '' is what tells "never chosen" apart from "chose All
+      // Terms" (an empty filterTermId).
       const yearTerms = termData.terms.filter((t: Term) => t.session === activeSession)
       const currentId = yearTerms.find((t: Term) => t.isCurrent)?.id || ''
-      setFilterTermId(currentId)
-      const rcData = await getReportCardsApi(currentId ? { termId: currentId } : { session: activeSession ?? undefined })
+      const hasStoredPref = typeof window !== 'undefined' && sessionStorage.getItem(FILTER_TERM_STORAGE_KEY) !== null
+      const restoredStillValid = filterTermId === '' || yearTerms.some((t: Term) => t.id === filterTermId)
+      const targetTermId = hasStoredPref && restoredStillValid ? filterTermId : currentId
+      setFilterTermId(targetTermId)
+      const rcData = await getReportCardsApi(targetTermId ? { termId: targetTermId } : { session: activeSession ?? undefined })
       setReportCards(rcData.reportCards)
       // Fetch publish readiness for all classes in the current term
-      if (currentId) {
-        getClassReadinessApi(currentId).then(d => setClassReadiness(d.readiness)).catch(() => {})
+      if (targetTermId) {
+        getClassReadinessApi(targetTermId).then(d => setClassReadiness(d.readiness)).catch(() => {})
       }
     } catch {
       showToast(tr('Failed to load data'), 'error')
@@ -516,6 +540,7 @@ export default function ReportCardsPage() {
   const handleFilterChange = (termId: string) => {
     setFilterTermId(termId)
     setSearchQuery('')
+    setPage(1)
     fetchReportCards(termId || undefined)
   }
 
@@ -567,8 +592,16 @@ export default function ReportCardsPage() {
     ? reportCards.filter(rc => rc.student.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : reportCards
 
-  // Paginate the table; reset to page 1 when the year, term, or search changes.
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(filteredCards, 15, `${activeSession}|${filterTermId}|${searchQuery}`)
+  // Paginate the table; reset to page 1 when the year or search changes. Term
+  // filter is deliberately NOT in this key — fetchAll() re-asserts filterTermId
+  // on every mount (even when it lands back on the same value the user had
+  // before), and if that resolution happened to differ transiently it would
+  // wipe the restored page. The term filter still resets the page, just
+  // explicitly, in handleFilterChange — only on a real user click.
+  // persistKey remembers the page across "open a report card, then hit Back".
+  // ready=false while the initial fetch is in flight, so the empty placeholder
+  // array doesn't clamp a restored page back down to 1 before real data loads.
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(filteredCards, 15, `${activeSession}|${searchQuery}`, 'report-cards-list-page', !loading)
 
   type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null; isActive?: boolean }
 
@@ -1024,7 +1057,7 @@ export default function ReportCardsPage() {
           {printJob.cards.map((rc) => (
             <div key={rc.id} id={`rc-print-${rc.id}`}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
@@ -1033,6 +1066,10 @@ export default function ReportCardsPage() {
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
+                classSize={rc.classSize ?? undefined}
+                annualAverage={rc.annualAverage ?? undefined}
+                annualPosition={rc.annualPosition ?? undefined}
+                annualClassSize={rc.annualClassSize ?? undefined}
                 config={printJob.config}
                 gradeBands={gradeBands}
               />

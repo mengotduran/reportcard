@@ -20,7 +20,9 @@ function StatusBadge({ status, balance }: { status: RegStatus; balance: number }
 
 export default function HndRegistrationPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  const groupWordCap = isUniversity ? 'Department' : 'Class'
   const { toast, showToast, hideToast } = useToast()
 
   const [data, setData] = useState<HndRegList | null>(null)
@@ -37,7 +39,7 @@ export default function HndRegistrationPage() {
     try {
       setData(await getHndRegistrationListApi())
     } catch {
-      showToast('Failed to load HND registration data.', 'error')
+      showToast('Failed to load exam registration data.', 'error')
     } finally {
       setLoading(false)
     }
@@ -60,7 +62,7 @@ export default function HndRegistrationPage() {
     return rows
   }, [data, activeDept, search])
 
-  const { page, totalPages, pageItems, setPage, total, pageSize } = usePagination(filtered, 30, `${activeDept}|${search}`)
+  const { page, totalPages, pageItems, setPage, total, pageSize } = usePagination(filtered, 15, `${activeDept}|${search}`)
 
   const stats = useMemo(() => {
     if (!data) return { total: 0, paid: 0, partial: 0, unpaid: 0 }
@@ -105,8 +107,11 @@ export default function HndRegistrationPage() {
           <BookMarked size={20} className="text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-foreground">HND Registration</h1>
-          <p className="text-sm text-muted-foreground">Level 2 students · HND exam registration{data?.session ? ` · ${data.session}` : ''}</p>
+          <h1 className="text-xl font-bold text-foreground">{isUniversity ? 'HND Registration' : 'GCE Registration'}</h1>
+          <p className="text-sm text-muted-foreground">
+            {isUniversity ? 'Level 2 students · HND exam registration' : 'Form 5 & Upper Sixth · GCE exam registration'}
+            {data?.session ? ` · ${data.session}` : ''}
+          </p>
         </div>
       </div>
 
@@ -128,7 +133,7 @@ export default function HndRegistrationPage() {
       {/* Registration fees per department */}
       {data && data.departments.length > 0 && (
         <div className="bg-card border border-border rounded-xl p-4 mb-6">
-          <h3 className="text-sm font-semibold text-foreground mb-3">Registration Fee per Department</h3>
+          <h3 className="text-sm font-semibold text-foreground mb-3">Registration Fee per {groupWordCap}</h3>
           <div className="divide-y divide-border">
             {data.departments.map((dept) => (
               <div key={dept.classLevel} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
@@ -190,7 +195,7 @@ export default function HndRegistrationPage() {
                   ? 'bg-primary text-white'
                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
               }`}>
-              {dept === 'ALL' ? 'All departments' : dept}
+              {dept === 'ALL' ? (isUniversity ? 'All departments' : 'All classes') : dept}
             </button>
           ))}
         </div>
@@ -218,7 +223,9 @@ export default function HndRegistrationPage() {
         <div className="text-center py-16 text-muted-foreground text-sm">Loading…</div>
       ) : !data || data.students.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground text-sm">
-          No Level 2 students found. Make sure Level 2 department classes exist.
+          {isUniversity
+            ? 'No Level 2 students found. Make sure Level 2 department classes exist.'
+            : 'No Form 5 or Upper Sixth students found. Make sure those classes exist.'}
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground text-sm">No students match your search.</div>
@@ -231,7 +238,7 @@ export default function HndRegistrationPage() {
                   <tr>
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">#</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Student</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase hidden sm:table-cell">Department</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase hidden sm:table-cell">{groupWordCap}</th>
                     <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Paid</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Status</th>
                     <th className="px-4 py-3 w-24"></th>
@@ -240,7 +247,7 @@ export default function HndRegistrationPage() {
                 <tbody className="divide-y divide-border">
                   {pageItems.map((s, i) => (
                     <tr key={s.studentId} className="hover:bg-muted/40 transition-colors">
-                      <td className="px-4 py-3 text-muted-foreground text-xs">{(page - 1) * 30 + i + 1}</td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">{(page - 1) * pageSize + i + 1}</td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-foreground">{s.name}</p>
                         <p className="text-xs text-muted-foreground">{s.studentIdCode}</p>

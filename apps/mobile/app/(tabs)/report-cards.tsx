@@ -293,7 +293,11 @@ function AdminReportCards() {
             setBulkPublishing(classLevel)
             try {
               const result = await bulkPublish(classLevel, selectedTermId)
-              Alert.alert(t('Done'), `${t('Published')}: ${result.published}, ${t('Skipped')}: ${result.skipped}`)
+              const names = result.issues.slice(0, 3).map((i) => i.student).join(', ')
+              const detail = result.published === 0 && result.issues.length > 0
+                ? `\n${t('Still incomplete')}: ${names}${result.issues.length > 3 ? '…' : ''}`
+                : ''
+              Alert.alert(t('Done'), `${t('Published')}: ${result.published}, ${t('Skipped')}: ${result.skipped}${detail}`)
               fetchData(selectedTermId)
             } catch (e: any) {
               Alert.alert(t('Error'), e?.response?.data?.message || t('Failed to publish.'))

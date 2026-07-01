@@ -148,6 +148,8 @@ export interface ReadinessDetail {
   missingSubjects: { subjectId: string; subjectName: string; teacher: { id: string; name: string } | null }[]
   classMaster: { id: string; name: string } | null
   missingRemarks: { id: string; name: string } | null
+  otherStudentsBlocking: number
+  otherStudentsBlockingNames: string[]
 }
 
 export const getReadinessDetailApi = async (id: string): Promise<ReadinessDetail> => {

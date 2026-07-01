@@ -41,6 +41,13 @@ const UNI_LEVEL_LABELS: Record<UniLevel, string> = {
   'Level 3': 'Level 3 (Degree)',
 }
 
+// Secondary schools track GCE exam registration for Form 5 (O Level) and Upper
+// Sixth (A Level) classes — including stream suffixes, e.g. "Form 5 Science".
+function isExamRegistrationClass(name: string): boolean {
+  return /^Form\s?5\b/i.test(name.trim()) || /^Upper\s?Sixth\b/i.test(name.trim())
+}
+const GCE_DEFAULT_FEE = '20000'
+
 // ── Form shape ───────────────────────────────────────────────────────────────
 type FormState = {
   name: string         // non-university: free text class name
@@ -53,7 +60,7 @@ type FormState = {
   hndRegistrationFee: string
 }
 
-const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '150000', hndRegistrationFee: '65000' }
+const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '150000', hndRegistrationFee: GCE_DEFAULT_FEE }
 const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '650000', hndRegistrationFee: '65000' }
 
 export default function ClassesPage() {
@@ -62,6 +69,7 @@ export default function ClassesPage() {
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
   const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
 
   const [classes, setClasses]         = useState<ClassLevel[]>([])
@@ -122,7 +130,7 @@ export default function ClassesPage() {
         hasStream: cls.hasStream,
         maxScore: String(cls.maxScore ?? 20),
         feeAmount: String(cls.feeAmount ?? 0),
-        hndRegistrationFee: String(cls.hndRegistrationFee ?? 65000),
+        hndRegistrationFee: String(cls.hndRegistrationFee ?? GCE_DEFAULT_FEE),
       })
     }
     setError('')
@@ -161,8 +169,8 @@ export default function ClassesPage() {
       return
     }
 
-    const hndRegFee = isUniversity && form.uniLevel === 'Level 2'
-      ? (Number(form.hndRegistrationFee) || 0) : null
+    const isExamReg = isUniversity ? form.uniLevel === 'Level 2' : isExamRegistrationClass(finalName)
+    const hndRegFee = isExamReg ? (Number(form.hndRegistrationFee) || 0) : null
 
     const payload = {
       name: finalName,
@@ -287,6 +295,9 @@ export default function ClassesPage() {
                   {isUniversity && activeLevel === 'Level 2' && (
                     <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">HND Reg. Fee</th>
                   )}
+                  {isSecondary && (
+                    <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">GCE Reg. Fee</th>
+                  )}
                   {!isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>}
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
                 </tr>
@@ -351,6 +362,15 @@ export default function ClassesPage() {
                           {cls.hndRegistrationFee != null
                             ? <span className="text-sm font-medium text-indigo-600">{formatXAF(cls.hndRegistrationFee)}</span>
                             : <span className="text-xs text-amber-600">not set</span>}
+                        </td>
+                      )}
+                      {isSecondary && (
+                        <td className="px-4 py-3 text-right">
+                          {!isExamRegistrationClass(cls.name)
+                            ? <span className="text-muted-foreground text-sm">—</span>
+                            : cls.hndRegistrationFee != null
+                              ? <span className="text-sm font-medium text-indigo-600">{formatXAF(cls.hndRegistrationFee)}</span>
+                              : <span className="text-xs text-amber-600">not set</span>}
                         </td>
                       )}
                       {!isUniversity && (
@@ -529,6 +549,18 @@ export default function ClassesPage() {
                     onChange={(e) => setForm({ ...form, hndRegistrationFee: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   <p className="text-xs text-muted-foreground mt-1">One-time exam registration fee for Level 2 students. Tracked separately from school fees.</p>
+                </div>
+              )}
+
+              {/* GCE Registration Fee — only for secondary Form 5 / Upper Sixth classes */}
+              {!isUniversity && isExamRegistrationClass(form.name) && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">GCE Registration Fee (XAF) <span className="text-destructive">*</span></label>
+                  <input type="number" min="0" step="any" placeholder={GCE_DEFAULT_FEE} required
+                    value={form.hndRegistrationFee}
+                    onChange={(e) => setForm({ ...form, hndRegistrationFee: e.target.value })}
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <p className="text-xs text-muted-foreground mt-1">One-time GCE exam registration fee for this class. Tracked separately from school fees.</p>
                 </div>
               )}
 

@@ -20,6 +20,10 @@ interface School {
   coverImage: string | null
   coverImages: string[]
   repeatThreshold?: number | null
+  email?: string
+  phone?: string | null
+  address?: string | null
+  website?: string | null
 }
 
 interface AuthState {

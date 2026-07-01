@@ -14,6 +14,11 @@ export interface ReportCardDetail {
   totalScore: number | null
   average: number | null
   position: number | null
+  classSize?: number | null
+  classAverage?: number | null
+  annualAverage?: number | null
+  annualPosition?: number | null
+  annualClassSize?: number | null
   remarks: string | null
   remarksFr: string | null
   remarksSource: string | null
@@ -153,6 +158,8 @@ export interface ReadinessDetail {
   missingSubjects: { subjectId: string; subjectName: string; teacher: { id: string; name: string } | null }[]
   classMaster: { id: string; name: string } | null
   missingRemarks: { id: string; name: string } | null
+  otherStudentsBlocking: number
+  otherStudentsBlockingNames: string[]
 }
 
 export const getReadinessDetail = async (id: string): Promise<ReadinessDetail> => {

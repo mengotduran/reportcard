@@ -9,6 +9,52 @@ import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 // matching ClassLevel.name — see the comment on Subject.term in schema.prisma.
 const subjectTermFilter = (termName: string) => ({ OR: [{ term: null }, { term: termName }] })
 
+// Which ACTIVE students in a class + term are not yet ready to publish (no
+// report card / missing sequence marks / missing remarks). Already-published
+// cards count as ready. Disabled/Dismissed students (isActive: false) are
+// excluded entirely — same convention used everywhere else in this file.
+// Positions are class-relative, so publishing one card while classmates are
+// still incomplete would show a rank that later changes — this list is what
+// blocks BOTH single-card publish and bulk publish until it's empty.
+async function findPublishBlockers(
+  schoolId: string, classLevel: string, termId: string, termName: string,
+): Promise<{ studentId: string; student: string; reason: string }[]> {
+  const [students, subjects, reportCards] = await Promise.all([
+    prisma.student.findMany({ where: { schoolId, classLevel, isActive: true }, select: { id: true, name: true } }),
+    prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(termName) }, select: { id: true, name: true, compulsory: true } }),
+    prisma.reportCard.findMany({
+      where: { schoolId, termId, student: { classLevel, isActive: true } },
+      include: { entries: true, student: { select: { id: true, name: true } } },
+    }),
+  ])
+  if (subjects.length === 0) return []
+
+  const issues: { studentId: string; student: string; reason: string }[] = []
+  for (const student of students) {
+    const rc = reportCards.find((r) => r.student.id === student.id)
+    if (!rc) { issues.push({ studentId: student.id, student: student.name, reason: 'No report card found for this term' }); continue }
+    if (rc.status === 'PUBLISHED') continue
+
+    // An optional subject the student never opted into (no entry at all) isn't
+    // "missing" — it just doesn't apply to them. Only flag it if compulsory, or
+    // if they started it but left it incomplete (has an entry, missing a seq).
+    const missingSubjects = subjects.filter((s) => {
+      const e = rc.entries.find((en) => en.subjectId === s.id)
+      if (!e) return s.compulsory !== false
+      return e.seq1Score == null || e.seq2Score == null
+    })
+    if (missingSubjects.length > 0) {
+      issues.push({ studentId: student.id, student: student.name, reason: `Missing sequences for: ${missingSubjects.slice(0, 3).map((s) => s.name).join(', ')}${missingSubjects.length > 3 ? '…' : ''}` })
+      continue
+    }
+
+    if (!rc.remarks?.trim() && !rc.remarksFr?.trim()) {
+      issues.push({ studentId: student.id, student: student.name, reason: 'No general remarks yet' })
+    }
+  }
+  return issues
+}
+
 // Get all report cards for the school
 export const getReportCards = async (req: AuthRequest, res: Response) => {
   try {
@@ -71,10 +117,90 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const result = reportCards.map(rc => ({
-      ...rc,
-      cgpa: cgpaByStudent[rc.studentId] ?? null,
-    }))
+    // Class size per term: how many students in this class + term actually got
+    // ranked (non-null average) — the denominator next to "Position". Computed
+    // in-memory from the already-fetched set (it always includes every card
+    // matching the term/class filters, same population saveEntries ranks).
+    // Class average uses the same population — mean of their `average` field.
+    const classSizeByKey = new Map<string, number>()
+    const classAverageSumByKey = new Map<string, number>()
+    for (const rc of reportCards) {
+      if (rc.average == null) continue
+      const key = `${rc.termId}::${rc.student.classLevel}`
+      classSizeByKey.set(key, (classSizeByKey.get(key) ?? 0) + 1)
+      classAverageSumByKey.set(key, (classAverageSumByKey.get(key) ?? 0) + rc.average)
+    }
+
+    // For non-university schools, compute annual average + class rank for any
+    // card that is the final term of its session (mirrors the getReportCard
+    // single-fetch logic and the End-Year PASS/REPEAT formula).
+    const annualByCardId: Record<string, { average: number | null; position: number | null; classSize: number }> = {}
+    if (school?.type !== 'UNIVERSITY' && reportCards.length > 0) {
+      const sessionsInvolved = [...new Set(reportCards.map((rc) => rc.term.session))]
+      const allSessionTerms = await prisma.term.findMany({
+        where: { schoolId, session: { in: sessionsInvolved } },
+        orderBy: { startDate: 'asc' },
+        select: { id: true, session: true },
+      })
+      const finalTermIdBySession = new Map<string, string>()
+      for (const t of allSessionTerms) finalTermIdBySession.set(t.session, t.id) // ordered asc — last write = latest startDate
+
+      const finalCards = reportCards.filter((rc) => finalTermIdBySession.get(rc.term.session) === rc.termId)
+      const groups = new Map<string, { classLevel: string; termIds: string[] }>()
+      for (const rc of finalCards) {
+        const key = `${rc.student.classLevel}::${rc.term.session}`
+        if (!groups.has(key)) {
+          const termIds = allSessionTerms.filter((t) => t.session === rc.term.session).map((t) => t.id)
+          groups.set(key, { classLevel: rc.student.classLevel, termIds })
+        }
+      }
+      for (const { classLevel: gClassLevel, termIds } of groups.values()) {
+        const sessionCards = await prisma.reportCard.findMany({
+          where: { schoolId, termId: { in: termIds }, average: { not: null }, student: { classLevel: gClassLevel } },
+          select: { studentId: true, average: true },
+        })
+        const byStudent = new Map<string, { sum: number; count: number }>()
+        for (const c of sessionCards) {
+          const e = byStudent.get(c.studentId) ?? { sum: 0, count: 0 }
+          e.sum += c.average!
+          e.count += 1
+          byStudent.set(c.studentId, e)
+        }
+        const ranked = [...byStudent.entries()]
+          .map(([studentId, { sum, count }]) => ({ studentId, annualAvg: sum / count }))
+          .sort((a, b) => b.annualAvg - a.annualAvg)
+        const posByStudent = new Map<string, number>()
+        let pos = 1
+        for (let i = 0; i < ranked.length; i++) {
+          if (i > 0 && ranked[i].annualAvg !== ranked[i - 1].annualAvg) pos = i + 1
+          posByStudent.set(ranked[i].studentId, pos)
+        }
+        for (const rc of finalCards) {
+          if (rc.student.classLevel !== gClassLevel) continue
+          const agg = byStudent.get(rc.studentId)
+          annualByCardId[rc.id] = {
+            average: agg ? agg.sum / agg.count : null,
+            position: posByStudent.get(rc.studentId) ?? null,
+            classSize: byStudent.size,
+          }
+        }
+      }
+    }
+
+    const result = reportCards.map(rc => {
+      const key = `${rc.termId}::${rc.student.classLevel}`
+      const classSize = classSizeByKey.get(key) ?? null
+      const classAverageSum = classAverageSumByKey.get(key)
+      return {
+        ...rc,
+        cgpa: cgpaByStudent[rc.studentId] ?? null,
+        classSize,
+        classAverage: classSize && classAverageSum != null ? classAverageSum / classSize : null,
+        annualAverage: annualByCardId[rc.id]?.average ?? null,
+        annualPosition: annualByCardId[rc.id]?.position ?? null,
+        annualClassSize: annualByCardId[rc.id]?.classSize ?? null,
+      }
+    })
 
     res.json({ reportCards: result, total: result.length })
   } catch (error) {
@@ -228,7 +354,62 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
       if (totalCredits > 0) cgpa = totalWP / totalCredits
     }
 
-    res.json({ ...reportCard, subjectStats, cgpa })
+    // Class size for this term: how many students actually received a position
+    // (non-null average) in this class + term — the denominator shown next to
+    // "Position" on the report card (e.g. "3rd / 45"). Meaningful for any school
+    // type — university report cards also carry a within-term average rank.
+    // Class average is the mean of `average` over that same population.
+    const classCards = await prisma.reportCard.findMany({
+      where: { schoolId, termId: reportCard.termId, average: { not: null }, student: { classLevel: reportCard.student.classLevel } },
+      select: { average: true },
+    })
+    const classSize = classCards.length
+    const classAverage = classSize > 0 ? classCards.reduce((s, c) => s + c.average!, 0) / classSize : null
+
+    // Annual average + class rank: only on the final term of the session (by
+    // date, not by name — schools name terms freely) for non-university
+    // schools. Mirrors the End-Year PASS/REPEAT formula (mean of whichever
+    // term averages exist for the student this session — tolerant of gaps).
+    let annualAverage: number | null = null
+    let annualPosition: number | null = null
+    let annualClassSize: number | null = null
+    if (reportCard.school.type !== 'UNIVERSITY') {
+      const sessionTerms = await prisma.term.findMany({
+        where: { schoolId, session: reportCard.term.session },
+        orderBy: { startDate: 'asc' },
+        select: { id: true },
+      })
+      const isFinalTermOfSession = sessionTerms.length > 0 && sessionTerms[sessionTerms.length - 1].id === reportCard.termId
+
+      if (isFinalTermOfSession) {
+        const sessionTermIds = sessionTerms.map((t) => t.id)
+        const sessionCards = await prisma.reportCard.findMany({
+          where: { schoolId, termId: { in: sessionTermIds }, average: { not: null }, student: { classLevel: reportCard.student.classLevel } },
+          select: { studentId: true, average: true },
+        })
+        const byStudent = new Map<string, { sum: number; count: number }>()
+        for (const c of sessionCards) {
+          const e = byStudent.get(c.studentId) ?? { sum: 0, count: 0 }
+          e.sum += c.average!
+          e.count += 1
+          byStudent.set(c.studentId, e)
+        }
+        const ranked = [...byStudent.entries()]
+          .map(([studentId, { sum, count }]) => ({ studentId, annualAvg: sum / count }))
+          .sort((a, b) => b.annualAvg - a.annualAvg)
+
+        annualAverage = byStudent.has(reportCard.studentId) ? (byStudent.get(reportCard.studentId)!.sum / byStudent.get(reportCard.studentId)!.count) : null
+        annualClassSize = byStudent.size
+
+        let pos = 1
+        for (let i = 0; i < ranked.length; i++) {
+          if (i > 0 && ranked[i].annualAvg !== ranked[i - 1].annualAvg) pos = i + 1
+          if (ranked[i].studentId === reportCard.studentId) { annualPosition = pos; break }
+        }
+      }
+    }
+
+    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, annualAverage, annualPosition, annualClassSize })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -435,7 +616,7 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
 
     const classLevel = reportCard.student.classLevel
     const [subjects, classMaster] = await Promise.all([
-      prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(reportCard.term.name) }, select: { id: true, name: true } }),
+      prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(reportCard.term.name) }, select: { id: true, name: true, compulsory: true } }),
       prisma.user.findFirst({ where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true } }),
     ])
 
@@ -445,10 +626,13 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Rule 2 — every subject must have both sequences filled
+    // Rule 2 — every subject must have both sequences filled. An optional
+    // subject the student never opted into (no entry at all) isn't "missing" —
+    // only flag it if compulsory, or if they started it but left it incomplete.
     const missing = subjects.filter(s => {
       const e = reportCard.entries.find(en => en.subjectId === s.id)
-      return !e || e.seq1Score == null || e.seq2Score == null
+      if (!e) return s.compulsory !== false
+      return e.seq1Score == null || e.seq2Score == null
     })
     if (missing.length > 0) {
       res.status(400).json({ message: `Cannot publish — missing marks for: ${missing.map(s => s.name).slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` })
@@ -459,6 +643,20 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
     if (!reportCard.remarks?.trim() && !reportCard.remarksFr?.trim()) {
       const who = classMaster ? 'the class master' : 'an admin / vice-principal'
       res.status(400).json({ message: `Cannot publish — general remarks have not been added yet (${who} must write them).` })
+      return
+    }
+
+    // Rule 4 — every other active student in this class + term must also be
+    // fully marked (or already published) before ANY single card in the class
+    // can be published. Class positions are relative to the whole class, so
+    // publishing early would show a rank that changes once everyone else is
+    // graded. Disabled/Dismissed students are excluded from this check.
+    const blockers = await findPublishBlockers(schoolId, classLevel, reportCard.termId, reportCard.term.name)
+    if (blockers.length > 0) {
+      const names = blockers.slice(0, 3).map((b) => b.student).join(', ')
+      res.status(400).json({
+        message: `Cannot publish yet — ${blockers.length} other student${blockers.length > 1 ? 's' : ''} in this class ${blockers.length > 1 ? 'are' : 'is'} still incomplete (${names}${blockers.length > 3 ? '…' : ''}). All active students must be graded before any report card in the class is published, since positions are class-relative.`,
+      })
       return
     }
 
@@ -775,81 +973,30 @@ export const bulkPublish = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Check if class has a master (for attribution only — remarks are now
-    // required for every class regardless)
-    const classMaster = await prisma.user.findFirst({
-      where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true }
-    })
-    const requiresRemarks = true
-
-    // Get all students in this class
-    const students = await prisma.student.findMany({
-      where: { schoolId, classLevel, isActive: true },
-      select: { id: true, name: true }
-    })
-
-    // Get all subjects for this class (scoped to this term for university courses)
-    const subjects = await prisma.subject.findMany({
-      where: { schoolId, classLevel, ...subjectTermFilter(term.name) },
-      select: { id: true, name: true }
-    })
-
     // A class with no subjects cannot be published
-    if (subjects.length === 0) {
-      res.json({ published: 0, skipped: students.length, issues: [{ student: '—', reason: 'This class has no subjects — add subjects before publishing' }] })
+    const subjectCount = await prisma.subject.count({ where: { schoolId, classLevel, ...subjectTermFilter(term.name) } })
+    if (subjectCount === 0) {
+      const total = await prisma.student.count({ where: { schoolId, classLevel, isActive: true } })
+      res.json({ published: 0, skipped: total, issues: [{ student: '—', reason: 'This class has no subjects — add subjects before publishing' }] })
       return
     }
 
-    // Get all report cards for this class + term
-    const reportCards = await prisma.reportCard.findMany({
-      where: { schoolId, termId, student: { classLevel }, status: { not: 'PUBLISHED' } },
-      include: { entries: true, student: { select: { id: true, name: true } } }
-    })
-
-    const issues: { student: string; reason: string }[] = []
-    const eligibleIds: string[] = []
-
-    for (const student of students) {
-      const rc = reportCards.find(r => r.student.id === student.id)
-
-      if (!rc) {
-        issues.push({ student: student.name, reason: 'No report card found for this term' })
-        continue
-      }
-
-      // Check both sequences filled for every subject
-      const missingSubjects: string[] = []
-      for (const subject of subjects) {
-        const entry = rc.entries.find(e => e.subjectId === subject.id)
-        if (!entry || entry.seq1Score == null || entry.seq2Score == null) {
-          missingSubjects.push(subject.name)
-        }
-      }
-      if (missingSubjects.length > 0) {
-        issues.push({ student: student.name, reason: `Missing sequences for: ${missingSubjects.slice(0, 3).join(', ')}${missingSubjects.length > 3 ? '…' : ''}` })
-        continue
-      }
-
-      // Check general remarks (required for every class)
-      if (requiresRemarks && !rc.remarks?.trim()) {
-        issues.push({ student: student.name, reason: 'No general remarks yet' })
-        continue
-      }
-
-      eligibleIds.push(rc.id)
-    }
-
-    if (eligibleIds.length === 0) {
+    // All-or-nothing: every active student in the class + term must be fully
+    // marked (or already published) before ANY of them get published. Class
+    // positions are relative to the whole class, so publishing some while
+    // others are incomplete would show a rank that later changes.
+    const issues = await findPublishBlockers(schoolId, classLevel, termId, term.name)
+    if (issues.length > 0) {
       res.json({ published: 0, skipped: issues.length, issues })
       return
     }
 
-    await prisma.reportCard.updateMany({
-      where: { id: { in: eligibleIds } },
+    const result = await prisma.reportCard.updateMany({
+      where: { schoolId, termId, student: { classLevel, isActive: true }, status: { not: 'PUBLISHED' } },
       data: { status: 'PUBLISHED' }
     })
 
-    res.json({ published: eligibleIds.length, skipped: issues.length, issues })
+    res.json({ published: result.count, skipped: 0, issues: [] })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -869,7 +1016,7 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
 
     const [students, subjects, reportCards] = await Promise.all([
       prisma.student.findMany({ where: { schoolId, isActive: true }, select: { id: true, name: true, classLevel: true } }),
-      prisma.subject.findMany({ where: { schoolId, ...subjectTermFilter(term.name) }, select: { id: true, classLevel: true } }),
+      prisma.subject.findMany({ where: { schoolId, ...subjectTermFilter(term.name) }, select: { id: true, classLevel: true, compulsory: true } }),
       prisma.reportCard.findMany({
         where: { schoolId, termId },
         select: { id: true, status: true, remarks: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
@@ -897,10 +1044,13 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
         const rc = reportCards.find(r => r.student.id === student.id)
         if (!rc || rc.status === 'PUBLISHED') continue
 
-        // Check both sequences for every subject
+        // Check both sequences for every subject. An optional subject the
+        // student never opted into (no entry) isn't missing — only compulsory
+        // subjects, or optional ones they started but left incomplete, count.
         for (const subject of classSubjects) {
           const entry = rc.entries.find(e => e.subjectId === subject.id)
-          if (!entry || entry.seq1Score == null || entry.seq2Score == null) {
+          const isMissing = entry ? (entry.seq1Score == null || entry.seq2Score == null) : subject.compulsory !== false
+          if (isMissing) {
             missingSeqs++
             break // count once per student
           }
@@ -950,7 +1100,7 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
     const classLevel = rc.student.classLevel
 
     const [subjects, teacherSubjects, classMaster] = await Promise.all([
-      prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, name: true } }),
+      prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, name: true, compulsory: true } }),
       prisma.teacherSubject.findMany({
         where: { subject: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) } },
         include: { user: { select: { id: true, name: true } }, subject: { select: { id: true } } },
@@ -961,10 +1111,14 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
       }),
     ])
 
+    // An optional subject the student never opted into (no entry) isn't
+    // missing — only compulsory subjects, or optional ones started but left
+    // incomplete, count.
     const missingSubjects = subjects
       .filter(s => {
         const entry = rc.entries.find(e => e.subjectId === s.id)
-        return !entry || entry.seq1Score == null || entry.seq2Score == null
+        if (!entry) return s.compulsory !== false
+        return entry.seq1Score == null || entry.seq2Score == null
       })
       .map(s => {
         const assignment = teacherSubjects.find(ts => ts.subject.id === s.id)
@@ -976,6 +1130,12 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
       })
 
     const remarksOk = !!rc.remarks?.trim()
+
+    // Other active students in this class + term who are blocking publish
+    // (excluding this student — their own gaps are already covered above).
+    const otherBlockers = (await findPublishBlockers(schoolId, classLevel, rc.termId, rc.term.name))
+      .filter((b) => b.studentId !== rc.studentId)
+
     res.json({
       missingSubjects,
       classMaster,
@@ -983,6 +1143,8 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
       // one, otherwise to admin / vice-principal.
       missingRemarks: !remarksOk ? (classMaster ?? { id: '', name: 'Admin / Vice-Principal' }) : null,
       allSeqsFilled: missingSubjects.length === 0,
+      otherStudentsBlocking: otherBlockers.length,
+      otherStudentsBlockingNames: otherBlockers.slice(0, 3).map((b) => b.student),
     })
   } catch (error) {
     console.error(error)

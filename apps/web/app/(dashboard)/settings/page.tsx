@@ -144,7 +144,10 @@ export default function SettingsPage() {
     } catch { showToast(t('Failed to remove logo'), 'error') }
   }
 
-  const [infoForm, setInfoForm] = useState({ name: school?.name ?? '', acronym: (school as any)?.acronym ?? '', batch: (school as any)?.batch ?? '' })
+  const [infoForm, setInfoForm] = useState({
+    name: school?.name ?? '', acronym: (school as any)?.acronym ?? '', batch: (school as any)?.batch ?? '',
+    phone: school?.phone ?? '', address: school?.address ?? '', website: school?.website ?? '',
+  })
   const [savingInfo, setSavingInfo] = useState(false)
   const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
   const [savingThreshold, setSavingThreshold] = useState(false)
@@ -152,7 +155,10 @@ export default function SettingsPage() {
   const handleSaveInfo = async () => {
     setSavingInfo(true)
     try {
-      const res = await api.put('/school/settings', { name: infoForm.name.trim(), acronym: infoForm.acronym.trim(), batch: infoForm.batch === '' ? null : Number(infoForm.batch) })
+      const res = await api.put('/school/settings', {
+        name: infoForm.name.trim(), acronym: infoForm.acronym.trim(), batch: infoForm.batch === '' ? null : Number(infoForm.batch),
+        phone: infoForm.phone.trim(), address: infoForm.address.trim(), website: infoForm.website.trim(),
+      })
       updateSchool(res.data.school)
       showToast(t('School info saved'))
     } catch { showToast(t('Failed to save'), 'error') }
@@ -194,6 +200,44 @@ export default function SettingsPage() {
               className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
               value={infoForm.name}
               onChange={e => setInfoForm(f => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Email')}</label>
+            <input
+              disabled
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-muted text-muted-foreground cursor-not-allowed"
+              value={school?.email ?? ''}
+            />
+            <p className="text-xs text-muted-foreground mt-1">{t('Contact support to change your school email')}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Phone')}</label>
+              <input
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                placeholder="+237 6XX XXX XXX"
+                value={infoForm.phone}
+                onChange={e => setInfoForm(f => ({ ...f, phone: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Website')}</label>
+              <input
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                placeholder="www.yourschool.com"
+                value={infoForm.website}
+                onChange={e => setInfoForm(f => ({ ...f, website: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Address')}</label>
+            <input
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              placeholder="P.O. Box 000, City, Country"
+              value={infoForm.address}
+              onChange={e => setInfoForm(f => ({ ...f, address: e.target.value }))}
             />
           </div>
           {isUniversity && (
