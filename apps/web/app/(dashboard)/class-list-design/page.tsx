@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { Save, Plus, Trash2, Printer } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
@@ -8,10 +9,10 @@ import DesktopOnly from '@/components/ui/DesktopOnly'
 import { useT } from '@/lib/i18n'
 import {
   ClassListConfig, ClassListGroup, ClassListColumn,
-  DEFAULT_CLASS_LIST_CONFIG, mergeClassListConfig, presetGroups, clCol, clGroup,
-  ClassListPreset, getClassListTemplateApi, saveClassListTemplateApi,
+  DEFAULT_CLASS_LIST_CONFIG, mergeClassListConfig, clCol, clGroup,
+  getClassListTemplateApi, saveClassListTemplateApi,
 } from '@/lib/api/classListTemplate'
-import { printClassList } from '@/lib/classListDocument'
+import { ClassListDocOptions, classListPrintPortalHtml } from '@/lib/classListDocument'
 
 const SAMPLE = [
   { name: 'Achu Brenda', studentId: '2025-0001' },
@@ -75,6 +76,9 @@ export default function ClassListDesignPage() {
   const [config, setConfig] = useState<ClassListConfig>(DEFAULT_CLASS_LIST_CONFIG)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // Test-print data — rendered into an off-screen in-page portal and printed
+  // via window.print(), same as the report card (no popup window).
+  const [printData, setPrintData] = useState<ClassListDocOptions[] | null>(null)
 
   useEffect(() => {
     getClassListTemplateApi()
@@ -82,6 +86,12 @@ export default function ClassListDesignPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (!printData) return
+    const timer = setTimeout(() => { window.print(); setPrintData(null) }, 350)
+    return () => clearTimeout(timer)
+  }, [printData])
 
   const set = <K extends keyof ClassListConfig>(key: K, value: ClassListConfig[K]) => setConfig(c => ({ ...c, [key]: value }))
   const setGroups = (groups: ClassListGroup[]) => setConfig(c => ({ ...c, groups }))
@@ -96,8 +106,6 @@ export default function ClassListDesignPage() {
     setGroups(config.groups.map((g, i) => i !== gi ? g : { ...g, columns: g.columns.filter((_, j) => j !== ci) }).filter(g => g.columns.length > 0))
   const addGroup = () => setGroups([...config.groups, clGroup('New Group', [clCol('Col 1'), clCol('Avg', true)])])
   const removeGroup = (gi: number) => setGroups(config.groups.filter((_, i) => i !== gi))
-
-  const applyPreset = (preset: ClassListPreset) => setGroups(presetGroups(preset))
 
   const logoUrl = school?.logo ? (typeof window !== 'undefined' ? window.location.origin + school.logo : school.logo) : null
 
@@ -125,13 +133,7 @@ export default function ClassListDesignPage() {
             <p className="text-xs text-muted-foreground">{t('Click any title, heading or column to edit it')}</p>
           </div>
           <div className="flex items-center gap-2">
-            <select className={inputCls} defaultValue="" onChange={e => { if (e.target.value) { applyPreset(e.target.value as ClassListPreset); e.target.value = '' } }}>
-              <option value="">{t('Load preset…')}</option>
-              <option value="secondary">{t('Secondary')}</option>
-              <option value="primary">{t('Primary')}</option>
-              <option value="university">{t('University')}</option>
-            </select>
-            <button onClick={() => printClassList({ students: SAMPLE, classLevel: 'Form 1', schoolName: school?.name ?? 'School', schoolType: school?.type ?? '', logoUrl, config })}
+            <button onClick={() => setPrintData([{ students: SAMPLE, classLevel: 'Form 1', schoolName: school?.name ?? 'School', schoolType: school?.type ?? '', logoUrl, config }])}
               className="flex items-center gap-1.5 border border-border text-muted-foreground px-3 py-2 rounded-lg text-sm hover:bg-muted transition-colors">
               <Printer size={14} /> {t('Test print')}
             </button>
@@ -145,7 +147,7 @@ export default function ClassListDesignPage() {
         {loading ? (
           <div className="text-center py-16 text-muted-foreground text-sm">{t('Loading…')}</div>
         ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-[300px_1fr] gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-[300px_1fr] gap-6 items-start">
             {/* ── Options ── */}
             <div className="space-y-4">
               <SectionCard title={t('Header')}>
@@ -184,8 +186,9 @@ export default function ClassListDesignPage() {
               </SectionCard>
             </div>
 
-            {/* ── Canvas ── */}
-            <div className="overflow-x-auto">
+            {/* ── Canvas — sticks in view while the (often taller) options
+                panel on the left scrolls past it ── */}
+            <div className="overflow-x-auto sticky top-24">
               <div className="bg-white text-black rounded-xl border border-border shadow-sm p-6 min-w-[640px]" style={{ fontFamily: 'Arial, sans-serif' }}>
                 {/* Header */}
                 <div style={{ textAlign: 'center', borderBottom: '3px double #111', paddingBottom: 10, marginBottom: 12 }}>
@@ -275,6 +278,11 @@ export default function ClassListDesignPage() {
         )}
 
         {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+
+        {printData && typeof document !== 'undefined' && createPortal(
+          <div className="classlist-print-portal" dangerouslySetInnerHTML={{ __html: classListPrintPortalHtml(printData) }} />,
+          document.body,
+        )}
       </div>
     </DesktopOnly>
   )

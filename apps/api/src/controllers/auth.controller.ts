@@ -112,16 +112,7 @@ export const login = async (req: Request, res: Response) => {
         masterClassLevel: user.masterClassLevel ?? null,
         preferredLanguage: user.preferredLanguage,
       },
-      school: user.school ? {
-        id: user.school.id,
-        name: user.school.name,
-        type: user.school.type,
-        language: user.school.language,
-        subdomain: user.school.subdomain,
-        logo: user.school.logo,
-        coverImage: user.school.coverImage,
-        coverImages: user.school.coverImages,
-      } : null
+      school: user.school ?? null
     })
   } catch (error) {
     console.error(error)

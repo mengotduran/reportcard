@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, OFFICIAL_HEADER_FONT } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
@@ -15,7 +15,7 @@ export interface PrintEntry {
 interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null }
+  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
   student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string }
   term: { name: string; session: string }
   subjects: PrintSubject[]
@@ -627,6 +627,14 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     if (field === 'cgpa')           return cgpa.toFixed(2)
     if (field === 'credits')        return String(gpaInfo.credits)
     if (field === 'classification') return classificationForGpa(cgpa, classBands)
+    // General (non-stat) keys the sheet field picker offers — used by banner
+    // rows like the Ledger's full-width term strip. Term is uppercased because
+    // these always render as headings ("FIRST TERM"), never inline prose.
+    if (field === 'term')           return t(term.name).toUpperCase()
+    if (field === 'session')        return term.session
+    if (field === 'student_name')   return student.name
+    if (field === 'class')          return student.classLevel
+    if (field === 'total_coeff')    return String(subjects.reduce((s, x) => s + (x.coefficient ?? 0), 0))
     return '—'
   }
 
@@ -638,34 +646,32 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
       const contactLine = buildOfficialContactLine(school, s)
       const contactLineEl = contactLine
-        ? <p style={{ textAlign: 'center', fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>{contactLine}</p>
+        ? <p style={{ fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>{contactLine}</p>
         : null
 
-      // Official Cameroon-style header: French block | logo | English block, then title.
-      // Every line, both sides, uses the same font/size/weight — the block's own
-      // longest line sets its width, shorter lines center within it (plain
-      // center-align does exactly this; no per-line special-casing). The logo
-      // is absolutely positioned so a bigger logo never stretches the text rows.
+      // Official Cameroon-style header: left block | logo | right block, then the
+      // authorization line (subtitle), the ruled contact strip, and the title.
+      // Per-line styling (bold caps / big acronym / italic motto) comes from
+      // officialTextBlockHtml — shared with the designer canvas so they can't
+      // drift. The logo is absolutely positioned so a bigger logo never
+      // stretches the text columns' row height.
       if (s.officialHeader) {
-        const toHtml = (lines: string[]) =>
-          lines.map(line =>
-            `<div style="font-family:Arial,sans-serif;font-size:10px;font-weight:bold;line-height:1.5;text-align:center;">${line || '&nbsp;'}</div>`
-          ).join('')
-
-        const leftLines  = (s.leftText  || '').split('\n')
-        const rightLines = (s.rightText || '').split('\n')
-
         return (
           <div style={{ borderBottom: `3px solid ${color}`, paddingBottom: 12, marginBottom: 16 }}>
             <div style={{ position: 'relative', minHeight: logoSize }}>
               <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
-                <div dangerouslySetInnerHTML={{ __html: toHtml(leftLines) }} />
+                <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.leftText || '') }} />
                 <div />
-                <div dangerouslySetInnerHTML={{ __html: toHtml(rightLines) }} />
+                <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.rightText || '') }} />
               </div>
               <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{s.showLogo && logoEl}</div>
             </div>
-            {contactLineEl}
+            {(s.showAuthorization ?? true) && school.authorizationNumber && <p style={{ textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 'bold', color: '#333', margin: '2px 0 0' }}>{school.authorizationNumber}</p>}
+            {contactLine && (
+              <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 600, color: '#111' }}>
+                {contactLine}
+              </div>
+            )}
             {s.reportTitle && <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '10px 0 0', letterSpacing: 3, color, textAlign: 'center' }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />}
           </div>
         )
@@ -805,8 +811,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           'm:credit': 38, 'm:coef': 38, 'm:weighted': 44,
           'm:min': 38, 'm:avg': 38, 'm:max': 38,
           'm:evaluation': 96,
+          // Fixed (not flex) so the subject column takes all the slack and the
+          // grade|remarks border sits close to the right edge — footer banner
+          // rows (TERM AVERAGE / CLASS POSITION) end their labels at that same
+          // border, so a mid-table border there sliced through the label text.
+          'm:remarks': 110,
         }
         const FLEX_FIELDS = new Set(['m:subject', 'm:subject_fr'])
+        // Fixed-width but prose-y: wrap to a second line rather than clipping.
+        const WRAP_FIELDS = new Set(['m:remarks', 'm:evaluation'])
 
         const dataRowFields: string[] = dataRowTpl?.cells.map((c: SheetCell) => c.field ?? '') ?? []
 
@@ -832,7 +845,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                     border: '1px solid #d1d5db',
                     lineHeight: isHdr ? 1.2 : 1.4,
                     // data cells in narrow cols stay on one line; clip any overflow
-                    ...(!isHdr && !isFlex ? { whiteSpace: 'nowrap' as const, overflow: 'hidden' as const } : {}),
+                    // (wrap-listed fields fold to a second line instead)
+                    ...(!isHdr && !isFlex && !WRAP_FIELDS.has(colField) ? { whiteSpace: 'nowrap' as const, overflow: 'hidden' as const } : {}),
                   }}>
                   {content}
                 </td>
@@ -852,7 +866,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             </colgroup>
             {headerRows.length > 0 && (
               <thead>
-                {headerRows.map((row: SheetRow) => renderTplRow(row, () => '', undefined, true))}
+                {/* Rows above the data row can carry general field bindings too
+                    (e.g. the Ledger's full-width term banner) — only per-subject
+                    m:* keys are meaningless here and resolve to blank. */}
+                {headerRows.map((row: SheetRow) => renderTplRow(row, f => f.startsWith('m:') ? '' : resolveStat(f), undefined, true))}
               </thead>
             )}
             <tbody>

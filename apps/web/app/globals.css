@@ -122,7 +122,8 @@ aside ::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Print portals — off-screen so content renders/images load, never visible on screen ── */
 .rc-print-portal,
-.transcript-print-portal {
+.transcript-print-portal,
+.classlist-print-portal {
   position: fixed;
   left: -9999px;
   top: 0;
@@ -135,9 +136,10 @@ aside ::-webkit-scrollbar-track { background: transparent; }
   @page { margin: 0; size: A4 portrait; }
   * { print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; box-sizing: border-box; }
   html, body { margin: 0 !important; padding: 0 !important; background: white !important; }
-  body > *:not(.rc-print-portal):not(.transcript-print-portal) { display: none !important; }
+  body > *:not(.rc-print-portal):not(.transcript-print-portal):not(.classlist-print-portal) { display: none !important; }
   .rc-print-portal,
-  .transcript-print-portal {
+  .transcript-print-portal,
+  .classlist-print-portal {
     position: static !important;
     left: auto !important;
     top: auto !important;

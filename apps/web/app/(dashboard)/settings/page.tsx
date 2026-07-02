@@ -145,23 +145,46 @@ export default function SettingsPage() {
   }
 
   const [infoForm, setInfoForm] = useState({
-    name: school?.name ?? '', acronym: (school as any)?.acronym ?? '', batch: (school as any)?.batch ?? '',
+    name: school?.name ?? '', email: school?.email ?? '', acronym: (school as any)?.acronym ?? '', batch: (school as any)?.batch ?? '',
     phone: school?.phone ?? '', address: school?.address ?? '', website: school?.website ?? '',
+    authorizationNumber: school?.authorizationNumber ?? '',
   })
+  const [loadingInfo, setLoadingInfo] = useState(true)
   const [savingInfo, setSavingInfo] = useState(false)
   const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
   const [savingThreshold, setSavingThreshold] = useState(false)
+
+  // The auth store's cached `school` can lag behind the database (e.g. right
+  // after login, or if a field was added since this session started), and
+  // this form's initial state is only ever set once from that snapshot. Pull
+  // the current row straight from the API so Save never overwrites fields
+  // the form never actually loaded with stale/blank values.
+  useEffect(() => {
+    api.get('/school/settings').then(res => {
+      const s = res.data.school
+      updateSchool(s)
+      setInfoForm({
+        name: s.name ?? '', email: s.email ?? '', acronym: s.acronym ?? '', batch: s.batch ?? '',
+        phone: s.phone ?? '', address: s.address ?? '', website: s.website ?? '',
+        authorizationNumber: s.authorizationNumber ?? '',
+      })
+      setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
+    }).catch(() => {}).finally(() => setLoadingInfo(false))
+  }, [])
 
   const handleSaveInfo = async () => {
     setSavingInfo(true)
     try {
       const res = await api.put('/school/settings', {
-        name: infoForm.name.trim(), acronym: infoForm.acronym.trim(), batch: infoForm.batch === '' ? null : Number(infoForm.batch),
+        name: infoForm.name.trim(), email: infoForm.email.trim(), acronym: infoForm.acronym.trim(), batch: infoForm.batch === '' ? null : Number(infoForm.batch),
         phone: infoForm.phone.trim(), address: infoForm.address.trim(), website: infoForm.website.trim(),
+        authorizationNumber: infoForm.authorizationNumber.trim(),
       })
       updateSchool(res.data.school)
       showToast(t('School info saved'))
-    } catch { showToast(t('Failed to save'), 'error') }
+    } catch (err: any) {
+      showToast(err.response?.data?.message ?? t('Failed to save'), 'error')
+    }
     finally { setSavingInfo(false) }
   }
 
@@ -205,11 +228,11 @@ export default function SettingsPage() {
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Email')}</label>
             <input
-              disabled
-              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-muted text-muted-foreground cursor-not-allowed"
-              value={school?.email ?? ''}
+              type="email"
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              value={infoForm.email}
+              onChange={e => setInfoForm(f => ({ ...f, email: e.target.value }))}
             />
-            <p className="text-xs text-muted-foreground mt-1">{t('Contact support to change your school email')}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -240,6 +263,16 @@ export default function SettingsPage() {
               onChange={e => setInfoForm(f => ({ ...f, address: e.target.value }))}
             />
           </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Authorization / Registration No.')}</label>
+            <input
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              placeholder="No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010"
+              value={infoForm.authorizationNumber}
+              onChange={e => setInfoForm(f => ({ ...f, authorizationNumber: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground mt-1">{t('Shown on the Official report card header when enabled in the Report Card Designer')}</p>
+          </div>
           {isUniversity && (
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -268,7 +301,7 @@ export default function SettingsPage() {
         </div>
         <button
           onClick={handleSaveInfo}
-          disabled={savingInfo}
+          disabled={savingInfo || loadingInfo}
           className="mt-4 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
         >
           {savingInfo ? t('Saving…') : t('Save Info')}

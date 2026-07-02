@@ -10,6 +10,7 @@ import { Wallet, Save, Eye, Search } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
+import CustomSelect from '@/components/ui/CustomSelect'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
@@ -190,31 +191,37 @@ export default function FeesPage() {
               )
             })}
           </div>
-          {/* Department pills within the active level */}
-          <div className="flex flex-wrap gap-2">
-            {visibleClasses.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No departments in {activeUniLevel} yet.</p>
-            ) : visibleClasses.map((c) => (
-              <button key={c.id} onClick={() => selectClass(c.name)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${
-                  activeClass === c.name ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                }`}>
-                {deptFromClassName(c.name)}
-              </button>
-            ))}
-          </div>
+          {/* Department picker within the active level */}
+          {visibleClasses.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No departments in {activeUniLevel} yet.</p>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}:</span>
+              <CustomSelect
+                className="w-64"
+                compact
+                value={activeClass}
+                onChange={selectClass}
+                placeholder={t('Select department')}
+                options={visibleClasses.map((c) => ({ value: c.name, label: deptFromClassName(c.name) }))}
+              />
+            </div>
+          )}
         </div>
       )}
 
-      {/* Non-university: flat class picker */}
-      {!isUniversity && (
-        <div className="flex flex-wrap gap-2 mb-4">
-          {classes.map((c) => (
-            <button key={c.id} onClick={() => selectClass(c.name)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === c.name ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
-              {c.name}
-            </button>
-          ))}
+      {/* Non-university: class picker */}
+      {!isUniversity && classes.length > 0 && (
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs text-muted-foreground flex-shrink-0">{t('Class')}:</span>
+          <CustomSelect
+            className="w-64"
+            compact
+            value={activeClass}
+            onChange={selectClass}
+            placeholder={t('Select class')}
+            options={classes.map((c) => ({ value: c.name, label: c.name }))}
+          />
         </div>
       )}
 

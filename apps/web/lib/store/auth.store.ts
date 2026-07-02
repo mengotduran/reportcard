@@ -24,6 +24,7 @@ interface School {
   phone?: string | null
   address?: string | null
   website?: string | null
+  authorizationNumber?: string | null
 }
 
 interface AuthState {

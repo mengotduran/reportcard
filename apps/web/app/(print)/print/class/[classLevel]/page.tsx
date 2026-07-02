@@ -81,6 +81,7 @@ export default function PrintClassPage() {
   const schoolData = {
     name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null,
     email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
+    authorizationNumber: school?.authorizationNumber,
   }
 
   // Compute class-wide min/avg/max per subject from all loaded cards
