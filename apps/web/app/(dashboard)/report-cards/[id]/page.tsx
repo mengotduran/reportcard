@@ -37,7 +37,7 @@ interface ReportCard {
   remarksEditGrantedTo: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
-  school: { name: string; type: string; language?: string; logo?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null }
+  school: { name: string; type: string; language?: string; logo?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
 

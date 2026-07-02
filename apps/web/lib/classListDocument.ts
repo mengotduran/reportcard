@@ -132,37 +132,14 @@ function classListBody({ students, classLevel, schoolName, schoolType, logoUrl, 
 </div>`
 }
 
-function classListDoc(title: string, styleConfig: ClassListDocOptions['config'], bodies: string): string {
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>${esc(title)}</title>
-<style>${classListStyles(styleConfig)}</style></head>
-<body>${bodies}</body></html>`
-}
-
-export function buildClassListHtml(opts: ClassListDocOptions): string {
-  return classListDoc(`Class List — ${opts.classLevel} | ${opts.schoolName}`, opts.config, classListBody(opts))
-}
-
-/** Open a popup and print the class list built from the config. */
-export function printClassList(opts: ClassListDocOptions) {
-  const pw = window.open('', '_blank', 'width=1200,height=800')
-  if (!pw) { alert('Allow popups to print the class list.'); return }
-  pw.document.write(buildClassListHtml(opts))
-  pw.document.close()
-  pw.focus()
-  setTimeout(() => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }, 350)
-}
-
-/** Print several classes' lists as one document (a page break between each). */
-export function printClassLists(list: ClassListDocOptions[]) {
-  if (list.length === 0) return
-  if (list.length === 1) return printClassList(list[0])
-  const pw = window.open('', '_blank', 'width=1200,height=800')
-  if (!pw) { alert('Allow popups to print the class lists.'); return }
-  const bodies = list.map((opts) => classListBody(opts)).join('\n')
-  pw.document.write(classListDoc(`Class Lists | ${list[0].schoolName}`, list[0].config, bodies))
-  pw.document.close()
-  pw.focus()
-  setTimeout(() => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }, 350)
+/**
+ * Style + body markup only (no outer <html>/<head>/<body>) — for embedding in
+ * an in-page print portal via dangerouslySetInnerHTML, the same way report
+ * cards print without leaving the app (see .rc-print-portal in globals.css).
+ * One or several classes; each gets its own page via .class-page's
+ * page-break-after.
+ */
+export function classListPrintPortalHtml(list: ClassListDocOptions[]): string {
+  if (list.length === 0) return ''
+  return `<style>${classListStyles(list[0].config)}</style>${list.map(classListBody).join('\n')}`
 }

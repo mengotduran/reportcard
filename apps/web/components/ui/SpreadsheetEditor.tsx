@@ -167,18 +167,56 @@ export function applyDeleteRows(table: SpreadsheetTable, sel: SheetRange): Sprea
   return { ...table, rows: table.rows.filter((_, i) => i < n.r1 || i > n.r2) }
 }
 
+// Both column ops below walk each row's cells summing colSpan (default 1) to
+// track each cell's true logical column range, rather than assuming array
+// index === logical column. Plain rows (no merged cells) have colSpan 1
+// everywhere, so this is a no-op there — but rows with a wide colSpan cell
+// (e.g. a "TOTAL" banner spanning several columns, as in the Ledger template)
+// have fewer array entries than colCount, and indexing by raw `ci` silently
+// hit the wrong cell — deleting/inserting into a banner row wrote to whatever
+// column happened to share that low index, and left its colSpan stale so it
+// no longer matched the table's real width. Growing/shrinking colSpan here
+// keeps every row's total logical width equal to colCount after the edit.
 export function applyInsertCol(
   table: SpreadsheetTable, sel: SheetRange, after: boolean,
 ): { table: SpreadsheetTable; newSel: SheetRange } {
   const n = normRange(sel)
-  const at = after ? n.c2 + 1 : n.c1
+  const at = after ? n.c2 + 1 : n.c1   // logical column the new column is inserted before
   const ws = table.colWidths
   return {
     table: {
       ...table,
       colCount: table.colCount + 1,
       rows: table.rows.map(row => {
-        const cells = [...row.cells]; cells.splice(at, 0, {}); return { ...row, cells }
+        const cells: SheetCell[] = []
+        let col = 0
+        let done = false
+        for (const cell of row.cells) {
+          const span = cell.colSpan ?? 1
+          const start = col, end = col + span - 1
+          if (!done && at === start) {
+            cells.push({})
+            col += 1
+            done = true
+          }
+          if (!done && at > start && at <= end) {
+            cells.push({ ...cell, colSpan: span + 1 })
+            col += span + 1
+            done = true
+            continue
+          }
+          cells.push(cell)
+          col += span
+        }
+        if (!done) {
+          // Inserting at the very end: a single cell spanning the whole row
+          // (a full-width title banner) grows with the table; anything else
+          // gets a fresh empty cell.
+          if (cells.length === 1 && (cells[0].colSpan ?? 1) === table.colCount)
+            cells[0] = { ...cells[0], colSpan: table.colCount + 1 }
+          else cells.push({})
+        }
+        return { ...row, cells }
       }),
       colWidths: ws ? [...ws.slice(0, at), ws[n.c1] ?? 80, ...ws.slice(at)] : undefined,
     },
@@ -188,14 +226,28 @@ export function applyInsertCol(
 
 export function applyDeleteCols(table: SpreadsheetTable, sel: SheetRange): SpreadsheetTable {
   const n = normRange(sel)
-  const keep = (ci: number) => ci < n.c1 || ci > n.c2
-  const newCount = Array.from({ length: table.colCount }, (_, i) => i).filter(keep).length
-  if (newCount === 0) return table
+  const newCount = table.colCount - (n.c2 - n.c1 + 1)
+  if (newCount <= 0) return table
   return {
     ...table,
     colCount: newCount,
-    rows: table.rows.map(row => ({ ...row, cells: row.cells.filter((_, ci) => keep(ci)) })),
-    colWidths: table.colWidths?.filter((_, ci) => keep(ci)),
+    rows: table.rows.map(row => {
+      const cells: SheetCell[] = []
+      let col = 0
+      for (const cell of row.cells) {
+        const span = cell.colSpan ?? 1
+        const start = col, end = col + span - 1
+        col += span
+        if (start >= n.c1 && end <= n.c2) continue // fully inside the deleted range — drop
+        if (end < n.c1 || start > n.c2) { cells.push(cell); continue } // no overlap — keep as-is
+        // Partial overlap — shrink the span by however many of its columns are being deleted
+        const overlap = Math.min(end, n.c2) - Math.max(start, n.c1) + 1
+        const newSpan = span - overlap
+        cells.push(newSpan > 1 ? { ...cell, colSpan: newSpan } : { ...cell, colSpan: undefined })
+      }
+      return { ...row, cells }
+    }),
+    colWidths: table.colWidths?.filter((_, ci) => ci < n.c1 || ci > n.c2),
   }
 }
 
@@ -491,8 +543,10 @@ export function SpreadsheetGrid({
     const option = SHEET_FIELD_OPTIONS.find(o => o.value === keyValue)
     const label  = option?.label ?? keyValue.replace(/^m:/, '')
     const dataIdx = rows.findIndex(r => r._isDataRow)
-    // Sample header style from a sibling cell so new columns inherit the header color
-    const headerRowRef = dataIdx > 0 ? rows[0] : null
+    // Sample header style from a sibling cell in the row just above the data
+    // row — that's the real header row even when a full-width title banner
+    // sits above it (e.g. the Ledger's term strip).
+    const headerRowRef = dataIdx > 0 ? rows[dataIdx - 1] : null
     const siblingHdrCell = headerRowRef?.cells.find((c, ci) => ci !== col && c.bgColor)
     const inheritedHdr = siblingHdrCell
       ? { bgColor: siblingHdrCell.bgColor, textColor: siblingHdrCell.textColor, bold: siblingHdrCell.bold }
@@ -502,7 +556,10 @@ export function SpreadsheetGrid({
       cells: row.cells.map((cell, ci) => {
         if (ci !== col || cell._consumed) return cell
         if (row._isDataRow) return { ...cell, field: keyValue || undefined, text: undefined }
-        if (dataIdx < 0 || ri < dataIdx) return { ...cell, text: label, field: undefined, ...inheritedHdr }
+        // Only single-span cells take the column label — a merged cell above
+        // the data row (title banner) spans many columns and must keep its
+        // own content.
+        if ((dataIdx < 0 || ri < dataIdx) && (cell.colSpan ?? 1) === 1) return { ...cell, text: label, field: undefined, ...inheritedHdr }
         return cell
       }),
     })))
@@ -628,7 +685,7 @@ export function SpreadsheetGrid({
                           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                         }}>
                           {cell.field && !resolveField
-                            ? <em style={{ fontSize: 8, color, opacity: 0.8, fontStyle: 'normal' }}>[{cell.field}]</em>
+                            ? <em style={{ fontSize: 8, color: cell.textColor ?? color, opacity: 0.8, fontStyle: 'normal' }}>[{cell.field}]</em>
                             : displayVal}
                         </div>
                       )}
@@ -654,13 +711,16 @@ export function SpreadsheetGrid({
               const { table: inserted } = applyInsertCol(table, lastColSel, true)
               const newColIdx = colCount
               const dataIdx   = inserted.rows.findIndex(r => r._isDataRow)
-              // Inherit header style (bgColor, textColor, bold) from any sibling header cell
-              const hdrRow    = dataIdx > 0 ? inserted.rows[0] : null
+              // Inherit header style (bgColor, textColor, bold) from a sibling
+              // cell in the row just above the data row — the real header row,
+              // even when a full-width title banner sits above it.
+              const hdrRowIdx = dataIdx - 1
+              const hdrRow    = hdrRowIdx >= 0 ? inserted.rows[hdrRowIdx] : null
               const sib       = hdrRow?.cells.find((c, ci) => ci !== newColIdx && c.bgColor)
               const newTable  = sib ? {
                 ...inserted,
                 rows: inserted.rows.map((row, ri) =>
-                  ri !== 0 ? row : {
+                  ri !== hdrRowIdx ? row : {
                     ...row,
                     cells: row.cells.map((cell, ci) =>
                       ci !== newColIdx ? cell

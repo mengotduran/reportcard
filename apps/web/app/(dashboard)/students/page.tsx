@@ -14,6 +14,7 @@ import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertT
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
+import CustomSelect from '@/components/ui/CustomSelect'
 import { usePagination } from '@/lib/usePagination'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
@@ -514,18 +515,19 @@ export default function StudentsPage() {
       </div>
 
       {filterClasses.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-4">
-          <button
-            onClick={() => handleClassFilter('all')}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === 'all' ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
-            {t('All')}
-          </button>
-          {filterClasses.map((cls) => (
-            <button key={cls} onClick={() => handleClassFilter(cls)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeClass === cls ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
-              {cls}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? t('Department') : t('Class')}:</span>
+          <CustomSelect
+            className="w-64"
+            compact
+            value={activeClass}
+            onChange={handleClassFilter}
+            placeholder={isUniversity ? t('All Departments') : t('All Classes')}
+            options={[
+              { value: 'all', label: isUniversity ? t('All Departments') : t('All Classes') },
+              ...filterClasses.map((cls) => ({ value: cls, label: cls })),
+            ]}
+          />
         </div>
       )}
 

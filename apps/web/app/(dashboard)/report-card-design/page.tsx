@@ -10,6 +10,7 @@ import {
   RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
   SpreadsheetTable, SheetRow, seedMarksTableSection, buildOfficialContactLine,
+  officialTextBlockHtml, OFFICIAL_HEADER_FONT,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
@@ -409,8 +410,11 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
   // Computed contact line — same in every header style, never directly
   // editable (it just reflects whichever toggles above are on).
   const contactLine = buildOfficialContactLine(school, sec)
-  const ContactLineEl = (sec.showEmail || sec.showPhone || sec.showAddress || sec.showWebsite) ? (
-    <p style={{ textAlign: 'center', fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>
+  // Each toggle defaults to on (undefined = never explicitly touched) — matches
+  // the checkbox UI below, which shows checked until the admin unticks it.
+  const anyContactToggleOn = (sec.showEmail ?? true) || (sec.showPhone ?? true) || (sec.showAddress ?? true) || (sec.showWebsite ?? true)
+  const ContactLineEl = anyContactToggleOn ? (
+    <p style={{ fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>
       {contactLine || t('(Nothing selected above has a value in Settings yet)')}
     </p>
   ) : null
@@ -457,7 +461,11 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
             onChange={e => {
               const on = e.target.checked
               const patch: Partial<HeaderSec> = { officialHeader: on }
-              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${schoolName}\nINSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION`
+              // School name uppercased so it renders as a bold heading line;
+              // typing the school's short acronym (e.g. "CITEC") on its own
+              // line instead gets the large display treatment — see
+              // officialTextBlockHtml in reportCardTemplate.ts.
+              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${schoolName.toUpperCase()}\nINSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION`
               if (on && !sec.rightText) patch.rightText = `REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\nREPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTRY OF HIGHER EDUCATION\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR`
               update({ ...sec, ...patch })
             }} />
@@ -470,11 +478,14 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
           Defaults to on for whatever data exists, until explicitly unchecked. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, padding: '6px 8px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
         {([
+          ['showAuthorization', 'Show Authorization No.', !!(school as any)?.authorizationNumber],
           ['showEmail', 'Show Email', !!school?.email],
           ['showPhone', 'Show Phone', !!school?.phone],
           ['showAddress', 'Show Address', !!school?.address],
           ['showWebsite', 'Show Website', !!school?.website],
-        ] as const).map(([key, label, hasData]) => (
+        ] as const)
+          .filter(([key]) => key !== 'showAuthorization' || sec.officialHeader)
+          .map(([key, label, hasData]) => (
           <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: hasData ? 'pointer' : 'not-allowed', opacity: hasData ? 1 : 0.5 }}
             title={hasData ? '' : t('Set this in School Settings first')}>
             <input type="checkbox" disabled={!hasData} checked={hasData && (sec[key] ?? true)}
@@ -486,19 +497,11 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
 
       {/* Rendered header */}
       {sec.officialHeader ? (
-        /* Three-column official layout: left text | logo | right text */
+        /* Three-column official layout: left text | logo | right text.
+           Per-line styling (bold caps / big acronym / italic motto) comes from
+           officialTextBlockHtml \u2014 shared with the print renderer, see its
+           comment in reportCardTemplate.ts for the typed-driven rules. */
         (() => {
-          const leftLines  = (sec.leftText  ?? '').split('\n')
-          const rightLines = (sec.rightText ?? '').split('\n')
-          // Every line, both sides, uses the same font/size/weight \u2014 the block's
-          // own longest line sets its width, shorter lines center within it
-          // (plain center-align does exactly this; no per-line special-casing).
-          const toHtml = (lines: string[]) =>
-            lines.map(line => {
-              const txt = line || '\u00A0'
-              return `<div style="font-family:Arial,sans-serif;font-size:10px;font-weight:bold;line-height:1.5;text-align:center;">${txt}</div>`
-            }).join('')
-
           return (
             <>
               {/* position:relative + absolutely-positioned logo so a bigger
@@ -508,7 +511,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
                   <div
                     key={leftVer}
                     contentEditable suppressContentEditableWarning
-                    dangerouslySetInnerHTML={{ __html: toHtml(leftLines) }}
+                    dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.leftText ?? '') }}
                     onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
                     style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
                     title="Click to edit"
@@ -517,7 +520,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
                   <div
                     key={rightVer + 10000}
                     contentEditable suppressContentEditableWarning
-                    dangerouslySetInnerHTML={{ __html: toHtml(rightLines) }}
+                    dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.rightText ?? '') }}
                     onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
                     style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
                     title="Click to edit"
@@ -525,8 +528,22 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
                 </div>
                 <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{LogoEl}</div>
               </div>
-              {ContactLineEl}
-              <div style={{ textAlign: 'center', marginTop: 4 }}>
+              {/* Authorization / registration line spanning under the columns
+                  (e.g. "No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010").
+                  Set once in School Settings, toggled on/off here — same
+                  pattern as the contact-line fields below. */}
+              {(sec.showAuthorization ?? true) && (
+                <div style={{ textAlign: 'center', marginTop: 2, fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 'bold', color: '#333' }}>
+                  {(school as any)?.authorizationNumber || t('(Set the Authorization No. in School Settings)')}
+                </div>
+              )}
+              {/* Contact strip between two thin rules, spanning the full width */}
+              {anyContactToggleOn && (
+                <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 600, color: '#111' }}>
+                  {contactLine || t('(Nothing selected above has a value in Settings yet)')}
+                </div>
+              )}
+              <div style={{ textAlign: 'center', marginTop: 6 }}>
                 <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                   style={{ display: 'block', fontSize: 14, fontWeight: 'bold', color, letterSpacing: 3, textTransform: 'uppercase' }} />
               </div>
@@ -1205,6 +1222,11 @@ export default function ReportCardDesignPage() {
   const [colorText, setColorText] = useState(config.primaryColor)
   const [bgText, setBgText] = useState(config.bgColor || '#ffffff')
   const canvasRef = useRef<HTMLDivElement>(null)
+  // The last design actually saved to the server (raw, pre-merge) — kept around so
+  // switching templates in-page can restore it instead of always resetting to blank
+  // defaults. Only ever written from the initial load; switching templates doesn't
+  // touch it, so re-selecting your saved template still brings it back.
+  const savedConfigRef = useRef<Partial<TemplateConfig> | null>(null)
 
   // ── Page-level spreadsheet toolbar state ──────────────────────────────────
   const activeTableIdRef   = useRef<string | null>(null)
@@ -1258,31 +1280,38 @@ export default function ReportCardDesignPage() {
     e.target.value = ''
   }
 
+  // Merge a raw saved config (as returned by the API) onto that template's
+  // defaults — shared by the initial load and by loadTemplate() below, so
+  // re-selecting your saved template reconstructs it identically either way.
+  // Returns null if there's nothing meaningfully saved to merge.
+  const buildMergedConfig = (saved: Partial<TemplateConfig> | null, lang: 'EN' | 'FR', sType: string) => {
+    const ensure = (cfg: any) => ensureMarksTables(cfg, sType)
+    // Ledger isn't in getDefaultLayout's set — it has its own base builder
+    // (special TOTAL/AVERAGE/POSITION footer rows baked into the marks table).
+    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(), layoutType: 'ledger' as const } : getDefaultLayout(tpl)
+    if (saved && (saved as any).sections?.length > 0) {
+      const base = baseFor((saved.template as TemplateName) || 'classic')
+      return ensure(localizeLayout({ ...base, ...saved } as any, lang))
+    }
+    if (saved && Object.keys(saved).length > 0) {
+      const tpl = (saved.template as TemplateName) || 'classic'
+      const layout = baseFor(tpl)
+      return ensure(localizeLayout({ ...layout, ...saved, sections: layout.sections } as any, lang))
+    }
+    return null
+  }
+
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
-    const ensure = (cfg: any) => ensureMarksTables(cfg, sType)
     getTemplateApi().then(({ config: saved }) => {
-      if (saved && (saved as any).sections?.length > 0) {
-        const base = getDefaultLayout((saved.template as TemplateName) || 'classic')
-        const merged = ensure(localizeLayout({ ...base, ...saved } as any, lang))
-        setConfig(merged)
-        setColorText(merged.primaryColor)
-        setBgText(merged.bgColor || '#ffffff')
-      } else if (saved && Object.keys(saved).length > 0) {
-        const tpl = (saved.template as TemplateName) || 'classic'
-        const layout = getDefaultLayout(tpl)
-        const merged = ensure(localizeLayout({ ...layout, ...saved, sections: layout.sections } as any, lang))
-        setConfig(merged)
-        setColorText(merged.primaryColor)
-        setBgText(merged.bgColor || '#ffffff')
-      } else {
-        const layout = ensure(localizeLayout(getDefaultLayoutForType(school?.type), lang))
-        setConfig(layout)
-        setColorText(layout.primaryColor)
-        setBgText(layout.bgColor || '#ffffff')
-      }
+      savedConfigRef.current = saved ?? null
+      const merged = buildMergedConfig(saved ?? null, lang, sType)
+        ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+      setConfig(merged)
+      setColorText(merged.primaryColor)
+      setBgText(merged.bgColor || '#ffffff')
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [isAuthenticated])
@@ -1322,14 +1351,25 @@ export default function ReportCardDesignPage() {
   }
 
   const loadTemplate = (name: TemplateName) => {
-    const layout = getDefaultLayout(name)
+    // Re-selecting the template you last saved should bring back that saved
+    // design, not wipe it back to blank defaults — only a genuinely different,
+    // never-saved-under-this-name template falls back to defaults.
+    const saved = savedConfigRef.current
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    const sType = school?.type || 'SECONDARY'
+    const restored = saved?.template === name ? buildMergedConfig(saved, lang, sType) : null
+    const layout = restored ?? getDefaultLayout(name)
     setConfig(layout)
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
 
   const loadLedger = () => {
-    const layout = { ...getLedgerLayout(), layoutType: 'ledger' as const }
+    const saved = savedConfigRef.current
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    const sType = school?.type || 'SECONDARY'
+    const restored = saved?.template === 'ledger' ? buildMergedConfig(saved, lang, sType) : null
+    const layout = restored ?? { ...getLedgerLayout(), layoutType: 'ledger' as const }
     setConfig(layout)
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')

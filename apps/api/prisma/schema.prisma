@@ -36,6 +36,7 @@ model School {
   acronym            String?
   batch              Int?
   repeatThreshold    Float?
+  authorizationNumber String?
   classLevels        ClassLevel[]
   classListTemplate  ClassListTemplate?
   excelTemplates     ExcelTemplate[]

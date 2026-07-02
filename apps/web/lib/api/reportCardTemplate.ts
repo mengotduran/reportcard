@@ -75,10 +75,14 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   // Official header only — independent per-field toggles for the contact line.
   // Each one only takes effect if the school actually has that value on file
   // (see buildOfficialContactLine); the line is computed live, never stored.
-  showEmail?: boolean; showPhone?: boolean; showAddress?: boolean; showWebsite?: boolean }
+  showEmail?: boolean; showPhone?: boolean; showAddress?: boolean; showWebsite?: boolean
+  // Official header only — same pattern as the contact-line toggles above:
+  // the authorization/registration number lives in School Settings, and this
+  // just switches on whether it's shown, never stores the text itself.
+  showAuthorization?: boolean }
 
 // School contact fields used by the Official header's contact line.
-export interface SchoolContactInfo { email?: string; phone?: string | null; address?: string | null; website?: string | null }
+export interface SchoolContactInfo { email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
 
 /**
  * Builds the Official header's contact line from the school's real, saved
@@ -91,12 +95,44 @@ export function buildOfficialContactLine(
   school: SchoolContactInfo | null | undefined,
   toggles: { showEmail?: boolean; showPhone?: boolean; showAddress?: boolean; showWebsite?: boolean },
 ): string {
+  // Each toggle defaults to on (undefined = never explicitly touched by the
+  // admin) — matches the checkbox UI, which shows checked until unticked.
   const parts: string[] = []
-  if (toggles.showEmail   && school?.email)   parts.push(`Email: ${school.email}`)
-  if (toggles.showWebsite && school?.website) parts.push(`WEB: ${school.website}`)
-  if (toggles.showPhone   && school?.phone)   parts.push(`TEL: ${school.phone}`)
-  if (toggles.showAddress && school?.address) parts.push(school.address)
-  return parts.join('  |  ')
+  if ((toggles.showEmail   ?? true) && school?.email)   parts.push(`Email: ${school.email}`)
+  if ((toggles.showWebsite ?? true) && school?.website) parts.push(`WEB: ${school.website}`)
+  if ((toggles.showPhone   ?? true) && school?.phone)   parts.push(`TEL: ${school.phone}`)
+  if ((toggles.showAddress ?? true) && school?.address) parts.push(school.address)
+  return parts.join(' | ')
+}
+
+// ── Official header text blocks ──────────────────────────────────────────────
+// One renderer shared by the designer canvas AND the print output (same
+// no-drift rule as buildOfficialContactLine). Styling follows Cameroon
+// official-letterhead conventions and is driven purely by how each line is
+// typed — nothing extra to configure:
+//   • ALL-CAPS line               → bold heading (institution / ministry names)
+//   • one short ALL-CAPS word     → large display line (the school acronym)
+//   • Mixed-case line             → small italic (mottos: "Peace-Work-Fatherland")
+//   • blank line                  → a small gap between groups, not a full row
+export const OFFICIAL_HEADER_FONT = 'Arial,Helvetica,sans-serif'
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+export function officialTextBlockHtml(text: string): string {
+  const base = `font-family:${OFFICIAL_HEADER_FONT};text-align:center;line-height:1.35;`
+  return text.split('\n').map(raw => {
+    // contentEditable round-trips blank rows as &nbsp; — normalize before testing
+    const line = raw.replace(/\u00a0/g, ' ').trim()
+    if (!line) return `<div style="${base}font-size:4px;">&nbsp;</div>`
+    const esc = escapeHtml(line)
+    const caps = line === line.toUpperCase() && /[A-Z]/.test(line)
+    if (caps && !line.includes(' ') && line.length <= 12)
+      return `<div style="${base}font-size:16px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
+    if (caps)
+      return `<div style="${base}font-size:9.5px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
+    return `<div style="${base}font-size:8.5px;font-style:italic;color:#333;">${esc}</div>`
+  }).join('')
 }
 
 export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|3; rows: InfoRow[] }
@@ -365,25 +401,36 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
   const cols = ['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const
   const ts = Date.now()
 
-  const bannerBg = '#f1f5f9'
+  // CITEC-transcript-style banding: near-black full-width term banner on top,
+  // light-gray bordered header + TOTAL band, white stats rows, then one big
+  // bold "TERM AVERAGE" hero line (mirrors the transcript's SEMESTER GPA row).
+  const bandBg = '#f1f5f9'
+  const bandFg = '#111827'
 
   const marksTemplate: SpreadsheetTable = {
     id: `marks_${ts}`,
     title: '',
     colCount: cols.length,
     rows: [
+      // Full-width term banner — resolves to "FIRST TERM" etc. per report card.
       {
-        id: `mhdr_${ts}`,
+        id: `mban_${ts}`,
+        cells: [
+          { field: 'term', bold: true, align: 'left', colSpan: cols.length, bgColor: color, textColor: '#ffffff', fontSize: 11 },
+        ],
+      },
+      {
+        id: `mhdr_${ts + 1}`,
         cells: cols.map((k) => ({
           text: MARKS_COL_LABELS[k]?.label ?? k,
           bold: true,
           align: MARKS_COL_LABELS[k]?.align ?? 'center',
-          bgColor: color,
-          textColor: '#ffffff',
+          bgColor: bandBg,
+          textColor: bandFg,
         })),
       },
       {
-        id: `mdata_${ts + 1}`,
+        id: `mdata_${ts + 2}`,
         _isDataRow: true,
         cells: cols.map((k) => ({
           field: `m:${k}`,
@@ -391,29 +438,38 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
           ...(MARKS_COL_LABELS[k]?.bold ? { bold: true } : {}),
         })),
       },
-      // TOTAL row — mirrors the transcript's course-total row.
-      {
-        id: `mfoot_${ts + 2}`,
-        cells: [
-          { text: 'TOTAL', bold: true, colSpan: 4, align: 'left', bgColor: bannerBg },
-          { field: 'total', bold: true, align: 'center', bgColor: bannerBg },
-          { text: '', colSpan: 2, bgColor: bannerBg },
-        ],
-      },
-      // TERM AVERAGE banner — mirrors the transcript's bold "SEMESTER GPA:" line.
+      // TOTAL band — mirrors the transcript's course-total row.
       {
         id: `mfoot_${ts + 3}`,
         cells: [
-          { text: 'TERM AVERAGE:', bold: true, colSpan: 6, align: 'right', bgColor: bannerBg, textColor: color },
-          { field: 'average', bold: true, align: 'center', bgColor: bannerBg, textColor: color, fontSize: 15 },
+          { text: 'TOTAL', bold: true, colSpan: 4, align: 'left', bgColor: bandBg, textColor: bandFg },
+          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', colSpan: 2, bgColor: bandBg },
         ],
       },
-      // CLASS POSITION banner — same treatment, one row down.
+      // Secondary stats share one white row: class average | class position.
+      // Spans are chosen around the print column widths: the first label
+      // absorbs the wide flexible subject column (S/N + Subject), its value
+      // lands in the narrow Seq 1 column, the second label spans Seq 2 +
+      // Score + Grade (~134px — wide enough that the column border never
+      // slices the text), and its value sits in the fixed-width Remarks
+      // column at the right edge, on the same border line as the TERM
+      // AVERAGE value below it.
       {
         id: `mfoot_${ts + 4}`,
         cells: [
-          { text: 'CLASS POSITION:', bold: true, colSpan: 6, align: 'right', bgColor: bannerBg, textColor: color },
-          { field: 'position', bold: true, align: 'center', bgColor: bannerBg, textColor: color, fontSize: 15 },
+          { text: 'CLASS AVERAGE:', bold: true, colSpan: 2, align: 'right', textColor: '#475569' },
+          { field: 'classAverage', bold: true, align: 'center' },
+          { text: 'CLASS POSITION:', bold: true, colSpan: 3, align: 'right', textColor: '#475569' },
+          { field: 'position', bold: true, align: 'center' },
+        ],
+      },
+      // Hero line — big bold term average, like the transcript's GPA row.
+      {
+        id: `mfoot_${ts + 5}`,
+        cells: [
+          { text: 'TERM AVERAGE:', bold: true, colSpan: 6, align: 'right', textColor: color },
+          { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
         ],
       },
     ],

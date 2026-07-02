@@ -73,6 +73,7 @@ model School {
   acronym        String?
   batch          Int?
   repeatThreshold Float?
+  authorizationNumber String?
 
   parentSchool   ParentSchool? @relation(fields: [parentSchoolId], references: [id])
 

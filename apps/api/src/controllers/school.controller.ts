@@ -21,7 +21,7 @@ export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
 export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, phone, address, website, acronym, batch, repeatThreshold } = req.body
+    const { name, email, phone, address, website, acronym, batch, repeatThreshold, authorizationNumber } = req.body
     const data: Record<string, unknown> = {}
     if (name             !== undefined) data.name             = String(name).trim()
     if (phone            !== undefined) data.phone            = String(phone).trim() || null
@@ -30,9 +30,16 @@ export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
     if (acronym          !== undefined) data.acronym          = String(acronym).trim().toUpperCase() || null
     if (batch            !== undefined) data.batch            = batch === null || batch === '' ? null : Number(batch)
     if (repeatThreshold  !== undefined) data.repeatThreshold  = repeatThreshold === null || repeatThreshold === '' ? null : Number(repeatThreshold)
+    if (authorizationNumber !== undefined) data.authorizationNumber = String(authorizationNumber).trim() || null
+    if (email            !== undefined) {
+      const trimmed = String(email).trim().toLowerCase()
+      if (!trimmed) { res.status(400).json({ message: 'Email is required' }); return }
+      data.email = trimmed
+    }
     const school = await prisma.school.update({ where: { id: schoolId }, data })
     res.json({ school })
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === 'P2002') { res.status(409).json({ message: 'That email is already in use by another school' }); return }
     console.error(error)
     res.status(500).json({ message: 'Server error' })
   }

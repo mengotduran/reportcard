@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
@@ -15,7 +16,7 @@ import { useToast } from '@/lib/useToast'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 import DesktopOnly from '@/components/ui/DesktopOnly'
 import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
-import { printClassLists } from '@/lib/classListDocument'
+import { ClassListDocOptions, classListPrintPortalHtml } from '@/lib/classListDocument'
 import ClassPickerModal, { ClassOption } from '@/components/ui/ClassPickerModal'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
 import Pagination from '@/components/ui/Pagination'
@@ -30,7 +31,7 @@ interface RawEntry {
 }
 interface RawRC {
   id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
-  classSize?: number | null
+  classSize?: number | null; classAverage?: number | null
   annualAverage?: number | null; annualPosition?: number | null; annualClassSize?: number | null
   decision?: string | null
   student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; isActive?: boolean }
@@ -40,45 +41,21 @@ interface RawRC {
 
 interface PrintJob { cards: RawRC[]; config: TemplateConfig }
 
-function openPopupPrint(cards: RawRC[], config: TemplateConfig, schoolName: string, schoolType: string, schoolLogo: string | null) {
-  const origin = window.location.origin
-  const html = cards.map((rc, i) => {
-    const el = document.getElementById(`rc-print-${rc.id}`)
-    if (!el) return ''
-    const raw = el.outerHTML.replace(/\bsrc="(\/[^"]+)"/g, `src="${origin}$1"`)
-    return i < cards.length - 1 ? `<div style="page-break-after:always">${raw}</div>` : raw
-  }).join('')
-
-  const pw = window.open('', 'classPrint', 'width=900,height=700')
-  if (!pw) { alert('Allow popups for this site to enable printing.'); return }
-
-  pw.document.write(`<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Report Cards</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #fff; }
-  @page { margin: 0; size: A4 portrait; }
-  * { print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; }
-  tbody tr, tbody td { background-color: transparent !important; }
-</style>
-</head>
-<body>${html}</body>
-</html>`)
-  pw.document.close()
-  pw.focus()
-  const imgs = Array.from(pw.document.images)
-  const doPrint = () => { pw.print(); pw.addEventListener('afterprint', () => pw.close()) }
-  if (imgs.length === 0) { setTimeout(doPrint, 250) }
-  else {
-    let done = 0
-    imgs.forEach(img => {
-      const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 250) }
-      if (img.complete) tick(); else { img.onload = tick; img.onerror = tick }
-    })
-  }
+/**
+ * Print the .rc-print-portal in place (no popup window) — waits for any
+ * images inside it to finish loading first, same as the single report card's
+ * print flow, then calls afterPrint() to clear the caller's print-job state.
+ */
+function printPortalWhenReady(afterPrint: () => void) {
+  const el = document.querySelector('.rc-print-portal')
+  const imgs = el ? Array.from(el.getElementsByTagName('img')) : []
+  const doPrint = () => { window.print(); afterPrint() }
+  if (imgs.length === 0) { setTimeout(doPrint, 200); return }
+  let done = 0
+  imgs.forEach(img => {
+    const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
+    if (img.complete) tick(); else { img.onload = tick; img.onerror = tick }
+  })
 }
 
 interface ReportCard {
@@ -120,10 +97,8 @@ function TeacherClassesView() {
   useEffect(() => {
     if (!printJob) return
     const timer = setTimeout(() => {
-      openPopupPrint(printJob.cards, printJob.config, school?.name ?? '', school?.type ?? 'SECONDARY', school?.logo ?? null)
-      setPrintJob(null)
-      setPrinting(false)
-    }, 600)
+      printPortalWhenReady(() => { setPrintJob(null); setPrinting(false) })
+    }, 300)
     return () => clearTimeout(timer)
   }, [printJob])
 
@@ -280,12 +255,12 @@ function TeacherClassesView() {
         </div>
       )}
 
-      {printJob && (
-        <div style={{ position: 'absolute', left: 0, top: 0, width: '210mm', overflow: 'visible', visibility: 'hidden', pointerEvents: 'none' }}>
-          {printJob.cards.map((rc) => (
-            <div key={rc.id} id={`rc-print-${rc.id}`}>
+      {printJob && typeof document !== 'undefined' && createPortal(
+        <div className="rc-print-portal">
+          {printJob.cards.map((rc, i) => (
+            <div key={rc.id} style={i < printJob.cards.length - 1 ? { pageBreakAfter: 'always' } : undefined}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
@@ -295,6 +270,7 @@ function TeacherClassesView() {
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
                 classSize={rc.classSize ?? undefined}
+                classAverage={rc.classAverage ?? undefined}
                 annualAverage={rc.annualAverage ?? undefined}
                 annualPosition={rc.annualPosition ?? undefined}
                 annualClassSize={rc.annualClassSize ?? undefined}
@@ -303,7 +279,8 @@ function TeacherClassesView() {
               />
             </div>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Bulk publish result modal */}
@@ -380,6 +357,9 @@ export default function ReportCardsPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
   const [printing, setPrinting] = useState(false)
+  // Class-list print data — rendered into an off-screen in-page portal and
+  // printed via window.print(), same as the report card (no popup window).
+  const [classListPrintData, setClassListPrintData] = useState<ClassListDocOptions[] | null>(null)
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
   const [bulkResult, setBulkResult] = useState<{ classLevel: string; published: number; skipped: number; issues: { student: string; reason: string }[] } | null>(null)
   const [classPicker, setClassPicker] = useState<'publish' | 'classList' | 'printClass' | null>(null)
@@ -455,7 +435,7 @@ export default function ReportCardsPage() {
           classLevel: cl, schoolName: school?.name ?? '', schoolType: school?.type ?? '', logoUrl, config,
         }
       }))
-      printClassLists(docs)
+      setClassListPrintData(docs)
     } catch {
       showToast(tr('Failed to load class list'), 'error')
     } finally { setPickerBusy(false); setClassPicker(null) }
@@ -483,12 +463,16 @@ export default function ReportCardsPage() {
   useEffect(() => {
     if (!printJob) return
     const timer = setTimeout(() => {
-      openPopupPrint(printJob.cards, printJob.config, school?.name ?? '', school?.type ?? 'SECONDARY', school?.logo ?? null)
-      setPrintJob(null)
-      setPrinting(false)
-    }, 600)
+      printPortalWhenReady(() => { setPrintJob(null); setPrinting(false) })
+    }, 300)
     return () => clearTimeout(timer)
   }, [printJob])
+
+  useEffect(() => {
+    if (!classListPrintData) return
+    const timer = setTimeout(() => { window.print(); setClassListPrintData(null) }, 350)
+    return () => clearTimeout(timer)
+  }, [classListPrintData])
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
@@ -1052,12 +1036,12 @@ export default function ReportCardsPage() {
         </div>
       )}
 
-      {printJob && (
-        <div style={{ position: 'absolute', left: 0, top: 0, width: '210mm', overflow: 'visible', visibility: 'hidden', pointerEvents: 'none' }}>
-          {printJob.cards.map((rc) => (
-            <div key={rc.id} id={`rc-print-${rc.id}`}>
+      {printJob && typeof document !== 'undefined' && createPortal(
+        <div className="rc-print-portal">
+          {printJob.cards.map((rc, i) => (
+            <div key={rc.id} style={i < printJob.cards.length - 1 ? { pageBreakAfter: 'always' } : undefined}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
@@ -1067,6 +1051,7 @@ export default function ReportCardsPage() {
                 average={rc.average ?? 0}
                 position={rc.position ?? null}
                 classSize={rc.classSize ?? undefined}
+                classAverage={rc.classAverage ?? undefined}
                 annualAverage={rc.annualAverage ?? undefined}
                 annualPosition={rc.annualPosition ?? undefined}
                 annualClassSize={rc.annualClassSize ?? undefined}
@@ -1075,7 +1060,13 @@ export default function ReportCardsPage() {
               />
             </div>
           ))}
-        </div>
+        </div>,
+        document.body,
+      )}
+
+      {classListPrintData && typeof document !== 'undefined' && createPortal(
+        <div className="classlist-print-portal" dangerouslySetInnerHTML={{ __html: classListPrintPortalHtml(classListPrintData) }} />,
+        document.body,
       )}
     </div>
     </DesktopOnly>
