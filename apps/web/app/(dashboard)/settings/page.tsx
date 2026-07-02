@@ -209,7 +209,12 @@ export default function SettingsPage() {
     if (!trimmed) { showToast(t('Email is required'), 'error'); return }
     setSavingMyEmail(true)
     try {
-      const res = await updateMyEmailApi(trimmed)
+      // Keep the "Saving…" state up for at least a beat so a fast response
+      // doesn't flash past unnoticed — the change is worth confirming visually.
+      const [res] = await Promise.all([
+        updateMyEmailApi(trimmed),
+        new Promise(resolve => setTimeout(resolve, 1000)),
+      ])
       updateUser({ email: res.email })
       showToast(t('Your email was updated'))
     } catch (err: any) {
