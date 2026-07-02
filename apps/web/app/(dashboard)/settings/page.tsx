@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle } from 'lucide-react'
 import api from '@/lib/api/client'
-import { updateLanguagePreferenceApi } from '@/lib/api/auth'
+import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -198,6 +198,25 @@ export default function SettingsPage() {
     finally { setSavingThreshold(false) }
   }
 
+  // My Account — the logged-in admin's own login email, distinct from the
+  // school's institutional email above.
+  const [myEmail, setMyEmail] = useState(user?.email ?? '')
+  const [savingMyEmail, setSavingMyEmail] = useState(false)
+  useEffect(() => { setMyEmail(user?.email ?? '') }, [user?.email])
+
+  const handleSaveMyEmail = async () => {
+    const trimmed = myEmail.trim()
+    if (!trimmed) { showToast(t('Email is required'), 'error'); return }
+    setSavingMyEmail(true)
+    try {
+      const res = await updateMyEmailApi(trimmed)
+      updateUser({ email: res.email })
+      showToast(t('Your email was updated'))
+    } catch (err: any) {
+      showToast(err.response?.data?.message ?? t('Failed to update email'), 'error')
+    } finally { setSavingMyEmail(false) }
+  }
+
   const logoUrl = school?.logo ?? null
   const coverImages: string[] = (school as any)?.coverImages ?? []
 
@@ -209,6 +228,32 @@ export default function SettingsPage() {
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-foreground tracking-tight">{t('School Settings')}</h2>
         <p className="text-muted-foreground text-sm mt-1">{t('Customize your school\'s appearance on the platform')}</p>
+      </div>
+
+      {/* My Account */}
+      <div className="bg-card rounded-xl border border-border p-6 mb-4">
+        <h3 className="font-semibold text-foreground flex items-center gap-2 mb-4">
+          <UserCircle size={16} /> {t('My Account')}
+        </h3>
+        <div className="grid grid-cols-1 gap-3">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')}</label>
+            <input
+              type="email"
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              value={myEmail}
+              onChange={e => setMyEmail(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground mt-1">{t('Used to sign in — not the same as the school email above')}</p>
+          </div>
+        </div>
+        <button
+          onClick={handleSaveMyEmail}
+          disabled={savingMyEmail}
+          className="mt-4 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+        >
+          {savingMyEmail ? t('Saving…') : t('Save Email')}
+        </button>
       </div>
 
       {/* School Info */}
