@@ -42,3 +42,8 @@ export const updateLanguagePreferenceApi = async (language: 'EN' | 'FR') => {
   const res = await api.patch('/auth/me/language', { language })
   return res.data as { preferredLanguage: string }
 }
+
+export const updateMyEmailApi = async (email: string) => {
+  const res = await api.patch('/auth/me/email', { email })
+  return res.data as { id: string; name: string; email: string; role: string }
+}

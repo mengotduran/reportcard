@@ -163,6 +163,24 @@ export const updatePreferredLanguage = async (req: AuthRequest, res: Response) =
   }
 }
 
+// Update the logged-in user's own login email (their personal account email,
+// distinct from the school's institutional email in School Settings).
+export const updateMyEmail = async (req: AuthRequest, res: Response) => {
+  try {
+    const trimmed = String(req.body.email ?? '').trim().toLowerCase()
+    if (!trimmed) { res.status(400).json({ message: 'Email is required' }); return }
+    const updated = await prisma.user.update({ where: { id: req.user!.id }, data: { email: trimmed } })
+    res.json({
+      id: updated.id, name: updated.name, email: updated.email, role: updated.role,
+      masterClassLevel: updated.masterClassLevel ?? null, preferredLanguage: updated.preferredLanguage,
+    })
+  } catch (error: any) {
+    if (error?.code === 'P2002') { res.status(409).json({ message: 'That email is already in use by another account' }); return }
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 // Superadmin self-recovery — no auth, uses SUPERADMIN_SECRET
 export const resetSuperAdminPassword = async (req: Request, res: Response) => {
   try {
