@@ -3,6 +3,10 @@ import { useEffect, useState } from 'react'
 import { getTeachersApi, createTeacherApi, updateTeacherApi, deleteTeacherApi, getTeacherSubjectsApi, assignTeacherSubjectsApi } from '@/lib/api/teachers'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getClassLevelsApi } from '@/lib/api/classLevels'
+import { getDepartmentsApi } from '@/lib/api/departments'
+
+// Secondary non-default departments store classes with a " (Department)" suffix.
+const stripSection = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 import { useAuthStore } from '@/lib/store/auth.store'
 import { School, Plus, Trash2, X, Eye, EyeOff, BookOpen, Info, Pencil, KeyRound } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
@@ -36,6 +40,8 @@ export default function TeachersPage() {
   const tr = useT()
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
+  const [classToDept, setClassToDept] = useState<Record<string, string>>({})
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [allSubjects, setAllSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<string[]>([])
@@ -77,6 +83,15 @@ export default function TeachersPage() {
       const [sd, clData] = await Promise.all([getSubjectsApi(), getClassLevelsApi()])
       setAllSubjects(sd.subjects)
       setClassLevels(clData.classLevels.sort((a: any, b: any) => a.order - b.order).map((cl: any) => cl.name))
+      // Secondary: map each class to its department so the assignment modal can
+      // group subjects by department (a teacher may span several departments).
+      if (isSecondary) {
+        try {
+          const { departments } = await getDepartmentsApi()
+          const byId = new Map(departments.map((d) => [d.id, d.name]))
+          setClassToDept(Object.fromEntries(clData.classLevels.map((cl: any) => [cl.name, byId.get(cl.departmentId) ?? 'Grammar'])))
+        } catch { /* non-fatal */ }
+      }
       // For university, derive available semesters from the subjects list and
       // load teachers for the first semester right away.
       if (isUniversity) {
@@ -301,7 +316,7 @@ export default function TeachersPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">
                     {t.masterClassLevel
-                      ? <span className="inline-block whitespace-nowrap text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">{t.masterClassLevel}</span>
+                      ? <span className="inline-block whitespace-nowrap text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">{isSecondary ? stripSection(t.masterClassLevel) : t.masterClassLevel}</span>
                       : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
@@ -378,7 +393,7 @@ export default function TeachersPage() {
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                     <option value="">{tr('Select a class')}</option>
                     {classLevels.map(cl => (
-                      <option key={cl} value={cl}>{cl}</option>
+                      <option key={cl} value={cl}>{isSecondary ? (classToDept[cl] ? `${stripSection(cl)} · ${classToDept[cl]}` : stripSection(cl)) : cl}</option>
                     ))}
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">{tr('This is the class they write general remarks for.')}</p>
@@ -429,9 +444,18 @@ export default function TeachersPage() {
             )}
 
             <div className="flex-1 overflow-y-auto space-y-4">
-              {Object.entries(grouped).map(([classLevel, subjects]) => (
+              {Object.entries(grouped)
+                .sort((a, b) => isSecondary
+                  ? ((classToDept[a[0]] ?? '').localeCompare(classToDept[b[0]] ?? '') || a[0].localeCompare(b[0]))
+                  : 0)
+                .map(([classLevel, subjects]) => (
                 <div key={classLevel}>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">{classLevel}</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-2">
+                    {isSecondary ? stripSection(classLevel) : classLevel}
+                    {isSecondary && classToDept[classLevel] && (
+                      <span className="inline-block normal-case bg-primary/10 text-primary px-1.5 py-0.5 rounded-full text-[10px] font-semibold">{classToDept[classLevel]}</span>
+                    )}
+                  </p>
                   <div className="grid grid-cols-2 gap-2">
                     {subjects.map((s) => (
                       <button key={s.id} onClick={() => toggleSubject(s.id)}
@@ -493,7 +517,7 @@ export default function TeachersPage() {
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                     <option value="">{tr('Select a class')}</option>
                     {classLevels.map(cl => (
-                      <option key={cl} value={cl}>{cl}</option>
+                      <option key={cl} value={cl}>{isSecondary ? (classToDept[cl] ? `${stripSection(cl)} · ${classToDept[cl]}` : stripSection(cl)) : cl}</option>
                     ))}
                   </select>
                   <p className="text-xs text-muted-foreground mt-1">{tr('If another person is already master of this class, they will become a Class Teacher.')}</p>

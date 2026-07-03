@@ -4,9 +4,14 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getSubjectsApi, createSubjectApi, deleteSubjectApi, updateSubjectApi } from '@/lib/api/subjects'
 import { getClassLevelsApi, ClassLevel as ClassLevelOption } from '@/lib/api/classLevels'
+import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
-import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar } from 'lucide-react'
+import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar, Layers } from 'lucide-react'
 import { useT } from '@/lib/i18n'
+
+// Non-default departments store classes with a " (Department)" suffix; strip it
+// for display since the department is already the active context.
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
 interface Subject {
   id: string
@@ -25,14 +30,18 @@ export default function SubjectsPage() {
   const router = useRouter()
   const { isAuthenticated, school, activeSession } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
   const t = useT()
   // Universities call subjects "courses" and classes "departments" — same data/routes, just different wording.
   const tt = (subjectStr: string, courseStr: string) => t(isUniversity ? courseStr : subjectStr)
   const tc = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<ClassLevelOption[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [terms, setTerms] = useState<TermOption[]>([])
   const [loading, setLoading] = useState(true)
+  // Secondary schools drill down department -> class -> subjects.
+  const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null)
   const [selectedClass, setSelectedClass] = useState<string | null>(null)
   // University only — a course belongs to one semester (see Subject.term in schema.prisma).
   const [selectedTerm, setSelectedTerm] = useState<string | null>(null)
@@ -57,6 +66,7 @@ export default function SubjectsPage() {
       getSubjectsApi().then(d => setSubjects(d.subjects)),
       getClassLevelsApi().then(d => setClassLevels(d.classLevels.sort((a, b) => a.order - b.order))),
       getTermsApi().then(d => setTerms(d.terms)),
+      isSecondary ? getDepartmentsApi().then(d => setDepartments(d.departments)).catch(() => {}) : Promise.resolve(),
     ]).finally(() => setLoading(false))
   }, [isAuthenticated])
 
@@ -144,16 +154,73 @@ export default function SubjectsPage() {
     return <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
   }
 
-  // ── Class picker ─────────────────────────────────────────────────────────
-  if (!selectedClass) {
+  // ── Department picker (secondary only) ────────────────────────────────────
+  if (isSecondary && !selectedDeptId) {
     return (
       <div>
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-foreground">{tt('Subjects', 'Courses')}</h2>
-          <p className="text-muted-foreground text-sm mt-1">{isUniversity ? t('Select a department to manage its courses') : t('Select a class to manage its subjects')}</p>
+          <p className="text-muted-foreground text-sm mt-1">{t('Select a department, then a class, to manage its subjects')}</p>
         </div>
 
-        {classLevels.length === 0 ? (
+        {departments.length === 0 ? (
+          <div className="bg-card rounded-xl border border-border text-center py-12">
+            <Layers size={32} className="mx-auto mb-2 text-muted-foreground" />
+            <p className="text-muted-foreground text-sm">{t('No departments found.')}</p>
+            <button onClick={() => router.push('/classes')} className="mt-3 text-primary text-sm hover:underline">
+              {t('Go to Classes →')}
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
+            {departments.map(dep => {
+              const depClasses = classLevels.filter(cl => cl.departmentId === dep.id)
+              const subjCount = subjects.filter(s => depClasses.some(cl => cl.name === s.classLevel)).length
+              return (
+                <button
+                  key={dep.id}
+                  onClick={() => setSelectedDeptId(dep.id)}
+                  className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 hover:bg-primary/5 transition group active:scale-[0.98]"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
+                      <Layers size={18} />
+                    </div>
+                    <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition" />
+                  </div>
+                  <p className="font-semibold text-foreground">{dep.name}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {depClasses.length} {depClasses.length !== 1 ? t('classes') : t('class')} · {subjCount} {subjCount !== 1 ? t('subjects') : t('subject')}
+                  </p>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Class picker ─────────────────────────────────────────────────────────
+  if (!selectedClass) {
+    const pickerClasses = isSecondary ? classLevels.filter(cl => cl.departmentId === selectedDeptId) : classLevels
+    const activeDept = departments.find(d => d.id === selectedDeptId)
+    return (
+      <div>
+        <div className="flex items-center gap-3 mb-6">
+          {isSecondary && (
+            <button onClick={() => setSelectedDeptId(null)}
+              className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition">
+              <ArrowLeft size={18} />
+            </button>
+          )}
+          <div>
+            <h2 className="text-2xl font-bold text-foreground">{isSecondary && activeDept ? activeDept.name : tt('Subjects', 'Courses')}</h2>
+            <p className="text-muted-foreground text-sm mt-0.5">{isUniversity ? t('Select a department to manage its courses') : t('Select a class to manage its subjects')}</p>
+          </div>
+        </div>
+
+        {pickerClasses.length === 0 ? (
           <div className="bg-card rounded-xl border border-border text-center py-12">
             <BookOpen size={32} className="mx-auto mb-2 text-muted-foreground" />
             <p className="text-muted-foreground text-sm">{tc('No classes found.', 'No departments found.')}</p>
@@ -162,22 +229,23 @@ export default function SubjectsPage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {classLevels.map(cl => {
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
+            {pickerClasses.map(cl => {
               const count = countByClass[cl.name] ?? 0
+              const label = isSecondary ? stripDeptSuffix(cl.name) : cl.name
               return (
                 <button
                   key={cl.id}
                   onClick={() => { setSelectedClass(cl.name); setSelectedTerm(null) }}
-                  className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 hover:bg-primary/5 transition group"
+                  className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 hover:bg-primary/5 transition group active:scale-[0.98]"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center font-bold text-sm">
-                      {cl.name.charAt(0)}
+                      {label.charAt(0)}
                     </div>
                     <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition" />
                   </div>
-                  <p className="font-semibold text-foreground">{cl.name}</p>
+                  <p className="font-semibold text-foreground">{label}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {count === 0 ? tt('No subjects yet', 'No courses yet') : `${count} ${count !== 1 ? tt('subjects', 'courses') : tt('subject', 'course')}`}
                   </p>
@@ -247,6 +315,7 @@ export default function SubjectsPage() {
 
   // ── Subject table for selected class ────────────────────────────────────
   const classMaxScore = classLevels.find(cl => cl.name === selectedClass)?.maxScore ?? 20
+  const selectedClassLabel = isSecondary && selectedClass ? stripDeptSuffix(selectedClass) : selectedClass
 
   return (
     <div>
@@ -259,7 +328,7 @@ export default function SubjectsPage() {
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1 min-w-0">
-          <h2 className="text-2xl font-bold text-foreground">{selectedClass}{isUniversity && <span className="text-muted-foreground font-normal"> · {selectedTerm}</span>}</h2>
+          <h2 className="text-2xl font-bold text-foreground">{selectedClassLabel}{isUniversity && <span className="text-muted-foreground font-normal"> · {selectedTerm}</span>}</h2>
           <p className="text-muted-foreground text-sm mt-0.5">
             {classSubjects.length} {classSubjects.length !== 1 ? tt('subjects', 'courses') : tt('subject', 'course')}
           </p>
@@ -276,7 +345,7 @@ export default function SubjectsPage() {
       {classSubjects.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-14">
           <BookOpen size={32} className="mx-auto mb-3 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm mb-4">{tt('No subjects for', 'No courses for')} <strong>{selectedClass}</strong> {t('yet.')}</p>
+          <p className="text-muted-foreground text-sm mb-4">{tt('No subjects for', 'No courses for')} <strong>{selectedClassLabel}</strong> {t('yet.')}</p>
           <button onClick={openModal}
             className="inline-flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
             <Plus size={15} /> {tt('Add First Subject', 'Add First Course')}
@@ -418,7 +487,7 @@ export default function SubjectsPage() {
               <div>
                 <h3 className="font-semibold text-foreground text-lg">{tt('Add Subject', 'Add Course')}</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {tc('Class:', 'Department:')} <span className="font-semibold text-foreground">{selectedClass}</span>
+                  {tc('Class:', 'Department:')} <span className="font-semibold text-foreground">{selectedClassLabel}</span>
                   {isUniversity && <> · {t('Semester:')} <span className="font-semibold text-foreground">{selectedTerm}</span></>}
                 </p>
               </div>

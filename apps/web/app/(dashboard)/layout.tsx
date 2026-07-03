@@ -232,7 +232,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* ── Main content ─────────────────────────────────────────────────── */}
         <main className="flex-1 min-w-0 overflow-x-clip md:ml-[220px] p-4 pt-20 md:p-8 min-h-screen bg-background">
-          {children}
+          {/* Keyed by route so each page gently fades in on navigation. Opacity-
+              only (no transform) so it never creates a containing block that
+              would disturb sticky/fixed children on any page. */}
+          <div key={pathname} className="animate-fade-in">
+            {children}
+          </div>
         </main>
       </div>
     </AuthGuard>

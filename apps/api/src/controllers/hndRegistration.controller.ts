@@ -64,10 +64,16 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
 
     const allClasses = await prisma.classLevel.findMany({
       where: { schoolId },
-      select: { name: true, hndRegistrationFee: true },
+      select: { name: true, hndRegistrationFee: true, department: { select: { name: true } } },
     })
     const regClasses = allClasses.filter((cl) => isRegistrationClass(schoolType, cl.name))
     const regClassNames = regClasses.map((c) => c.name)
+
+    // Secondary: the grouping "department" is the real Department (Grammar /
+    // Technical / Commercial), not the class name. Map each class to its dept.
+    const realDept = (className: string) =>
+      allClasses.find((c) => c.name === className)?.department?.name ?? 'Grammar'
+    const stripSection = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
     const students = regClassNames.length
       ? await prisma.student.findMany({
@@ -99,7 +105,7 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
         name: s.name,
         studentIdCode: s.studentId,
         classLevel: s.classLevel,
-        department: groupLabelFor(schoolType, s.classLevel),
+        department: schoolType === 'SECONDARY' ? realDept(s.classLevel) : groupLabelFor(schoolType, s.classLevel),
         fee,
         paid,
         balance: Math.max(0, fee - paid),
@@ -109,7 +115,11 @@ export const getHndRegistrationList = async (req: AuthRequest, res: Response) =>
 
     const departments = regClasses
       .map((cl) => ({
-        department: groupLabelFor(schoolType, cl.name),
+        // Fees are still set per class; for secondary we prefix the real
+        // department so identically-sectioned classes stay distinguishable.
+        department: schoolType === 'SECONDARY'
+          ? `${realDept(cl.name)} · ${stripSection(cl.name)}`
+          : groupLabelFor(schoolType, cl.name),
         classLevel: cl.name,
         fee: cl.hndRegistrationFee ?? defaultFee,
         isDefault: cl.hndRegistrationFee == null,

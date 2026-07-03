@@ -83,6 +83,7 @@ model School {
   terms                    Term[]
   reportCards              ReportCard[]
   classLevels              ClassLevel[]
+  departments              Department[]
   reportCardTemplate       ReportCardTemplate?
   classListTemplate        ClassListTemplate?
   gradingScale             GradingScale?
@@ -118,6 +119,20 @@ model ClassListTemplate {
   school School @relation(fields: [schoolId], references: [id])
 }
 
+model Department {
+  id        String       @id @default(uuid())
+  schoolId  String
+  name      String
+  order     Int          @default(0)
+  isDefault Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  school  School       @relation(fields: [schoolId], references: [id])
+  classes ClassLevel[]
+
+  @@unique([schoolId, name])
+}
+
 model ClassLevel {
   id                 String   @id @default(uuid())
   schoolId           String
@@ -128,9 +143,11 @@ model ClassLevel {
   maxScore           Int      @default(20)
   feeAmount          Int      @default(0) // total fee for this class per academic session, in XAF
   hndRegistrationFee Int?
+  departmentId       String?
   createdAt          DateTime @default(now())
 
-  school School @relation(fields: [schoolId], references: [id])
+  school     School      @relation(fields: [schoolId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
 
   @@unique([schoolId, name])
 }

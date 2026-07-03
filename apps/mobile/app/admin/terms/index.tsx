@@ -11,6 +11,9 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
+const DEFAULT_TERM_NAMES = ['First Term', 'Second Term', 'Third Term']
+const DEFAULT_SEM_NAMES  = ['First Semester', 'Second Semester']
+
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -100,6 +103,11 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  optRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  optChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary },
+  optChipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  optChipText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  optChipTextActive: { color: '#fff' },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -127,6 +135,7 @@ export default function TermsScreen() {
   const isUniversity = school?.type === 'UNIVERSITY'
   // Universities call terms "semesters" — same data/route, just different wording.
   const tt = (termStr: string, semesterStr: string) => tr(isUniversity ? semesterStr : termStr)
+  const termNameOptions = isUniversity ? DEFAULT_SEM_NAMES : DEFAULT_TERM_NAMES
   const [terms, setTerms] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -281,7 +290,12 @@ export default function TermsScreen() {
       />
       )}
 
-      <TouchableOpacity style={styles.fab} onPress={() => { setSession(activeSession ?? ''); setModalVisible(true) }} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.fab} onPress={() => {
+        setSession(activeSession ?? '')
+        const used = terms.filter((tm) => tm.session === (activeSession ?? '')).map((tm) => tm.name)
+        setTermName(termNameOptions.find((n) => !used.includes(n)) ?? termNameOptions[0])
+        setModalVisible(true)
+      }} activeOpacity={0.85}>
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
 
@@ -296,14 +310,17 @@ export default function TermsScreen() {
             </View>
 
             <Text style={styles.label}>{tt('Term Name', 'Semester Name')}</Text>
-            <TextInput
-              style={styles.input}
-              value={termName}
-              onChangeText={setTermName}
-              placeholder={tt('e.g. First Term', 'e.g. First Semester')}
-              placeholderTextColor="#9ca3af"
-              autoFocus
-            />
+            <View style={styles.optRow}>
+              {termNameOptions.map((n) => {
+                const active = termName === n
+                return (
+                  <TouchableOpacity key={n} onPress={() => setTermName(n)}
+                    style={[styles.optChip, active && styles.optChipActive]}>
+                    <Text style={[styles.optChipText, active && styles.optChipTextActive]}>{n}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
 
             <Text style={styles.label}>{tr('Session')}</Text>
             <TextInput

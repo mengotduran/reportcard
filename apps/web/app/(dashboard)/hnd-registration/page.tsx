@@ -22,7 +22,9 @@ export default function HndRegistrationPage() {
   const router = useRouter()
   const { isAuthenticated, school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
-  const groupWordCap = isUniversity ? 'Department' : 'Class'
+  const isSecondary = school?.type === 'SECONDARY'
+  const groupWordCap = 'Department'
+  const stripSection = (n: string) => n.replace(/\s*\([^)]*\)\s*$/, '').trim()
   const { toast, showToast, hideToast } = useToast()
 
   const [data, setData] = useState<HndRegList | null>(null)
@@ -195,7 +197,7 @@ export default function HndRegistrationPage() {
                   ? 'bg-primary text-white'
                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
               }`}>
-              {dept === 'ALL' ? (isUniversity ? 'All departments' : 'All classes') : dept}
+              {dept === 'ALL' ? 'All departments' : dept}
             </button>
           ))}
         </div>
@@ -239,6 +241,7 @@ export default function HndRegistrationPage() {
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">#</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Student</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase hidden sm:table-cell">{groupWordCap}</th>
+                    {isSecondary && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase hidden sm:table-cell">Class</th>}
                     <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Paid</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Status</th>
                     <th className="px-4 py-3 w-24"></th>
@@ -253,6 +256,7 @@ export default function HndRegistrationPage() {
                         <p className="text-xs text-muted-foreground">{s.studentIdCode}</p>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{s.department}</td>
+                      {isSecondary && <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{stripSection(s.classLevel)}</td>}
                       <td className="px-4 py-3 text-right font-medium text-emerald-600">{s.paid > 0 ? formatXAF(s.paid) : '—'}</td>
                       <td className="px-4 py-3"><StatusBadge status={s.status} balance={s.balance} /></td>
                       <td className="px-4 py-3 text-right">

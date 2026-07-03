@@ -115,3 +115,38 @@ export const deleteSubject = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ message: 'Server error' })
   }
 }
+
+// Copy every subject from one class to another (same school). Used when creating
+// a new section (e.g. Form 1 B) so the admin doesn't re-enter the subject list.
+// Skips subjects whose name already exists on the target class.
+export const copySubjects = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const fromClassLevel = String(req.body.fromClassLevel ?? '').trim()
+    const toClassLevel = String(req.body.toClassLevel ?? '').trim()
+    if (!fromClassLevel || !toClassLevel || fromClassLevel === toClassLevel) {
+      res.status(400).json({ message: 'A valid source and target class are required' })
+      return
+    }
+
+    const source = await prisma.subject.findMany({ where: { schoolId, classLevel: fromClassLevel } })
+    const existing = new Set(
+      (await prisma.subject.findMany({ where: { schoolId, classLevel: toClassLevel }, select: { name: true } }))
+        .map((s) => s.name.toLowerCase()),
+    )
+    const toCreate = source.filter((s) => !existing.has(s.name.toLowerCase()))
+    if (toCreate.length) {
+      await prisma.subject.createMany({
+        data: toCreate.map((s) => ({
+          schoolId, name: s.name, code: s.code, classLevel: toClassLevel,
+          maxScore: s.maxScore, coefficient: s.coefficient, compulsory: s.compulsory,
+          credit: s.credit, term: s.term,
+        })),
+      })
+    }
+    res.json({ copied: toCreate.length })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}

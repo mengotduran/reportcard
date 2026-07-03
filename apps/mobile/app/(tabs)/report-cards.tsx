@@ -8,6 +8,10 @@ import {
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getCurrentTerm, getClassLevels, getClassOverview, getAllReportCards, bulkPublish, ReportCardSummary, Term } from '@/lib/api/reportcards'
+import { getClasses as getClassesFull } from '@/lib/api/classes'
+import { getDepartments, Department } from '@/lib/api/departments'
+
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
@@ -100,10 +104,14 @@ function TeacherReportCards() {
   const styles = makeStylesStyles(colors)
   const t = useT()
   const router = useRouter()
-  const { user } = useAuthStore()
+  const { user, school } = useAuthStore()
   const isClassMaster = user?.role === 'CLASS_MASTER'
+  const isSecondary = school?.type === 'SECONDARY'
   const [term, setTerm] = useState<Term | null>(null)
   const [classes, setClasses] = useState<ClassSummary[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeDeptId, setActiveDeptId] = useState('')
+  const [classDeptMap, setClassDeptMap] = useState<Record<string, string | null>>({})
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
@@ -127,6 +135,12 @@ function TeacherReportCards() {
         }
       })
       setClasses(summaries)
+      if (isSecondary) {
+        const [full, deptRes] = await Promise.all([getClassesFull(), getDepartments()])
+        setClassDeptMap(Object.fromEntries(full.classLevels.map((c) => [c.name, c.departmentId ?? null])))
+        setDepartments(deptRes.departments)
+        setActiveDeptId((prev) => prev || (deptRes.departments.find((d) => d.isDefault) ?? deptRes.departments[0])?.id || '')
+      }
     } catch (err: any) {
       if (err?.response?.status === 404) {
         setError(t('No active term set. Please set a current term from the web app.'))
@@ -167,10 +181,25 @@ function TeacherReportCards() {
         </View>
       )}
       <FlatList
-        data={classes}
+        data={isSecondary && activeDeptId ? classes.filter((c) => classDeptMap[c.classLevel] === activeDeptId) : classes}
         keyExtractor={(item) => item.classLevel}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        ListHeaderComponent={isSecondary && departments.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}
+            style={{ flexGrow: 0, marginBottom: 12 }} contentContainerStyle={{ flexDirection: 'row', gap: 8 }}>
+            {departments.map((d) => {
+              const active = activeDeptId === d.id
+              return (
+                <TouchableOpacity key={d.id} onPress={() => setActiveDeptId(d.id)}
+                  style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1,
+                    borderColor: active ? '#F03E2F' : colors.border, backgroundColor: active ? '#F03E2F' : colors.bgSecondary }}>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: active ? '#fff' : colors.textSecondary }}>{d.name}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </ScrollView>
+        ) : null}
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="people-outline" size={40} color="#d1d5db" />
@@ -188,10 +217,10 @@ function TeacherReportCards() {
             >
               <View style={styles.cardHeader}>
                 <View style={styles.classIcon}>
-                  <Text style={styles.classIconText}>{item.classLevel.charAt(0)}</Text>
+                  <Text style={styles.classIconText}>{(isSecondary ? stripDeptSuffix(item.classLevel) : item.classLevel).charAt(0)}</Text>
                 </View>
                 <View style={styles.cardInfo}>
-                  <Text style={styles.className}>{item.classLevel}</Text>
+                  <Text style={styles.className}>{isSecondary ? stripDeptSuffix(item.classLevel) : item.classLevel}</Text>
                   <Text style={styles.classMeta}>{item.total} {item.total !== 1 ? t('students') : t('student')}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
@@ -222,7 +251,8 @@ function AdminReportCards() {
   const styles = makeStylesStyles(colors)
   const t = useT()
   const router = useRouter()
-  const { activeSession } = useAuthStore()
+  const { activeSession, school } = useAuthStore()
+  const isSecondary = school?.type === 'SECONDARY'
   const [reportCards, setReportCards] = useState<AdminReportCard[]>([])
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
   const [selectedTermId, setSelectedTermId] = useState<string | null>(null)
@@ -231,6 +261,9 @@ function AdminReportCards() {
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeDeptId, setActiveDeptId] = useState('')
+  const [classDeptMap, setClassDeptMap] = useState<Record<string, string | null>>({})
 
   // Only the active academic year's terms.
   const visibleTerms = terms.filter((tm) => tm.session === activeSession)
@@ -244,10 +277,16 @@ function AdminReportCards() {
       ])
       setReportCards(rcData.reportCards as AdminReportCard[])
       setTerms(termData.terms)
+      if (isSecondary && departments.length === 0) {
+        const [full, deptRes] = await Promise.all([getClassesFull(), getDepartments()])
+        setClassDeptMap(Object.fromEntries(full.classLevels.map((c) => [c.name, c.departmentId ?? null])))
+        setDepartments(deptRes.departments)
+        setActiveDeptId((prev) => prev || (deptRes.departments.find((d) => d.isDefault) ?? deptRes.departments[0])?.id || '')
+      }
     } catch {
       setError(t('Failed to load report cards.'))
     }
-  }, [activeSession])
+  }, [activeSession, isSecondary, departments.length])
 
   // Default the selected term to the active year's live term — once per year, so
   // a manual "All Terms" choice isn't reset every refresh.
@@ -310,8 +349,9 @@ function AdminReportCards() {
 
   const filtered = reportCards.filter((rc) => {
     const termMatch = !selectedTermId || rc.term.id === selectedTermId
+    const deptMatch = !isSecondary || !activeDeptId || classDeptMap[rc.student.classLevel] === activeDeptId
     const q = search.toLowerCase()
-    return termMatch && (
+    return termMatch && deptMatch && (
       rc.student.name.toLowerCase().includes(q) ||
       rc.student.classLevel.toLowerCase().includes(q) ||
       rc.term.name.toLowerCase().includes(q)
@@ -352,6 +392,23 @@ function AdminReportCards() {
         </ScrollView>
       )}
 
+      {/* Department filter (secondary) */}
+      {isSecondary && departments.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8, gap: 8 }}>
+          {departments.map((d) => {
+            const active = activeDeptId === d.id
+            return (
+              <TouchableOpacity key={d.id} onPress={() => setActiveDeptId(d.id)}
+                style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+                  borderColor: active ? '#F03E2F' : colors.border, backgroundColor: active ? '#F03E2F' : colors.card }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: active ? '#fff' : colors.textSecondary }}>{d.name}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </ScrollView>
+      )}
+
       <View style={styles.searchWrap}>
         <Ionicons name="search-outline" size={16} color="#9ca3af" />
         <TextInput
@@ -388,7 +445,7 @@ function AdminReportCards() {
           return (
             <View style={styles.classSection}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <Text style={styles.classSectionTitle}>{classLevel}</Text>
+                <Text style={styles.classSectionTitle}>{isSecondary ? stripDeptSuffix(classLevel) : classLevel}</Text>
                 {unpublishedCount > 0 && selectedTermId && (
                   <TouchableOpacity
                     onPress={() => handleBulkPublish(classLevel)}

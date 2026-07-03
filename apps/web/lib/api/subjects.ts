@@ -19,3 +19,8 @@ export const deleteSubjectApi = async (id: string) => {
   const res = await api.delete(`/subjects/${id}`)
   return res.data
 }
+
+export const copySubjectsApi = async (fromClassLevel: string, toClassLevel: string): Promise<{ copied: number }> => {
+  const res = await api.post('/subjects/copy', { fromClassLevel, toClassLevel })
+  return res.data
+}

@@ -2,16 +2,20 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet,
+  View, Text, FlatList, TouchableOpacity, StyleSheet, ScrollView,
   ActivityIndicator, RefreshControl, Alert, Modal,
   TextInput, Switch,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getClasses, createClass, deleteClass, ClassLevel } from '@/lib/api/classes'
+import { getDepartments, createDepartment, deleteDepartment, Department } from '@/lib/api/departments'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { formatXAF } from '@/lib/api/fees'
+
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+const DEPT_SUGGESTIONS = ['Grammar', 'Technical', 'Commercial']
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -115,6 +119,22 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   createBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   disabled: { opacity: 0.5 },
+  deptBar: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 8, flexDirection: 'row' },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: colors.bgSecondary, borderWidth: 1, borderColor: colors.border,
+  },
+  chipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  chipText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  chipTextActive: { color: '#fff' },
+  chipCount: { fontSize: 11, fontWeight: '700', color: colors.textMuted },
+  chipCountActive: { color: '#fff' },
+  addChip: { borderStyle: 'dashed', borderColor: '#F03E2F', backgroundColor: 'transparent' },
+  addChipText: { color: '#F03E2F', fontWeight: '600', fontSize: 13 },
+  suggestRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  suggestChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: colors.border },
+  suggestChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
 }))
 
 export default function ClassesScreen() {
@@ -123,6 +143,7 @@ export default function ClassesScreen() {
   const t = useT()
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
   // Universities call classes "departments" — same data/route, just different wording.
   const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [classes, setClasses] = useState<ClassLevel[]>([])
@@ -135,6 +156,14 @@ export default function ClassesScreen() {
   const [feeAmount, setFeeAmount] = useState('150000')
   const [creating, setCreating] = useState(false)
 
+  // Secondary departments (streams)
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeDeptId, setActiveDeptId] = useState<string>('')
+  const [deptModalVisible, setDeptModalVisible] = useState(false)
+  const [deptName, setDeptName] = useState('')
+  const [savingDept, setSavingDept] = useState(false)
+  const activeDept = departments.find((d) => d.id === activeDeptId)
+
   const fetchClasses = useCallback(async () => {
     try {
       const data = await getClasses()
@@ -144,14 +173,59 @@ export default function ClassesScreen() {
     }
   }, [])
 
+  const fetchDepartments = useCallback(async () => {
+    try {
+      const d = await getDepartments()
+      setDepartments(d.departments)
+      setActiveDeptId((prev) =>
+        prev && d.departments.some((x) => x.id === prev)
+          ? prev
+          : (d.departments.find((x) => x.isDefault)?.id ?? d.departments[0]?.id ?? ''))
+    } catch { /* ignore */ }
+  }, [])
+
   useFocusEffect(useCallback(() => {
-    fetchClasses().finally(() => setLoading(false))
-  }, [fetchClasses]))
+    Promise.all([fetchClasses(), isSecondary ? fetchDepartments() : Promise.resolve()])
+      .finally(() => setLoading(false))
+  }, [fetchClasses, fetchDepartments, isSecondary]))
 
   const onRefresh = async () => {
     setRefreshing(true)
-    await fetchClasses()
+    await Promise.all([fetchClasses(), isSecondary ? fetchDepartments() : Promise.resolve()])
     setRefreshing(false)
+  }
+
+  const visibleClasses = isSecondary && activeDeptId
+    ? classes.filter((c) => c.departmentId === activeDeptId)
+    : classes
+
+  const handleCreateDept = async () => {
+    if (!deptName.trim()) return
+    setSavingDept(true)
+    try {
+      const { department } = await createDepartment(deptName.trim())
+      setDeptModalVisible(false)
+      setDeptName('')
+      setActiveDeptId(department.id)
+      await fetchDepartments()
+    } catch (err: any) {
+      Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to save department'))
+    } finally { setSavingDept(false) }
+  }
+
+  const handleDeleteDept = (dep: Department) => {
+    Alert.alert(t('Delete Department'), `${t('Delete')} "${dep.name}"?`, [
+      { text: t('Cancel'), style: 'cancel' },
+      { text: t('Delete'), style: 'destructive', onPress: async () => {
+        try {
+          await deleteDepartment(dep.id)
+          if (activeDeptId === dep.id) setActiveDeptId('')
+          await fetchDepartments()
+        } catch (err: any) {
+          Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to delete department'))
+        }
+      } },
+    ])
   }
 
   const handleCreate = async () => {
@@ -162,7 +236,10 @@ export default function ClassesScreen() {
     }
     setCreating(true)
     try {
-      await createClass({ name: newName.trim(), hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0 })
+      await createClass({
+        name: newName.trim(), hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0,
+        ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
+      })
       setModalVisible(false)
       setNewName('')
       setHasStream(false)
@@ -206,10 +283,30 @@ export default function ClassesScreen() {
         </View>
       ) : (
       <FlatList
-        data={classes}
+        data={visibleClasses}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        ListHeaderComponent={isSecondary ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.deptBar}>
+            {departments.map((d) => {
+              const count = classes.filter((c) => c.departmentId === d.id).length
+              const active = activeDeptId === d.id
+              return (
+                <TouchableOpacity key={d.id} style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => setActiveDeptId(d.id)}
+                  onLongPress={() => !d.isDefault && handleDeleteDept(d)}>
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{d.name}</Text>
+                  <Text style={[styles.chipCount, active && styles.chipCountActive]}>{count}</Text>
+                </TouchableOpacity>
+              )
+            })}
+            <TouchableOpacity style={[styles.chip, styles.addChip]} onPress={() => { setDeptName(''); setDeptModalVisible(true) }}>
+              <Ionicons name="add" size={14} color="#F03E2F" />
+              <Text style={styles.addChipText}>{t('Add Department')}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        ) : null}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="school-outline" size={48} color="#d1d5db" />
@@ -220,10 +317,10 @@ export default function ClassesScreen() {
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={styles.iconBox}>
-              <Text style={styles.iconText}>{item.name.charAt(0).toUpperCase()}</Text>
+              <Text style={styles.iconText}>{stripDeptSuffix(item.name).charAt(0).toUpperCase()}</Text>
             </View>
             <View style={styles.info}>
-              <Text style={styles.className}>{item.name}</Text>
+              <Text style={styles.className}>{isSecondary ? stripDeptSuffix(item.name) : item.name}</Text>
               <View style={styles.badgeRow}>
                 {item.hasStream && (
                   <View style={styles.streamBadge}>
@@ -317,6 +414,47 @@ export default function ClassesScreen() {
               {creating
                 ? <ActivityIndicator color="#fff" size="small" />
                 : <Text style={styles.createBtnText}>{tt('Create Class', 'Create Department')}</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add department */}
+      <Modal visible={deptModalVisible} transparent animationType="slide" onRequestClose={() => setDeptModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t('Add Department')}</Text>
+              <TouchableOpacity onPress={() => setDeptModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>{t('Department Name')}</Text>
+            <TextInput
+              style={styles.input}
+              value={deptName}
+              onChangeText={setDeptName}
+              placeholder={t('e.g. Technical, Commercial')}
+              placeholderTextColor="#9ca3af"
+              autoFocus
+            />
+            <View style={styles.suggestRow}>
+              {DEPT_SUGGESTIONS.filter((s) => !departments.some((d) => d.name.toLowerCase() === s.toLowerCase())).map((s) => (
+                <TouchableOpacity key={s} style={styles.suggestChip} onPress={() => setDeptName(s)}>
+                  <Text style={styles.suggestChipText}>{s}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              style={[styles.createBtn, (!deptName.trim() || savingDept) && styles.disabled]}
+              onPress={handleCreateDept}
+              disabled={!deptName.trim() || savingDept}
+            >
+              {savingDept
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={styles.createBtnText}>{t('Add Department')}</Text>}
             </TouchableOpacity>
           </View>
         </View>

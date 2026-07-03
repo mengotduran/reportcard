@@ -120,6 +120,37 @@ button:disabled, [disabled] {
 
 aside ::-webkit-scrollbar-track { background: transparent; }
 
+/* ── Motion utilities ───────────────────────────────────────────────────────
+   Small, reusable entrance animations used across pages (tabs, cards, modals,
+   list rows). Kept subtle and fast so the UI feels responsive, not showy. */
+@keyframes rc-fade-in       { from { opacity: 0 } to { opacity: 1 } }
+@keyframes rc-fade-in-up    { from { opacity: 0; transform: translateY(6px) }  to { opacity: 1; transform: none } }
+@keyframes rc-fade-in-down  { from { opacity: 0; transform: translateY(-6px) } to { opacity: 1; transform: none } }
+@keyframes rc-scale-in      { from { opacity: 0; transform: scale(0.96) }       to { opacity: 1; transform: scale(1) } }
+
+.animate-fade-in      { animation: rc-fade-in      .18s ease-out both }
+.animate-fade-in-up   { animation: rc-fade-in-up   .28s cubic-bezier(0.16, 1, 0.3, 1) both }
+.animate-fade-in-down { animation: rc-fade-in-down .28s cubic-bezier(0.16, 1, 0.3, 1) both }
+.animate-scale-in     { animation: rc-scale-in     .2s  cubic-bezier(0.16, 1, 0.3, 1) both }
+
+/* Stagger helper: children fade up in sequence (used on card grids). */
+.stagger-children > * { animation: rc-fade-in-up .32s cubic-bezier(0.16, 1, 0.3, 1) both }
+.stagger-children > *:nth-child(1)  { animation-delay: .02s }
+.stagger-children > *:nth-child(2)  { animation-delay: .05s }
+.stagger-children > *:nth-child(3)  { animation-delay: .08s }
+.stagger-children > *:nth-child(4)  { animation-delay: .11s }
+.stagger-children > *:nth-child(5)  { animation-delay: .14s }
+.stagger-children > *:nth-child(6)  { animation-delay: .17s }
+.stagger-children > *:nth-child(7)  { animation-delay: .20s }
+.stagger-children > *:nth-child(8)  { animation-delay: .23s }
+.stagger-children > *:nth-child(9)  { animation-delay: .26s }
+.stagger-children > *:nth-child(n+10) { animation-delay: .29s }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in, .animate-fade-in-up, .animate-fade-in-down, .animate-scale-in,
+  .stagger-children > * { animation: none !important }
+}
+
 /* ── Print portals — off-screen so content renders/images load, never visible on screen ── */
 .rc-print-portal,
 .transcript-print-portal,

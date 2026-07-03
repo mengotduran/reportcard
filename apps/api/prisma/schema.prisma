@@ -38,6 +38,7 @@ model School {
   repeatThreshold    Float?
   authorizationNumber String?
   classLevels        ClassLevel[]
+  departments        Department[]
   classListTemplate  ClassListTemplate?
   excelTemplates     ExcelTemplate[]
   feePayments              FeePayment[]
@@ -76,6 +77,19 @@ model ClassListTemplate {
   school    School   @relation(fields: [schoolId], references: [id])
 }
 
+model Department {
+  id        String       @id @default(uuid())
+  schoolId  String
+  name      String
+  order     Int          @default(0)
+  isDefault Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  school    School       @relation(fields: [schoolId], references: [id])
+  classes   ClassLevel[]
+
+  @@unique([schoolId, name])
+}
+
 model ClassLevel {
   id           String   @id @default(uuid())
   schoolId     String
@@ -87,6 +101,8 @@ model ClassLevel {
   feeAmount            Int      @default(0)
   maxScore             Int      @default(20)
   hndRegistrationFee   Int?
+  departmentId         String?
+  department           Department? @relation(fields: [departmentId], references: [id])
   school               School   @relation(fields: [schoolId], references: [id])
 
   @@unique([schoolId, name])

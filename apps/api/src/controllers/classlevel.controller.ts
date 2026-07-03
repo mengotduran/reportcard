@@ -3,6 +3,32 @@ import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { isRegistrationClass } from './hndRegistration.controller'
 
+// Validate a caller-supplied departmentId belongs to the school; for secondary
+// schools with none supplied, fall back to the default department (creating it
+// if the school somehow has none yet).
+async function resolveDepartmentId(
+  schoolId: string,
+  schoolType: string | undefined,
+  departmentId: unknown,
+): Promise<string | null> {
+  if (typeof departmentId === 'string' && departmentId) {
+    const dept = await prisma.department.findFirst({ where: { id: departmentId, schoolId }, select: { id: true } })
+    if (dept) return dept.id
+  }
+  if (schoolType !== 'SECONDARY') return null
+  const existing = await prisma.department.findFirst({
+    where: { schoolId },
+    orderBy: [{ isDefault: 'desc' }, { order: 'asc' }],
+    select: { id: true },
+  })
+  if (existing) return existing.id
+  const created = await prisma.department.create({
+    data: { schoolId, name: 'Grammar', order: 0, isDefault: true },
+    select: { id: true },
+  })
+  return created.id
+}
+
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -20,7 +46,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
 export const createClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee, departmentId } = req.body
 
     if (!name?.trim()) {
       res.status(400).json({ message: 'Class name is required' })
@@ -46,6 +72,11 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
       ? Math.max(0, Math.round(Number(hndRegistrationFee)) || 0)
       : null
 
+    // Resolve which department this class belongs to. Secondary schools group
+    // classes under departments (Grammar / Technical / …); fall back to the
+    // school's default department when the caller didn't specify one.
+    const resolvedDepartmentId = await resolveDepartmentId(schoolId, school?.type, departmentId)
+
     const level = await prisma.classLevel.create({
       data: {
         schoolId, name: name.trim(),
@@ -55,6 +86,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         maxScore: maxScore ? Number(maxScore) : 20,
         feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0),
         hndRegistrationFee: regFee,
+        departmentId: resolvedDepartmentId,
       },
     })
     res.status(201).json({ message: 'Class created', classLevel: level })
@@ -68,7 +100,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee, departmentId } = req.body
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) {
@@ -100,6 +132,9 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         ...(feeAmount !== undefined ? { feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0) } : {}),
         ...(hndRegistrationFee !== undefined
           ? { hndRegistrationFee: !regEligible || hndRegistrationFee === null || hndRegistrationFee === '' ? null : Math.max(0, Math.round(Number(hndRegistrationFee)) || 0) }
+          : {}),
+        ...(departmentId !== undefined
+          ? { departmentId: await resolveDepartmentId(schoolId, school?.type, departmentId) }
           : {}),
       },
     })
