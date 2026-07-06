@@ -676,9 +676,9 @@ export default function StudentsPage() {
                     {(() => {
                       const f = feesByStudent[s.id]
                       if (!f || f.status === 'NONE') return <span className="text-muted-foreground text-sm">—</span>
-                      if (f.status === 'COMPLETE') return <span className="inline-flex px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">{t('Complete')}</span>
+                      if (f.status === 'COMPLETE') return <span className="inline-flex px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded text-xs font-medium">{t('Complete')}</span>
                       const cls = f.status === 'UNPAID' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                      return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
+                      return <span className={`inline-flex px-3 py-1.5 rounded text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
                     })()}
                   </td>
                   <td className="px-4 py-3">

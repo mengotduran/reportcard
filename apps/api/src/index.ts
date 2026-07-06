@@ -33,7 +33,7 @@ app.use(express.json())
 app.use('/uploads', express.static(UPLOAD_DIR))
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'ReportCard API is running' })
+  res.json({ status: 'ok', message: 'Bulletin API is running' })
 })
 
 app.use('/api/auth', authRoutes)

@@ -4,7 +4,8 @@ import { loginApi } from '@/lib/api/auth'
 import { useAuthStore } from '@/lib/store/auth.store'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import AuthBackground from '@/components/ui/AuthBackground'
-import { Eye, EyeOff, AlertCircle } from 'lucide-react'
+import AuthIllustration from '@/components/ui/AuthIllustration'
+import { Eye, EyeOff, AlertCircle, GraduationCap } from 'lucide-react'
 
 // Module-level cache — survives any component remount caused by Next.js
 // hydration or Zustand store notifications. Cleared on successful login.
@@ -51,7 +52,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-start justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen relative overflow-hidden">
       <AuthBackground />
       <div className="absolute top-4 right-4 z-20">
         <ThemeToggle />
@@ -69,18 +70,33 @@ export default function LoginPage() {
         }
       `}</style>
 
-      <div className="relative z-10 w-full max-w-sm pt-[6vh] md:pt-[8vh]">
-        {/* Brand */}
-        <div className="flex items-center gap-2 mb-10">
-          <div className="w-6 h-6 bg-primary rounded-[4px] flex items-center justify-center">
-            <span className="text-white text-[10px] font-black tracking-tight">RC</span>
+      <div className="relative z-10 min-h-screen max-w-6xl mx-auto flex flex-col px-4 py-6 md:px-6">
+        {/* Brand — bold, spans both columns */}
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center shadow-md">
+            <GraduationCap size={22} className="text-white" strokeWidth={2.25} />
           </div>
-          <span className="font-semibold text-sm text-white tracking-tight">ReportCard</span>
+          <div className="leading-tight">
+            <span className="block font-extrabold text-2xl text-[#262016] dark:text-white tracking-tight">Bulletin</span>
+            <span className="block text-[10px] font-bold tracking-[0.16em] uppercase text-[#6f6553] dark:text-white/50">School report cards</span>
+          </div>
         </div>
 
+        {/* Columns */}
+        <div className="flex-1 flex items-center justify-center gap-12 lg:gap-20 w-full">
+          {/* Illustration — desktop only */}
+          <div className="hidden lg:flex flex-1 max-w-xl flex-col items-center justify-center">
+            <AuthIllustration className="w-full h-auto text-[#33291b] dark:text-white/85" />
+            <p className="mt-8 text-center text-[#5f5648] dark:text-white/60 text-sm max-w-sm leading-relaxed">
+              Marks, report cards, class lists and school fees — everything your school needs in one place.
+            </p>
+          </div>
+
+          {/* Sign-in column */}
+          <div className="w-full max-w-sm">
         <div className="mb-7">
-          <h1 className="text-2xl font-bold text-white tracking-tight">Welcome back</h1>
-          <p className="text-white/60 mt-1.5 text-sm">Sign in to your school account</p>
+          <h1 className="text-2xl font-bold text-[#262016] dark:text-white tracking-tight">Welcome back</h1>
+          <p className="text-[#5f5648] dark:text-white/60 mt-1.5 text-sm">Sign in to your school account</p>
         </div>
 
         <div className="bg-card border border-border rounded-xl p-6 space-y-4">
@@ -155,9 +171,11 @@ export default function LoginPage() {
           </button>
         </div>
 
-        <p className="mt-5 text-center text-sm text-white/50">
-          Contact your administrator to get access.
-        </p>
+          <p className="mt-5 text-center text-sm text-[#6f6553] dark:text-white/50">
+            Contact your administrator to get access.
+          </p>
+          </div>
+        </div>
       </div>
     </div>
   )

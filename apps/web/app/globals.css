@@ -2,19 +2,21 @@
 @variant dark (&:where(.dark, .dark *));
 
 /* ── Sanity-inspired design tokens ───────────────────────────────────────── */
+/* Light mode — warm "dimmed paper" palette, matched to the login backdrop as
+   it looks under its dark vignette wash. Cards are the same family, lighter. */
 :root {
-  --background:           #e2e2e2;
-  --foreground:           #09090b;
-  --card:                 #e8e8e8;
-  --card-foreground:      #09090b;
-  --muted:                #d5d5d5;
-  --muted-foreground:     #71717a;
-  --border:               #bebebe;
-  --input:                #e2e2e2;
+  --background:           #ddd5c6;
+  --foreground:           #262016;
+  --card:                 #efe8d9;
+  --card-foreground:      #262016;
+  --muted:                #cec5b2;
+  --muted-foreground:     #6e6452;
+  --border:               #b9ad94;
+  --input:                #ddd5c6;
   --primary:              #F03E2F;
   --primary-foreground:   #ffffff;
-  --secondary:            #f4f4f5;
-  --secondary-foreground: #18181b;
+  --secondary:            #d6cdbb;
+  --secondary-foreground: #2b2519;
   --destructive:          #ef4444;
   --ring:                 #F03E2F;
 }
@@ -53,6 +55,27 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive:          var(--destructive);
   --color-ring:                 var(--ring);
+}
+
+/* ── Theme-switch crossfade ──────────────────────────────────────────────────
+   ThemeProvider puts .theme-transition on <html> for ~550ms whenever the
+   light/dark class flips, so every themed color melts instead of snapping.
+   Scoped to that window only — hovers and normal interactions stay instant. */
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition: background-color .45s ease, border-color .45s ease, color .45s ease,
+              fill .45s ease, stroke .45s ease, box-shadow .45s ease !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-transition,
+  .theme-transition *,
+  .theme-transition *::before,
+  .theme-transition *::after {
+    transition: none !important;
+  }
 }
 
 /* ── Card shadows (light mode only) ─────────────────────────────────────── */

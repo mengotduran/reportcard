@@ -29,7 +29,7 @@ export default function ThemeToggle({ compact }: { compact?: boolean }) {
       style={{
         width: w, height: h,
         borderRadius: h / 2,
-        backgroundColor: isDark ? '#F03E2F' : '#e4e4e7',
+        backgroundColor: isDark ? '#F03E2F' : '#d9cdb3',
         position: 'relative',
         transition: 'background-color 0.2s',
         flexShrink: 0,
@@ -51,7 +51,7 @@ export default function ThemeToggle({ compact }: { compact?: boolean }) {
       }}>
         {isDark
           ? <Moon size={compact ? 7 : 9} color="#F03E2F" />
-          : <Sun  size={compact ? 7 : 9} color="#71717a" />
+          : <Sun  size={compact ? 7 : 9} color="#7d7360" />
         }
       </span>
     </button>
