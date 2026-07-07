@@ -55,7 +55,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen relative overflow-hidden">
+    <div className="h-dvh relative overflow-hidden">
       <AuthBackground />
       <div className="absolute top-4 right-4 z-20">
         <ThemeToggle />
@@ -73,7 +73,9 @@ export default function LoginPage() {
         }
       `}</style>
 
-      <div className="relative z-10 min-h-screen max-w-6xl mx-auto flex flex-col px-4 py-6 md:px-6">
+      {/* h-full + overflow-y-auto: the page itself never scrolls; a scrollbar
+          only appears inside on viewports too short to fit the sign-in card */}
+      <div className="relative z-10 h-full overflow-y-auto max-w-6xl mx-auto flex flex-col px-4 py-6 md:px-6">
         {/* Brand — bold, spans both columns */}
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center shadow-md">
@@ -86,13 +88,10 @@ export default function LoginPage() {
         </div>
 
         {/* Columns */}
-        <div className="flex-1 flex items-center justify-center gap-12 lg:gap-20 w-full">
+        <div className="flex-1 min-h-0 flex items-center justify-center gap-12 lg:gap-20 w-full">
           {/* Illustration — desktop only */}
           <div className="hidden lg:flex flex-1 max-w-xl flex-col items-center justify-center">
             <AuthIllustration className="w-full h-auto text-[#33291b] dark:text-white/85" />
-            <p className="mt-8 text-center text-[#5f5648] dark:text-white/60 text-sm max-w-sm leading-relaxed">
-              Marks, report cards, class lists and school fees — everything your school needs in one place.
-            </p>
           </div>
 
           {/* Sign-in column */}
