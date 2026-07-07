@@ -4,7 +4,10 @@ import { loginApi } from '@/lib/api/auth'
 import { useAuthStore } from '@/lib/store/auth.store'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import AuthBackground from '@/components/ui/AuthBackground'
-import AuthIllustration from '@/components/ui/AuthIllustration'
+// Animated scene (cat pads in, student walks in, sits and types, chalkboard
+// writes itself). To revert to the static drawing, import
+// '@/components/ui/AuthIllustration' instead — same props, same final frame.
+import AuthIllustration from '@/components/ui/AuthIllustrationAnimated'
 import { Eye, EyeOff, AlertCircle, GraduationCap } from 'lucide-react'
 
 // Module-level cache — survives any component remount caused by Next.js
