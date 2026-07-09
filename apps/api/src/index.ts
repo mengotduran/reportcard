@@ -12,6 +12,7 @@ import dashboardRoutes from './routes/dashboard.routes'
 import superadminRoutes from './routes/superadmin.routes'
 import schoolRoutes from './routes/school.routes'
 import classLevelRoutes from './routes/classlevel.routes'
+import departmentRoutes from './routes/department.routes'
 import reportCardTemplateRoutes from './routes/reportcardtemplate.routes'
 import classListTemplateRoutes from './routes/classlisttemplate.routes'
 import gradingScaleRoutes from './routes/gradingscale.routes'
@@ -32,7 +33,7 @@ app.use(express.json())
 app.use('/uploads', express.static(UPLOAD_DIR))
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'ReportCard API is running' })
+  res.json({ status: 'ok', message: 'Bulletin API is running' })
 })
 
 app.use('/api/auth', authRoutes)
@@ -45,6 +46,7 @@ app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/superadmin', superadminRoutes)
 app.use('/api/school', schoolRoutes)
 app.use('/api/class-levels', classLevelRoutes)
+app.use('/api/departments', departmentRoutes)
 app.use('/api/report-card-template', reportCardTemplateRoutes)
 app.use('/api/class-list-template', classListTemplateRoutes)
 app.use('/api/grading-scale', gradingScaleRoutes)

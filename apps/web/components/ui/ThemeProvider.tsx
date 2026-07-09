@@ -1,14 +1,25 @@
 'use client'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useThemeStore } from '@/lib/store/theme.store'
 
 export default function ThemeProvider({ children }: { children: React.ReactNode }) {
   const { theme } = useThemeStore()
+  const hasApplied = useRef(false)
+  const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const root = document.documentElement
     const apply = (dark: boolean) => {
+      // Crossfade the whole page when the theme actually flips (but not on
+      // the initial application at page load) — .theme-transition briefly
+      // turns on color/background transitions everywhere (see globals.css).
+      if (hasApplied.current && root.classList.contains('dark') !== dark) {
+        root.classList.add('theme-transition')
+        if (transitionTimer.current) clearTimeout(transitionTimer.current)
+        transitionTimer.current = setTimeout(() => root.classList.remove('theme-transition'), 550)
+      }
       root.classList.toggle('dark', dark)
+      hasApplied.current = true
     }
 
     if (theme === 'system') {

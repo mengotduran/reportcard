@@ -55,8 +55,22 @@ export const createTerm = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const { name, session, startDate, endDate } = req.body
 
+    if (!name?.trim() || !session?.trim()) {
+      res.status(400).json({ message: 'Name and session are required' })
+      return
+    }
+
+    // Prevent duplicates: a term/semester name can only exist once per session.
+    const existing = await prisma.term.findFirst({
+      where: { schoolId, name: name.trim(), session: session.trim() },
+    })
+    if (existing) {
+      res.status(400).json({ message: `"${name.trim()}" already exists for ${session.trim()}` })
+      return
+    }
+
     const term = await prisma.term.create({
-      data: { schoolId, name, session, startDate: new Date(startDate), endDate: new Date(endDate) }
+      data: { schoolId, name: name.trim(), session: session.trim(), startDate: new Date(startDate), endDate: new Date(endDate) }
     })
     res.status(201).json({ message: 'Term created', term })
   } catch (error) {
@@ -75,6 +89,19 @@ export const updateTerm = async (req: AuthRequest, res: Response) => {
     if (!term) {
       res.status(404).json({ message: 'Term not found' })
       return
+    }
+
+    // Renaming must not collide with another term in the same session.
+    const newName = (name ?? term.name).trim()
+    const newSession = (session ?? term.session).trim()
+    if (newName !== term.name || newSession !== term.session) {
+      const conflict = await prisma.term.findFirst({
+        where: { schoolId, name: newName, session: newSession, id: { not: id } },
+      })
+      if (conflict) {
+        res.status(400).json({ message: `"${newName}" already exists for ${newSession}` })
+        return
+      }
     }
 
     const updated = await prisma.term.update({

@@ -1,6 +1,6 @@
 'use client'
 import { useRouter } from 'next/navigation'
-import { ShieldX } from 'lucide-react'
+import { ShieldX, GraduationCap } from 'lucide-react'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import AuthBackground from '@/components/ui/AuthBackground'
 
@@ -15,11 +15,14 @@ export default function RegisterPage() {
       </div>
 
       <div className="relative z-10 w-full max-w-sm text-center pt-[6vh] md:pt-[8vh]">
-        <div className="flex items-center gap-2 mb-10 justify-center">
-          <div className="w-6 h-6 bg-primary rounded-[4px] flex items-center justify-center">
-            <span className="text-white text-[10px] font-black tracking-tight">RC</span>
+        <div className="flex items-center gap-2.5 mb-10 justify-center">
+          <div className="w-9 h-9 bg-primary rounded-[10px] flex items-center justify-center shadow-md">
+            <GraduationCap size={20} className="text-white" strokeWidth={2.25} />
           </div>
-          <span className="font-semibold text-sm text-white tracking-tight">ReportCard</span>
+          <div className="leading-tight text-left">
+            <span className="block font-bold text-[17px] text-[#262016] dark:text-white tracking-tight">Bulletin</span>
+            <span className="block text-[10px] font-semibold tracking-[0.14em] uppercase text-[#6f6553] dark:text-white/50">School report cards</span>
+          </div>
         </div>
 
         <div className="bg-card border border-border rounded-xl p-8 space-y-4">

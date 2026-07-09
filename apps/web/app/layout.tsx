@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "ReportCard - School Management System",
-  description: "Manage school report cards, students, and teachers",
+  title: "Bulletin - School Management System",
+  description: "Bulletin — manage school report cards, students, and teachers",
 };
 
 export const viewport: Viewport = {

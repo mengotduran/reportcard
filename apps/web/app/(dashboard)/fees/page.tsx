@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
+import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import {
   getClassFeesApi, addBulkPaymentsApi, formatXAF, ClassFees, FeeStatus,
 } from '@/lib/api/fees'
@@ -25,6 +26,9 @@ function deptFromClassName(name: string): string {
   return name
 }
 
+// Secondary non-default departments store classes with a " (Department)" suffix.
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+
 function levelFromClassName(name: string): UniLevel | null {
   if (/ - Level 1$/i.test(name)) return 'Level 1'
   if (/ - Level 2$/i.test(name)) return 'Level 2'
@@ -43,6 +47,7 @@ export default function FeesPage() {
   const router = useRouter()
   const { isAuthenticated, school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const today = new Date().toISOString().slice(0, 10)
@@ -50,6 +55,8 @@ export default function FeesPage() {
   const [classes, setClasses]         = useState<ClassLevel[]>([])
   const [activeClass, setActiveClass] = useState('')
   const [activeUniLevel, setActiveUniLevel] = useState<UniLevel>('Level 1')
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeDeptId, setActiveDeptId] = useState('')
   const [data, setData]               = useState<ClassFees | null>(null)
   const [loading, setLoading]         = useState(false)
   const [rows, setRows]               = useState<Record<string, RowEntry>>({})
@@ -59,28 +66,53 @@ export default function FeesPage() {
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
-    getClassLevelsApi().then((d) => {
-      const sorted = d.classLevels.sort((a, b) => a.order - b.order)
+    const init = async () => {
+      const [{ classLevels }, deptRes] = await Promise.all([
+        getClassLevelsApi(),
+        isSecondary ? getDepartmentsApi() : Promise.resolve({ departments: [] as Department[] }),
+      ])
+      const sorted = classLevels.sort((a, b) => a.order - b.order)
       setClasses(sorted)
+      setDepartments(deptRes.departments)
       if (sorted.length && !activeClass) {
-        // For university, pick first class in Level 1; for others, just pick first
-        const first = isUniversity
-          ? sorted.find((c) => levelFromClassName(c.name) === 'Level 1')
-          : sorted[0]
-        if (first) selectClass(first.name)
+        if (isUniversity) {
+          const first = sorted.find((c) => levelFromClassName(c.name) === 'Level 1')
+          if (first) selectClass(first.name)
+        } else if (isSecondary) {
+          const dept = deptRes.departments.find((d) => d.isDefault) ?? deptRes.departments[0]
+          if (dept) {
+            setActiveDeptId(dept.id)
+            const first = sorted.find((c) => c.departmentId === dept.id)
+            if (first) selectClass(first.name)
+          }
+        } else {
+          selectClass(sorted[0].name)
+        }
       }
-    }).catch(() => {})
+    }
+    init().catch(() => {})
   }, [isAuthenticated])
 
-  // Classes visible in the current level tab (university) or all classes (non-university)
+  // Classes visible in the current level tab (university), active department
+  // (secondary), or all classes (primary)
   const visibleClasses = useMemo(() =>
-    isUniversity ? classes.filter((c) => levelFromClassName(c.name) === activeUniLevel) : classes,
-  [isUniversity, classes, activeUniLevel])
+    isUniversity ? classes.filter((c) => levelFromClassName(c.name) === activeUniLevel)
+    : isSecondary ? classes.filter((c) => c.departmentId === activeDeptId)
+    : classes,
+  [isUniversity, isSecondary, classes, activeUniLevel, activeDeptId])
 
   // When switching level tabs, auto-select first class in that level
   const handleLevelTab = (lv: UniLevel) => {
     setActiveUniLevel(lv)
     const first = classes.find((c) => levelFromClassName(c.name) === lv)
+    if (first) selectClass(first.name)
+    else { setActiveClass(''); setData(null) }
+  }
+
+  // Secondary: switching department auto-selects its first class
+  const handleDeptTab = (deptId: string) => {
+    setActiveDeptId(deptId)
+    const first = classes.find((c) => c.departmentId === deptId)
     if (first) selectClass(first.name)
     else { setActiveClass(''); setData(null) }
   }
@@ -210,8 +242,43 @@ export default function FeesPage() {
         </div>
       )}
 
-      {/* Non-university: class picker */}
-      {!isUniversity && classes.length > 0 && (
+      {/* Secondary: department pills + class picker within the active department */}
+      {isSecondary && departments.length > 0 && (
+        <div className="mb-4 space-y-3">
+          <div className="flex gap-2 flex-wrap">
+            {departments.map((d) => {
+              const count = classes.filter((c) => c.departmentId === d.id).length
+              return (
+                <button key={d.id} onClick={() => handleDeptTab(d.id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
+                    activeDeptId === d.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  }`}>
+                  {d.name}
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeDeptId === d.id ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
+                    {count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          {visibleClasses.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground flex-shrink-0">{t('Class')}:</span>
+              <CustomSelect
+                className="w-64"
+                compact
+                value={activeClass}
+                onChange={selectClass}
+                placeholder={t('Select class')}
+                options={visibleClasses.map((c) => ({ value: c.name, label: stripDeptSuffix(c.name) }))}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Primary: plain class picker */}
+      {!isUniversity && !isSecondary && classes.length > 0 && (
         <div className="flex items-center gap-2 mb-4">
           <span className="text-xs text-muted-foreground flex-shrink-0">{t('Class')}:</span>
           <CustomSelect

@@ -8,6 +8,7 @@ import {
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
+import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
 import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle } from 'lucide-react'
@@ -43,6 +44,10 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
 
 const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
 
+// Secondary non-default departments store classes with a " (Department)" suffix;
+// strip it for display since the department is shown separately.
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+
 // Helpers for parsing university class level names
 function univDept(classLevel: string): string {
   if (classLevel.startsWith('HND ')) return classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
@@ -67,11 +72,14 @@ export default function StudentsPage() {
   const router = useRouter()
   const { isAuthenticated, activeSession, setActiveSession, school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const [students, setStudents] = useState<Student[]>([])
   const [filterClasses, setFilterClasses] = useState<string[]>([])
   const [definedClasses, setDefinedClasses] = useState<ClassLevel[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [deptFilter, setDeptFilter] = useState('all')
   const [activeClass, setActiveClass] = useState('all')
   const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
   const [search, setSearch] = useState('')
@@ -109,6 +117,7 @@ export default function StudentsPage() {
       fetchFeesOverview()
       fetchSubjects()
       fetchTerms()
+      if (isSecondary) getDepartmentsApi().then(d => setDepartments(d.departments)).catch(() => {})
     }
   }, [isAuthenticated])
 
@@ -431,12 +440,15 @@ export default function StudentsPage() {
   const handleExport = async () => {
     const targetTerms = activeTermId ? visibleTerms.filter((tm) => tm.id === activeTermId) : visibleTerms
     if (targetTerms.length === 0) { showToast(t('No term selected'), 'error'); return }
-    const targetClasses = activeClass !== 'all' ? [activeClass] : filterClasses
+    const targetClasses = activeClass !== 'all'
+      ? [activeClass]
+      : (isSecondary && deptFilter !== 'all' ? filterClasses.filter((c) => deptIdOfClass(c) === deptFilter) : filterClasses)
     if (targetClasses.length === 0) { showToast(t('Nothing to export'), 'error'); return }
     const cols = [
       { label: t('Name'), value: (s: Student) => s.name },
       { label: t('Student ID'), value: (s: Student) => s.studentId },
-      { label: t('Class'), value: (s: Student) => s.classLevel },
+      ...(isSecondary ? [{ label: t('Department'), value: (s: Student) => deptNameOf(s.classLevel) }] : []),
+      { label: t('Class'), value: (s: Student) => isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel },
       { label: t('Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
       { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
       { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
@@ -478,7 +490,31 @@ export default function StudentsPage() {
     }
   }
 
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(students, 15, `${activeClass}|${search}|${statusFilter}`)
+  // ── Secondary department filtering ──
+  const deptIdOfClass = (name: string) => definedClasses.find((c) => c.name === name)?.departmentId ?? null
+  const deptNameOf = (name: string) => departments.find((d) => d.id === deptIdOfClass(name))?.name ?? ''
+
+  const handleDeptFilter = (deptId: string) => {
+    setDeptFilter(deptId)
+    setActiveClass('all')
+    setSearch('')
+    fetchStudents('all', '')
+  }
+
+  // Class dropdown options, narrowed to the active department (secondary) and
+  // shown with department suffixes stripped.
+  const classFilterOptions = (isSecondary && deptFilter !== 'all'
+    ? filterClasses.filter((cls) => deptIdOfClass(cls) === deptFilter)
+    : filterClasses
+  ).map((cls) => ({ value: cls, label: isSecondary ? stripDeptSuffix(cls) : cls }))
+
+  // The roster to display: when a department is selected (and no single class),
+  // narrow the server roster to that department's classes client-side.
+  const visibleStudents = (isSecondary && deptFilter !== 'all' && activeClass === 'all')
+    ? students.filter((s) => deptIdOfClass(s.classLevel) === deptFilter)
+    : students
+
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(visibleStudents, 15, `${deptFilter}|${activeClass}|${search}|${statusFilter}`)
 
   return (
     <div>
@@ -486,7 +522,11 @@ export default function StudentsPage() {
         <div>
           <h2 className="text-2xl font-bold text-foreground">{t('Students')}</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {students.length} {activeClass !== 'all' ? `${t('in')} ${activeClass}` : t('total students')}
+            {visibleStudents.length} {activeClass !== 'all'
+              ? `${t('in')} ${isSecondary ? stripDeptSuffix(activeClass) : activeClass}`
+              : (isSecondary && deptFilter !== 'all')
+                ? `${t('in')} ${departments.find(d => d.id === deptFilter)?.name ?? ''}`
+                : t('total students')}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -514,8 +554,24 @@ export default function StudentsPage() {
         </div>
       </div>
 
-      {filterClasses.length > 0 && (
-        <div className="flex items-center gap-2 mb-4">
+      {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {isSecondary && departments.length > 0 && (
+            <>
+              <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}:</span>
+              <CustomSelect
+                className="w-52"
+                compact
+                value={deptFilter}
+                onChange={handleDeptFilter}
+                placeholder={t('All Departments')}
+                options={[
+                  { value: 'all', label: t('All Departments') },
+                  ...departments.map((d) => ({ value: d.id, label: d.name })),
+                ]}
+              />
+            </>
+          )}
           <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? t('Department') : t('Class')}:</span>
           <CustomSelect
             className="w-64"
@@ -525,7 +581,7 @@ export default function StudentsPage() {
             placeholder={isUniversity ? t('All Departments') : t('All Classes')}
             options={[
               { value: 'all', label: isUniversity ? t('All Departments') : t('All Classes') },
-              ...filterClasses.map((cls) => ({ value: cls, label: cls })),
+              ...classFilterOptions,
             ]}
           />
         </div>
@@ -602,7 +658,7 @@ export default function StudentsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {isUniversity ? univDept(s.classLevel) : s.classLevel}
+                    {isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel}
                   </td>
                   {isUniversity && (
                     <td className="px-4 py-3">
@@ -620,9 +676,9 @@ export default function StudentsPage() {
                     {(() => {
                       const f = feesByStudent[s.id]
                       if (!f || f.status === 'NONE') return <span className="text-muted-foreground text-sm">—</span>
-                      if (f.status === 'COMPLETE') return <span className="inline-flex px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">{t('Complete')}</span>
+                      if (f.status === 'COMPLETE') return <span className="inline-flex px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded text-xs font-medium">{t('Complete')}</span>
                       const cls = f.status === 'UNPAID' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                      return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
+                      return <span className={`inline-flex px-3 py-1.5 rounded text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
                     })()}
                   </td>
                   <td className="px-4 py-3">

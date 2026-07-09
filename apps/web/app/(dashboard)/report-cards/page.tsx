@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
+import { getClassLevelsApi as getClassLevelsFullApi } from '@/lib/api/classLevels'
+import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getStudentsApi } from '@/lib/api/students'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
@@ -74,6 +76,9 @@ interface Term { id: string; name: string; session: string; isCurrent: boolean }
 const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 const FILTER_TERM_STORAGE_KEY = 'report-cards-filter-term'
 
+// Secondary non-default departments store classes with a " (Department)" suffix.
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+
 // ── Teacher/Admin class-based view ────────────────────────────────────────────────
 function TeacherClassesView() {
   const tr = useT()
@@ -82,8 +87,12 @@ function TeacherClassesView() {
   const { toast, showToast, hideToast } = useToast()
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   const isClassMaster = user?.role === 'CLASS_MASTER'
+  const isSecondary = school?.type === 'SECONDARY'
   const [term, setTerm] = useState<{ id: string; name: string; session: string } | null>(null)
   const [classes, setClasses] = useState<{ classLevel: string; total: number; filled: number; published: number; hasSubjects: boolean }[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeDeptId, setActiveDeptId] = useState('')
+  const [classDeptMap, setClassDeptMap] = useState<Record<string, string | null>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
@@ -171,6 +180,14 @@ function TeacherClassesView() {
         const { classLevels } = await getClassLevelsApi()
         const overviews = await Promise.all(classLevels.map((cl) => getClassOverviewApi(t.id, cl)))
         setClasses(buildClasses(classLevels, overviews))
+        // Secondary: build a class-name → departmentId map and load departments
+        // so the class grid can be grouped/filtered by department.
+        if (isSecondary) {
+          const [full, deptRes] = await Promise.all([getClassLevelsFullApi(), getDepartmentsApi()])
+          setClassDeptMap(Object.fromEntries(full.classLevels.map((c) => [c.name, c.departmentId ?? null])))
+          setDepartments(deptRes.departments)
+          setActiveDeptId((deptRes.departments.find((d) => d.isDefault) ?? deptRes.departments[0])?.id ?? '')
+        }
       } catch (err: any) {
         if (err?.response?.status === 404) setError(tr('No active term set. Please set a current term first.'))
         else setError(tr('Failed to load classes.'))
@@ -178,6 +195,10 @@ function TeacherClassesView() {
     }
     load()
   }, [])
+
+  const displayedClasses = isSecondary && activeDeptId
+    ? classes.filter((c) => classDeptMap[c.classLevel] === activeDeptId)
+    : classes
 
   if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">Loading classes...</div>
   if (error) return (
@@ -195,23 +216,43 @@ function TeacherClassesView() {
         </div>
       </div>
 
-      {classes.length === 0 ? (
+      {/* Secondary: department tabs to group the class grid */}
+      {isSecondary && departments.length > 0 && (
+        <div className="flex gap-2 flex-wrap mb-4">
+          {departments.map((d) => {
+            const count = classes.filter((c) => classDeptMap[c.classLevel] === d.id).length
+            return (
+              <button key={d.id} onClick={() => setActiveDeptId(d.id)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
+                  activeDeptId === d.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}>
+                {d.name}
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeDeptId === d.id ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {displayedClasses.length === 0 ? (
         <div className="text-center py-16 bg-card rounded-xl border border-border">
           <p className="text-muted-foreground text-sm">{tr('No classes found. Add students first.')}</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {classes.map((c) => {
+        <div key={activeDeptId} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in-up">
+          {displayedClasses.map((c) => {
             const pct = c.total > 0 ? Math.round((c.filled / c.total) * 100) : 0
             const pending = c.total - c.filled
             return (
               <div key={c.classLevel} className="bg-card rounded-xl border border-border p-5 hover:shadow-md hover:border-primary/20 transition group">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-lg">
-                    {c.classLevel.charAt(0)}
+                    {(isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel).charAt(0)}
                   </div>
                   <div>
-                    <p className="font-bold text-foreground">{c.classLevel}</p>
+                    <p className="font-bold text-foreground">{isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel}</p>
                     <p className="text-xs text-muted-foreground">{c.total} {tr('students')}{isClassMaster ? ` · ${c.published} ${tr('published')}` : ''}</p>
                   </div>
                 </div>

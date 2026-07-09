@@ -86,9 +86,15 @@ export default function TermsPage() {
 
   const toInputDate = (iso: string) => iso ? iso.split('T')[0] : ''
 
+  // Standard term/semester names offered in the dropdown, per school type.
+  const termNameOptions = isUniversity ? DEFAULT_SEM_NAMES : DEFAULT_TERM_NAMES
+
   const openAdd = () => {
     setEditingId(null)
-    setForm({ ...emptyForm, session: activeSession ?? '' })
+    // Pre-select the first standard name not already used this session.
+    const used = terms.filter((tm) => tm.session === (activeSession ?? '')).map((tm) => tm.name)
+    const nextName = termNameOptions.find((n) => !used.includes(n)) ?? ''
+    setForm({ ...emptyForm, session: activeSession ?? '', name: nextName })
     setError('')
     setShowModal(true)
   }
@@ -334,9 +340,14 @@ export default function TermsPage() {
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{tt('Term Name', 'Semester Name')}</label>
-                <input type="text" placeholder={isUniversity ? 'First Semester' : 'First Term'}
+                <select
                   value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  required className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                  required className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
+                  <option value="" disabled>{tt('Select a term', 'Select a semester')}</option>
+                  {termNameOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+                  {/* Preserve a pre-existing custom name when editing */}
+                  {form.name && !termNameOptions.includes(form.name) && <option value={form.name}>{form.name}</option>}
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('Session')}</label>
@@ -462,10 +473,13 @@ export default function TermsPage() {
                 <div className="space-y-3">
                   {nyTerms.map((td, i) => (
                     <div key={i} className="border border-border rounded-xl p-3 space-y-2">
-                      <input type="text" placeholder={`${tt('Term', 'Semester')} ${t('name')}`}
+                      <select
                         value={td.name}
                         onChange={(e) => setNyTerms((prev) => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                        className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                        className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
+                        {termNameOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+                        {td.name && !termNameOptions.includes(td.name) && <option value={td.name}>{td.name}</option>}
+                      </select>
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-xs text-muted-foreground">{t('Start')}</label>

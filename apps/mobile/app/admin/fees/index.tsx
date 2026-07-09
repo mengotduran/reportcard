@@ -5,12 +5,15 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
+import { getDepartments, Department } from '@/lib/api/departments'
 import { getClassFees, addBulkPayments, formatXAF, ClassFees, FeeStatus } from '@/lib/api/fees'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
 import StudentFeesModal from '@/components/StudentFeesModal'
 
 type RowEntry = { amount: string; date: string; note: string }
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
 function chipColors(status: FeeStatus): { bg: string; fg: string } {
   switch (status) {
@@ -26,8 +29,12 @@ export default function FeesGridScreen() {
   const s = makeStyles(colors)
   const t = useT()
   const today = new Date().toISOString().slice(0, 10)
+  const { school } = useAuthStore()
+  const isSecondary = school?.type === 'SECONDARY'
   const [classes, setClasses] = useState<ClassLevel[]>([])
   const [activeClass, setActiveClass] = useState('')
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeDeptId, setActiveDeptId] = useState('')
   const [data, setData] = useState<ClassFees | null>(null)
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState<Record<string, RowEntry>>({})
@@ -48,12 +55,34 @@ export default function FeesGridScreen() {
   }, [])
 
   useEffect(() => {
-    getClasses().then((d) => {
+    Promise.all([
+      getClasses(),
+      isSecondary ? getDepartments() : Promise.resolve({ departments: [] as Department[] }),
+    ]).then(([d, dep]) => {
       const sorted = d.classLevels.sort((a, b) => a.order - b.order)
       setClasses(sorted)
-      if (sorted.length) loadClass(sorted[0].name)
+      setDepartments(dep.departments)
+      if (isSecondary && dep.departments.length) {
+        const def = dep.departments.find((x) => x.isDefault) ?? dep.departments[0]
+        setActiveDeptId(def.id)
+        const first = sorted.find((c) => c.departmentId === def.id)
+        if (first) loadClass(first.name)
+      } else if (sorted.length) {
+        loadClass(sorted[0].name)
+      }
     }).catch(() => {})
   }, [loadClass])
+
+  const handleDeptChip = (deptId: string) => {
+    setActiveDeptId(deptId)
+    const first = classes.find((c) => c.departmentId === deptId)
+    if (first) loadClass(first.name)
+    else { setActiveClass(''); setData(null) }
+  }
+
+  const visibleClasses = isSecondary && activeDeptId
+    ? classes.filter((c) => c.departmentId === activeDeptId)
+    : classes
 
   const reload = async () => { if (activeClass) setData(await getClassFees(activeClass)) }
 
@@ -91,13 +120,26 @@ export default function FeesGridScreen() {
 
   return (
     <View style={s.container}>
+      {/* Department chips (secondary) */}
+      {isSecondary && departments.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0 }} contentContainerStyle={s.chipsRow}>
+          {departments.map((d) => (
+            <TouchableOpacity key={d.id} onPress={() => handleDeptChip(d.id)}
+              style={[s.chip, activeDeptId === d.id && s.chipActive]}>
+              <Text style={[s.chipText, activeDeptId === d.id && s.chipTextActive]}>{d.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
       {/* Class chips */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false}
         style={{ flexGrow: 0 }} contentContainerStyle={s.chipsRow}>
-        {classes.map((c) => (
+        {visibleClasses.map((c) => (
           <TouchableOpacity key={c.id} onPress={() => loadClass(c.name)}
             style={[s.chip, activeClass === c.name && s.chipActive]}>
-            <Text style={[s.chipText, activeClass === c.name && s.chipTextActive]}>{c.name}</Text>
+            <Text style={[s.chipText, activeClass === c.name && s.chipTextActive]}>{isSecondary ? stripDeptSuffix(c.name) : c.name}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>

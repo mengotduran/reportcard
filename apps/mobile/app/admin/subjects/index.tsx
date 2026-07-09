@@ -8,12 +8,15 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { getSubjects, createSubject, deleteSubject, Subject } from '@/lib/api/subjects'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
+import { getDepartments, Department } from '@/lib/api/departments'
 import { getTerms, Term } from '@/lib/api/terms'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 import { useAuthStore } from '@/lib/store/auth.store'
 
 interface SectionData { title: string; data: Subject[] }
+
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -149,9 +152,11 @@ export default function SubjectsScreen() {
   const isUniversity = school?.type === 'UNIVERSITY'
   // Universities call subjects "courses" and classes "departments" — same data/routes, just different wording.
   const tt = (subjectStr: string, courseStr: string) => t(isUniversity ? courseStr : subjectStr)
+  const isSecondary = school?.type === 'SECONDARY'
   const tc = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [sections, setSections] = useState<SectionData[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [termList, setTermList] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -168,9 +173,12 @@ export default function SubjectsScreen() {
   // University: a course belongs to one semester, so group/label sections by
   // department + semester (see Subject.term in schema.prisma). Other types:
   // group by class only, exactly as before.
-  const buildSections = (subjects: Subject[]): SectionData[] => {
+  const buildSections = (subjects: Subject[], deptOfClass: (name: string) => string): SectionData[] => {
     const map: Record<string, Subject[]> = {}
-    const keyOf = (s: Subject) => isUniversity ? `${s.classLevel} — ${s.term ?? t('No semester')}` : s.classLevel
+    const keyOf = (s: Subject) =>
+      isUniversity ? `${s.classLevel} — ${s.term ?? t('No semester')}`
+      : isSecondary ? `${deptOfClass(s.classLevel) || '—'} · ${stripDeptSuffix(s.classLevel)}`
+      : s.classLevel
     for (const s of subjects) {
       const key = keyOf(s)
       if (!map[key]) map[key] = []
@@ -181,16 +189,27 @@ export default function SubjectsScreen() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [subData, clData, termData] = await Promise.all([getSubjects(), getClasses(), getTerms()])
+      const [subData, clData, termData, deptData] = await Promise.all([
+        getSubjects(), getClasses(), getTerms(),
+        isSecondary ? getDepartments() : Promise.resolve({ departments: [] as Department[] }),
+      ])
       setClassList(clData.classLevels.sort((a, b) => a.order - b.order))
+      setDepartments(deptData.departments)
       // Distinct semester names within the active academic session.
       const seen = new Set<string>()
       setTermList(termData.terms.filter((tm) => tm.session === activeSession && !seen.has(tm.name) && seen.add(tm.name)))
-      setSections(buildSections(subData.subjects))
+
+      const deptById = new Map(deptData.departments.map((d) => [d.id, d.name]))
+      const deptIdByClass = new Map(clData.classLevels.map((c) => [c.name, c.departmentId]))
+      const deptOfClass = (name: string) => {
+        const id = deptIdByClass.get(name)
+        return id ? (deptById.get(id) ?? '') : ''
+      }
+      setSections(buildSections(subData.subjects, deptOfClass))
     } catch {
       Alert.alert(t('Error'), tt('Failed to load subjects.', 'Failed to load courses.'))
     }
-  }, [activeSession, isUniversity])
+  }, [activeSession, isUniversity, isSecondary])
 
   useFocusEffect(useCallback(() => {
     fetchData().finally(() => setLoading(false))
@@ -251,6 +270,16 @@ export default function SubjectsScreen() {
         },
       ]
     )
+  }
+
+  // Label a class in the picker: strip the department suffix and tag its
+  // department (secondary), so identically-named classes across departments
+  // are distinguishable.
+  const classPickerLabel = (name: string): string => {
+    if (!isSecondary) return name
+    const cl = classList.find((c) => c.name === name)
+    const dep = cl?.departmentId ? departments.find((d) => d.id === cl.departmentId)?.name : ''
+    return dep ? `${stripDeptSuffix(name)} · ${dep}` : stripDeptSuffix(name)
   }
 
   return (
@@ -321,7 +350,7 @@ export default function SubjectsScreen() {
             <Text style={styles.label}>{tc('Class Level', 'Department')}</Text>
             <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
               <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>
-                {classLevel || tc('Select class level', 'Select department')}
+                {classLevel ? classPickerLabel(classLevel) : tc('Select class level', 'Select department')}
               </Text>
               <Ionicons name="chevron-down" size={16} color="#6b7280" />
             </TouchableOpacity>
@@ -334,7 +363,7 @@ export default function SubjectsScreen() {
                     onPress={() => { setClassLevel(cl.name); setClassPickerOpen(false) }}
                   >
                     <Text style={[styles.dropdownItemText, cl.name === classLevel && { color: '#F03E2F', fontWeight: '700' }]}>
-                      {cl.name}
+                      {classPickerLabel(cl.name)}
                     </Text>
                   </TouchableOpacity>
                 ))}

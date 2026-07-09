@@ -24,12 +24,34 @@ const ICONS = [
   { Icon: Atom,          top: '90%', left: '20%', size: 48, rotate: 8 },
 ]
 
-/** Branded, school-themed auth backdrop: dark gradient → faint school icons → black wash. */
+// Both theme variants are always rendered and crossfaded with opacity, so
+// toggling light/dark melts smoothly instead of snapping (display can't
+// animate, opacity can). Layer order matters: washes sit above the icons.
+const FADE_IN  = 'transition-opacity duration-500 ease-out opacity-100 dark:opacity-0'   // light-only layer
+const FADE_OUT = 'transition-opacity duration-500 ease-out opacity-0 dark:opacity-100'   // dark-only layer
+
+/** School-themed auth backdrop, theme-aware:
+ *  light = warm ruled-notebook paper with a red margin line,
+ *  dark  = deep-navy chalkboard with faint chalk lines. */
 export default function AuthBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden">
-      {/* Base gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-[#241019] via-[#141416] to-[#0a0a0b]" />
+      {/* Base — warm paper (light) / navy chalkboard (dark) */}
+      <div className={`absolute inset-0 bg-gradient-to-br from-[#f8f3e9] via-[#f3ecdf] to-[#eae1cf] ${FADE_IN}`} />
+      <div className={`absolute inset-0 bg-gradient-to-br from-[#14243a] via-[#0f1a2b] to-[#0a111d] ${FADE_OUT}`} />
+
+      {/* Ruled notebook lines + red margin line — light */}
+      <div
+        className={`absolute inset-0 ${FADE_IN}`}
+        style={{ backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0px, transparent 31px, rgba(96,140,190,0.18) 31px, rgba(96,140,190,0.18) 32px)' }}
+      />
+      <div className={`absolute inset-y-0 left-10 md:left-16 w-px bg-[#f03e2f]/30 ${FADE_IN}`} />
+
+      {/* Faint chalk rules — dark */}
+      <div
+        className={`absolute inset-0 ${FADE_OUT}`}
+        style={{ backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0px, transparent 31px, rgba(255,255,255,0.05) 31px, rgba(255,255,255,0.05) 32px)' }}
+      />
 
       {/* Scattered school icons */}
       <div className="absolute inset-0">
@@ -37,14 +59,19 @@ export default function AuthBackground() {
           <Icon
             key={i}
             size={size}
-            className="absolute text-white/[0.07]"
+            className="absolute text-[#5a4a30]/[0.10] dark:text-white/[0.07] transition-colors duration-500"
             style={{ top, left, transform: `rotate(${rotate}deg)` }}
           />
         ))}
       </div>
 
-      {/* Black transparent layer */}
-      <div className="absolute inset-0 bg-black/45" />
+      {/* Wash — a warm dark vignette dims the paper toward the edges (light);
+          plain deep wash on the chalkboard (dark). Keeps the card readable. */}
+      <div
+        className={`absolute inset-0 ${FADE_IN}`}
+        style={{ background: 'radial-gradient(120% 90% at 50% 38%, rgba(35,28,15,0.10) 0%, rgba(35,28,15,0.20) 55%, rgba(35,28,15,0.38) 100%)' }}
+      />
+      <div className={`absolute inset-0 bg-black/40 ${FADE_OUT}`} />
     </div>
   )
 }

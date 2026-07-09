@@ -29,6 +29,16 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     shadowRadius: 8,
     elevation: 4,
   },
+  logoBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#F03E2F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
   title: {
     fontSize: 26,
     fontWeight: 'bold',
@@ -142,8 +152,11 @@ export default function LoginScreen() {
         automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       >
         <View style={styles.card}>
-          <Text style={styles.title}>ReportCard</Text>
-          <Text style={styles.subtitle}>Sign in to your account</Text>
+          <View style={styles.logoBox}>
+            <Ionicons name="school" size={26} color="#fff" />
+          </View>
+          <Text style={styles.title}>Bulletin</Text>
+          <Text style={styles.subtitle}>Sign in to your school account</Text>
 
           {/* Fixed-height error row — card height never shifts */}
           <View style={styles.errorRow}>
