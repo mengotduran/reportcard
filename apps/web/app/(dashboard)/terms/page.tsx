@@ -339,7 +339,7 @@ export default function TermsPage() {
             )}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{tt('Term Name', 'Semester Name')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{tt('Term Name', 'Semester Name')} <span className="text-destructive">*</span></label>
                 <select
                   value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
@@ -350,18 +350,18 @@ export default function TermsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Session')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Session')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="2025/2026"
                   value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })}
                   required className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Start Date')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Start Date')} <span className="text-destructive">*</span></label>
                 <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })}
                   required className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('End Date')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('End Date')} <span className="text-destructive">*</span></label>
                 <input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })}
                   required className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>

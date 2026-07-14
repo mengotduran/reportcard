@@ -319,7 +319,7 @@ export default function SettingsPage() {
             <div className={CARD}>
               <CardHead icon={UserCircle} title={t('My Account')} desc={t('Used to sign in — not the same as the school email below')} />
               <div className="mt-5">
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')}</label>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')} <span className="text-destructive">*</span></label>
                 <input
                   type="email"
                   className={FIELD}
@@ -376,7 +376,7 @@ export default function SettingsPage() {
               <CardHead icon={Building2} title={t('School Information')} desc={t('Contact details and identifiers shown across the platform and on report cards.')} />
               <div className="mt-5 grid grid-cols-1 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('School Name')}</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('School Name')} <span className="text-destructive">*</span></label>
                   <input
                     className={FIELD}
                     value={infoForm.name}
@@ -384,7 +384,7 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Email')}</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Email')} <span className="text-destructive">*</span></label>
                   <input
                     type="email"
                     className={FIELD}

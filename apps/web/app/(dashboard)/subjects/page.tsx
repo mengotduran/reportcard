@@ -502,7 +502,7 @@ export default function SubjectsPage() {
 
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{tt('Subject Name', 'Course Name')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{tt('Subject Name', 'Course Name')} <span className="text-destructive">*</span></label>
                 <input
                   type="text" placeholder={isUniversity ? 'e.g. Calculus I' : 'e.g. Mathematics'}
                   value={form.name}
@@ -514,7 +514,7 @@ export default function SubjectsPage() {
 
               {!isUniversity && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Coefficient')}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Coefficient')} <span className="text-destructive">*</span></label>
                   <input
                     type="number" min="1" max="10" placeholder="1"
                     value={form.coefficient}
@@ -542,7 +542,7 @@ export default function SubjectsPage() {
 
               {isUniversity && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Credit hours')}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Credit hours')} <span className="text-destructive">*</span></label>
                   <input
                     type="number" min="0" step="1" placeholder="e.g. 3"
                     value={form.credit}

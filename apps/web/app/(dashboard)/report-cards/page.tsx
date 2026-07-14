@@ -942,7 +942,7 @@ export default function ReportCardsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Student')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Student')} <span className="text-destructive">*</span></label>
                 <select value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="">{tr('Select student...')}</option>
@@ -950,7 +950,7 @@ export default function ReportCardsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Term')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Term')} <span className="text-destructive">*</span></label>
                 <select value={form.termId} onChange={(e) => setForm({ ...form, termId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="">{tr('Select term...')}</option>

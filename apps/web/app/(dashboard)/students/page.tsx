@@ -723,7 +723,7 @@ export default function StudentsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="e.g. Nguemo Alice"
                   value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
@@ -799,7 +799,7 @@ export default function StudentsPage() {
                 </div>
               ) : (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Class')}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Class')} <span className="text-destructive">*</span></label>
                   {definedClasses.length > 0 ? (
                     <select
                       value={form.classLevel}
@@ -893,7 +893,7 @@ export default function StudentsPage() {
             </button>
 
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1">{t('Upload file (.xlsx or .csv)')}</label>
+              <label className="block text-xs font-medium text-foreground mb-1">{t('Upload file (.xlsx or .csv)')} <span className="text-destructive">*</span></label>
               <input type="file" accept=".xlsx,.csv"
                 onChange={handleImportFileChange}
                 className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />

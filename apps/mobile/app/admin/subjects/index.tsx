@@ -102,6 +102,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -337,7 +338,7 @@ export default function SubjectsScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{tt('Subject Name', 'Course Name')}</Text>
+            <Text style={styles.label}>{tt('Subject Name', 'Course Name')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
               value={subjectName}
@@ -347,7 +348,7 @@ export default function SubjectsScreen() {
               autoFocus
             />
 
-            <Text style={styles.label}>{tc('Class Level', 'Department')}</Text>
+            <Text style={styles.label}>{tc('Class Level', 'Department')} <Text style={styles.required}>*</Text></Text>
             <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
               <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>
                 {classLevel ? classPickerLabel(classLevel) : tc('Select class level', 'Select department')}
@@ -372,7 +373,7 @@ export default function SubjectsScreen() {
 
             {isUniversity && (
               <>
-                <Text style={styles.label}>{t('Semester')}</Text>
+                <Text style={styles.label}>{t('Semester')} <Text style={styles.required}>*</Text></Text>
                 <TouchableOpacity style={styles.picker} onPress={() => setTermPickerOpen((v) => !v)}>
                   <Text style={[styles.pickerText, !term && { color: colors.textMuted }]}>
                     {term || t('Select semester')}
@@ -399,7 +400,7 @@ export default function SubjectsScreen() {
 
             {!isUniversity && (
               <View>
-                <Text style={styles.label}>{t('Coefficient')}</Text>
+                <Text style={styles.label}>{t('Coefficient')} <Text style={styles.required}>*</Text></Text>
                 <TextInput
                   style={styles.input}
                   value={coefficient}
@@ -412,7 +413,7 @@ export default function SubjectsScreen() {
 
             {isUniversity && (
               <View>
-                <Text style={styles.label}>{t('Credit hours')}</Text>
+                <Text style={styles.label}>{t('Credit hours')} <Text style={styles.required}>*</Text></Text>
                 <TextInput
                   style={styles.input}
                   value={credit}

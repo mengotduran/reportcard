@@ -359,17 +359,17 @@ export default function TeachersPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Full Name')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Full Name')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="Jane Smith" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Email')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Email')} <span className="text-destructive">*</span></label>
                 <input type="email" placeholder="jane@school.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')} <span className="text-destructive">*</span></label>
                 <div className="relative">
                   <input type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring pr-10" />
@@ -388,7 +388,7 @@ export default function TeachersPage() {
               </div>
               {form.role === 'CLASS_MASTER' && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')}</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')} <span className="text-destructive">*</span></label>
                   <select value={form.masterClassLevel} onChange={(e) => setForm({ ...form, masterClassLevel: e.target.value })} required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                     <option value="">{tr('Select a class')}</option>
@@ -511,9 +511,9 @@ export default function TeachersPage() {
               </div>
               {editForm.role === 'CLASS_MASTER' && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')}</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')} <span className="text-destructive">*</span></label>
                   <select value={editForm.masterClassLevel}
-                    onChange={(e) => setEditForm({ ...editForm, masterClassLevel: e.target.value })}
+                    onChange={(e) => setEditForm({ ...editForm, masterClassLevel: e.target.value })} required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                     <option value="">{tr('Select a class')}</option>
                     {classLevels.map(cl => (
@@ -550,10 +550,12 @@ export default function TeachersPage() {
               </button>
             </div>
             {resetError && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">{resetError}</p>}
+            <label className="block text-xs font-medium text-foreground mb-1">{tr('New Password')} <span className="text-destructive">*</span></label>
             <div className="relative mb-4">
               <input
                 type={showResetPw ? 'text' : 'password'}
                 placeholder={tr('New password (min 6 characters)')}
+                required
                 value={resetPassword}
                 onChange={e => setResetPassword(e.target.value)}
                 className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"

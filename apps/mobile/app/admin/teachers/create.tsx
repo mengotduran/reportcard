@@ -29,6 +29,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     marginBottom: 14,
   },
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -133,7 +134,7 @@ export default function CreateTeacherScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>{t('TEACHER DETAILS')}</Text>
 
-          <Text style={styles.label}>{t('Full Name')}</Text>
+          <Text style={styles.label}>{t('Full Name')} <Text style={styles.required}>*</Text></Text>
           <TextInput
             style={styles.input}
             value={name}
@@ -143,7 +144,7 @@ export default function CreateTeacherScreen() {
             autoCapitalize="words"
           />
 
-          <Text style={styles.label}>{t('Email Address')}</Text>
+          <Text style={styles.label}>{t('Email Address')} <Text style={styles.required}>*</Text></Text>
           <TextInput
             style={styles.input}
             value={email}
@@ -154,7 +155,7 @@ export default function CreateTeacherScreen() {
             autoCapitalize="none"
           />
 
-          <Text style={styles.label}>{t('Password')}</Text>
+          <Text style={styles.label}>{t('Password')} <Text style={styles.required}>*</Text></Text>
           <View style={styles.passwordWrap}>
             <TextInput
               style={styles.passwordInput}
@@ -194,7 +195,7 @@ export default function CreateTeacherScreen() {
 
           {role === 'CLASS_MASTER' && (
             <>
-              <Text style={[styles.label, { marginTop: 16 }]}>{t('Master Class Level')}</Text>
+              <Text style={[styles.label, { marginTop: 16 }]}>{t('Master Class Level')} <Text style={styles.required}>*</Text></Text>
               <TextInput
                 style={styles.input}
                 value={masterClassLevel}

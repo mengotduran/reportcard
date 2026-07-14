@@ -101,6 +101,7 @@ const makeSStyles = (colors: Colors) => StyleSheet.create(({
 
   formField: { marginBottom: 12 },
   formLabel: { fontSize: 12, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   formInput: {
     borderWidth: 1, borderColor: '#d1d5db', borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 10,
@@ -406,15 +407,15 @@ export default function SchoolsScreen() {
 
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               {[
-                { label: 'School Name *', key: 'schoolName', placeholder: 'St. Mary College' },
-                { label: 'School Email *', key: 'schoolEmail', placeholder: 'info@school.com', type: 'email-address' },
-                { label: 'Subdomain *', key: 'subdomain', placeholder: 'st-mary' },
+                { label: 'School Name', key: 'schoolName', placeholder: 'St. Mary College', required: true },
+                { label: 'School Email', key: 'schoolEmail', placeholder: 'info@school.com', type: 'email-address', required: true },
+                { label: 'Subdomain', key: 'subdomain', placeholder: 'st-mary', required: true },
                 { label: 'Phone', key: 'phone', placeholder: '+237 6XX XXX XXX', type: 'phone-pad' },
-                { label: 'Admin Name *', key: 'adminName', placeholder: 'John Doe' },
-                { label: 'Admin Email *', key: 'adminEmail', placeholder: 'admin@school.com', type: 'email-address' },
+                { label: 'Admin Name', key: 'adminName', placeholder: 'John Doe', required: true },
+                { label: 'Admin Email', key: 'adminEmail', placeholder: 'admin@school.com', type: 'email-address', required: true },
               ].map(field => (
                 <View key={field.key} style={s.formField}>
-                  <Text style={s.formLabel}>{field.label}</Text>
+                  <Text style={s.formLabel}>{field.label} {field.required && <Text style={s.required}>*</Text>}</Text>
                   <TextInput
                     style={s.formInput}
                     value={(form as any)[field.key]}
@@ -428,7 +429,7 @@ export default function SchoolsScreen() {
               ))}
 
               <View style={s.formField}>
-                <Text style={s.formLabel}>Admin Password *</Text>
+                <Text style={s.formLabel}>Admin Password <Text style={s.required}>*</Text></Text>
                 <View style={{ position: 'relative' }}>
                   <TextInput
                     style={s.formInput}
@@ -448,7 +449,7 @@ export default function SchoolsScreen() {
               </View>
 
               <View style={s.formField}>
-                <Text style={s.formLabel}>School Type *</Text>
+                <Text style={s.formLabel}>School Type <Text style={s.required}>*</Text></Text>
                 <View style={s.typeRow}>
                   {SCHOOL_TYPES.map(t => (
                     <TouchableOpacity
@@ -464,7 +465,7 @@ export default function SchoolsScreen() {
               </View>
 
               <View style={s.formField}>
-                <Text style={s.formLabel}>Language * (AI remarks)</Text>
+                <Text style={s.formLabel}>Language (AI remarks)</Text>
                 <View style={s.typeRow}>
                   {[{ k: 'EN', label: 'English' }, { k: 'FR', label: 'French' }].map(l => (
                     <TouchableOpacity

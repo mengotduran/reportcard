@@ -106,6 +106,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   deleteActionText: { fontSize: 14, fontWeight: '600', color: '#ef4444' },
   formLabel: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   formInput: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 10,
     padding: 12, fontSize: 14, color: colors.text, backgroundColor: colors.inputBg, marginBottom: 14,
@@ -268,10 +269,10 @@ function CreateStudentModal({
               </TouchableOpacity>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.formLabel}>{t('Full Name')}</Text>
+              <Text style={styles.formLabel}>{t('Full Name')} <Text style={styles.required}>*</Text></Text>
               <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder={t('e.g. John Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
-              <Text style={styles.formLabel}>{t('Class Level')}</Text>
+              <Text style={styles.formLabel}>{t('Class Level')} <Text style={styles.required}>*</Text></Text>
               <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
                 <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>{classLevel || t('Select class level')}</Text>
                 <Ionicons name="chevron-down" size={16} color="#6b7280" />
@@ -286,7 +287,7 @@ function CreateStudentModal({
                 </View>
               )}
 
-              <Text style={styles.formLabel}>{t('Gender')} *</Text>
+              <Text style={styles.formLabel}>{t('Gender')} <Text style={styles.required}>*</Text></Text>
               <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
                 {['Male', 'Female'].map((g) => (
                   <TouchableOpacity key={g} onPress={() => setGender(g)}

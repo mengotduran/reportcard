@@ -209,6 +209,7 @@ export default function ClassesPage() {
     let finalNames: string[]
     if (isUniversity) {
       if (!form.deptName.trim()) { setError(tt('Class name is required.', 'Department name is required.')); return }
+      if (!form.abbreviation.trim()) { setError(t('Abbreviation for student matricule is required.')); return }
       finalNames = [buildClassName(form.deptName.trim(), form.uniLevel)]
     } else if (isSecondary) {
       if (!secBase) { setError(t('Class name is required.')); return }
@@ -686,18 +687,19 @@ export default function ClassesPage() {
               {/* Abbreviation (university only) */}
               {isUniversity && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Abbreviation')} <span className="text-muted-foreground font-normal">(for student matricule)</span></label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Abbreviation')} <span className="text-muted-foreground font-normal">(for student matricule)</span> <span className="text-destructive">*</span></label>
                   <input type="text" placeholder="e.g. HWM, SWE, MF"
                     value={form.abbreviation}
                     onChange={(e) => setForm({ ...form, abbreviation: e.target.value.toUpperCase() })}
                     maxLength={10}
+                    required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
               )}
 
               {/* Max score */}
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <span className="text-destructive">*</span></label>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">{t('out of')}</span>
                   <input type="number" min="1" max="1000" placeholder={isUniversity ? '100' : '20'}
@@ -716,7 +718,7 @@ export default function ClassesPage() {
                 const halfFee = l1 && l1.feeAmount > 0 ? Math.round(l1.feeAmount / 2) : null
                 return (
                   <div>
-                    <label className="block text-xs font-medium text-foreground mb-1">Level 2 Entry Fee (XAF)</label>
+                    <label className="block text-xs font-medium text-foreground mb-1">Level 2 Entry Fee (XAF) <span className="text-destructive">*</span></label>
                     {halfFee !== null ? (
                       <div className="w-full border border-indigo-200 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg px-3 py-2.5 flex items-center justify-between">
                         <span className="text-sm font-semibold text-indigo-700">{formatXAF(halfFee)}</span>
