@@ -292,8 +292,13 @@ export default function ReportCardDetailPage() {
   })()
   const cgpa = studentCgpa ?? semGpaInfo.gpa
 
-  // Publish readiness checks
-  const allSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
+  // Publish readiness checks — prefer the backend's readiness detail (admin-only)
+  // once it loads, since it also catches subjects with zero entries at all, not
+  // just entries with a missing sequence score. Falls back to the local, weaker
+  // check for non-admins (who never fetch readiness) so their remarks-edit gate
+  // still works.
+  const localSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
+  const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!(reportCard.remarks?.trim() || reportCard.remarksFr?.trim())
   // Positions are class-relative — every other active student in this class + term
   // must also be complete (or already published) before this one can publish.
@@ -522,22 +527,22 @@ export default function ReportCardDetailPage() {
       {subjects.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <p className="text-muted-foreground text-sm">
-            {tr('No subjects for')} <strong>{reportCard.student.classLevel}</strong>.
+            {isUniversity ? tr('No courses for') : tr('No subjects for')} <strong>{reportCard.student.classLevel}</strong>.
           </p>
           <button onClick={() => router.push('/subjects')} className="mt-3 text-primary text-sm hover:underline">
-            {tr('Go to Subjects →')}
+            {isUniversity ? tr('Go to Courses →') : tr('Go to Subjects →')}
           </button>
         </div>
       ) : (
         <>
           <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
             <div className="px-4 py-3 bg-muted border-b border-border">
-              <h3 className="text-sm font-semibold text-foreground">{tr('Subject Scores')}</h3>
+              <h3 className="text-sm font-semibold text-foreground">{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</h3>
             </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
               <thead className="border-b border-gray-100 dark:border-border">
                 <tr>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Subject')}</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{isUniversity ? tr('Course') : tr('Subject')}</th>
                   {isUniversity ? (
                     <>
                       <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">CA / 30</th>

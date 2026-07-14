@@ -1019,7 +1019,7 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
       prisma.subject.findMany({ where: { schoolId, ...subjectTermFilter(term.name) }, select: { id: true, classLevel: true, compulsory: true } }),
       prisma.reportCard.findMany({
         where: { schoolId, termId },
-        select: { id: true, status: true, remarks: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
+        select: { id: true, status: true, remarks: true, remarksFr: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
         }
       }),
     ])
@@ -1056,7 +1056,7 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
           }
         }
 
-        if (requiresRemarks && !rc.remarks?.trim()) missingRemarks++
+        if (requiresRemarks && !rc.remarks?.trim() && !rc.remarksFr?.trim()) missingRemarks++
       }
 
       const unpublished = classStudents.filter(s => {
@@ -1129,7 +1129,7 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
         }
       })
 
-    const remarksOk = !!rc.remarks?.trim()
+    const remarksOk = !!(rc.remarks?.trim() || rc.remarksFr?.trim())
 
     // Other active students in this class + term who are blocking publish
     // (excluding this student — their own gaps are already covered above).

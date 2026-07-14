@@ -412,9 +412,12 @@ export default function AdminReportCardDetail() {
   const avgMaxScore = subjects[0]?.maxScore ?? 20
   const gradeResult = gradeFromScore(average, avgMaxScore, gradingRanges)
 
-  // Publish readiness (same rules as web + bulk-publish)
-  const allSeqsFilled = reportCard.entries.length > 0 &&
+  // Publish readiness (same rules as web + bulk-publish) — prefer the backend's
+  // readiness detail once loaded, since it also catches subjects with zero
+  // entries at all, not just entries with a missing sequence score.
+  const localSeqsFilled = reportCard.entries.length > 0 &&
     reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null)
+  const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
   // Positions are class-relative — every other active student in this class + term
   // must also be complete (or already published) before this one can publish.
@@ -650,10 +653,10 @@ export default function AdminReportCardDetail() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
-          <Text style={styles.sectionTitle}>{tr('Subject Scores')}</Text>
+          <Text style={styles.sectionTitle}>{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</Text>
         </View>
         {subjects.length === 0 ? (
-          <Text style={styles.emptyText}>{tr('No subjects found for this class')}</Text>
+          <Text style={styles.emptyText}>{isUniversity ? tr('No courses found for this class') : tr('No subjects found for this class')}</Text>
         ) : (
           <View style={{ gap: 10 }}>
             {subjects.map((subject) => {
