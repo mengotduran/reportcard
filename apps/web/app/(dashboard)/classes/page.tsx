@@ -156,7 +156,11 @@ export default function ClassesPage() {
 
   const openAdd = () => {
     setEditing(null)
-    setForm(isUniversity ? { ...UNI_EMPTY, uniLevel: activeLevel } : STD_EMPTY)
+    // Entry/registration fees are never pre-filled on create — only shown as
+    // placeholder suggestions — so the admin has to consciously enter them.
+    setForm(isUniversity
+      ? { ...UNI_EMPTY, uniLevel: activeLevel, feeAmount: activeLevel === 'Level 2' ? '' : UNI_EMPTY.feeAmount, hndRegistrationFee: '' }
+      : { ...STD_EMPTY, hndRegistrationFee: '' })
     setSections(['A'])
     setCopyFrom('')
     setError('')
@@ -221,14 +225,10 @@ export default function ClassesPage() {
       finalNames = [form.name.trim()]
     }
 
-    // For university Level 2: fee is auto-computed as half of Level 1
-    const l1ForDept = (isUniversity && form.uniLevel === 'Level 2' && form.deptName.trim())
-      ? classes.find((c) => c.name === `HND ${form.deptName.trim()} - Level 1`)
-      : null
-    const autoL2Fee = l1ForDept && l1ForDept.feeAmount > 0 ? Math.round(l1ForDept.feeAmount / 2) : null
-
-    const isAutoFee = isUniversity && form.uniLevel === 'Level 2' && autoL2Fee !== null
-    if (!isAutoFee && (form.feeAmount.trim() === '' || isNaN(Number(form.feeAmount)) || Number(form.feeAmount) < 0)) {
+    // Level 2 entry fee defaults to half of Level 1's fee (suggested when the field
+    // is opened) but the admin can always type a different amount — always use
+    // whatever is in the field at submit time.
+    if (form.feeAmount.trim() === '' || isNaN(Number(form.feeAmount)) || Number(form.feeAmount) < 0) {
       setError(tt('Enter the class fee (use 0 if there is none).', 'Enter the department fee (use 0 if there is none).'))
       return
     }
@@ -240,7 +240,7 @@ export default function ClassesPage() {
         abbreviation: form.abbreviation.trim() || undefined,
         hasStream: isUniversity ? false : form.hasStream,
         maxScore: Number(form.maxScore),
-        feeAmount: isAutoFee ? autoL2Fee! : (Number(form.feeAmount) || 0),
+        feeAmount: Number(form.feeAmount) || 0,
         hndRegistrationFee: isExamReg ? (Number(form.hndRegistrationFee) || 0) : null,
         ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
       }
@@ -508,19 +508,9 @@ export default function ClassesPage() {
                         <span className="text-sm font-semibold text-primary">/ {cls.maxScore ?? 20}</span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {(() => {
-                          if (isUniversity && activeLevel === 'Level 2') {
-                            const dept = deptFromClassName(cls.name)
-                            const l1 = classes.find((c) => c.name === `HND ${dept} - Level 1`)
-                            const halfFee = l1 && l1.feeAmount > 0 ? Math.round(l1.feeAmount / 2) : cls.feeAmount
-                            return halfFee > 0
-                              ? <span className="text-sm font-medium text-indigo-600">{formatXAF(halfFee)}</span>
-                              : <span className="text-muted-foreground text-sm">—</span>
-                          }
-                          return cls.feeAmount > 0
-                            ? <span className={`text-sm font-medium ${isUniversity && activeLevel === 'Level 1' ? 'text-indigo-600' : 'text-foreground'}`}>{formatXAF(cls.feeAmount)}</span>
-                            : <span className="text-muted-foreground text-sm">—</span>
-                        })()}
+                        {cls.feeAmount > 0
+                          ? <span className={`text-sm font-medium ${isUniversity && (activeLevel === 'Level 1' || activeLevel === 'Level 2') ? 'text-indigo-600' : 'text-foreground'}`}>{formatXAF(cls.feeAmount)}</span>
+                          : <span className="text-muted-foreground text-sm">—</span>}
                       </td>
                       {isUniversity && activeLevel === 'Level 2' && (
                         <td className="px-4 py-3 text-right">
@@ -610,7 +600,15 @@ export default function ClassesPage() {
                     <div className="grid grid-cols-3 gap-2">
                       {UNI_LEVELS.map((lv) => (
                         <button key={lv} type="button"
-                          onClick={() => setForm({ ...form, uniLevel: lv })}
+                          onClick={() => {
+                            // Never pre-fill the Level 2 entry fee on create — the half-fee is
+                            // only ever shown as a placeholder suggestion, not auto-applied.
+                            if (lv === 'Level 2' && !editing) {
+                              setForm({ ...form, uniLevel: lv, feeAmount: '' })
+                              return
+                            }
+                            setForm({ ...form, uniLevel: lv })
+                          }}
                           className={`py-2 px-1 rounded-lg border text-xs font-medium transition text-center ${
                             form.uniLevel === lv
                               ? 'bg-primary text-white border-primary'
@@ -719,22 +717,28 @@ export default function ClassesPage() {
                 return (
                   <div>
                     <label className="block text-xs font-medium text-foreground mb-1">Level 2 Entry Fee (XAF) <span className="text-destructive">*</span></label>
-                    {halfFee !== null ? (
-                      <div className="w-full border border-indigo-200 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg px-3 py-2.5 flex items-center justify-between">
-                        <span className="text-sm font-semibold text-indigo-700">{formatXAF(halfFee)}</span>
-                        <span className="text-xs text-indigo-500">auto · ½ of {formatXAF(l1!.feeAmount)}</span>
-                      </div>
-                    ) : (
-                      <input type="number" min="0" step="any" placeholder="0" required
-                        value={form.feeAmount}
-                        onChange={(e) => setForm({ ...form, feeAmount: e.target.value })}
-                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                    <input type="number" min="0" step="any" placeholder={halfFee !== null ? String(halfFee) : '0'} required
+                      value={form.feeAmount}
+                      onChange={(e) => setForm({ ...form, feeAmount: e.target.value })}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                    {halfFee !== null && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Suggested: half the 2-year program fee ({formatXAF(l1!.feeAmount)}) = {formatXAF(halfFee)}.
+                        {Number(form.feeAmount) !== halfFee && (
+                          <>
+                            {' '}
+                            <button type="button" onClick={() => setForm({ ...form, feeAmount: String(halfFee) })}
+                              className="text-primary font-medium hover:underline">Use {formatXAF(halfFee)}</button>
+                          </>
+                        )}
+                        {' '}Enter a different amount if this department's Level 2 entry fee isn't exactly half.
+                      </p>
                     )}
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {halfFee !== null
-                        ? 'Fee for students who join directly at Level 2. Auto-calculated as half the 2-year program fee.'
-                        : 'Create the Level 1 department first to auto-calculate this fee.'}
-                    </p>
+                    {halfFee === null && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Create the Level 1 department first to see the suggested half-fee, or enter this department's Level 2 entry fee directly.
+                      </p>
+                    )}
                   </div>
                 )
               })() : (
@@ -749,7 +753,7 @@ export default function ClassesPage() {
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   <p className="text-xs text-muted-foreground mt-1">
                     {isUniversity && form.uniLevel === 'Level 1'
-                      ? 'Total fee for the full 2-year HND program. Level 2 students (direct entry) will automatically be charged half this amount.'
+                      ? 'Total fee for the full 2-year HND program. Level 2 direct-entry students are suggested half this amount by default, but it can be set differently.'
                       : tt("Total fee per academic year. Record each student's payments from the Students page.",
                           "Annual fee for this department. Record payments from the Students page.")}
                   </p>
