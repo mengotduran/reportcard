@@ -17,7 +17,7 @@ export interface StudentFees {
   session: string | null
   isHndProgram?: boolean
   isRepeatingYear?: boolean
-  student: { id: string; name: string; studentId: string; classLevel: string }
+  student: { id: string; name: string; studentId: string; classLevel: string; directLevel2Entry?: boolean }
   due: number
   totalPaid: number
   balance: number
@@ -61,6 +61,7 @@ export interface ClassFeeRow {
   name: string
   studentIdCode: string
   fee?: number   // per-student (may differ for carry-over vs direct Level 2 entrants)
+  directLevel2Entry?: boolean
   paid: number
   balance: number
   status: FeeStatus
