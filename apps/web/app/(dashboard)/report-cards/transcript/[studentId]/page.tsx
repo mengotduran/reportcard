@@ -2,11 +2,26 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { getStudentTranscriptApi, StudentTranscript } from '@/lib/api/reportcards'
-import { PrintableTranscript } from '@/components/ui/PrintableTranscript'
+import { getStudentTranscriptApi, StudentTranscript, TranscriptReportCard } from '@/lib/api/reportcards'
+import PrintableReportCard, { PrintEntry, TranscriptSemesterData } from '@/components/ui/PrintableReportCard'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { ArrowLeft, Printer } from 'lucide-react'
-import { getTemplateApi } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig } from '@/lib/api/reportCardTemplate'
+
+// Build a per-semester bundle (subjects + entries, PrintableReportCard's shapes) from
+// one transcript report card. `subjects` is derived from the entries themselves since
+// the transcript endpoint doesn't return a separate class subject list.
+function toSemesterData(card?: TranscriptReportCard): TranscriptSemesterData | undefined {
+  if (!card) return undefined
+  return {
+    term: { name: card.term.name, session: card.term.session },
+    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined })),
+    entries: card.entries.map((e): PrintEntry => ({
+      subjectId: e.subject.id, score: e.score ?? 0, seq1Score: e.seq1Score, seq2Score: e.seq2Score,
+      resitScore: e.resitScore, grade: e.grade ?? '', remarks: '',
+    })),
+  }
+}
 
 export default function AnnualTranscriptPage() {
   const { studentId } = useParams() as { studentId: string }
@@ -16,9 +31,7 @@ export default function AnnualTranscriptPage() {
   const [data, setData] = useState<StudentTranscript | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [primaryColor, setPrimaryColor] = useState('#1e3a5f')
-  const [highlightFailingRed, setHighlightFailingRed] = useState(true)
-  const [transcriptConfig, setTranscriptConfig] = useState<{ showGradeSystem?: boolean; showClassification?: boolean; showLegend?: boolean; deanLabel?: string; registrarLabel?: string; reportTitle?: string; academicYearLabel?: string }>({})
+  const [config, setConfig] = useState<TemplateConfig | null>(null)
   const [printing, setPrinting] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
 
@@ -32,10 +45,17 @@ export default function AnnualTranscriptPage() {
     ])
       .then(([transcript, tpl]) => {
         setData(transcript)
-        const cfg = tpl.config as any
-        if (cfg?.primaryColor) setPrimaryColor(cfg.primaryColor)
-        if (cfg?.highlightFailingRed === false) setHighlightFailingRed(false)
-        if (cfg?.transcriptConfig) setTranscriptConfig(cfg.transcriptConfig)
+        const saved = tpl.config as Partial<TemplateConfig> | undefined
+        // A school that never customized the transcript layout (or only ever customized
+        // the standard one) has no transcriptSemester-flagged marks_table in its saved
+        // sections — fall back to the built-in transcript default rather than rendering
+        // whatever unrelated layout happens to be saved.
+        const hasTranscriptSections = Array.isArray((saved as any)?.sections)
+          && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+        const finalConfig: TemplateConfig = hasTranscriptSections
+          ? (saved as TemplateConfig)
+          : { ...getDefaultTranscriptLayout(), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' }
+        setConfig(finalConfig)
       })
       .catch(() => setError('Failed to load transcript.'))
       .finally(() => setLoading(false))
@@ -58,12 +78,34 @@ export default function AnnualTranscriptPage() {
   }
 
   if (loading) return <div className="text-center py-16 text-muted-foreground text-sm">Loading transcript…</div>
-  if (error || !data) return (
+  if (error || !data || !config) return (
     <div className="text-center py-16">
       <p className="text-destructive text-sm">{error || 'Transcript not found.'}</p>
       <button onClick={() => router.back()} className="mt-4 text-sm text-primary underline">Go back</button>
     </div>
   )
+
+  // First Semester before Second Semester.
+  const sorted = [...data.reportCards].sort((a, b) => a.term.name.localeCompare(b.term.name))
+  const sem1 = toSemesterData(sorted[0])
+  const sem2 = toSemesterData(sorted[1])
+  // Combined across both semesters — drives the grading_legend's Credits/CGPA/Remark box.
+  const allSubjects = [...(sem1?.subjects ?? []), ...(sem2?.subjects ?? [])]
+  const allEntries = [...(sem1?.entries ?? []), ...(sem2?.entries ?? [])]
+
+  const printableProps = {
+    school: { name: data.school.name, type: data.school.type ?? 'UNIVERSITY', logo: data.school.logo, language: data.school.language ?? undefined },
+    student: { name: data.student.name, studentId: data.student.studentId, classLevel: data.student.classLevel, gender: data.student.gender ?? undefined },
+    term: { name: '', session: data.session },
+    subjects: allSubjects,
+    entries: allEntries,
+    generalRemarks: '',
+    average: 0,
+    config,
+    gradeBands: data.gradingScale,
+    classificationBands: data.classificationBands,
+    transcriptSemesters: { sem1, sem2 },
+  }
 
   return (
     <div>
@@ -94,35 +136,13 @@ export default function AnnualTranscriptPage() {
       {/* Preview — screen only */}
       <div className="bg-white rounded-xl border border-border shadow-sm overflow-auto">
         <div ref={printRef}>
-          <PrintableTranscript
-            data={data}
-            primaryColor={primaryColor}
-            showGradeSystem={transcriptConfig.showGradeSystem ?? true}
-            showClassification={transcriptConfig.showClassification ?? true}
-            showLegend={transcriptConfig.showLegend ?? true}
-            highlightFailingRed={highlightFailingRed}
-            deanLabel={transcriptConfig.deanLabel}
-            registrarLabel={transcriptConfig.registrarLabel}
-            reportTitle={transcriptConfig.reportTitle}
-            academicYearLabel={transcriptConfig.academicYearLabel}
-          />
+          <PrintableReportCard {...printableProps} />
         </div>
       </div>
 
       {createPortal(
         <div className="transcript-print-portal">
-          <PrintableTranscript
-            data={data}
-            primaryColor={primaryColor}
-            showGradeSystem={transcriptConfig.showGradeSystem ?? true}
-            showClassification={transcriptConfig.showClassification ?? true}
-            showLegend={transcriptConfig.showLegend ?? true}
-            highlightFailingRed={highlightFailingRed}
-            deanLabel={transcriptConfig.deanLabel}
-            registrarLabel={transcriptConfig.registrarLabel}
-            reportTitle={transcriptConfig.reportTitle}
-            academicYearLabel={transcriptConfig.academicYearLabel}
-          />
+          <PrintableReportCard {...printableProps} />
         </div>,
         document.body
       )}

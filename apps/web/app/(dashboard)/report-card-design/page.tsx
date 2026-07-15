@@ -3,20 +3,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
   RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
-  SpreadsheetTable, SheetRow, seedMarksTableSection, buildOfficialContactLine,
+  SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
   officialTextBlockHtml, OFFICIAL_HEADER_FONT,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor, LayoutTemplate } from 'lucide-react'
-import { PrintableTranscript } from '@/components/ui/PrintableTranscript'
 import type { StudentTranscript } from '@/lib/api/reportcards'
 import { useT } from '@/lib/i18n'
 import { DEFAULT_UNIVERSITY_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
@@ -39,10 +38,6 @@ const SD = {
   remarks: ['Good','Satisfactory','Excellent','Needs improvement','Outstanding'],
   position: 3,
 }
-// Weighted-average preview: average = Σ(score × coeff) / Σ(coeff), out of 20.
-// The sample subjects carry no coefficient, so each weighs 1.
-const SD_TOTAL = SD.entries.reduce((a, b) => a + b, 0)        // Σ(score × coeff) = 74
-const SD_AVG = SD.entries.length ? SD_TOTAL / SD.entries.length : 0  // 14.8 / 20
 
 // ── University sample data (scores /100, GPA derived from DEFAULT_UNIVERSITY_RANGES) ──
 const U_SEQ1    = [23, 19, 25, 17, 21]         // CA /30
@@ -55,12 +50,6 @@ function _gpForScore(score: number) {
   return { grade: r?.grade ?? 'F', gp: r?.gradePoint ?? 0 }
 }
 const U_GP     = U_SCORES.map(_gpForScore)
-const U_WP     = U_GP.map((g, i) => g.gp * U_CREDITS[i])  // [10.5, 9.0, 12.0, 7.5, 14.0]
-const U_TOT_CR = U_CREDITS.reduce((a, b) => a + b, 0)      // 16
-const U_TOT_WP = U_WP.reduce((a, b) => a + b, 0)           // 53.0
-const U_GPA    = U_TOT_CR > 0 ? U_TOT_WP / U_TOT_CR : 0   // 3.3125
-const U_CLASS  = [...DEFAULT_CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
-                   .find(b => U_GPA >= b.min && U_GPA <= b.max)?.label ?? 'Fail'
 
 const SD_UNI = {
   student: {
@@ -149,21 +138,6 @@ function resolveField(field: string, schoolName: string, schoolType?: string) {
     'school.name':         schoolName,
   }
   return map[field] ?? field
-}
-
-function resolveSummary(field: string, schoolType?: string) {
-  if (schoolType === 'UNIVERSITY') {
-    if (field === 'credits')        return String(U_TOT_CR)
-    if (field === 'gpa')            return U_GPA.toFixed(2)
-    if (field === 'cgpa')           return U_GPA.toFixed(2)
-    if (field === 'classification') return U_CLASS
-  }
-  if (field === 'total')    return String(SD_TOTAL)
-  if (field === 'average')  return SD_AVG.toFixed(1)
-  if (field === 'position') return String(SD.position)
-  if (field === 'grade')    return 'B'
-  if (field === 'classAverage') return (SD_AVG - 1.3).toFixed(1)
-  return '—'
 }
 
 // ── Color system ─────────────────────────────────────────────────────────────
@@ -504,42 +478,41 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
         (() => {
           return (
             <>
-              {/* position:relative + absolutely-positioned logo so a bigger
-                  logo never stretches the text columns' row height. */}
-              <div style={{ position: 'relative', minHeight: logoSize, marginBottom: 4 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
-                  <div
-                    key={leftVer}
-                    contentEditable suppressContentEditableWarning
-                    dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.leftText ?? '') }}
-                    onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
-                    style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                    title="Click to edit"
-                  />
-                  <div />
-                  <div
-                    key={rightVer + 10000}
-                    contentEditable suppressContentEditableWarning
-                    dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.rightText ?? '') }}
-                    onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
-                    style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                    title="Click to edit"
-                  />
-                </div>
-                <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{LogoEl}</div>
+              {/* The logo sits in the grid's own middle column (not absolutely
+                  positioned) so it vertically centers against the text blocks at
+                  any size, instead of hanging below them once it's larger than
+                  the text. */}
+              <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'center', marginBottom: 4 }}>
+                <div
+                  key={leftVer}
+                  contentEditable suppressContentEditableWarning
+                  dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.leftText ?? '', 'left') }}
+                  onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
+                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
+                  title="Click to edit"
+                />
+                <div style={{ display: 'flex', justifyContent: 'center' }}>{LogoEl}</div>
+                <div
+                  key={rightVer + 10000}
+                  contentEditable suppressContentEditableWarning
+                  dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.rightText ?? '', 'right') }}
+                  onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
+                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
+                  title="Click to edit"
+                />
               </div>
               {/* Authorization / registration line spanning under the columns
                   (e.g. "No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010").
                   Set once in School Settings, toggled on/off here — same
                   pattern as the contact-line fields below. */}
               {(sec.showAuthorization ?? true) && (
-                <div style={{ textAlign: 'center', marginTop: 2, fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 'bold', color: '#333' }}>
+                <div style={{ textAlign: 'center', marginTop: 2, fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 'bold', color: '#333' }}>
                   {(school as any)?.authorizationNumber || t('(Set the Authorization No. in School Settings)')}
                 </div>
               )}
               {/* Contact strip between two thin rules, spanning the full width */}
               {anyContactToggleOn && (
-                <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 600, color: '#111' }}>
+                <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 600, color: '#111' }}>
                   {contactLine || t('(Nothing selected above has a value in Settings yet)')}
                 </div>
               )}
@@ -674,46 +647,9 @@ const UNIVERSITY_ONLY_MARKS_KEYS = new Set(['m:code', 'm:credit', 'm:gradePoint'
 function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableSec; color: string; schoolType?: string; update: (s: MarksTableSec) => void }) {
   const isUni = schoolType === 'UNIVERSITY'
 
-  // Preview value for each m:* field key (shows row 0 of sample data). Footer
-  // rows (total/average/position/etc.) use the same resolver as Summary boxes.
-  const resolveMarksPreviewField = (field: string): string => {
-    if (!field.startsWith('m:')) return resolveSummary(field, schoolType)
-    const k = field.slice(2)
-    if (k === 'sn') return '1'
-    if (isUni) {
-      switch (k) {
-        case 'subject':      return SD_UNI.subjects[0] ?? ''
-        case 'code':         return SD_UNI.codes[0]    ?? ''
-        case 'seq1':         return String(SD_UNI.seq1[0])
-        case 'seq2':         return String(SD_UNI.seq2[0])
-        case 'score':        return String(SD_UNI.entries[0])
-        case 'grade':        return SD_UNI.grades[0]   ?? ''
-        case 'gradePoint':   return U_GP[0] ? U_GP[0].gp.toFixed(1) : '—'
-        case 'weighted':     return U_WP[0] != null ? U_WP[0].toFixed(1) : '—'
-        case 'credit':       return String(U_CREDITS[0])
-        case 'evaluation':   return SD_UNI.remarks[0]  ?? '—'
-        case 'juryDecision': return 'VALIDATED'
-        default:             return `[${k}]`
-      }
-    }
-    switch (k) {
-      case 'subject': return SD.subjects[0] ?? ''
-      case 'coef':    return '1'
-      case 'seq1':    return String(SD.seq1[0])
-      case 'seq2':    return String(SD.seq2[0])
-      case 'score':   return String(SD.entries[0])
-      case 'grade':   return SD.grades[0]   ?? ''
-      case 'remarks': return SD.remarks[0]  ?? ''
-      case 'min':     return '10.0'
-      case 'avg':     return '13.5'
-      case 'max':     return '18.0'
-      default:        return `[${k}]`
-    }
-  }
-
-  const seedMarksTable = () => update({ ...sec, template: seedMarksTableSection(sec, color, schoolType) })
+  const seedMarksTable = () => update({ ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(color) : seedMarksTableSection(sec, color, schoolType) })
   // sec.template is guaranteed by ensureMarksTables() at load + newSection()
-  const tpl: SpreadsheetTable = sec.template ?? seedMarksTableSection(sec, color, schoolType)
+  const tpl: SpreadsheetTable = sec.template ?? (sec.transcriptSemester ? seedTranscriptMarksTable(color) : seedMarksTableSection(sec, color, schoolType))
 
   const smallBtn: React.CSSProperties = {
     fontSize: 10, padding: '2px 8px', border: '1px solid #e5e7eb',
@@ -722,10 +658,12 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
 
   return (
     <div style={{ marginBottom: 12 }}>
+      {/* No resolveField — every bound cell shows its raw [field] key, same as the
+          grading legend's tables, so the design canvas never looks like it's showing
+          real marks. Only the actual report card/transcript print shows real data. */}
       <SpreadsheetGrid
         table={tpl}
         onChange={t => update({ ...sec, template: t })}
-        resolveField={resolveMarksPreviewField}
         color={color}
         marksKeyMode
         marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef') && !(!isUni && UNIVERSITY_ONLY_MARKS_KEYS.has(o.value)))}
@@ -776,7 +714,7 @@ function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; co
           <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', position: 'relative' }}>
             <button onClick={() => deleteBox(box.id)} style={{ position: 'absolute', top: 2, right: 4, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
             <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-              <ColorableCell sampleText={resolveSummary(box.field, schoolType)} color={sec.valueColor || color}
+              <ColorableCell sampleText={box.field ? `[${box.field}]` : ''} color={sec.valueColor || color}
                 onColorChange={syncBoxValueColor} style={{ fontWeight: 'bold' }} />
             </div>
             <ET value={box.label} onChange={v => updateBox(box.id, { label: v })} onColorApplied={syncBoxLabelColor}
@@ -1166,10 +1104,14 @@ const TEMPLATES = [
   { id: 'official' as TemplateName, label: 'Official',     color: '#92400e' },
 ]
 
-const ADD_OPTIONS = [
+type AddSectionType = LayoutSection['type'] | 'marks_table_sem1' | 'marks_table_sem2'
+
+const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true }[] = [
   { type: 'header'         as const, label: '🏷 Header' },
   { type: 'student_info'   as const, label: '👤 Student Info' },
   { type: 'marks_table'    as const, label: '📋 Marks Table' },
+  { type: 'marks_table_sem1' as const, label: '📋 Semester 1 Table', transcriptOnly: true },
+  { type: 'marks_table_sem2' as const, label: '📋 Semester 2 Table', transcriptOnly: true },
   { type: 'summary'        as const, label: '📊 Summary Boxes' },
   { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
   { type: 'remarks'        as const, label: '💬 Remarks' },
@@ -1178,8 +1120,13 @@ const ADD_OPTIONS = [
   { type: 'divider'        as const, label: '── Divider' },
 ]
 
-function newSection(type: LayoutSection['type'], color: string, schoolType?: string): LayoutSection {
+function newSection(type: AddSectionType, color: string, schoolType?: string): LayoutSection {
   const id = `sec_${Date.now()}`
+  if (type === 'marks_table_sem1' || type === 'marks_table_sem2') {
+    const transcriptSemester = type === 'marks_table_sem1' ? 'sem1' : 'sem2'
+    const sec: MarksTableSec = { id, type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, transcriptSemester }
+    return { ...sec, template: seedTranscriptMarksTable(color) }
+  }
   if (type === 'text_block')   return { id, type, content: 'New text block', align: 'left' }
   if (type === 'divider')      return { id, type, style: 'solid' }
   if (type === 'remarks')      return { id, type, label: 'General Remarks' }
@@ -1203,7 +1150,7 @@ function ensureMarksTables(
     ...cfg,
     sections: cfg.sections.map(sec =>
       sec.type === 'marks_table' && !sec.template
-        ? { ...sec, template: seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
+        ? { ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(cfg.primaryColor) : seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
         : sec
     ),
   }
@@ -1264,9 +1211,6 @@ export default function ReportCardDesignPage() {
   const schoolLogo = school?.logo ?? null
   const isTranscript = schoolType === 'UNIVERSITY' && config.layoutType === 'transcript'
   const isLedger = schoolType !== 'UNIVERSITY' && config.layoutType === 'ledger'
-  const tc = config.transcriptConfig ?? {}
-  const setTc = (patch: Partial<NonNullable<typeof config.transcriptConfig>>) =>
-    setConfig(c => ({ ...c, transcriptConfig: { ...c.transcriptConfig, ...patch } }))
   const watermark = config.watermark ?? { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null, size: 240, rotation: -45 }
   const setWatermark = (patch: Partial<typeof watermark>) =>
     setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
@@ -1307,8 +1251,21 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     getTemplateApi().then(({ config: saved }) => {
       savedConfigRef.current = saved ?? null
-      const merged = buildMergedConfig(saved ?? null, lang, sType)
-        ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+      // A saved config with `layoutType: 'transcript'` must NEVER go through
+      // buildMergedConfig — that merges onto a `template`-name base (classic/
+      // bilingual/…), and a transcript config's `template` is just its unrelated
+      // base ('classic') for storage purposes, not a real standard layout. It only
+      // counts as a real, previously-edited transcript design if it has a
+      // transcriptSemester-flagged marks_table — anything else (a pre-refactor
+      // leftover, or never customized) reseeds fresh instead.
+      const hasTranscriptSections = Array.isArray((saved as any)?.sections)
+        && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+      const merged = saved?.layoutType === 'transcript'
+        ? (hasTranscriptSections
+            ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(), ...saved } as any, lang), sType)
+            : { ...getDefaultTranscriptLayout(), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' as const })
+        : buildMergedConfig(saved ?? null, lang, sType)
+          ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
       setConfig(merged)
       setColorText(merged.primaryColor)
       setBgText(merged.bgColor || '#ffffff')
@@ -1334,7 +1291,7 @@ export default function ReportCardDesignPage() {
     })
   }
 
-  const addSection = (type: LayoutSection['type']) => {
+  const addSection = (type: AddSectionType) => {
     const sec = newSection(type, config.primaryColor, schoolType)
     setConfig(c => ({ ...c, sections: [...c.sections, sec] }))
   }
@@ -1354,11 +1311,32 @@ export default function ReportCardDesignPage() {
     // Re-selecting the template you last saved should bring back that saved
     // design, not wipe it back to blank defaults — only a genuinely different,
     // never-saved-under-this-name template falls back to defaults.
+    // A saved *transcript* config also carries `template: 'classic'` (its base) —
+    // exclude it here, or clicking Standard would silently restore transcript
+    // sections/layoutType instead of actually switching to a standard layout.
     const saved = savedConfigRef.current
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
-    const restored = saved?.template === name ? buildMergedConfig(saved, lang, sType) : null
+    const restored = (saved?.template === name && saved?.layoutType !== 'transcript') ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? getDefaultLayout(name)
+    setConfig(layout)
+    setColorText(layout.primaryColor)
+    setBgText(layout.bgColor || '#ffffff')
+  }
+
+  // University "Standard" thumbnail. Restore-if-saved uses the same pattern as
+  // loadTemplate/loadLedger, but the fresh-default fallback must be the
+  // university-aware layout (Credits Earned/Semester GPA/Cumulative GPA/
+  // Classification summary boxes, code/credit/GPA marks columns) — NOT
+  // getDefaultLayout('classic'), which is built for secondary/primary schools
+  // and has the wrong summary fields (Total Score/Average/Class Average/Position).
+  const loadStandardLayout = () => {
+    const saved = savedConfigRef.current
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    const sType = school?.type || 'SECONDARY'
+    const restored = (saved?.layoutType !== 'transcript' && (saved as any)?.sections?.length > 0)
+      ? buildMergedConfig(saved, lang, sType) : null
+    const layout = restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
     setConfig(layout)
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
@@ -1371,6 +1349,24 @@ export default function ReportCardDesignPage() {
     const restored = saved?.template === 'ledger' ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? { ...getLedgerLayout(), layoutType: 'ledger' as const }
     setConfig(layout)
+    setColorText(layout.primaryColor)
+    setBgText(layout.bgColor || '#ffffff')
+  }
+
+  // Transcript sections aren't tied to a `template` name (it's a separate `layoutType`
+  // axis) — a saved config only counts as a real transcript design if it actually has
+  // a transcriptSemester-flagged marks_table; anything else (never customized, or a
+  // leftover standard-shaped `sections` from before this layout existed) reseeds fresh.
+  const loadTranscriptLayout = () => {
+    const saved = savedConfigRef.current
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    const hasTranscriptSections = saved?.layoutType === 'transcript'
+      && Array.isArray((saved as any).sections)
+      && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+    const layout = hasTranscriptSections
+      ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(), ...saved } as any, lang), schoolType)
+      : { ...getDefaultTranscriptLayout(), layoutType: 'transcript' as const }
+    setConfig({ ...layout, layoutType: 'transcript' as const })
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1599,18 +1595,16 @@ export default function ReportCardDesignPage() {
 
         <div className="flex-1" />
 
-        {/* Add section — hidden in transcript mode */}
-        {!isTranscript && (
-          <button ref={addMenuBtnRef}
-            onClick={() => {
-              if (addMenuCoords) { setAddMenuCoords(null); return }
-              const r = addMenuBtnRef.current?.getBoundingClientRect()
-              if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
-            }}
-            className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
-            <Plus size={14} /> {tr('Add Section')}
-          </button>
-        )}
+        {/* Add section */}
+        <button ref={addMenuBtnRef}
+          onClick={() => {
+            if (addMenuCoords) { setAddMenuCoords(null); return }
+            const r = addMenuBtnRef.current?.getBoundingClientRect()
+            if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
+          }}
+          className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
+          <Plus size={14} /> {tr('Add Section')}
+        </button>
 
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
@@ -1619,71 +1613,7 @@ export default function ReportCardDesignPage() {
         </button>
       </div>{/* end main row */}
 
-      {/* Second row: transcript settings — shown only in transcript mode */}
-      {isTranscript && (
-        <div className="py-2 border-t border-border flex items-start gap-4 flex-wrap">
-          {/* Report title */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-xs text-muted-foreground whitespace-nowrap">Title</label>
-            <input type="text"
-              value={tc.reportTitle ?? ''}
-              onChange={e => setTc({ reportTitle: e.target.value })}
-              placeholder="Annual Transcript"
-              className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-40"
-            />
-          </div>
-
-          {/* Academic year label */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-xs text-muted-foreground whitespace-nowrap">Year label</label>
-            <input type="text"
-              value={tc.academicYearLabel ?? ''}
-              onChange={e => setTc({ academicYearLabel: e.target.value })}
-              placeholder="Academic Year"
-              className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-32"
-            />
-          </div>
-
-          <div className="border-l border-border pl-4 flex items-center gap-3">
-            {([
-              ['showGradeSystem', 'Grade System'],
-              ['showClassification', 'Classification'],
-              ['showLegend', 'Legend'],
-            ] as const).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none whitespace-nowrap">
-                <input type="checkbox"
-                  checked={tc[key] ?? true}
-                  onChange={e => setTc({ [key]: e.target.checked })}
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-
-          <div className="border-l border-border pl-4 flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-muted-foreground whitespace-nowrap">Dean label</label>
-              <input type="text"
-                value={tc.deanLabel ?? ''}
-                onChange={e => setTc({ deanLabel: e.target.value })}
-                placeholder="Dean of Studies' Signature"
-                className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-44"
-              />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-muted-foreground whitespace-nowrap">Registrar label</label>
-              <input type="text"
-                value={tc.registrarLabel ?? ''}
-                onChange={e => setTc({ registrarLabel: e.target.value })}
-                placeholder="Registrar's Signature"
-                className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-44"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Third row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
+      {/* Second row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
       <div className="py-1.5 border-t border-border" style={{ color: '#374151', visibility: pageActiveTableId ? 'visible' : 'hidden' }}>
         <SpreadsheetToolbar
           table={pageActiveTableId ? activeTableRef.current : null}
@@ -1708,8 +1638,7 @@ export default function ReportCardDesignPage() {
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
-        {!isTranscript && !isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>}
-        {isTranscript && <p className="text-xs text-muted-foreground text-center mb-4">Customize color and toggle sections on the right · The layout is fixed for the transcript style</p>}
+        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The two semester tables have a fixed design' : ''}</p>}
         {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
         <div ref={canvasRef} className="shadow-sm border border-[#e4e4e7] rounded-xl p-10 pl-14" style={{
@@ -1737,24 +1666,8 @@ export default function ReportCardDesignPage() {
             }
             return <div style={{ ...base, fontSize: watermark.size ?? 72, fontWeight: 'bold', opacity, color: watermark.color, whiteSpace: 'nowrap' }}>{watermark.text || schoolName}</div>
           })()}
-          {/* Transcript canvas preview */}
-          {isTranscript && (
-            <PrintableTranscript
-              data={{ ...MOCK_TRANSCRIPT, school: { ...MOCK_TRANSCRIPT.school, name: schoolName, logo: schoolLogo } }}
-              primaryColor={config.primaryColor}
-              showGradeSystem={tc.showGradeSystem ?? true}
-              showClassification={tc.showClassification ?? true}
-              showLegend={tc.showLegend ?? true}
-              highlightFailingRed={config.highlightFailingRed ?? true}
-              deanLabel={tc.deanLabel}
-              registrarLabel={tc.registrarLabel}
-              reportTitle={tc.reportTitle}
-              academicYearLabel={tc.academicYearLabel}
-            />
-          )}
-
-          {/* Standard section-based canvas */}
-          {!isTranscript && sections.map((sec, i) => (
+          {/* Section-based canvas — same for standard and transcript layouts */}
+          {sections.map((sec, i) => (
             <SectionWrap key={sec.id} index={i} total={sections.length}
               onMove={d => moveSection(i, d)} onDelete={() => deleteSection(i)}
               onDragStart={() => setDragIndex(i)}
@@ -1791,7 +1704,7 @@ export default function ReportCardDesignPage() {
             </SectionWrap>
           ))}
 
-          {!isTranscript && sections.length === 0 && (
+          {sections.length === 0 && (
             <div className="text-center py-16 text-muted-foreground">
               <p className="text-sm">No sections yet.</p>
               <p className="text-xs mt-1">Choose a template above or use "Add Section" to start.</p>
@@ -1809,7 +1722,7 @@ export default function ReportCardDesignPage() {
 
           {/* Standard thumbnail */}
           <button
-            onClick={() => setConfig(c => ({ ...c, layoutType: 'standard' }))}
+            onClick={loadStandardLayout}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
             style={{ borderColor: !isTranscript ? config.primaryColor : '#e5e7eb', background: !isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
           >
@@ -1844,7 +1757,7 @@ export default function ReportCardDesignPage() {
 
           {/* Transcript thumbnail */}
           <button
-            onClick={() => setConfig(c => ({ ...c, layoutType: 'transcript' }))}
+            onClick={loadTranscriptLayout}
             className="w-full rounded-lg border-2 overflow-hidden transition"
             style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
           >
@@ -1972,7 +1885,7 @@ export default function ReportCardDesignPage() {
           <div className="fixed inset-0 z-40" onClick={() => setAddMenuCoords(null)} />
           <div className="fixed z-50 bg-card border border-border rounded-xl shadow-lg py-1 w-max"
             style={{ top: addMenuCoords.top, left: addMenuCoords.left }}>
-            {ADD_OPTIONS.map(o => (
+            {ADD_OPTIONS.filter(o => !o.transcriptOnly || isTranscript).map(o => (
               <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
                 className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition whitespace-nowrap">
                 {tr(o.label)}

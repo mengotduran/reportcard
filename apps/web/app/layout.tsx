@@ -25,6 +25,17 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning className={inter.variable}>
+      <head>
+        {/* "Share Tech" (Google Fonts) — used only by the "Official" report card/
+            transcript header style (see OFFICIAL_HEADER_FONT in
+            lib/api/reportCardTemplate.ts) to match real Cameroon institutional
+            letterheads. Loaded as a direct stylesheet link (not next/font)
+            so it's unambiguously the real Google-hosted font file, verifiable
+            in the network tab / page source. */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Share+Tech&display=swap" rel="stylesheet" />
+      </head>
       <body>
         <ThemeProvider>{children}</ThemeProvider>
       </body>

@@ -35,6 +35,9 @@ export interface PrintableReportCardProps {
   classificationBands?: ClassificationBand[] // CGPA classification bands (university)
   cgpa?: number                       // cumulative GPA (university), if known
   subjectStats?: Record<string, { min: number; avg: number; max: number }> // class-wide per-subject stats
+  // University transcript only: per-semester data for marks_table sections with
+  // `transcriptSemester` set. Absent for every other document type/layout.
+  transcriptSemesters?: { sem1?: TranscriptSemesterData; sem2?: TranscriptSemesterData }
 }
 
 function ordinalPos(n: number): string {
@@ -95,6 +98,17 @@ function entryGrade(e: PrintEntry | undefined, bands: GradeRange[]): string {
 function entryRemark(e: PrintEntry | undefined, bands: GradeRange[]): string {
   if (!e || e.score == null) return '—'
   return gradeForScore20(e.score, bands).remark || '—'
+}
+
+// University transcript only: a marks_table section with `transcriptSemester` set
+// sources its subjects/entries from here instead of the document's combined
+// top-level subjects/entries — see the marks_table branch below. Otherwise it's a
+// completely normal, editable SpreadsheetTable (columns removable/re-keyable via
+// double-click, same as any other marks table).
+export interface TranscriptSemesterData {
+  term: { name: string; session: string }
+  subjects: PrintSubject[]
+  entries: PrintEntry[]
 }
 
 // ─── Classic ─────────────────────────────────────────────────────────────────
@@ -654,22 +668,20 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       // authorization line (subtitle), the ruled contact strip, and the title.
       // Per-line styling (bold caps / big acronym / italic motto) comes from
       // officialTextBlockHtml — shared with the designer canvas so they can't
-      // drift. The logo is absolutely positioned so a bigger logo never
-      // stretches the text columns' row height.
+      // drift. The logo sits in the grid's own middle column (not absolutely
+      // positioned) so it vertically centers against the text blocks at any size,
+      // instead of hanging below them once it's larger than the text.
       if (s.officialHeader) {
         return (
           <div style={{ borderBottom: `3px solid ${color}`, paddingBottom: 12, marginBottom: 16 }}>
-            <div style={{ position: 'relative', minHeight: logoSize }}>
-              <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
-                <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.leftText || '') }} />
-                <div />
-                <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.rightText || '') }} />
-              </div>
-              <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{s.showLogo && logoEl}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'center' }}>
+              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.leftText || '', 'left') }} />
+              <div style={{ display: 'flex', justifyContent: 'center' }}>{s.showLogo && logoEl}</div>
+              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.rightText || '', 'right') }} />
             </div>
-            {(s.showAuthorization ?? true) && school.authorizationNumber && <p style={{ textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 'bold', color: '#333', margin: '2px 0 0' }}>{school.authorizationNumber}</p>}
+            {(s.showAuthorization ?? true) && school.authorizationNumber && <p style={{ textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 'bold', color: '#333', margin: '2px 0 0' }}>{school.authorizationNumber}</p>}
             {contactLine && (
-              <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 600, color: '#111' }}>
+              <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 600, color: '#111' }}>
                 {contactLine}
               </div>
             )}
@@ -722,6 +734,36 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'marks_table') {
       const s = sec as MarksTableSec
+      // Transcript only: this table's data comes from ONE specific semester (not the
+      // document's combined top-level subjects/entries). If that semester hasn't
+      // happened yet for this student, the table just has nothing to show.
+      if (s.transcriptSemester && !props.transcriptSemesters?.[s.transcriptSemester]) return null
+      const semData = s.transcriptSemester ? props.transcriptSemesters?.[s.transcriptSemester] : undefined
+      const scopedSubjects = semData?.subjects ?? subjects
+      const scopedEntries  = semData?.entries ?? entries
+      // Credit/mark/grade-point/weighted-point sums for THIS semester, used by the
+      // 'credits'/'total'/'gpTotal'/'wpTotal'/'gpa' footer fields below (statResolver).
+      const scopedAgg = s.transcriptSemester ? (() => {
+        let credit = 0, mark = 0, gp = 0, wp = 0
+        for (const subj of scopedSubjects) {
+          const e = scopedEntries.find(x => x.subjectId === subj.id)
+          const c = subj.credit ?? 0
+          const g = e?.score == null ? null : gradePointForScore20(e.score, bands)
+          credit += c; mark += e?.score ?? 0
+          if (g != null) { gp += g; wp += g * c }
+        }
+        return { credit, mark, gp, wp }
+      })() : null
+      const statResolver = (field: string): React.ReactNode => {
+        if (scopedAgg) {
+          if (field === 'credits') return String(scopedAgg.credit)
+          if (field === 'total')   return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
+          if (field === 'gpTotal') return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
+          if (field === 'wpTotal') return scopedAgg.wp.toFixed(2)
+          if (field === 'gpa')     return (scopedAgg.credit > 0 ? scopedAgg.wp / scopedAgg.credit : 0).toFixed(2)
+        }
+        return resolveStat(field)
+      }
       const hdrs = s.headers || {}
       const cc   = s.colColors || {}
       const hText = (k: string, fallback: string) => {
@@ -756,7 +798,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         e?.resitScore != null ? <>{e.resitScore}<sup>*</sup></> : (e?.seq2Score ?? '—')
       const renderScore = (e?: PrintEntry): React.ReactNode => {
         const isFail = school.type === 'UNIVERSITY' && highlightRed && !!e && entryGrade(e, bands) === 'F'
-        return <span style={isFail ? { color: '#dc2626' } : undefined}>{e?.score ?? 0}</span>
+        return <span style={isFail ? { color: '#dc2626' } : undefined}>{e?.score ?? 0}{e?.resitScore != null ? <sup>*</sup> : null}</span>
       }
       const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
         switch (k) {
@@ -879,16 +921,16 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                 {/* Rows above the data row can carry general field bindings too
                     (e.g. the Ledger's full-width term banner) — only per-subject
                     m:* keys are meaningless here and resolve to blank. */}
-                {headerRows.map((row: SheetRow) => renderTplRow(row, f => f.startsWith('m:') ? '' : resolveStat(f), undefined, true))}
+                {headerRows.map((row: SheetRow) => renderTplRow(row, f => f.startsWith('m:') ? '' : statResolver(f), undefined, true))}
               </thead>
             )}
             <tbody>
-              {subjects.map((subj, si) => {
+              {scopedSubjects.map((subj, si) => {
                 if (!dataRowTpl) return null
-                const e = entries.find(x => x.subjectId === subj.id)
+                const e = scopedEntries.find(x => x.subjectId === subj.id)
                 return renderTplRow(dataRowTpl, field => resolveMarksField(field, subj, e, si), `subj_${si}`)
               })}
-              {footerRows.map((row: SheetRow) => renderTplRow(row, resolveStat))}
+              {footerRows.map((row: SheetRow) => renderTplRow(row, statResolver))}
             </tbody>
           </table>
         )
@@ -906,8 +948,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             </tr>
           </thead>
           <tbody>
-            {subjects.map((subj, i) => {
-              const e = entries.find(x => x.subjectId === subj.id)
+            {scopedSubjects.map((subj, i) => {
+              const e = scopedEntries.find(x => x.subjectId === subj.id)
               return (
                 <tr key={subj.id} style={{ background: i % 2 === 0 ? 'transparent' : `rgba(${rgb},0.04)`, borderBottom: '1px solid #e5e7eb' }}>
                   {cols.map(k => (
@@ -1137,52 +1179,63 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   // University only: courses the student resat, listed for transparency — CA carries
   // over unchanged, the Exam column is the new (resit) mark, and Mark/Grade already
   // reflect the recalculated total (same numbers shown up in the main marks table).
-  const resitEntries = school.type === 'UNIVERSITY' ? entries.filter(e => e.resitScore != null) : []
+  // Scoped per marks_table section — a transcript's two semester tables each get
+  // only their own semester's resits, not a combined/duplicated list.
   const resitTh: React.CSSProperties = { padding: '5px 7px', border: '1px solid #999', fontWeight: 'bold', textAlign: 'center', fontSize: 10 }
   const resitTd: React.CSSProperties = { padding: '4px 7px', border: '1px solid #ccc', fontSize: 10, textAlign: 'center' }
-  const resitTableEl = resitEntries.length > 0 ? (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ backgroundColor: color, color: '#fff', padding: '5px 10px', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{t('Resits')}</div>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ backgroundColor: `rgba(${rgb},0.1)` }}>
-            <th style={{ ...resitTh, textAlign: 'left' }}>{t('Course')}</th>
-            <th style={resitTh}>CA</th>
-            <th style={resitTh}>{t('Original Exam')}</th>
-            <th style={resitTh}>{t('Resit Exam')}</th>
-            <th style={resitTh}>{t('New Mark')}</th>
-            <th style={resitTh}>{t('New Grade')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {resitEntries.map(e => {
-            const subj = subjects.find(x => x.id === e.subjectId)
-            return (
-              <tr key={e.subjectId}>
-                <td style={{ ...resitTd, textAlign: 'left' }}>{subj?.name ?? '—'}</td>
-                <td style={resitTd}>{e.seq1Score ?? '—'}</td>
-                <td style={resitTd}>{e.seq2Score ?? '—'}</td>
-                <td style={resitTd}>{e.resitScore}<sup>*</sup></td>
-                <td style={{ ...resitTd, fontWeight: 'bold' }}>{e.score}</td>
-                <td style={{ ...resitTd, fontWeight: 'bold', color }}>{entryGrade(e, bands)}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-      <p style={{ fontSize: 10, color: '#666', marginTop: 4 }}>* {t('Mark obtained after resit')}</p>
-    </div>
-  ) : null
+  const renderResitAppendix = (subjList: PrintSubject[], entryList: PrintEntry[]) => {
+    if (school.type !== 'UNIVERSITY') return null
+    const resitEntries = entryList.filter(e => e.resitScore != null)
+    if (resitEntries.length === 0) return null
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ backgroundColor: color, color: '#fff', padding: '5px 10px', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{t('Resits')}</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ backgroundColor: `rgba(${rgb},0.1)` }}>
+              <th style={{ ...resitTh, textAlign: 'left' }}>{t('Course')}</th>
+              <th style={resitTh}>CA</th>
+              <th style={resitTh}>{t('Original Exam')}</th>
+              <th style={resitTh}>{t('Resit Exam')}</th>
+              <th style={resitTh}>{t('New Mark')}</th>
+              <th style={resitTh}>{t('New Grade')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {resitEntries.map(e => {
+              const subj = subjList.find(x => x.id === e.subjectId)
+              return (
+                <tr key={e.subjectId}>
+                  <td style={{ ...resitTd, textAlign: 'left' }}>{subj?.name ?? '—'}</td>
+                  <td style={resitTd}>{e.seq1Score ?? '—'}</td>
+                  <td style={resitTd}>{e.seq2Score ?? '—'}</td>
+                  <td style={resitTd}>{e.resitScore}<sup>*</sup></td>
+                  <td style={{ ...resitTd, fontWeight: 'bold' }}>{e.score}</td>
+                  <td style={{ ...resitTd, fontWeight: 'bold', color }}>{entryGrade(e, bands)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        <p style={{ fontSize: 10, color: '#666', marginTop: 4 }}>* {t('Mark obtained after resit')}</p>
+      </div>
+    )
+  }
 
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: 40, maxWidth: 800, margin: '0 auto', color: '#111', fontSize: 13, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
       <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
-      {sections.map(sec => (
-        <div key={sec.id}>
-          {renderSec(sec)}
-          {sec.type === 'marks_table' && resitTableEl}
-        </div>
-      ))}
+      {sections.map(sec => {
+        const ts = sec.type === 'marks_table' ? (sec as MarksTableSec).transcriptSemester : undefined
+        const resitSubjects = ts ? (props.transcriptSemesters?.[ts]?.subjects ?? []) : subjects
+        const resitEntries  = ts ? (props.transcriptSemesters?.[ts]?.entries ?? []) : entries
+        return (
+          <div key={sec.id}>
+            {renderSec(sec)}
+            {sec.type === 'marks_table' && renderResitAppendix(resitSubjects, resitEntries)}
+          </div>
+        )
+      })}
     </div>
   )
 }

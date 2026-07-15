@@ -117,31 +117,47 @@ export function buildOfficialContactLine(
 //   • one short ALL-CAPS word     → large display line (the school acronym)
 //   • Mixed-case line             → small italic (mottos: "Peace-Work-Fatherland")
 //   • blank line                  → a small gap between groups, not a full row
-export const OFFICIAL_HEADER_FONT = 'Arial,Helvetica,sans-serif'
+// "Share Tech" (Google Fonts), loaded as a real stylesheet link in
+// app/layout.tsx — matches the real Cameroon institutional letterhead this
+// header style is modeled on. Falls back to Arial/Helvetica if the stylesheet
+// fails to load.
+export const OFFICIAL_HEADER_FONT = "'Share Tech', Arial, Helvetica, sans-serif"
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-export function officialTextBlockHtml(text: string): string {
-  const base = `font-family:${OFFICIAL_HEADER_FONT};text-align:center;line-height:1.35;`
-  return text.split('\n').map(raw => {
+// Every multi-word caps line is fully justified (both edges straight, relative to
+// the block's own natural width below — not the wider grid column, which made
+// short lines stretch out with unnaturally large gaps); the single-word acronym
+// line and the italic motto line are centered instead.
+export function officialTextBlockHtml(text: string, edge: 'left' | 'right'): string {
+  const base = `font-family:${OFFICIAL_HEADER_FONT};line-height:1.35;`
+  const lines = text.split('\n').map(raw => {
     // contentEditable round-trips blank rows as &nbsp; — normalize before testing
     const line = raw.replace(/\u00a0/g, ' ').trim()
-    if (!line) return `<div style="${base}font-size:4px;">&nbsp;</div>`
+    if (!line) return `<div style="${base}text-align:center;font-size:4px;">&nbsp;</div>`
     const esc = escapeHtml(line)
     const caps = line === line.toUpperCase() && /[A-Z]/.test(line)
     if (caps && !line.includes(' ') && line.length <= 12)
-      return `<div style="${base}font-size:16px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
+      return `<div style="${base}text-align:center;font-size:18px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
     if (caps)
-      return `<div style="${base}font-size:9.5px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
-    return `<div style="${base}font-size:8.5px;font-style:italic;color:#333;">${esc}</div>`
+      return `<div style="${base}text-align:justify;text-align-last:justify;font-size:11px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
+    return `<div style="${base}text-align:center;font-size:10px;font-style:italic;color:#333;">${esc}</div>`
   }).join('')
+  // Shrink-wrap to the widest natural line and hug the block's outer edge (left
+  // block flush-left, right block flush-right) — so justify above only stretches
+  // shorter lines up to THAT width, a small natural-looking adjustment.
+  const edgeMargin = edge === 'left' ? 'margin-right:auto' : 'margin-left:auto'
+  return `<div style="width:fit-content;${edgeMargin}">${lines}</div>`
 }
 
 export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|3; rows: InfoRow[] }
 export interface MarksTableSec { id: string; type: 'marks_table';  showSeq1: boolean; showSeq2: boolean; showCoef?: boolean; showGrade: boolean; showRemarks: boolean; headers?: Record<string,string>; headerColor?: string; colColors?: Record<string,string>; columnOrder?: string[];
   /** When set, the marks table is rendered from this SpreadsheetTable template instead of the default layout. The row marked _isDataRow repeats per subject in the print renderer. */
   template?: SpreadsheetTable
+  /** Transcript layout only: renders as the fixed banded semester table (TOTAL + SEMESTER GPA rows,
+   *  resit asterisks) sourced from ONE specific semester's data instead of the spreadsheet template. */
+  transcriptSemester?: 'sem1' | 'sem2'
 }
 
 // Secondary marks-table columns, in their default order. `subject` and `score` always show.
@@ -218,6 +234,64 @@ export function seedMarksTableSection(sec: MarksTableSec, color: string, schoolT
     ],
   }
 }
+
+/** Build the banded SpreadsheetTable a university transcript's per-semester marks
+ *  table starts from (CODE/TITLE/CREDIT/MARK/GRADE/GRADE POINT/WEIGHTED POINT, a
+ *  TOTAL row, and a big SEMESTER GPA row) — same section mechanics as any other
+ *  marks_table (draggable, deletable, columns removable/re-keyable via double-click),
+ *  just a different starting shape. The footer fields (`credits`/`total`/`gpTotal`/
+ *  `wpTotal`/`gpa`) resolve scoped to THIS section's own semester — see the
+ *  transcriptSemester-aware resolver in PrintableReportCard.tsx. */
+export function seedTranscriptMarksTable(color: string): SpreadsheetTable {
+  const cols = ['code', 'subject', 'credit', 'score', 'grade', 'gradePoint', 'weighted'] as const
+  const labels: Record<string, string> = { code: 'CODE', subject: 'TITLE', credit: 'CREDIT', score: 'MARK /100', grade: 'GRADE', gradePoint: 'GRADE POINT', weighted: 'WEIGHTED POINT' }
+  const ts = Date.now()
+  const bandBg = '#f1f5f9'
+  const bandFg = '#111827'
+  return {
+    id: `marks_${ts}`,
+    title: '',
+    colCount: cols.length,
+    rows: [
+      {
+        id: `mhdr_${ts}`,
+        cells: cols.map(k => ({
+          text: labels[k], bold: true, align: k === 'subject' ? 'left' : 'center',
+          bgColor: color, textColor: '#ffffff',
+        })),
+      } as SheetRow,
+      {
+        id: `mdata_${ts + 1}`,
+        _isDataRow: true,
+        cells: cols.map(k => ({
+          field: `m:${k}`, align: k === 'subject' ? 'left' : 'center',
+          ...(k === 'score' || k === 'grade' ? { bold: true } : {}),
+        })),
+      } as SheetRow,
+      // TOTAL row — credit/mark/GP/WP sums, scoped to this table's semester.
+      {
+        id: `mfoot_${ts + 2}`,
+        cells: [
+          { text: 'TOTAL', bold: true, colSpan: 2, align: 'left', bgColor: bandBg, textColor: bandFg },
+          { field: 'credits', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', bgColor: bandBg },
+          { field: 'gpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+        ],
+      } as SheetRow,
+      // Hero line — this semester's own GPA.
+      {
+        id: `mfoot_${ts + 3}`,
+        cells: [
+          { text: 'SEMESTER GPA:', bold: true, colSpan: 6, align: 'right', textColor: color },
+          { field: 'gpa', bold: true, align: 'center', textColor: color, fontSize: 15 },
+        ],
+      } as SheetRow,
+    ],
+  }
+}
+
 export interface SummarySec    { id: string; type: 'summary';      boxes: SummaryBox[]; valueColor?: string }
 export interface RemarksSec    { id: string; type: 'remarks';      label: string; placeholderColor?: string }
 export interface SignaturesSec { id: string; type: 'signatures';   lines: SignatureLine[] }
@@ -508,6 +582,59 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
   ]
 
   return { ...TEMPLATE_DEFAULTS.ledger, sections }
+}
+
+/**
+ * University annual transcript, built from the same section system as every other
+ * layout — a marks_table section with `transcriptSemester: 'sem1' | 'sem2'` sources
+ * its data from that semester specifically (instead of the document's combined
+ * subjects/entries) but is otherwise a completely normal, editable SpreadsheetTable
+ * (columns removable/re-keyable via double-click, same as any other marks table).
+ * Everything else (header, student info, grading legend, signatures) is a normal,
+ * freely editable section too.
+ */
+export function getDefaultTranscriptLayout(): TemplateConfig & { sections: LayoutSection[] } {
+  const color = '#1e3a5f'
+  const sections: LayoutSection[] = [
+    // Same non-official defaults as the standard university layout (logo left,
+    // school type shown) — so unchecking "Official" on this header behaves the
+    // same way it does on standard, instead of falling back to its own look.
+    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL TRANSCRIPT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    {
+      id: uid('info'), type: 'student_info', columns: 2,
+      rows: [
+        { id: uid('r'), label: 'Student Name', field: 'student.name' },
+        { id: uid('r'), label: 'Matricule No.', field: 'student.studentId' },
+        { id: uid('r'), label: 'Programme', field: 'student.classLevel' },
+        { id: uid('r'), label: 'Sex', field: 'student.gender' },
+        { id: uid('r'), label: 'Academic Year', field: 'term.session' },
+      ],
+    },
+    { id: uid('tbl1'), type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, transcriptSemester: 'sem1', template: seedTranscriptMarksTable(color) },
+    { id: uid('tbl2'), type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, transcriptSemester: 'sem2', template: seedTranscriptMarksTable(color) },
+    {
+      id: uid('leg'), type: 'grading_legend', title: 'Grading System',
+      showGradeSystem: true, showClassification: true, showLegend: true, legendText: DEFAULT_TRANSCRIPT_LEGEND,
+      rightLayout: 'columns',
+      rightTables: [{
+        id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
+        rows: [
+          { id: uid('rr'), cells: [{ text: 'Credits Earned', bold: true }, { field: 'credits' }] },
+          { id: uid('rr'), cells: [{ text: 'Cumulative GPA', bold: true }, { field: 'cgpa' }] },
+          { id: uid('rr'), cells: [{ text: 'Remark', bold: true }, { field: 'classification' }] },
+        ],
+      }],
+    },
+    {
+      id: uid('sig'), type: 'signatures',
+      lines: [
+        { id: uid('s'), label: "Dean of Studies' Signature" },
+        { id: uid('s'), label: "Registrar's Signature" },
+      ],
+    },
+  ]
+
+  return { ...TEMPLATE_DEFAULTS.classic, template: 'classic', primaryColor: color, reportTitle: 'ANNUAL TRANSCRIPT', schoolSubtitle: '', sections }
 }
 
 /** Default report-card layout tailored to the school's section type. */
