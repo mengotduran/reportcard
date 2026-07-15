@@ -1,0 +1,1 @@
+ALTER TABLE "ReportEntry" ADD COLUMN "resitScore" DOUBLE PRECISION;

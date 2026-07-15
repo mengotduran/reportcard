@@ -24,6 +24,7 @@ interface Row {
   score: string
   otherSeqScore: number | null
   isLocked: boolean
+  resitEligible?: boolean
 }
 
 export default function MarksEntryScreen() {
@@ -39,7 +40,8 @@ export default function MarksEntryScreen() {
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
   const isUniversity = school?.type === 'UNIVERSITY'
-  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : 'Exam') : seqFull(termName, seqIndex, lang)
+  const isResit = isUniversity && seqIndex === 2
+  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
   const decodedSubjectName = decodeURIComponent(subjectName)
@@ -74,21 +76,33 @@ export default function MarksEntryScreen() {
       sorted.map(async (s) => {
         let score = ''
         let otherSeqScore: number | null = null
+        let resitEligible = false
         if (s.reportCard) {
           try {
             const rc = await getReportCard(s.reportCard.id)
             const entry = rc.entries.find((e) => e.subject.id === decodedSubjectId) as any
             if (entry) {
-              score = seqIndex === 0
-                ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
-                : (entry.seq2Score != null ? String(entry.seq2Score) : '')
-              otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              if (isResit) {
+                score = entry.resitScore != null ? String(entry.resitScore) : ''
+                const base = entry.seq1Score != null && entry.seq2Score != null ? entry.seq1Score + entry.seq2Score : null
+                resitEligible = base != null && gradeFromScore(base, 100, scaleData.ranges).grade === 'F'
+              } else {
+                score = seqIndex === 0
+                  ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
+                  : (entry.seq2Score != null ? String(entry.seq2Score) : '')
+                otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              }
             }
           } catch { /* no entries yet */ }
         }
         const isPublished = s.reportCard?.status === 'PUBLISHED'
         const grantedToMe = s.reportCard?.marksEditGrantedTo === user?.id
-        return { studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null, score, otherSeqScore, isLocked: isPublished && !grantedToMe }
+        return {
+          studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null,
+          score, otherSeqScore,
+          isLocked: (isPublished && !grantedToMe) || (isResit && !resitEligible),
+          resitEligible,
+        }
       })
     )
     setRows(loaded)
@@ -143,6 +157,7 @@ export default function MarksEntryScreen() {
                 subjectId: sid,
                 seq1Score: seqIndex === 0 ? cur : (existing?.seq1Score ?? null),
                 seq2Score: seqIndex === 1 ? cur : (existing?.seq2Score ?? null),
+                resitScore: isResit ? cur : (existing?.resitScore ?? null),
                 // no remarks — API auto-fills from grading scale
               }
             }
@@ -150,6 +165,7 @@ export default function MarksEntryScreen() {
               subjectId: sid,
               seq1Score: existing?.seq1Score ?? undefined,
               seq2Score: existing?.seq2Score ?? undefined,
+              resitScore: existing?.resitScore ?? undefined,
               score: existing?.score ?? 0,
               // no remarks — API auto-fills from grading scale
             }
@@ -228,12 +244,20 @@ export default function MarksEntryScreen() {
           </View>
         )}
 
-        {/* Copy bar — always visible */}
-        <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
-          <Ionicons name="copy-outline" size={15} color="#7c3aed" />
-          <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
-          <Ionicons name="chevron-forward" size={14} color="#7c3aed" />
-        </TouchableOpacity>
+        {/* Copy bar — resit has nothing to copy from */}
+        {isResit ? (
+          <View style={s.resitBar}>
+            <Text style={s.resitBarText}>
+              {t('Only students who failed this course (CA + Exam = F) are editable here. Enter their new exam mark from the resit.')}
+            </Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
+            <Ionicons name="copy-outline" size={15} color="#7c3aed" />
+            <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
+            <Ionicons name="chevron-forward" size={14} color="#7c3aed" />
+          </TouchableOpacity>
+        )}
 
         {/* Table */}
         <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
@@ -241,7 +265,7 @@ export default function MarksEntryScreen() {
           <View style={s.headerRow}>
             <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
             <View style={s.colName}><Text style={s.headerText}>{t('STUDENT NAME')}</Text></View>
-            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : 'MARKS / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
+            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
             <View style={s.colRemark}><Text style={s.headerText}>{t('PERFORMANCE')}</Text></View>
           </View>
 
@@ -356,6 +380,11 @@ const makeSStyles = (colors: Colors) => StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   copyBarText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#7c3aed' },
+  resitBar: {
+    backgroundColor: '#eff6ff', paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#bfdbfe',
+  },
+  resitBarText: { fontSize: 12.5, color: '#1d4ed8' },
 
   // Table
   headerRow: {

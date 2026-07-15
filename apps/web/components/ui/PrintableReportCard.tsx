@@ -8,6 +8,7 @@ export interface PrintEntry {
   score: number
   seq1Score?: number | null
   seq2Score?: number | null
+  resitScore?: number | null
   grade: string
   remarks: string
 }
@@ -748,13 +749,22 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       }
       const evalForGpa = (gpa: number): string =>
         classificationForGpa(gpa, classBands).toUpperCase()
+      // University only: a resat exam mark shows with an asterisk (* = mark obtained after
+      // resit); the failing (F-grade) total mark prints in red unless the admin turned that off.
+      const highlightRed = cfg.highlightFailingRed !== false
+      const renderSeq2 = (e?: PrintEntry): React.ReactNode =>
+        e?.resitScore != null ? <>{e.resitScore}<sup>*</sup></> : (e?.seq2Score ?? '—')
+      const renderScore = (e?: PrintEntry): React.ReactNode => {
+        const isFail = school.type === 'UNIVERSITY' && highlightRed && !!e && entryGrade(e, bands) === 'F'
+        return <span style={isFail ? { color: '#dc2626' } : undefined}>{e?.score ?? 0}</span>
+      }
       const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
         switch (k) {
           case 'subject':      return subj.name
           case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
           case 'seq1':         return e?.seq1Score ?? '—'
-          case 'seq2':         return e?.seq2Score ?? '—'
-          case 'score':        return e?.score ?? 0
+          case 'seq2':         return renderSeq2(e)
+          case 'score':        return renderScore(e)
           case 'grade':        return entryGrade(e, bands)
           case 'remarks':      return entryRemark(e, bands)
           case 'code':         return courseCode(subj, i)
@@ -786,8 +796,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             case 'subject':      return subj.name
             case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
             case 'seq1':         return e?.seq1Score ?? '—'
-            case 'seq2':         return e?.seq2Score ?? '—'
-            case 'score':        return e?.score ?? 0
+            case 'seq2':         return renderSeq2(e)
+            case 'score':        return renderScore(e)
             case 'grade':        return entryGrade(e, bands)
             case 'remarks':      return entryRemark(e, bands)
             case 'code':         return courseCode(subj, si)
@@ -1124,10 +1134,55 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     return null
   }
 
+  // University only: courses the student resat, listed for transparency — CA carries
+  // over unchanged, the Exam column is the new (resit) mark, and Mark/Grade already
+  // reflect the recalculated total (same numbers shown up in the main marks table).
+  const resitEntries = school.type === 'UNIVERSITY' ? entries.filter(e => e.resitScore != null) : []
+  const resitTh: React.CSSProperties = { padding: '5px 7px', border: '1px solid #999', fontWeight: 'bold', textAlign: 'center', fontSize: 10 }
+  const resitTd: React.CSSProperties = { padding: '4px 7px', border: '1px solid #ccc', fontSize: 10, textAlign: 'center' }
+  const resitTableEl = resitEntries.length > 0 ? (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ backgroundColor: color, color: '#fff', padding: '5px 10px', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{t('Resits')}</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ backgroundColor: `rgba(${rgb},0.1)` }}>
+            <th style={{ ...resitTh, textAlign: 'left' }}>{t('Course')}</th>
+            <th style={resitTh}>CA</th>
+            <th style={resitTh}>{t('Original Exam')}</th>
+            <th style={resitTh}>{t('Resit Exam')}</th>
+            <th style={resitTh}>{t('New Mark')}</th>
+            <th style={resitTh}>{t('New Grade')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {resitEntries.map(e => {
+            const subj = subjects.find(x => x.id === e.subjectId)
+            return (
+              <tr key={e.subjectId}>
+                <td style={{ ...resitTd, textAlign: 'left' }}>{subj?.name ?? '—'}</td>
+                <td style={resitTd}>{e.seq1Score ?? '—'}</td>
+                <td style={resitTd}>{e.seq2Score ?? '—'}</td>
+                <td style={resitTd}>{e.resitScore}<sup>*</sup></td>
+                <td style={{ ...resitTd, fontWeight: 'bold' }}>{e.score}</td>
+                <td style={{ ...resitTd, fontWeight: 'bold', color }}>{entryGrade(e, bands)}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <p style={{ fontSize: 10, color: '#666', marginTop: 4 }}>* {t('Mark obtained after resit')}</p>
+    </div>
+  ) : null
+
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: 40, maxWidth: 800, margin: '0 auto', color: '#111', fontSize: 13, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
       <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
-      {sections.map(sec => <div key={sec.id}>{renderSec(sec)}</div>)}
+      {sections.map(sec => (
+        <div key={sec.id}>
+          {renderSec(sec)}
+          {sec.type === 'marks_table' && resitTableEl}
+        </div>
+      ))}
     </div>
   )
 }

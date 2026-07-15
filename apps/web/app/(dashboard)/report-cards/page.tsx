@@ -28,7 +28,7 @@ import { useT } from '@/lib/i18n'
 import { ExcelTemplate, listExcelTemplatesApi, downloadExcelTranscriptApi, fetchExcelPreviewHtmlApi } from '@/lib/api/excelTemplates'
 
 interface RawEntry {
-  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
+  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
   grade: string; remarks: string; subject: { id: string; name: string; coefficient?: number; credit?: number }
 }
 interface RawRC {
@@ -305,7 +305,7 @@ function TeacherClassesView() {
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
-                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
+                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, resitScore: e.resitScore ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
@@ -1086,7 +1086,7 @@ export default function ReportCardsPage() {
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
-                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
+                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, resitScore: e.resitScore ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}

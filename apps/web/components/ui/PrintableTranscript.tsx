@@ -65,9 +65,10 @@ interface SemesterTableProps {
   ranges: GradeRange[]
   maxScore: number
   primaryColor: string
+  highlightFailingRed?: boolean
 }
 
-function SemesterTable({ label, entries, ranges, maxScore, primaryColor }: SemesterTableProps) {
+function SemesterTable({ label, entries, ranges, maxScore, primaryColor, highlightFailingRed = true }: SemesterTableProps) {
   const rgb = hexToRgb(primaryColor)
 
   const rows = entries.map((e) => {
@@ -77,6 +78,8 @@ function SemesterTable({ label, entries, ranges, maxScore, primaryColor }: Semes
     const wp = gradePoint * credit
     return { entry: e, score, grade, gradePoint, color, credit, wp }
   })
+
+  const resitRows = rows.filter((r) => r.entry.resitScore != null)
 
   const totalCredits  = rows.reduce((s, r) => s + r.credit, 0)
   const totalMarkSum  = rows.reduce((s, r) => s + (r.score ?? 0), 0)
@@ -113,17 +116,22 @@ function SemesterTable({ label, entries, ranges, maxScore, primaryColor }: Semes
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ entry, score, grade, gradePoint, color, credit, wp }, i) => (
-            <tr key={entry.id} style={{ backgroundColor: i % 2 === 0 ? 'transparent' : `rgba(${rgb},0.04)` }}>
-              <td style={td}>{entry.subject.code ?? '—'}</td>
-              <td style={tdL}>{entry.subject.name}</td>
-              <td style={td}>{credit || '—'}</td>
-              <td style={{ ...td, fontWeight: 'bold' }}>{score != null ? score : '—'}</td>
-              <td style={{ ...td, fontWeight: 'bold', color }}>{grade}</td>
-              <td style={td}>{gradePoint.toFixed(2)}</td>
-              <td style={td}>{wp.toFixed(2)}</td>
-            </tr>
-          ))}
+          {rows.map(({ entry, score, grade, gradePoint, color, credit, wp }, i) => {
+            const isFail = highlightFailingRed && grade === 'F'
+            return (
+              <tr key={entry.id} style={{ backgroundColor: i % 2 === 0 ? 'transparent' : `rgba(${rgb},0.04)` }}>
+                <td style={td}>{entry.subject.code ?? '—'}</td>
+                <td style={tdL}>{entry.subject.name}</td>
+                <td style={td}>{credit || '—'}</td>
+                <td style={{ ...td, fontWeight: 'bold', color: isFail ? '#dc2626' : 'inherit' }}>
+                  {score != null ? score : '—'}{entry.resitScore != null ? <sup>*</sup> : null}
+                </td>
+                <td style={{ ...td, fontWeight: 'bold', color }}>{grade}</td>
+                <td style={td}>{gradePoint.toFixed(2)}</td>
+                <td style={td}>{wp.toFixed(2)}</td>
+              </tr>
+            )
+          })}
         </tbody>
         <tfoot>
           {/* TOTAL row — sums for credit, mark, grade point, weighted point */}
@@ -147,6 +155,45 @@ function SemesterTable({ label, entries, ranges, maxScore, primaryColor }: Semes
           </tr>
         </tfoot>
       </table>
+
+      {/* Resits — courses in this semester the student resat. CA carries over unchanged;
+          the Exam figure is the new (resit) mark, shown elsewhere in the main table with an
+          asterisk. Listed here for transparency, matching the transcript's real-world source. */}
+      {resitRows.length > 0 && (
+        <div style={{ marginTop: '4px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ backgroundColor: `rgba(${rgb},0.06)` }}>
+                <th colSpan={7} style={{ ...th, textAlign: 'left', fontSize: '10px', backgroundColor: `rgba(${rgb},0.06)` }}>
+                  {label} — RESITS
+                </th>
+              </tr>
+              <tr style={{ backgroundColor: `rgba(${rgb},0.1)` }}>
+                <th style={th}>CODE</th>
+                <th style={{ ...th, textAlign: 'left' }}>TITLE</th>
+                <th style={th}>CA</th>
+                <th style={th}>ORIGINAL EXAM</th>
+                <th style={th}>RESIT EXAM</th>
+                <th style={th}>NEW MARK</th>
+                <th style={th}>NEW GRADE</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resitRows.map(({ entry, score, grade, color }, i) => (
+                <tr key={entry.id} style={{ backgroundColor: i % 2 === 0 ? 'transparent' : `rgba(${rgb},0.04)` }}>
+                  <td style={td}>{entry.subject.code ?? '—'}</td>
+                  <td style={tdL}>{entry.subject.name}</td>
+                  <td style={td}>{entry.seq1Score ?? '—'}</td>
+                  <td style={td}>{entry.seq2Score ?? '—'}</td>
+                  <td style={td}>{entry.resitScore}<sup>*</sup></td>
+                  <td style={{ ...td, fontWeight: 'bold' }}>{score != null ? score : '—'}</td>
+                  <td style={{ ...td, fontWeight: 'bold', color }}>{grade}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
@@ -164,6 +211,7 @@ export interface PrintableTranscriptProps {
   showGradeSystem?: boolean
   showClassification?: boolean
   showLegend?: boolean
+  highlightFailingRed?: boolean
   deanLabel?: string
   registrarLabel?: string
   reportTitle?: string
@@ -175,6 +223,7 @@ export function PrintableTranscript({
   primaryColor = '#1e3a5f',
   showGradeSystem = true,
   showClassification = true,
+  highlightFailingRed = true,
   showLegend = true,
   deanLabel = "Dean of Studies' Signature",
   registrarLabel = "Registrar's Signature",
@@ -277,6 +326,7 @@ export function PrintableTranscript({
           ranges={gradingScale}
           maxScore={maxScore}
           primaryColor={primaryColor}
+          highlightFailingRed={highlightFailingRed}
         />
       )}
       {sem2 && (
@@ -286,6 +336,7 @@ export function PrintableTranscript({
           ranges={gradingScale}
           maxScore={maxScore}
           primaryColor={primaryColor}
+          highlightFailingRed={highlightFailingRed}
         />
       )}
 

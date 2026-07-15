@@ -93,14 +93,14 @@ export default function ClassSubjectsPage() {
           {isUniversity ? t('Select Assessment') : t('Select Sequence')}
         </p>
         <div className="flex gap-3">
-          {[0, 1].map((i) => (
+          {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
             <button key={i} onClick={() => setSelectedSeq(i)}
               className={`flex-1 py-2.5 px-4 rounded-xl border-2 text-sm font-semibold transition ${
                 selectedSeq === i
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground hover:border-border'
               }`}>
-              {isUniversity ? (i === 0 ? t('CA (30)') : t('Exam (70)')) : seqFull(termName, i, lang)}
+              {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqFull(termName, i, lang)}
             </button>
           ))}
         </div>

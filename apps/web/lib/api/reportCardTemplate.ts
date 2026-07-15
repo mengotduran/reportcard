@@ -21,6 +21,9 @@ export interface TemplateConfig {
   showParentSig: boolean
   principalTitle: string
   footerText: string
+  // university only: print failing (F-grade) marks in red instead of the default black.
+  // Undefined/true = red (matches the printed transcript convention this was modeled on).
+  highlightFailingRed?: boolean
   // sections-based layout (overrides toggle config if present)
   sections?: LayoutSection[]
   // background color of the card paper

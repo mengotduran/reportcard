@@ -329,6 +329,7 @@ model ReportEntry {
   subjectId    String
   seq1Score    Float?
   seq2Score    Float?
+  resitScore   Float?
   score        Float?
   grade        String?
   remarks      String?

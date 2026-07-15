@@ -24,6 +24,7 @@ interface Row {
   otherSeqScore: number | null
   isLocked: boolean
   isPublished?: boolean
+  resitEligible?: boolean
 }
 
 export default function MarksEntryPage() {
@@ -39,7 +40,8 @@ export default function MarksEntryPage() {
   const termName = searchParams.get('termName') ?? ''
   const lang = useLang()
   const isUniversity = school?.type === 'UNIVERSITY'
-  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : 'Exam') : seqFull(termName, seqIndex, lang)
+  const isResit = isUniversity && seqIndex === 2
+  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
   const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
 
@@ -87,15 +89,24 @@ export default function MarksEntryPage() {
       sorted.map(async (s) => {
         let score = ''
         let otherSeqScore: number | null = null
+        let resitEligible = false
         if (s.reportCard) {
           try {
             const rc = await getReportCardApi(s.reportCard.id)
             const entry = rc.entries.find((e: any) => e.subject.id === subjectId) as any
             if (entry) {
-              score = seqIndex === 0
-                ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
-                : (entry.seq2Score != null ? String(entry.seq2Score) : '')
-              otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              if (isResit) {
+                score = entry.resitScore != null ? String(entry.resitScore) : ''
+                // Eligible only if the ORIGINAL CA+Exam total (ignoring any resit already
+                // recorded) was a failing grade — i.e. this course actually needed a resit.
+                const base = entry.seq1Score != null && entry.seq2Score != null ? entry.seq1Score + entry.seq2Score : null
+                resitEligible = base != null && gradeFromScore(base, 100, scaleData.ranges).grade === 'F'
+              } else {
+                score = seqIndex === 0
+                  ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
+                  : (entry.seq2Score != null ? String(entry.seq2Score) : '')
+                otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              }
             }
           } catch { /* no entries yet */ }
         }
@@ -105,7 +116,8 @@ export default function MarksEntryPage() {
           studentId: s.id, name: s.name, studentIdCode: s.studentId,
           reportCardId: s.reportCard?.id ?? null,
           score, otherSeqScore,
-          isLocked: isPublished && !grantedToMe,
+          isLocked: (isPublished && !grantedToMe) || (isResit && !resitEligible),
+          resitEligible,
         }
       })
     )
@@ -379,6 +391,7 @@ export default function MarksEntryPage() {
               subjectId: sid,
               seq1Score: seqIndex === 0 ? cur : (existing?.seq1Score ?? null),
               seq2Score: seqIndex === 1 ? cur : (existing?.seq2Score ?? null),
+              resitScore: isResit ? cur : (existing?.resitScore ?? null),
               remarks: existing?.remarks || '',
             }
           }
@@ -386,6 +399,7 @@ export default function MarksEntryPage() {
             subjectId: sid,
             seq1Score: existing?.seq1Score ?? undefined,
             seq2Score: existing?.seq2Score ?? undefined,
+            resitScore: existing?.resitScore ?? undefined,
             score: existing?.score ?? 0,
             remarks: existing?.remarks || '',
           }
@@ -436,17 +450,25 @@ export default function MarksEntryPage() {
         </span>
       </div>
 
-      {/* Copy-from-other-seq bar */}
-      <button
-        onClick={handleCopyFromOther}
-        className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"
-      >
-        <Copy size={15} className="text-violet-600 flex-shrink-0" />
-        <span className="flex-1 text-sm font-semibold text-violet-600">
-          {t('Copy marks from')} {otherSeqLabel} {t('→ fill here')}
-        </span>
-        <span className="text-violet-400 text-sm">›</span>
-      </button>
+      {/* Copy-from-other-seq bar — resit has nothing to copy from */}
+      {isResit ? (
+        <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
+          <span className="flex-1 text-sm text-sky-700">
+            {t('Only students who failed this course (CA + Exam = F) are editable here. Enter their new exam mark from the resit.')}
+          </span>
+        </div>
+      ) : (
+        <button
+          onClick={handleCopyFromOther}
+          className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"
+        >
+          <Copy size={15} className="text-violet-600 flex-shrink-0" />
+          <span className="flex-1 text-sm font-semibold text-violet-600">
+            {t('Copy marks from')} {otherSeqLabel} {t('→ fill here')}
+          </span>
+          <span className="text-violet-400 text-sm">›</span>
+        </button>
+      )}
 
       {/* Published banner */}
       {publishedCount > 0 && (
@@ -482,7 +504,7 @@ export default function MarksEntryPage() {
                 <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
                 <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">{t('STUDENT NAME')}</th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white w-44 border-r border-white/10">
-                  {isUniversity ? (seqIndex === 0 ? 'CA / 30' : 'MARKS / 70') : `${t('MARKS /')} ${effectiveMax}`}
+                  {isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}
                 </th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white">{t('PERFORMANCE')}</th>
               </tr>

@@ -17,6 +17,7 @@ export default function AnnualTranscriptPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [primaryColor, setPrimaryColor] = useState('#1e3a5f')
+  const [highlightFailingRed, setHighlightFailingRed] = useState(true)
   const [transcriptConfig, setTranscriptConfig] = useState<{ showGradeSystem?: boolean; showClassification?: boolean; showLegend?: boolean; deanLabel?: string; registrarLabel?: string; reportTitle?: string; academicYearLabel?: string }>({})
   const [printing, setPrinting] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
@@ -33,6 +34,7 @@ export default function AnnualTranscriptPage() {
         setData(transcript)
         const cfg = tpl.config as any
         if (cfg?.primaryColor) setPrimaryColor(cfg.primaryColor)
+        if (cfg?.highlightFailingRed === false) setHighlightFailingRed(false)
         if (cfg?.transcriptConfig) setTranscriptConfig(cfg.transcriptConfig)
       })
       .catch(() => setError('Failed to load transcript.'))
@@ -98,6 +100,7 @@ export default function AnnualTranscriptPage() {
             showGradeSystem={transcriptConfig.showGradeSystem ?? true}
             showClassification={transcriptConfig.showClassification ?? true}
             showLegend={transcriptConfig.showLegend ?? true}
+            highlightFailingRed={highlightFailingRed}
             deanLabel={transcriptConfig.deanLabel}
             registrarLabel={transcriptConfig.registrarLabel}
             reportTitle={transcriptConfig.reportTitle}
@@ -114,6 +117,7 @@ export default function AnnualTranscriptPage() {
             showGradeSystem={transcriptConfig.showGradeSystem ?? true}
             showClassification={transcriptConfig.showClassification ?? true}
             showLegend={transcriptConfig.showLegend ?? true}
+            highlightFailingRed={highlightFailingRed}
             deanLabel={transcriptConfig.deanLabel}
             registrarLabel={transcriptConfig.registrarLabel}
             reportTitle={transcriptConfig.reportTitle}

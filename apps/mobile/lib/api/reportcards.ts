@@ -25,7 +25,7 @@ export interface ReportCardDetail {
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string }
   term: { id: string; name: string; session: string }
   school: { name: string; type: string; language?: string }
-  entries: { id: string; score: number | null; seq1Score?: number | null; seq2Score?: number | null; grade: string | null; remarks: string; subject: { id: string; name: string; maxScore: number; coefficient: number } }[]
+  entries: { id: string; score: number | null; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string | null; remarks: string; subject: { id: string; name: string; maxScore: number; coefficient: number } }[]
 }
 
 export interface Subject {
@@ -97,7 +97,7 @@ export const getSubjects = async (): Promise<{ subjects: Subject[] }> => {
 
 export const saveEntries = async (
   id: string,
-  data: { entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]; remarks?: string }
+  data: { entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]; remarks?: string }
 ) => {
   const res = await api.put(`/report-cards/${id}/entries`, data)
   return res.data

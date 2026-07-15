@@ -18,7 +18,7 @@ import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
 
 interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number; credit?: number; compulsory?: boolean; term?: string | null }
-interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string }
+interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string }
 interface ReportCard {
   id: string
   status: string
@@ -38,7 +38,7 @@ interface ReportCard {
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
   school: { name: string; type: string; language?: string; logo?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
-  entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
+  entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
 
 
@@ -141,6 +141,7 @@ export default function ReportCardDetailPage() {
           score: existing?.score || 0,
           seq1Score: existing?.seq1Score ?? null,
           seq2Score: existing?.seq2Score ?? null,
+          resitScore: existing?.resitScore ?? null,
           grade: existing?.grade || '',
           remarks: existing?.remarks || ''
         }

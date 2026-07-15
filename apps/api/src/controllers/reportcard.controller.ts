@@ -518,15 +518,20 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade(isUniversity ? score : (score / 20) * 100)
 
     const createdEntries = await Promise.all(
-      entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; grade?: string; remarks?: string }) => {
+      entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; resitScore?: number; grade?: string; remarks?: string }) => {
         const seq1 = entry.seq1Score ?? null
         const seq2 = entry.seq2Score ?? null
+        // University only: a resit re-does the Exam component; CA (seq1) carries over unchanged.
+        // The original seq2Score is preserved for the record — resitScore, when present, is what
+        // actually counts toward the total/grade/GPA.
+        const resit = isUniversity ? (entry.resitScore ?? null) : null
+        const effectiveSeq2 = resit ?? seq2
         // University: TOTAL = CA + EXAM (direct sum, both components on their own scale).
         // Secondary: TOTAL = average of the two sequences.
         const finalScore: number | null = entry.score !== undefined
           ? entry.score
-          : seq1 !== null && seq2 !== null
-            ? isUniversity ? seq1 + seq2 : (seq1 + seq2) / 2
+          : seq1 !== null && effectiveSeq2 !== null
+            ? isUniversity ? seq1 + effectiveSeq2 : (seq1 + effectiveSeq2) / 2
             : null
         const sub = subjectMap[entry.subjectId]
         // University: match raw 0-100 score against 0-100 ranges.
@@ -541,6 +546,7 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
             subjectId: entry.subjectId,
             seq1Score: seq1,
             seq2Score: seq2,
+            resitScore: resit,
             score: finalScore,
             grade: scoreForGrade !== null ? getGradeLetter(scoreForGrade) : null,
             remarks: autoRemark

@@ -23,7 +23,7 @@ export const getClassOverviewApi = async (termId: string, classLevel: string): P
 }
 
 export const saveEntriesWithSeqApi = async (id: string, data: {
-  entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]
+  entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]
   remarks?: string
 }) => {
   const res = await api.put(`/report-cards/${id}/entries`, data)
@@ -167,6 +167,7 @@ export interface TranscriptEntry {
   score: number | null
   seq1Score?: number | null
   seq2Score?: number | null
+  resitScore?: number | null
   grade?: string | null
   subject: { id: string; name: string; code?: string | null; credit?: number | null; term?: string | null; classLevel: string }
 }

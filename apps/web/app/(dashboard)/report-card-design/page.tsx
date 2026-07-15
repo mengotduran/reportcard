@@ -1456,6 +1456,15 @@ export default function ReportCardDesignPage() {
           )}
         </div>
 
+        {/* Failing marks color — university only (resit-eligible F grades) */}
+        {schoolType === 'UNIVERSITY' && (
+          <label className="flex items-center gap-2 ml-2 text-xs text-muted-foreground cursor-pointer">
+            <input type="checkbox" checked={config.highlightFailingRed ?? true}
+              onChange={e => setConfig(c => ({ ...c, highlightFailingRed: e.target.checked }))} />
+            {tr('Failing marks in red')}
+          </label>
+        )}
+
         {/* Watermark */}
         <div className="flex items-center gap-2 ml-2 border-l border-border pl-4 flex-wrap">
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
@@ -1736,6 +1745,7 @@ export default function ReportCardDesignPage() {
               showGradeSystem={tc.showGradeSystem ?? true}
               showClassification={tc.showClassification ?? true}
               showLegend={tc.showLegend ?? true}
+              highlightFailingRed={config.highlightFailingRed ?? true}
               deanLabel={tc.deanLabel}
               registrarLabel={tc.registrarLabel}
               reportTitle={tc.reportTitle}

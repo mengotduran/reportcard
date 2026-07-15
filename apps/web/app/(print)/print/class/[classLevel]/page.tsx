@@ -8,7 +8,7 @@ import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEF
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
 interface RawEntry {
-  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
+  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
   grade: string; remarks: string; subject: { id: string; name: string }
 }
 interface RawRC {
@@ -119,6 +119,7 @@ export default function PrintClassPage() {
           score: e.score,
           seq1Score: e.seq1Score ?? null,
           seq2Score: e.seq2Score ?? null,
+          resitScore: e.resitScore ?? null,
           grade: e.grade,
           remarks: e.remarks ?? '',
         }))
