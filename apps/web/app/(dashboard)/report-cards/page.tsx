@@ -301,7 +301,7 @@ function TeacherClassesView() {
           {printJob.cards.map((rc, i) => (
             <div key={rc.id} style={i < printJob.cards.length - 1 ? { pageBreakAfter: 'always' } : undefined}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber, officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr, officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
@@ -1082,7 +1082,7 @@ export default function ReportCardsPage() {
           {printJob.cards.map((rc, i) => (
             <div key={rc.id} style={i < printJob.cards.length - 1 ? { pageBreakAfter: 'always' } : undefined}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber, officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr, officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}

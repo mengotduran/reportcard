@@ -25,6 +25,10 @@ interface School {
   address?: string | null
   website?: string | null
   authorizationNumber?: string | null
+  officialLeftTextEn?: string | null
+  officialLeftTextFr?: string | null
+  officialRightTextEn?: string | null
+  officialRightTextFr?: string | null
 }
 
 interface AuthState {

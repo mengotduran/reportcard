@@ -21,7 +21,7 @@ export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
 export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, phone, address, website, acronym, batch, repeatThreshold, authorizationNumber } = req.body
+    const { name, email, phone, address, website, acronym, batch, repeatThreshold, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr } = req.body
     const data: Record<string, unknown> = {}
     if (name             !== undefined) data.name             = String(name).trim()
     if (phone            !== undefined) data.phone            = String(phone).trim() || null
@@ -31,6 +31,10 @@ export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
     if (batch            !== undefined) data.batch            = batch === null || batch === '' ? null : Number(batch)
     if (repeatThreshold  !== undefined) data.repeatThreshold  = repeatThreshold === null || repeatThreshold === '' ? null : Number(repeatThreshold)
     if (authorizationNumber !== undefined) data.authorizationNumber = String(authorizationNumber).trim() || null
+    if (officialLeftTextEn  !== undefined) data.officialLeftTextEn  = String(officialLeftTextEn).trim() || null
+    if (officialLeftTextFr  !== undefined) data.officialLeftTextFr  = String(officialLeftTextFr).trim() || null
+    if (officialRightTextEn !== undefined) data.officialRightTextEn = String(officialRightTextEn).trim() || null
+    if (officialRightTextFr !== undefined) data.officialRightTextFr = String(officialRightTextFr).trim() || null
     if (email            !== undefined) {
       const trimmed = String(email).trim().toLowerCase()
       if (!trimmed) { res.status(400).json({ message: 'Email is required' }); return }

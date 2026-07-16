@@ -10,7 +10,7 @@ import {
   RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
   SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
-  officialTextBlockHtml, OFFICIAL_HEADER_FONT,
+  officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
@@ -312,15 +312,27 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
   onDelete: () => void; onDragStart: () => void; onDragOver: (e: React.DragEvent) => void
   onDrop: () => void; dragging: boolean; children: React.ReactNode
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
   return (
     <div
-      draggable onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
+      ref={wrapRef}
+      onDragOver={onDragOver} onDrop={onDrop}
       style={{ opacity: dragging ? 0.4 : 1, position: 'relative', marginBottom: 2 }}
       className="group"
     >
       {/* Section toolbar — visible on hover */}
       <div className="absolute -left-10 top-0 bottom-0 flex flex-col items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ width: 36 }}>
-        <div className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-muted-foreground p-0.5">
+        {/* draggable lives ONLY on this handle (not the whole section) so dragging
+            an input/slider/checkbox anywhere inside the section — e.g. the header's
+            Text Size or logo Size sliders — never gets hijacked into a reorder-drag.
+            We still set the native drag-ghost image to the whole section (via
+            setDragImage) so reordering looks/feels the same as before — otherwise
+            the browser's default drag preview would just be this tiny 14px icon. */}
+        <div draggable onDragStart={e => {
+          if (wrapRef.current) e.dataTransfer.setDragImage(wrapRef.current, 20, 20)
+          onDragStart()
+        }}
+          className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-muted-foreground p-0.5">
           <GripVertical size={14} />
         </div>
         <button onClick={() => onMove('up')} disabled={index === 0}
@@ -343,11 +355,11 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 
 // ── Section renderers (edit mode) ─────────────────────────────────────────────
 
-function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null } | null; update: (s: HeaderSec) => void }) {
+function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null; language?: string; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null } | null; update: (s: HeaderSec) => void }) {
   const t = useT()
   const logoSize = sec.logoSize || 60
-  const [leftVer,  setLeftVer]  = useState(0)
-  const [rightVer, setRightVer] = useState(0)
+  const officialLeftResolved = resolveOfficialText(school, 'left', sec.leftText ?? '')
+  const officialRightResolved = resolveOfficialText(school, 'right', sec.rightText ?? '')
 
   const LogoEl = schoolLogo ? (
     <img src={schoolLogo} alt="logo" style={{ width: logoSize, height: logoSize, objectFit: 'contain', borderRadius: 4, display: 'block' }} />
@@ -432,19 +444,17 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
           <input type="checkbox" checked={!!sec.officialHeader}
-            onChange={e => {
-              const on = e.target.checked
-              const patch: Partial<HeaderSec> = { officialHeader: on }
-              // School name uppercased so it renders as a bold heading line;
-              // typing the school's short acronym (e.g. "CITEC") on its own
-              // line instead gets the large display treatment — see
-              // officialTextBlockHtml in reportCardTemplate.ts.
-              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${schoolName.toUpperCase()}\nINSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION`
-              if (on && !sec.rightText) patch.rightText = `REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\nREPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTRY OF HIGHER EDUCATION\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR`
-              update({ ...sec, ...patch })
-            }} />
+            onChange={e => update({ ...sec, officialHeader: e.target.checked })} />
           {t('Official (logo center)')}
         </label>
+        {sec.officialHeader && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {t('Text Size:')}
+            <input type="range" min={0.6} max={1.8} step={0.05} value={sec.officialTextScale ?? 1.15}
+              onChange={e => update({ ...sec, officialTextScale: Number(e.target.value) })} style={{ width: 70 }} />
+            {Math.round((sec.officialTextScale ?? 1.15) * 100)}%
+          </label>
+        )}
       </div>
 
       {/* Per-field contact-line toggles — available in every header style, each
@@ -452,7 +462,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
           Defaults to on for whatever data exists, until explicitly unchecked. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, padding: '6px 8px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
         {([
-          ['showAuthorization', 'Show Authorization No.', !!(school as any)?.authorizationNumber],
+          ['showAuthorization', 'Show Authorization No.', !!school?.authorizationNumber],
           ['showEmail', 'Show Email', !!school?.email],
           ['showPhone', 'Show Phone', !!school?.phone],
           ['showAddress', 'Show Address', !!school?.address],
@@ -482,24 +492,29 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
                   positioned) so it vertically centers against the text blocks at
                   any size, instead of hanging below them once it's larger than
                   the text. */}
-              <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'center', marginBottom: 4 }}>
-                <div
-                  key={leftVer}
-                  contentEditable suppressContentEditableWarning
-                  dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.leftText ?? '', 'left') }}
-                  onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
-                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                  title="Click to edit"
-                />
+              {/* minmax(0, 1fr) — not bare 1fr — forces the two side columns to
+                  stay exactly equal width regardless of how much text either
+                  block holds; bare 1fr lets a wider block's min-content grow
+                  its track past the other's, pushing the logo off-center. */}
+              <div style={{ display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${Math.max(logoSize, 40) + 16}px minmax(0, 1fr)`, gap: 16, alignItems: 'center', marginBottom: 4 }}>
+                {/* Read-only — this text now lives in School Settings (English +
+                    French per side) so it stays consistent and correctly styled
+                    everywhere it's used, instead of being retyped per template. */}
+                {officialLeftResolved ? (
+                  <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(officialLeftResolved, 'left', officialTextScaleFor(sec)) }} />
+                ) : (
+                  <p style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic', textAlign: 'center' }} title="Set this in School Settings">
+                    {t('(Set the left header text in School Settings)')}
+                  </p>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'center' }}>{LogoEl}</div>
-                <div
-                  key={rightVer + 10000}
-                  contentEditable suppressContentEditableWarning
-                  dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.rightText ?? '', 'right') }}
-                  onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
-                  style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                  title="Click to edit"
-                />
+                {officialRightResolved ? (
+                  <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(officialRightResolved, 'right', officialTextScaleFor(sec)) }} />
+                ) : (
+                  <p style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic', textAlign: 'center' }} title="Set this in School Settings">
+                    {t('(Set the right header text in School Settings)')}
+                  </p>
+                )}
               </div>
               {/* Authorization / registration line spanning under the columns
                   (e.g. "No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010").
@@ -507,7 +522,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
                   pattern as the contact-line fields below. */}
               {(sec.showAuthorization ?? true) && (
                 <div style={{ textAlign: 'center', marginTop: 2, fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 'bold', color: '#333' }}>
-                  {(school as any)?.authorizationNumber || t('(Set the Authorization No. in School Settings)')}
+                  {school?.authorizationNumber || t('(Set the Authorization No. in School Settings)')}
                 </div>
               )}
               {/* Contact strip between two thin rules, spanning the full width */}
@@ -1375,6 +1390,12 @@ export default function ReportCardDesignPage() {
     setSaving(true)
     try {
       await saveTemplateApi(config as TemplateConfig)
+      // loadTemplate/loadStandardLayout/loadLedger/loadTranscriptLayout (the
+      // layout-type thumbnails) all restore from this ref, not from the API —
+      // without updating it here, switching thumbnails after a save reverts
+      // to whatever was saved BEFORE this session started, silently discarding
+      // every edit made (and saved) during the current visit.
+      savedConfigRef.current = config
       showToast(tr('Design saved successfully'))
     } catch {
       showToast(tr('Failed to save'), 'error')

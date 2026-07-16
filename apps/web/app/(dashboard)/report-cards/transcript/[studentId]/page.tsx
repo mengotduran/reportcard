@@ -94,7 +94,13 @@ export default function AnnualTranscriptPage() {
   const allEntries = [...(sem1?.entries ?? []), ...(sem2?.entries ?? [])]
 
   const printableProps = {
-    school: { name: data.school.name, type: data.school.type ?? 'UNIVERSITY', logo: data.school.logo, language: data.school.language ?? undefined },
+    school: {
+      name: data.school.name, type: data.school.type ?? 'UNIVERSITY', logo: data.school.logo, language: data.school.language ?? undefined,
+      email: data.school.email, phone: data.school.phone, address: data.school.address, website: data.school.website,
+      authorizationNumber: data.school.authorizationNumber,
+      officialLeftTextEn: data.school.officialLeftTextEn, officialLeftTextFr: data.school.officialLeftTextFr,
+      officialRightTextEn: data.school.officialRightTextEn, officialRightTextFr: data.school.officialRightTextFr,
+    },
     student: { name: data.student.name, studentId: data.student.studentId, classLevel: data.student.classLevel, gender: data.student.gender ?? undefined },
     term: { name: '', session: data.session },
     subjects: allSubjects,

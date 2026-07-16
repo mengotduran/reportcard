@@ -37,6 +37,14 @@ model School {
   batch              Int?
   repeatThreshold    Float?
   authorizationNumber String?
+  // Official-header letterhead text (left/right blocks in the "Official"
+  // report-card header style), set once here so it stays consistent no
+  // matter how many report-card templates/layouts render it. One EN and one
+  // FR variant per side; the header auto-picks the one matching `language`.
+  officialLeftTextEn  String?
+  officialLeftTextFr  String?
+  officialRightTextEn String?
+  officialRightTextFr String?
   classLevels        ClassLevel[]
   departments        Department[]
   classListTemplate  ClassListTemplate?

@@ -185,7 +185,7 @@ export interface StudentTranscript {
     id: string; name: string; studentId: string; classLevel: string; gender?: string | null
     dateOfBirth?: string | null; nationality?: string | null
   }
-  school: { name: string; logo?: string | null; language?: string | null; type?: string | null }
+  school: { name: string; logo?: string | null; language?: string | null; type?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   session: string
   reportCards: TranscriptReportCard[]
   maxScore: number

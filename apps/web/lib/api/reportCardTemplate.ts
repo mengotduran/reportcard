@@ -74,7 +74,13 @@ export interface SpreadsheetTable {
   rows: SheetRow[]
 }
 
-export interface HeaderSec     { id: string; type: 'header';       reportTitle: string; subtitle: string; showSchoolType: boolean; showLogo: boolean; logoSize: number; logoPosition: 'left'|'center'|'right'; schoolNameColor?: string; schoolTypeColor?: string; officialHeader?: boolean; leftText?: string; rightText?: string
+export interface HeaderSec     { id: string; type: 'header';       reportTitle: string; subtitle: string; showSchoolType: boolean; showLogo: boolean; logoSize: number; logoPosition: 'left'|'center'|'right'; schoolNameColor?: string; schoolTypeColor?: string; officialHeader?: boolean
+  // Legacy — the official header's left/right text used to be edited per
+  // template here. It now lives in School Settings (English + French per
+  // side, see School.officialLeftTextEn etc. and resolveOfficialText below),
+  // read-only in the designer. Kept only as a fallback for templates saved
+  // before the move, so they keep rendering unchanged until Settings is filled in.
+  leftText?: string; rightText?: string
   // Official header only — independent per-field toggles for the contact line.
   // Each one only takes effect if the school actually has that value on file
   // (see buildOfficialContactLine); the line is computed live, never stored.
@@ -82,7 +88,20 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   // Official header only — same pattern as the contact-line toggles above:
   // the authorization/registration number lives in School Settings, and this
   // just switches on whether it's shown, never stores the text itself.
-  showAuthorization?: boolean }
+  showAuthorization?: boolean
+  // Official header only — manual multiplier (default 1) on top of the automatic
+  // logoSize-based scale (see officialTextScaleFor below), so the admin can fine
+  // tune the left/right text block sizing independently of the logo.
+  officialTextScale?: number }
+
+// Official header only: the left/right text blocks auto-scale with the logo size
+// (bigger logo -> bigger text, so they stay visually balanced), on top of the
+// admin's own manual officialTextScale multiplier. 60 is the shared default
+// logoSize used across every header style, so it's the scale-1.0 baseline.
+// Default manual multiplier is 1.15 (115%), matching the default 60px logo.
+export function officialTextScaleFor(sec: { logoSize: number; officialTextScale?: number }): number {
+  return (sec.officialTextScale ?? 1.15) * (sec.logoSize / 60)
+}
 
 // School contact fields used by the Official header's contact line.
 export interface SchoolContactInfo { email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
@@ -108,6 +127,33 @@ export function buildOfficialContactLine(
   return parts.join(' | ')
 }
 
+// The official header's left/right blocks live in School Settings (one EN and
+// one FR variant per side) so they stay consistent across every report-card
+// template instead of being retyped per-template — see School Settings'
+// "Official Header Letterhead" card.
+export interface SchoolOfficialTextInfo {
+  officialLeftTextEn?: string | null
+  officialLeftTextFr?: string | null
+  officialRightTextEn?: string | null
+  officialRightTextFr?: string | null
+}
+
+/**
+ * Combines the left/right official-header text's English and French variants
+ * — real Cameroon institutional letterheads are always bilingual (both
+ * languages shown together, not one-or-the-other), so both saved blocks are
+ * stacked with a blank-line gap when both exist. Falls back to `legacy` (a
+ * per-template leftText/rightText saved before this moved to Settings) only
+ * when NEITHER language has been filled in yet in Settings, so older
+ * templates keep rendering unchanged until an admin fills in the new fields.
+ */
+export function resolveOfficialText(school: SchoolOfficialTextInfo | null | undefined, side: 'left' | 'right', legacy: string): string {
+  const en = (side === 'left' ? school?.officialLeftTextEn : school?.officialRightTextEn)?.trim()
+  const fr = (side === 'left' ? school?.officialLeftTextFr : school?.officialRightTextFr)?.trim()
+  if (en && fr) return `${en}\n\n${fr}`
+  return en || fr || legacy
+}
+
 // ── Official header text blocks ──────────────────────────────────────────────
 // One renderer shared by the designer canvas AND the print output (same
 // no-drift rule as buildOfficialContactLine). Styling follows Cameroon
@@ -126,27 +172,41 @@ export const OFFICIAL_HEADER_FONT = "'Share Tech', Arial, Helvetica, sans-serif"
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// Every multi-word caps line is fully justified (both edges straight, relative to
-// the block's own natural width below — not the wider grid column, which made
-// short lines stretch out with unnaturally large gaps); the single-word acronym
-// line and the italic motto line are centered instead.
-export function officialTextBlockHtml(text: string, edge: 'left' | 'right'): string {
-  const base = `font-family:${OFFICIAL_HEADER_FONT};line-height:1.35;`
-  const lines = text.split('\n').map(raw => {
-    // contentEditable round-trips blank rows as &nbsp; — normalize before testing
-    const line = raw.replace(/\u00a0/g, ' ').trim()
-    if (!line) return `<div style="${base}text-align:center;font-size:4px;">&nbsp;</div>`
+// No artificial word-spacing (justify). Every multi-word ALL-CAPS line
+// individually scales its own font-size toward the block's longest such line, by
+// character-count ratio (with a small boost since Share Tech isn't perfectly
+// monospace, so a plain ratio tends to undershoot the real rendered width) --
+// capped as a sanity ceiling against a truly extreme outlier. The one-word
+// acronym line and the italic motto line are the ONLY lines that don't reach the
+// edge -- fixed size, centered, regardless of the surrounding lines' lengths.
+// `scale` (see officialTextScaleFor) multiplies every size uniformly -- the
+// boost/cap ratios that drive edge-alignment stay the same at any scale.
+export function officialTextBlockHtml(text: string, edge: 'left' | 'right', scale = 1): string {
+  const base = `font-family:${OFFICIAL_HEADER_FONT};text-align:center;line-height:1.35;`
+  const CAPS_BASE_PX = 8.5 * scale
+  // Same boost on both sides so the right block reaches the edge exactly like
+  // the left does — `edge` here only decides which outer edge each block hugs.
+  const CAPS_BOOST = 1.6
+  const CAPS_MAX_SCALE = 2.2
+  const isScalableCaps = (l: string) => l.length > 0 && l === l.toUpperCase() && /[A-Z]/.test(l) && l.includes(' ')
+  // contentEditable round-trips blank rows as a non-breaking space -- normalize first
+  const rawLines = text.split('\n').map(raw => raw.replace(/\u00a0/g, ' ').trim())
+  const maxCapsLen = Math.max(0, ...rawLines.filter(isScalableCaps).map(l => l.length))
+
+  const lines = rawLines.map(line => {
+    if (!line) return `<div style="${base}font-size:${(4 * scale).toFixed(1)}px;">&nbsp;</div>`
     const esc = escapeHtml(line)
     const caps = line === line.toUpperCase() && /[A-Z]/.test(line)
     if (caps && !line.includes(' ') && line.length <= 12)
-      return `<div style="${base}text-align:center;font-size:18px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
-    if (caps)
-      return `<div style="${base}text-align:justify;text-align-last:justify;font-size:11px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
-    return `<div style="${base}text-align:center;font-size:10px;font-style:italic;color:#333;">${esc}</div>`
+      return `<div style="${base}font-size:${(13.5 * scale).toFixed(1)}px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
+    if (caps) {
+      const s = Math.min(CAPS_MAX_SCALE, (maxCapsLen / line.length) * CAPS_BOOST)
+      return `<div style="${base}font-size:${(CAPS_BASE_PX * s).toFixed(1)}px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
+    }
+    return `<div style="${base}font-size:${(7.5 * scale).toFixed(1)}px;font-style:italic;color:#333;">${esc}</div>`
   }).join('')
   // Shrink-wrap to the widest natural line and hug the block's outer edge (left
-  // block flush-left, right block flush-right) — so justify above only stretches
-  // shorter lines up to THAT width, a small natural-looking adjustment.
+  // block flush-left, right block flush-right).
   const edgeMargin = edge === 'left' ? 'margin-right:auto' : 'margin-left:auto'
   return `<div style="width:fit-content;${edgeMargin}">${lines}</div>`
 }

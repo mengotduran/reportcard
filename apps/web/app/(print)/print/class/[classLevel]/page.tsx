@@ -82,6 +82,8 @@ export default function PrintClassPage() {
     name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null,
     email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
     authorizationNumber: school?.authorizationNumber,
+    officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr,
+    officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr,
   }
 
   // Compute class-wide min/avg/max per subject from all loaded cards

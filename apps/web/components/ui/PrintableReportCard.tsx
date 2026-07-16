@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, OFFICIAL_HEADER_FONT } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
@@ -16,7 +16,7 @@ export interface PrintEntry {
 interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
+  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string }
   term: { name: string; session: string }
   subjects: PrintSubject[]
@@ -674,10 +674,14 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       if (s.officialHeader) {
         return (
           <div style={{ borderBottom: `3px solid ${color}`, paddingBottom: 12, marginBottom: 16 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'center' }}>
-              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.leftText || '', 'left') }} />
+            {/* minmax(0, 1fr) — not bare 1fr — forces the two side columns to
+                stay exactly equal width regardless of how much text either
+                block holds; bare 1fr lets a wider block's min-content grow
+                its track past the other's, pushing the logo off-center. */}
+            <div style={{ display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${Math.max(logoSize, 40) + 16}px minmax(0, 1fr)`, gap: 16, alignItems: 'center' }}>
+              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(resolveOfficialText(school, 'left', s.leftText || ''), 'left', officialTextScaleFor(s)) }} />
               <div style={{ display: 'flex', justifyContent: 'center' }}>{s.showLogo && logoEl}</div>
-              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.rightText || '', 'right') }} />
+              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(resolveOfficialText(school, 'right', s.rightText || ''), 'right', officialTextScaleFor(s)) }} />
             </div>
             {(s.showAuthorization ?? true) && school.authorizationNumber && <p style={{ textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 'bold', color: '#333', margin: '2px 0 0' }}>{school.authorizationNumber}</p>}
             {contactLine && (

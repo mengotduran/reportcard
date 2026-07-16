@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, type LucideIcon } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, type LucideIcon } from 'lucide-react'
 import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
@@ -22,6 +22,33 @@ import { getClassLevelsApi } from '@/lib/api/classLevels'
 
 const CARD = 'bg-card rounded-xl border border-border p-6'
 const FIELD = 'w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50'
+
+// Example/placeholder text for the Official header letterhead blocks — kept
+// per school type so a Primary/Secondary admin never sees university wording
+// (institute/ministry of higher education) and vice versa. Real Cameroon
+// ministry acronyms: MINESUP (higher ed), MINESEC (secondary), MINEDUB (basic).
+function officialTextExamples(schoolType: string | undefined, name: string) {
+  const upperName = name ? name.toUpperCase() : 'YOUR SCHOOL'
+  if (schoolType === 'UNIVERSITY') return {
+    leftEn: `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${upperName}`,
+    leftFr: `INSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION\n${upperName}`,
+    rightEn: 'REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\n\nMINISTRY OF HIGHER EDUCATION',
+    rightFr: "REPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR",
+  }
+  if (schoolType === 'PRIMARY') return {
+    leftEn: `GOVERNMENT PRIMARY SCHOOL\n${upperName}`,
+    leftFr: `ECOLE PUBLIQUE DE\n${upperName}`,
+    rightEn: 'REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\n\nMINISTRY OF BASIC EDUCATION',
+    rightFr: "REPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTERE DE L'EDUCATION DE BASE",
+  }
+  // SECONDARY (also the default fallback)
+  return {
+    leftEn: `GOVERNMENT BILINGUAL HIGH SCHOOL\n${upperName}`,
+    leftFr: `LYCEE BILINGUE DE\n${upperName}`,
+    rightEn: 'REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\n\nMINISTRY OF SECONDARY EDUCATION',
+    rightFr: 'REPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTERE DES ENSEIGNEMENTS SECONDAIRES',
+  }
+}
 
 // One consistent header for every settings card: an icon chip, a title, an
 // optional description, and an optional right-aligned action (a button/link).
@@ -55,6 +82,7 @@ export default function SettingsPage() {
   const [backingUp, setBackingUp] = useState(false)
   const isOfflineInstall = process.env.NEXT_PUBLIC_OFFLINE_BUILD === '1'
   const isUniversity = school?.type === 'UNIVERSITY'
+  const officialExamples = officialTextExamples(school?.type, school?.name ?? '')
 
   // ── Excel Templates state (university only) ──
   const [excelTemplates, setExcelTemplates] = useState<ExcelTemplate[]>([])
@@ -176,6 +204,16 @@ export default function SettingsPage() {
   const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
   const [savingThreshold, setSavingThreshold] = useState(false)
 
+  // Official header letterhead text (the "Official" style's left/right text
+  // blocks) — one English and one French variant per side, set once here so
+  // it's always consistent and correctly styled everywhere it's used instead
+  // of being retyped per report-card template.
+  const [officialTextForm, setOfficialTextForm] = useState({
+    leftEn: school?.officialLeftTextEn ?? '', leftFr: school?.officialLeftTextFr ?? '',
+    rightEn: school?.officialRightTextEn ?? '', rightFr: school?.officialRightTextFr ?? '',
+  })
+  const [savingOfficialText, setSavingOfficialText] = useState(false)
+
   // The auth store's cached `school` can lag behind the database (e.g. right
   // after login, or if a field was added since this session started), and
   // this form's initial state is only ever set once from that snapshot. Pull
@@ -191,6 +229,10 @@ export default function SettingsPage() {
         authorizationNumber: s.authorizationNumber ?? '',
       })
       setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
+      setOfficialTextForm({
+        leftEn: s.officialLeftTextEn ?? '', leftFr: s.officialLeftTextFr ?? '',
+        rightEn: s.officialRightTextEn ?? '', rightFr: s.officialRightTextFr ?? '',
+      })
     }).catch(() => {}).finally(() => setLoadingInfo(false))
   }, [])
 
@@ -218,6 +260,19 @@ export default function SettingsPage() {
       showToast(t('Decision threshold saved'))
     } catch { showToast(t('Failed to save'), 'error') }
     finally { setSavingThreshold(false) }
+  }
+
+  const handleSaveOfficialText = async () => {
+    setSavingOfficialText(true)
+    try {
+      const res = await api.put('/school/settings', {
+        officialLeftTextEn: officialTextForm.leftEn.trim(), officialLeftTextFr: officialTextForm.leftFr.trim(),
+        officialRightTextEn: officialTextForm.rightEn.trim(), officialRightTextFr: officialTextForm.rightFr.trim(),
+      })
+      updateSchool(res.data.school)
+      showToast(t('Official header text saved'))
+    } catch { showToast(t('Failed to save'), 'error') }
+    finally { setSavingOfficialText(false) }
   }
 
   // My Account — the logged-in admin's own login email, distinct from the
@@ -425,7 +480,7 @@ export default function SettingsPage() {
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Authorization / Registration No.')}</label>
                   <input
                     className={FIELD}
-                    placeholder="No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010"
+                    placeholder={isUniversity ? 'No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010' : school?.type === 'PRIMARY' ? 'No .../MINEDUB/SG/DEB of DD/MM/YYYY' : 'No .../MINESEC/DESG of DD/MM/YYYY'}
                     value={infoForm.authorizationNumber}
                     onChange={e => setInfoForm(f => ({ ...f, authorizationNumber: e.target.value }))}
                   />
@@ -649,6 +704,67 @@ export default function SettingsPage() {
                   </button>
                 }
               />
+            </div>
+
+            {/* Official Header Letterhead Text */}
+            <div className={CARD}>
+              <CardHead
+                icon={Type}
+                title={t('Official Header Letterhead Text')}
+                desc={t('Used by the "Official" header style in Report Card Design (left and right text blocks around the logo). Set once here in English and French — the report card automatically shows the version matching your school\'s language, always sized and aligned consistently.')}
+              />
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Left Block — English')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.leftEn}
+                      value={officialTextForm.leftEn}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, leftEn: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Left Block — French')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.leftFr}
+                      value={officialTextForm.leftFr}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, leftFr: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Right Block — English')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.rightEn}
+                      value={officialTextForm.rightEn}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, rightEn: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Right Block — French')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.rightFr}
+                      value={officialTextForm.rightFr}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, rightFr: e.target.value }))}
+                    />
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-3">
+                {t('One line per row. An ALL-CAPS line with multiple words is sized to reach the edge automatically; a short ALL-CAPS word (like an acronym) and mottos stay a fixed size; leave a blank line for a small gap between groups.')}
+              </p>
+              <button
+                onClick={handleSaveOfficialText}
+                disabled={savingOfficialText || loadingInfo}
+                className="mt-4 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+              >
+                {savingOfficialText ? t('Saving…') : t('Save Header Text')}
+              </button>
             </div>
 
             {/* Excel Transcript Templates — university only */}
