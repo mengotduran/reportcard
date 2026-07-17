@@ -21,8 +21,13 @@ export interface TemplateConfig {
   showParentSig: boolean
   principalTitle: string
   footerText: string
-  // university only: print failing (F-grade) marks in red instead of the default black.
+  // School-wide marking policy (NOT per-layout): print a failed subject's numbers and
+  // grade letter in red instead of black. Applies to the report card, the ledger and
+  // the transcript alike, so it always lives at the TOP level of the saved config, even
+  // when the transcript design is the one being saved — see the designer's handleSave.
   // Undefined/true = red (matches the printed transcript convention this was modeled on).
+  // What counts as a fail comes from the school's own grading scale (isFailingScore),
+  // so it's a mark /100 at a university and a subject's term average /20 elsewhere.
   highlightFailingRed?: boolean
   // sections-based layout (overrides toggle config if present)
   sections?: LayoutSection[]
@@ -910,7 +915,11 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
  */
 export function mergeSavedStandardConfig(saved: Partial<TemplateConfig> | null | undefined, schoolType?: string): TemplateConfig {
   const { transcript: _t, ...top } = (saved ?? {}) as Partial<TemplateConfig>
-  if (Object.keys(top).length === 0 || top.layoutType === 'transcript') return getDefaultLayoutForType(schoolType)
+  // `highlightFailingRed` is a school-wide marking policy rather than part of any one
+  // design, so it has to survive even the fallbacks below that discard the saved design.
+  const policy = top.highlightFailingRed != null ? { highlightFailingRed: top.highlightFailingRed } : {}
+  if (Object.keys(top).length === 0 || top.layoutType === 'transcript')
+    return { ...getDefaultLayoutForType(schoolType), ...policy }
   const base = TEMPLATE_DEFAULTS[(top.template as TemplateName) ?? 'classic']
   return { ...base, ...top } as TemplateConfig
 }

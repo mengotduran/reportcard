@@ -7,13 +7,18 @@ import {
 } from '@/lib/api/reportcards'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getGradingScaleApi, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
-import { gradeFromScore } from '@/lib/grading'
+import { gradeFromScore, isFailingMark } from '@/lib/grading'
 import { seqShort, seqFull } from '@/lib/sequences'
 import { ArrowLeft, Save, Copy, AlertTriangle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT, useLang } from '@/lib/i18n'
+
+// University marking split: CA is out of 30, the exam out of 70, the course out of 100.
+// The same numbers the column headers below print.
+const EXAM_MAX = 70
+const COURSE_MAX = 100
 
 interface Row {
   studentId: string
@@ -22,7 +27,11 @@ interface Row {
   reportCardId: string | null
   score: string
   otherSeqScore: number | null
+  /** Not editable, for ANY reason (published, or not eligible for this resit). */
   isLocked: boolean
+  /** Locked specifically because the report card is published — the only case an admin
+   *  can unlock. Kept apart from isLocked so the banner can't blame publishing for a
+   *  row that's simply passed the course. */
   isPublished?: boolean
   resitEligible?: boolean
 }
@@ -97,10 +106,20 @@ export default function MarksEntryPage() {
             if (entry) {
               if (isResit) {
                 score = entry.resitScore != null ? String(entry.resitScore) : ''
-                // Eligible only if the ORIGINAL CA+Exam total (ignoring any resit already
-                // recorded) was a failing grade — i.e. this course actually needed a resit.
-                const base = entry.seq1Score != null && entry.seq2Score != null ? entry.seq1Score + entry.seq2Score : null
-                resitEligible = base != null && gradeFromScore(base, 100, scaleData.ranges).grade === 'F'
+                // A resit re-sits the EXAM only (CA carries over), so it's offered when the
+                // student failed the exam AND failed the course overall. A poor CA alone is
+                // not a resit matter, and someone whose CA already carried them to a pass
+                // isn't asked to re-sit anything.
+                //
+                // Judged against the ORIGINAL CA+Exam (ignoring any resit already recorded),
+                // so a row stays editable after its resit mark is entered.
+                //
+                // Both tests go through the school's own scale rather than a hardcoded 'F' or
+                // pass mark: CITEC juries grade D as FAIL, which a grade-letter test misses.
+                const ca = entry.seq1Score, exam = entry.seq2Score
+                resitEligible = ca != null && exam != null
+                  && isFailingMark(exam, EXAM_MAX, scaleData.ranges)
+                  && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
               } else {
                 score = seqIndex === 0
                   ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
@@ -117,6 +136,7 @@ export default function MarksEntryPage() {
           reportCardId: s.reportCard?.id ?? null,
           score, otherSeqScore,
           isLocked: (isPublished && !grantedToMe) || (isResit && !resitEligible),
+          isPublished: isPublished && !grantedToMe,
           resitEligible,
         }
       })
@@ -344,7 +364,11 @@ export default function MarksEntryPage() {
   }
 
   // ── Save ────────────────────────────────────────────────────────────────────
-  const publishedCount = rows.filter(r => r.isLocked).length
+  // Only rows locked BY PUBLISHING — the ones an admin can actually unlock. Counting
+  // every locked row here told teachers on the Resit tab that N report cards were
+  // published and to go contact their admin, when those rows were simply students who
+  // passed the course and were never resit-eligible.
+  const publishedCount = rows.filter(r => r.isPublished).length
   const editableRows   = rows.filter(r => !r.isLocked)
 
   const handleSaveAll = async () => {
@@ -454,7 +478,7 @@ export default function MarksEntryPage() {
       {isResit ? (
         <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
           <span className="flex-1 text-sm text-sky-700">
-            {t('Only students who failed this course (CA + Exam = F) are editable here. Enter their new exam mark from the resit.')}
+            {t('Only students who failed the exam and failed the course overall can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is.')}
           </span>
         </div>
       ) : (

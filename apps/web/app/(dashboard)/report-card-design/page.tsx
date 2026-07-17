@@ -1272,6 +1272,10 @@ export default function ReportCardDesignPage() {
             : { ...getDefaultTranscriptLayout(sType), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' as const })
         : buildMergedConfig(saved ?? null, lang, sType)
           ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+      // "Failing marks in red" is stored school-wide at the top level (see handleSave),
+      // so stamp it onto whichever layout loaded — the checkbox must read the same in
+      // every view, not whatever a layout happened to be saved with.
+      merged.highlightFailingRed = saved?.highlightFailingRed ?? true
       setConfig(merged)
       setColorText(merged.primaryColor)
       setBgText(merged.bgColor || '#ffffff')
@@ -1341,7 +1345,7 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.template === name && saved?.layoutType !== 'transcript') ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? getDefaultLayout(name)
-    setConfig(layout)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1359,7 +1363,7 @@ export default function ReportCardDesignPage() {
     const restored = (saved?.layoutType !== 'transcript' && (saved as any)?.sections?.length > 0)
       ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
-    setConfig(layout)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1370,7 +1374,7 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = saved?.template === 'ledger' ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? { ...getLedgerLayout(), layoutType: 'ledger' as const }
-    setConfig(layout)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1390,7 +1394,7 @@ export default function ReportCardDesignPage() {
     const layout = hasTranscriptSections
       ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
       : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
-    setConfig({ ...layout, layoutType: 'transcript' as const })
+    setConfig(c => ({ ...layout, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1406,9 +1410,18 @@ export default function ReportCardDesignPage() {
       const legacyTranscript = prev?.layoutType === 'transcript' ? prev : undefined
       const { transcript: _prevT, ...prevTop } = (prev ?? {}) as Partial<TemplateConfig>
       const { transcript: _curT, ...configTop } = config as TemplateConfig
-      const payload: TemplateConfig = config.layoutType === 'transcript'
+      const base: TemplateConfig = config.layoutType === 'transcript'
         ? { ...(legacyTranscript ? {} : prevTop), transcript: configTop } as TemplateConfig
         : { ...configTop, transcript: prev?.transcript ?? legacyTranscript } as TemplateConfig
+      // "Failing marks in red" is a school-wide marking policy, not a per-layout style:
+      // it always lives at the TOP level, whichever layout is being saved, and is kept
+      // out of the transcript sub-key so the two can never disagree.
+      const { highlightFailingRed: _t, ...transcriptDesign } = (base.transcript ?? {}) as Partial<TemplateConfig>
+      const payload: TemplateConfig = {
+        ...base,
+        highlightFailingRed: config.highlightFailingRed ?? true,
+        ...(base.transcript ? { transcript: transcriptDesign } : {}),
+      }
       await saveTemplateApi(payload)
       // loadTemplate/loadStandardLayout/loadLedger/loadTranscriptLayout (the
       // layout-type thumbnails) all restore from this ref, not from the API —
@@ -1493,14 +1506,16 @@ export default function ReportCardDesignPage() {
           )}
         </div>
 
-        {/* Failing marks color — university only (resit-eligible F grades) */}
-        {schoolType === 'UNIVERSITY' && (
-          <label className="flex items-center gap-2 ml-2 text-xs text-muted-foreground cursor-pointer">
-            <input type="checkbox" checked={config.highlightFailingRed ?? true}
-              onChange={e => setConfig(c => ({ ...c, highlightFailingRed: e.target.checked }))} />
-            {tr('Failing marks in red')}
-          </label>
-        )}
+        {/* Failing marks colour. School-wide, not per-layout: it's a marking policy, so
+            it applies to the report card and the transcript alike (handleSave always
+            stores it at the top level). A failed subject prints its numbers and grade
+            in red; unchecked, everything stays black. */}
+        <label className="flex items-center gap-2 ml-2 text-xs text-muted-foreground cursor-pointer"
+          title={tr('Applies to every layout: a subject the student failed prints its marks in red')}>
+          <input type="checkbox" checked={config.highlightFailingRed ?? true}
+            onChange={e => setConfig(c => ({ ...c, highlightFailingRed: e.target.checked }))} />
+          {tr('Failing marks in red')}
+        </label>
 
         {/* Watermark */}
         <div className="flex items-center gap-2 ml-2 border-l border-border pl-4 flex-wrap">

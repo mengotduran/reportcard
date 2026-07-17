@@ -1,5 +1,5 @@
 import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel } from '@/lib/api/reportCardTemplate'
-import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
+import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
 
@@ -40,6 +40,9 @@ export interface PrintableReportCardProps {
   // Absent for every other document type/layout.
   transcriptSemesters?: Partial<Record<TranscriptPeriod, TranscriptSemesterData>>
 }
+
+// Colour a failed subject's marks print in when the admin enables it school-wide.
+const FAIL_RED = '#dc2626'
 
 function ordinalPos(n: number): string {
   const s = ['th', 'st', 'nd', 'rd']
@@ -632,6 +635,27 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   })()
   const cgpa = props.cgpa ?? gpaInfo.gpa
 
+  // ── Failing marks in red ─────────────────────────────────────────────────────
+  // When the admin turns it on (school-wide — see TemplateConfig.highlightFailingRed),
+  // every subject the student FAILED prints its numbers and its grade letter in red;
+  // text cells (code, title, remark, jury decision) stay black and passed subjects are
+  // untouched. Fail is judged on the school's OWN grading scale, so this needs no
+  // school-type branching: the failing band is a mark /100 at a university and a
+  // subject's term average /20 at a primary/secondary school.
+  //
+  // `score` is always the mark that COUNTS — for a resat university course the backend
+  // stores CA + resit exam (see reportcard.controller.ts), so a resit that still falls
+  // short is judged on the resit and correctly prints red.
+  //
+  // Shared by the marks table and the Resits appendix so the same course can't print
+  // red in one and black in the other.
+  const highlightRed = cfg.highlightFailingRed !== false
+  const isFailedEntry = (e?: PrintEntry): boolean =>
+    highlightRed && !!e && e.score != null && isFailingScore(e.score, bands)
+  // Class-wide stats (min/avg/max) stay black on purpose — they describe the whole
+  // class, not this student's result. 'sn' is a row index, not a mark.
+  const FAIL_RED_COLS = new Set(['seq1', 'seq2', 'score', 'grade', 'coef', 'credit', 'gradePoint', 'weighted'])
+
   const resolveStat = (field: string) => {
     const total = entries.reduce((s, e) => s + e.score, 0)
     if (field === 'total')          return String(total)
@@ -815,16 +839,16 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       }
       const evalForGpa = (gpa: number): string =>
         classificationForGpa(gpa, classBands).toUpperCase()
-      // University only: a resat exam mark shows with an asterisk (* = mark obtained after
-      // resit); the failing (F-grade) total mark prints in red unless the admin turned that off.
-      const highlightRed = cfg.highlightFailingRed !== false
+      // University only: a resat exam mark shows with an asterisk (* = mark obtained after resit).
       const renderSeq2 = (e?: PrintEntry): React.ReactNode =>
         e?.resitScore != null ? <>{e.resitScore}<sup>*</sup></> : (e?.seq2Score ?? '—')
-      const renderScore = (e?: PrintEntry): React.ReactNode => {
-        const isFail = school.type === 'UNIVERSITY' && highlightRed && !!e && entryGrade(e, bands) === 'F'
-        return <span style={isFail ? { color: '#dc2626' } : undefined}>{e?.score ?? 0}{e?.resitScore != null ? <sup>*</sup> : null}</span>
-      }
-      const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
+      const renderScore = (e?: PrintEntry): React.ReactNode =>
+        <>{e?.score ?? 0}{e?.resitScore != null ? <sup>*</sup> : null}</>
+
+      const paintFail = (k: string, e: PrintEntry | undefined, node: React.ReactNode): React.ReactNode =>
+        FAIL_RED_COLS.has(k) && isFailedEntry(e) ? <span style={{ color: FAIL_RED }}>{node}</span> : node
+
+      const cellValue = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
         switch (k) {
           case 'subject':      return subj.name
           case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
@@ -845,6 +869,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           default: return ''
         }
       }
+      const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode =>
+        paintFail(k, e, cellValue(k, subj, e, i))
 
       // ── Template mode: SpreadsheetTable with _isDataRow repeat ───────────────
       if (s.template) {
@@ -857,26 +883,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         const resolveMarksField = (field: string, subj: PrintSubject, e: PrintEntry | undefined, si: number): React.ReactNode => {
           if (!field.startsWith('m:')) return resolveStat(field)
           const k = field.slice(2)
-          switch (k) {
-            case 'sn':           return String(si + 1)
-            case 'subject':      return subj.name
-            case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
-            case 'seq1':         return e?.seq1Score ?? '—'
-            case 'seq2':         return renderSeq2(e)
-            case 'score':        return renderScore(e)
-            case 'grade':        return entryGrade(e, bands)
-            case 'remarks':      return entryRemark(e, bands)
-            case 'code':         return courseCode(subj, si)
-            case 'credit':       return subj.credit ?? '—'
-            case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
-            case 'weighted':     { const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1) }
-            case 'evaluation':   { const gp = gradePointOf(e); return gp == null ? '—' : evalForGpa(gp) }
-            case 'juryDecision': return !e ? 'FAIL' : juryDecisionForScore(e.score, bands)
-            case 'min':          { const st = subjectStats[subj.id]; return st != null ? st.min.toFixed(1) : '—' }
-            case 'avg':          { const st = subjectStats[subj.id]; return st != null ? st.avg.toFixed(1) : '—' }
-            case 'max':          { const st = subjectStats[subj.id]; return st != null ? st.max.toFixed(1) : '—' }
-            default: return ''
-          }
+          // Same per-subject vocabulary as the non-template table above, plus 'sn'
+          // (a row counter, which only the spreadsheet templates offer).
+          const value = k === 'sn' ? String(si + 1) : cellValue(k, subj, e, si)
+          return paintFail(k, e, value)
         }
 
         // Pixel widths for known narrow fields; flex fields (subject, subject_fr) get no width
@@ -1275,14 +1285,19 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           <tbody>
             {resitEntries.map(e => {
               const subj = subjList.find(x => x.id === e.subjectId)
+              // A resit can still fall short: `score` here is the post-resit mark, so a
+              // course that failed even after resitting prints this row's figures red,
+              // exactly as the marks table above does. The course name stays black.
+              const failed = isFailedEntry(e)
+              const num = failed ? { ...resitTd, color: FAIL_RED } : resitTd
               return (
                 <tr key={e.subjectId}>
                   <td style={{ ...resitTd, textAlign: 'left' }}>{subj?.name ?? '—'}</td>
-                  <td style={resitTd}>{e.seq1Score ?? '—'}</td>
-                  <td style={resitTd}>{e.seq2Score ?? '—'}</td>
-                  <td style={resitTd}>{e.resitScore}<sup>*</sup></td>
-                  <td style={{ ...resitTd, fontWeight: 'bold' }}>{e.score}</td>
-                  <td style={{ ...resitTd, fontWeight: 'bold', color }}>{entryGrade(e, bands)}</td>
+                  <td style={num}>{e.seq1Score ?? '—'}</td>
+                  <td style={num}>{e.seq2Score ?? '—'}</td>
+                  <td style={num}>{e.resitScore}<sup>*</sup></td>
+                  <td style={{ ...num, fontWeight: 'bold' }}>{e.score}</td>
+                  <td style={{ ...resitTd, fontWeight: 'bold', color: failed ? FAIL_RED : color }}>{entryGrade(e, bands)}</td>
                 </tr>
               )
             })}

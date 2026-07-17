@@ -61,6 +61,10 @@ export default function AnnualTranscriptPage() {
         const finalConfig: TemplateConfig = hasTranscriptSections
           ? (savedT as TemplateConfig)
           : { ...getDefaultTranscriptLayout(sType), ...(primaryColor ? { primaryColor } : {}), layoutType: 'transcript' }
+        // "Failing marks in red" is a school-wide policy stored at the top level, not
+        // part of the transcript design — read it from there so the transcript matches
+        // the report card (see the designer's handleSave).
+        finalConfig.highlightFailingRed = saved?.highlightFailingRed ?? true
         setConfig(finalConfig)
       })
       .catch(() => setError('Failed to load transcript.'))

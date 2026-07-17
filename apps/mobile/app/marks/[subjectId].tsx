@@ -11,10 +11,14 @@ import {
   getClassOverview, getReportCard, createReportCard,
   saveEntries, getSubjects,
 } from '@/lib/api/reportcards'
-import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { getGradingScale, gradeFromScore, isFailingMark, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { seqFull, seqShort } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
+
+// University marking split: CA out of 30, exam out of 70, course out of 100.
+const EXAM_MAX = 70
+const COURSE_MAX = 100
 
 interface Row {
   studentId: string
@@ -23,7 +27,11 @@ interface Row {
   reportCardId: string | null
   score: string
   otherSeqScore: number | null
+  /** Not editable, for ANY reason (published, or not eligible for this resit). */
   isLocked: boolean
+  /** Locked specifically by publishing — the only case an admin can unlock. Kept apart
+   *  from isLocked so the banner can't blame publishing for a row that simply passed. */
+  isPublished?: boolean
   resitEligible?: boolean
 }
 
@@ -84,8 +92,14 @@ export default function MarksEntryScreen() {
             if (entry) {
               if (isResit) {
                 score = entry.resitScore != null ? String(entry.resitScore) : ''
-                const base = entry.seq1Score != null && entry.seq2Score != null ? entry.seq1Score + entry.seq2Score : null
-                resitEligible = base != null && gradeFromScore(base, 100, scaleData.ranges).grade === 'F'
+                // Same rule as the web marks grid: a resit re-sits the EXAM only, so it's
+                // offered when the student failed the exam AND failed the course overall.
+                // Judged on the ORIGINAL CA+Exam so the row stays editable once the resit
+                // mark is in, and via the school's own scale rather than a hardcoded 'F'.
+                const ca = entry.seq1Score, exam = entry.seq2Score
+                resitEligible = ca != null && exam != null
+                  && isFailingMark(exam, EXAM_MAX, scaleData.ranges)
+                  && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
               } else {
                 score = seqIndex === 0
                   ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
@@ -101,6 +115,7 @@ export default function MarksEntryScreen() {
           studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null,
           score, otherSeqScore,
           isLocked: (isPublished && !grantedToMe) || (isResit && !resitEligible),
+          isPublished: isPublished && !grantedToMe,
           resitEligible,
         }
       })
@@ -123,7 +138,10 @@ export default function MarksEntryScreen() {
   }
 
   const editableRows = rows.filter(r => !r.isLocked)
-  const publishedCount = rows.length - editableRows.length
+  // Only rows locked BY PUBLISHING. Counting every locked row told teachers on the Resit
+  // tab that N cards were published and to contact their admin, when those rows were
+  // really just students who passed and were never resit-eligible.
+  const publishedCount = rows.filter(r => r.isPublished).length
 
   const handleSaveAll = async () => {
     setSaving(true)
@@ -248,7 +266,7 @@ export default function MarksEntryScreen() {
         {isResit ? (
           <View style={s.resitBar}>
             <Text style={s.resitBarText}>
-              {t('Only students who failed this course (CA + Exam = F) are editable here. Enter their new exam mark from the resit.')}
+              {t('Only students who failed the exam and failed the course overall can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is.')}
             </Text>
           </View>
         ) : (
