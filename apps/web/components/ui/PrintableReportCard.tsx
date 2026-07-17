@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
@@ -16,8 +16,8 @@ export interface PrintEntry {
 interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
-  student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string }
+  school: { name: string; type: string; logo?: string | null; stamp?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
+  student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; dateOfBirth?: string | null; placeOfBirth?: string | null }
   term: { name: string; session: string }
   subjects: PrintSubject[]
   entries: PrintEntry[]
@@ -39,10 +39,37 @@ export interface PrintableReportCardProps {
   // `transcriptSemester` set (2 semesters for a university, 3 terms otherwise).
   // Absent for every other document type/layout.
   transcriptSemesters?: Partial<Record<TranscriptPeriod, TranscriptSemesterData>>
+  /** Which copy is being produced: the sealed OFFICIAL one, or the STUDENT copy handed
+   *  out at the end of a term. Chosen per print, never saved into the design. Defaults
+   *  to 'official' = show everything, so callers that don't care are unaffected. */
+  variant?: DocVariant
 }
 
 // Colour a failed subject's marks print in when the admin enables it school-wide.
 const FAIL_RED = '#dc2626'
+
+const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const MONTHS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
+
+/**
+ * A birth date, spelled out: "12 May 2003". Deliberately not numeric — these documents go
+ * to WES and embassies, where 12/05/2003 is read as 5 December by half the world.
+ *
+ * Parsed from the stored "YYYY-MM-DD" text by hand, never via `new Date(...)`: that reads
+ * the string as UTC midnight and then prints the PREVIOUS day for any viewer west of UTC,
+ * which would silently misstate a date of birth on an official transcript.
+ * Anything unrecognised is passed through verbatim rather than mangled.
+ */
+function formatBirthDate(value?: string | null, lang: 'EN' | 'FR' = 'EN'): string {
+  const raw = (value ?? '').trim()
+  if (!raw) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw)
+  if (!m) return raw
+  const [, year, mm, dd] = m
+  const month = (lang === 'FR' ? MONTHS_FR : MONTHS_EN)[Number(mm) - 1]
+  if (!month) return raw
+  return `${Number(dd)} ${month} ${year}`
+}
 
 function ordinalPos(n: number): string {
   const s = ['th', 'st', 'nd', 'rd']
@@ -66,9 +93,11 @@ const cell = (extra?: React.CSSProperties): React.CSSProperties => ({
   padding: '6px 10px', borderBottom: '1px solid #ddd', ...extra,
 })
 
-function Watermark({ cfg, schoolLogo, schoolName }: { cfg: any; schoolLogo?: string | null; schoolName?: string }) {
+function Watermark({ cfg, schoolLogo, schoolName, variant = 'official' }: { cfg: any; schoolLogo?: string | null; schoolName?: string; variant?: DocVariant }) {
   const wm = cfg.watermark
   if (!wm?.enabled) return null
+  // Scoped watermarks (an UNOFFICIAL stamp across the student copy) skip the other copy.
+  if (wm.showOn && wm.showOn !== variant) return null
   const opacity = (wm.opacity ?? 8) / 100
   const rotation = wm.rotation ?? -45
   const x = wm.x ?? 50
@@ -596,6 +625,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, classAverage, annualAverage, annualPosition, annualClassSize, cfg } = props
   const lang: 'EN' | 'FR' = school.language === 'FR' ? 'FR' : 'EN'
+  const variant: DocVariant = props.variant ?? 'official'
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
   const rgb = hexToRgb(color)
@@ -607,6 +637,11 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       'student.classLevel': student.classLevel,
       'student.guardianName': student.guardianName || '—',
       'student.gender': student.gender || '—',
+      // Birth details are optional, so an unknown one prints BLANK rather than the '—'
+      // used above: a dash reads as "none", and a transcript should not assert that a
+      // student has no birthplace just because nobody typed it in.
+      'student.dateOfBirth': formatBirthDate(student.dateOfBirth, lang),
+      'student.placeOfBirth': student.placeOfBirth || '',
       'term.name': term.name,
       'term.session': term.session,
       'school.name': school.name,
@@ -678,6 +713,26 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     return '—'
   }
 
+  // Marks the OFFICIAL copy under the document title, on every layout and school type.
+  // It is the answer to "how do I know this is the official one just by looking at it",
+  // so it is automatic and not editable: a design must not be able to omit it or word it
+  // into meaning the opposite. The stamp is separate, additional proof.
+  //
+  // The student copy is deliberately left BLANK rather than stamped "not official": the
+  // everyday report card handed to a student is the ordinary document and shouldn't be
+  // branded as a lesser one. Absence of the note is what makes it unofficial.
+  const variantLabel = (align: 'left' | 'center' = 'center') => {
+    if (variant !== 'official') return null
+    return (
+      <p style={{
+        margin: '4px 0 0', fontSize: 9.5, fontWeight: 'bold', letterSpacing: 2,
+        textTransform: 'uppercase', textAlign: align, color,
+      }}>
+        {t('Official Copy')}
+      </p>
+    )
+  }
+
   const renderSec = (sec: LayoutSection) => {
     if (sec.type === 'header') {
       const s = sec as HeaderSec
@@ -715,6 +770,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
               </div>
             )}
             {s.reportTitle && <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '10px 0 0', letterSpacing: 3, color, textAlign: 'center' }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />}
+            {variantLabel('center')}
           </div>
         )
       }
@@ -725,6 +781,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           <h1 style={{ fontSize: 22, fontWeight: 'bold', margin: '0 0 4px', color: s.schoolNameColor || color }}>{school.name}</h1>
           {s.subtitle && <p style={{ margin: '0 0 6px', fontSize: 12, color: '#555' }} dangerouslySetInnerHTML={{ __html: s.subtitle }} />}
           <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '8px 0 0', letterSpacing: 3, color }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />
+          {variantLabel('left')}
           {contactLineEl}
         </div>
       )
@@ -1115,6 +1172,26 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       )
     }
 
+    if (sec.type === 'stamp') {
+      const s = sec as StampSec
+      // A school with no stamp prints nothing here, not an empty placeholder box: an
+      // official copy is already marked by the "Official Copy" note under the title, and
+      // a dashed box on a real document reads as a printing fault. Schools that stamp by
+      // hand simply stamp the page. (The designer still shows a placeholder, so the
+      // section can be found and uploaded to.)
+      if (!school.stamp) return null
+      const size = s.size || 110
+      const justify = s.align === 'left' ? 'flex-start' : s.align === 'right' ? 'flex-end' : 'center'
+      return (
+        <div style={{ display: 'flex', justifyContent: justify, padding: '8px 0', marginBottom: 8 }}>
+          <div style={{ textAlign: 'center' }}>
+            <img src={school.stamp} alt="" style={{ width: size, height: size, objectFit: 'contain', display: 'block' }} />
+            {s.label ? <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{t(s.label)}</div> : null}
+          </div>
+        </div>
+      )
+    }
+
     if (sec.type === 'grading_legend') {
       const s = sec as GradingLegendSec
       // University grading scales carry a gradePoint (/4.0) per band; a plain
@@ -1310,8 +1387,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: 40, maxWidth: 800, margin: '0 auto', color: '#111', fontSize: 13, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
-      {sections.map(sec => {
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} variant={variant} />
+      {/* Sections scoped to the OTHER copy are dropped entirely — this is what makes one
+          saved design print both the sealed official document and the student copy. */}
+      {sections.filter(sec => sectionShowsOn(sec, variant)).map(sec => {
         const ts = sec.type === 'marks_table' ? (sec as MarksTableSec).transcriptSemester : undefined
         const resitSubjects = ts ? (props.transcriptSemesters?.[ts]?.subjects ?? []) : subjects
         const resitEntries  = ts ? (props.transcriptSemesters?.[ts]?.entries ?? []) : entries

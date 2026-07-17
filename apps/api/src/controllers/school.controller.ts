@@ -66,6 +66,39 @@ export const uploadLogo = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// Official stamp/seal. Same flow as the logo, but it prints only on OFFICIAL copies
+// (placed via a `stamp` section in the designer), which is what distinguishes a copy
+// the school seals and sends itself from the one handed to a student.
+export const uploadStamp = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    if (!req.file) { res.status(400).json({ message: 'No file uploaded' }); return }
+
+    const school = await prisma.school.findUnique({ where: { id: schoolId } })
+    if (school?.stamp) deleteFile(school.stamp)
+
+    const url = `/uploads/${req.file.filename}`
+    const updated = await prisma.school.update({ where: { id: schoolId }, data: { stamp: url } })
+    res.json({ message: 'Stamp uploaded', stamp: updated.stamp, school: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const removeStamp = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const school = await prisma.school.findUnique({ where: { id: schoolId } })
+    if (school?.stamp) deleteFile(school.stamp)
+    await prisma.school.update({ where: { id: schoolId }, data: { stamp: null } })
+    res.json({ message: 'Stamp removed' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const uploadCover = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!

@@ -17,6 +17,9 @@ interface School {
   language?: string
   subdomain: string
   logo: string | null
+  /** Official stamp/seal, printed on OFFICIAL copies only via the designer's stamp
+   *  section. Null when the school stamps its printed pages by hand instead. */
+  stamp?: string | null
   coverImage: string | null
   coverImages: string[]
   repeatThreshold?: number | null

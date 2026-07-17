@@ -11,7 +11,7 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
-import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfig, DocVariant } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
 import { gradeFromScore } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
@@ -37,7 +37,7 @@ interface ReportCard {
   remarksEditGrantedTo: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
-  school: { name: string; type: string; language?: string; logo?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
+  school: { name: string; type: string; language?: string; logo?: string | null; stamp?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
 
@@ -78,22 +78,34 @@ export default function ReportCardDetailPage() {
   const [teachers, setTeachers] = useState<{ id: string; name: string; role: string }[]>([])
   const [grantMarksUserId, setGrantMarksUserId] = useState('')
   const [grantRemarksUserId, setGrantRemarksUserId] = useState('')
+  // Which copy prints: the student copy handed out at the end of the term, or the
+  // official one the school seals and sends itself. Chosen per print, never saved.
+  const [variant, setVariant] = useState<DocVariant>('student')
+  const [pendingPrint, setPendingPrint] = useState(false)
 
-  const handlePrint = useCallback(() => {
+  // Printing runs from an effect, not the click: picking a copy has to re-render the
+  // print portal first, or window.print() would capture the previous one.
+  useEffect(() => {
+    if (!pendingPrint) return
     const el = document.getElementById('report-card-printable')
-    if (!el) return
+    if (!el) { setPendingPrint(false); return }
     const imgs = Array.from(el.getElementsByTagName('img'))
-    const doPrint = () => window.print()
+    const doPrint = () => { window.print(); setPendingPrint(false) }
     if (imgs.length === 0) {
-      setTimeout(doPrint, 200)
-    } else {
-      let done = 0
-      imgs.forEach(img => {
-        const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
-        if (img.complete) tick()
-        else { img.onload = tick; img.onerror = tick }
-      })
+      const t = setTimeout(doPrint, 200)
+      return () => clearTimeout(t)
     }
+    let done = 0
+    imgs.forEach(img => {
+      const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
+      if (img.complete) tick()
+      else { img.onload = tick; img.onerror = tick }
+    })
+  }, [pendingPrint])
+
+  const handlePrint = useCallback((v: DocVariant) => {
+    setVariant(v)
+    setPendingPrint(true)
   }, [])
 
   const fetchData = useCallback(async () => {
@@ -394,14 +406,24 @@ export default function ReportCardDetailPage() {
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground bg-muted border border-border px-3 py-2 rounded-lg" title="Printing has been disabled for this term by your administrator">
                     <Printer size={14} /> {tr('Printing disabled')}
                   </span>
-                ) : (
+                ) : (<>
+                  {/* Both copies stay available: the student copy is the everyday one,
+                      the official is sealed and sent by the school itself. */}
                   <button
-                    onClick={handlePrint}
+                    onClick={() => handlePrint('student')}
                     className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    title={tr('The copy handed to students at the end of the term')}
                   >
-                    <Printer size={14} /> {tr('Print / Save PDF')}
+                    <Printer size={14} /> {tr('Print Student Copy')}
                   </button>
-                )
+                  <button
+                    onClick={() => handlePrint('official')}
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    title={tr('The sealed copy the school sends out itself')}
+                  >
+                    <Printer size={14} /> {tr('Print Official')}
+                  </button>
+                </>)
               )}
             </div>
           ) : (
@@ -737,6 +759,7 @@ export default function ReportCardDetailPage() {
             config={templateConfig}
             gradeBands={gradingRanges}
             classificationBands={classificationBands}
+            variant={variant}
             cgpa={studentCgpa ?? undefined}
             subjectStats={subjectStats}
           />

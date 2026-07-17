@@ -6,7 +6,7 @@ import { getStudentTranscriptApi, StudentTranscript, TranscriptReportCard } from
 import PrintableReportCard, { PrintEntry, TranscriptSemesterData } from '@/components/ui/PrintableReportCard'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { ArrowLeft, Printer } from 'lucide-react'
-import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor, DocVariant } from '@/lib/api/reportCardTemplate'
 
 // Build a per-semester bundle (subjects + entries, PrintableReportCard's shapes) from
 // one transcript report card. `subjects` is derived from the entries themselves since
@@ -33,6 +33,11 @@ export default function AnnualTranscriptPage() {
   const [error, setError] = useState('')
   const [config, setConfig] = useState<TemplateConfig | null>(null)
   const [printing, setPrinting] = useState(false)
+  // Which copy is on screen and, therefore, what prints. Defaults to the student copy:
+  // handing one to a student is the everyday case, and an official copy is the
+  // deliberate act (it gets sealed and sent), so it should be the one you opt into.
+  const [variant, setVariant] = useState<DocVariant>('student')
+  const [pendingPrint, setPendingPrint] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
 
   const session = searchParams.get('session') ?? undefined
@@ -71,21 +76,27 @@ export default function AnnualTranscriptPage() {
       .finally(() => setLoading(false))
   }, [studentId, session])
 
-  const handlePrint = () => {
+  // Print runs from an effect rather than straight out of the click: choosing a copy has
+  // to re-render the preview and the print portal FIRST, or window.print() would capture
+  // the copy that was on screen a moment ago.
+  useEffect(() => {
+    if (!pendingPrint) return
     setPrinting(true)
     const portal = document.querySelector('.transcript-print-portal')
     const imgs = portal ? Array.from(portal.getElementsByTagName('img')) : []
-    const doPrint = () => { window.print(); setPrinting(false) }
+    const doPrint = () => { window.print(); setPrinting(false); setPendingPrint(false) }
     if (imgs.length === 0) {
-      setTimeout(doPrint, 200)
-    } else {
-      let done = 0
-      imgs.forEach((img) => {
-        const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
-        if (img.complete) tick(); else { img.onload = tick; img.onerror = tick }
-      })
+      const id = setTimeout(doPrint, 200)
+      return () => clearTimeout(id)
     }
-  }
+    let done = 0
+    imgs.forEach((img) => {
+      const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
+      if (img.complete) tick(); else { img.onload = tick; img.onerror = tick }
+    })
+  }, [pendingPrint])
+
+  const handlePrint = (v: DocVariant) => { setVariant(v); setPendingPrint(true) }
 
   if (loading) return <div className="text-center py-16 text-muted-foreground text-sm">Loading transcript…</div>
   if (error || !data || !config) return (
@@ -139,6 +150,10 @@ export default function AnnualTranscriptPage() {
   const printableProps = {
     school: {
       name: data.school.name, type: data.school.type ?? 'UNIVERSITY', logo: data.school.logo, language: data.school.language ?? undefined,
+      // The official seal. This object is a hand-listed copy rather than a spread, so a
+      // field left out here is simply absent at print time however correct everything
+      // else is: that is exactly how the stamp silently never rendered on transcripts.
+      stamp: data.school.stamp,
       email: data.school.email, phone: data.school.phone, address: data.school.address, website: data.school.website,
       authorizationNumber: data.school.authorizationNumber,
       officialLeftTextEn: data.school.officialLeftTextEn, officialLeftTextFr: data.school.officialLeftTextFr,
@@ -156,31 +171,66 @@ export default function AnnualTranscriptPage() {
     gradeBands: data.gradingScale,
     classificationBands: data.classificationBands,
     transcriptSemesters: periodData,
+    variant,
   }
 
   return (
     <div>
 {/* Toolbar */}
-      <div className="flex items-center justify-between mb-6 print:hidden">
+      {/* flex-wrap: the row holds the student name plus both print buttons, and without it
+          a long name pushed the last button off the edge on a narrower window. */}
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-6 print:hidden">
         <button onClick={() => router.back()} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition">
           <ArrowLeft size={16} /> Back
         </button>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
           <span className="text-sm text-muted-foreground">{data.student.name} — {data.session}</span>
+          {/* Look before you print. Previously the only way to see the official copy was to
+              press Print, which switched the preview and opened the dialog in one go, so
+              you never got to check the seal or the Official Copy note first. */}
+          {!printingDisabled && (
+            <div className="flex items-center gap-1.5 border border-border rounded-lg p-0.5">
+              {(['student', 'official'] as DocVariant[]).map(v => (
+                <button key={v} onClick={() => setVariant(v)}
+                  disabled={printing}
+                  title={v === 'official'
+                    ? 'Preview the sealed copy the school sends out itself'
+                    : 'Preview the copy handed to students at the end of the term'}
+                  className={`text-xs px-2.5 py-1 rounded-md transition disabled:opacity-50 ${variant === v
+                    ? 'bg-primary text-white font-medium'
+                    : 'text-muted-foreground hover:text-foreground'}`}>
+                  {v === 'official' ? 'Official' : 'Student copy'}
+                </button>
+              ))}
+            </div>
+          )}
           {printingDisabled ? (
             <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground bg-muted border border-border px-3 py-2 rounded-lg" title="Printing has been disabled for this period by your administrator">
               <Printer size={14} /> Printing disabled
             </span>
-          ) : (
+          ) : (<>
+            {/* Both copies are always available: the student copy is what students get at
+                the end of the term, the official one is sealed and sent by the school
+                itself. Clicking either switches the preview to it and prints that. */}
             <button
-              onClick={handlePrint}
+              onClick={() => handlePrint('student')}
               disabled={printing}
-              className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition disabled:opacity-50"
+              className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition disabled:opacity-50"
+              title="The copy handed to students at the end of the term"
             >
               <Printer size={15} />
-              {printing ? 'Loading…' : 'Print Transcript'}
+              {printing && variant === 'student' ? 'Loading…' : 'Print Student Copy'}
             </button>
-          )}
+            <button
+              onClick={() => handlePrint('official')}
+              disabled={printing}
+              className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition disabled:opacity-50"
+              title="The sealed copy the school sends out itself"
+            >
+              <Printer size={15} />
+              {printing && variant === 'official' ? 'Loading…' : 'Print Official'}
+            </button>
+          </>)}
         </div>
       </div>
 

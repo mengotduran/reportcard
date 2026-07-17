@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, type LucideIcon } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, type LucideIcon } from 'lucide-react'
 import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
@@ -75,6 +75,8 @@ export default function SettingsPage() {
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const logoRef = useRef<HTMLInputElement>(null)
+  const stampRef = useRef<HTMLInputElement>(null)
+  const [uploadingStamp, setUploadingStamp] = useState(false)
   const coverRef = useRef<HTMLInputElement>(null)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
@@ -148,14 +150,16 @@ export default function SettingsPage() {
     } finally { setBackingUp(false) }
   }
 
-  const handleUpload = async (file: File, field: 'logo' | 'cover', setLoading: (v: boolean) => void) => {
+  const handleUpload = async (file: File, field: 'logo' | 'cover' | 'stamp', setLoading: (v: boolean) => void) => {
     setLoading(true)
     try {
       const formData = new FormData()
       formData.append(field, file)
       const res = await api.post(`/school/${field}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
       updateSchool(res.data.school)
-      showToast(field === 'logo' ? t('Logo updated successfully') : t('Cover image updated successfully'))
+      showToast(field === 'logo' ? t('Logo updated successfully')
+        : field === 'stamp' ? t('Official stamp updated successfully')
+        : t('Cover image updated successfully'))
     } catch {
       showToast(t('Upload failed. Make sure the file is an image under 5MB.'), 'error')
     } finally { setLoading(false) }
@@ -184,6 +188,14 @@ export default function SettingsPage() {
     } catch {
       showToast(t('Failed to remove image'), 'error')
     } finally { setRemovingIdx(null) }
+  }
+
+  const handleRemoveStamp = async () => {
+    try {
+      await api.delete('/school/stamp')
+      updateSchool({ ...school!, stamp: null })
+      showToast(t('Official stamp removed'))
+    } catch { showToast(t('Failed to remove stamp'), 'error') }
   }
 
   const handleRemoveLogo = async () => {
@@ -300,6 +312,7 @@ export default function SettingsPage() {
   }
 
   const logoUrl = school?.logo ?? null
+  const stampUrl = school?.stamp ?? null
   const coverImages: string[] = (school as any)?.coverImages ?? []
 
   const initials = school?.name?.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase() ?? 'SC'
@@ -564,6 +577,51 @@ export default function SettingsPage() {
                   <input
                     ref={logoRef} type="file" accept="image/*" className="hidden"
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, 'logo', setUploadingLogo); e.target.value = '' }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Official Stamp / Seal — prints on OFFICIAL copies only, via the stamp
+                section in Report Card Design. Not the logo: the logo is the letterhead
+                mark on every copy, the stamp is what makes a copy official. */}
+            <div className={CARD}>
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0">
+                  {stampUrl ? (
+                    <img src={stampUrl} alt="Official stamp" className="w-20 h-20 rounded-2xl object-contain border border-border bg-white p-1" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-2xl border border-dashed border-border flex items-center justify-center">
+                      <Stamp size={22} className="text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-foreground">{t('Official Stamp / Seal')}</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {t('Prints on official copies only, never on student copies. Add a Stamp section in Report Card Design to place it. Leave this empty to stamp printed pages by hand. Use a PNG with a transparent background, max 5MB.')}
+                  </p>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => stampRef.current?.click()}
+                      disabled={uploadingStamp}
+                      className="flex items-center gap-2 bg-primary text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+                    >
+                      <Upload size={14} />
+                      {uploadingStamp ? t('Uploading...') : stampUrl ? t('Change Stamp') : t('Upload Stamp')}
+                    </button>
+                    {stampUrl && (
+                      <button
+                        onClick={handleRemoveStamp}
+                        className="flex items-center gap-2 border border-destructive/20 text-destructive px-3 py-1.5 rounded-lg text-sm hover:bg-destructive/10 transition"
+                      >
+                        <Trash2 size={14} /> {t('Remove')}
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={stampRef} type="file" accept="image/*" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, 'stamp', setUploadingStamp); e.target.value = '' }}
                   />
                 </div>
               </div>

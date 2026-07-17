@@ -1306,7 +1306,8 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
         orderBy: { term: { startDate: 'asc' } },
       }),
       prisma.gradingScale.findUnique({ where: { schoolId } }),
-      prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, logo: true, language: true, type: true, email: true, phone: true, address: true, website: true, authorizationNumber: true, officialLeftTextEn: true, officialLeftTextFr: true, officialRightTextEn: true, officialRightTextFr: true } }),
+      // `stamp` prints on official copies via the designer's stamp section.
+      prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, logo: true, stamp: true, language: true, type: true, email: true, phone: true, address: true, website: true, authorizationNumber: true, officialLeftTextEn: true, officialLeftTextFr: true, officialRightTextEn: true, officialRightTextFr: true } }),
       prisma.student.findFirst({
         where: { id: studentId, schoolId },
         select: { classLevel: true },

@@ -34,7 +34,10 @@ export interface TemplateConfig {
   // background color of the card paper
   bgColor?: string
   // watermark
-  watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number }
+  // `showOn` scopes the watermark to one printed copy, the way a section's does — it is
+  // what stamps UNOFFICIAL across a student copy while the sealed official stays clean.
+  // Undefined = both copies, so existing watermarks are unaffected.
+  watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
   // top-level layout type — 'standard' (section-based designer), 'transcript' (annual
   // transcript style, university only), or 'ledger' (totals-in-table style, non-university only)
   layoutType?: 'standard' | 'transcript' | 'ledger'
@@ -454,6 +457,13 @@ export interface SummarySec    { id: string; type: 'summary';      boxes: Summar
 export interface RemarksSec    { id: string; type: 'remarks';      label: string; placeholderColor?: string }
 export interface SignaturesSec { id: string; type: 'signatures';   lines: SignatureLine[] }
 export interface TextBlockSec  { id: string; type: 'text_block';   content: string; align: 'left'|'center'|'right' }
+/**
+ * The school's official stamp/seal (School.stamp, uploaded in School Settings).
+ * Nothing here decides whether it prints: mark the section `showOn: 'official'` so it
+ * appears on the sealed copy and never on the student's. Prints nothing when the school
+ * hasn't uploaded a stamp, leaving room to stamp the page by hand instead.
+ */
+export interface StampSec      { id: string; type: 'stamp';        size: number; align: 'left'|'center'|'right'; label?: string }
 export interface DividerSec    { id: string; type: 'divider';      style: 'solid'|'dashed' }
 // University transcript footer: the grading system, degree classification and a
 // legend of abbreviations. Grade rows come from the school's GPA grading scale.
@@ -473,9 +483,35 @@ export interface GradingLegendSec {
   rightLayout?: 'columns' | 'rows'
 }
 
-export type LayoutSection =
+/**
+ * Which printed copy a document is: the OFFICIAL one the school seals and sends on
+ * itself (WES and the like), or the STUDENT copy handed out at the end of a term.
+ *
+ * Deliberately NOT called "official header" — `HeaderSec.officialHeader` already means
+ * the Cameroon letterhead block and has nothing to do with this.
+ *
+ * The variant is chosen when PRINTING, never saved into the design: a school needs both
+ * copies available at once, so it can't be a property of the one saved layout.
+ */
+export type DocVariant = 'official' | 'student'
+
+/** Per-section variant scoping. Undefined means the section prints on BOTH copies, so
+ *  an untouched design behaves exactly as it did before this existed. */
+export interface SectionVariant {
+  /** Restrict this section to one copy (e.g. the registrar's signature and school seal
+   *  on the official only; a "not valid for official use" note on the student copy). */
+  showOn?: DocVariant
+}
+
+/** Does this section print on the copy being produced? */
+export function sectionShowsOn(sec: SectionVariant, variant: DocVariant): boolean {
+  return !sec.showOn || sec.showOn === variant
+}
+
+export type LayoutSection = (
   | HeaderSec | StudentInfoSec | MarksTableSec | SummarySec
-  | RemarksSec | SignaturesSec | TextBlockSec | DividerSec | GradingLegendSec
+  | RemarksSec | SignaturesSec | TextBlockSec | DividerSec | GradingLegendSec | StampSec
+) & SectionVariant
 
 // Degree classification by CGPA (mirrors classificationForGpa in lib/api/gradingScale).
 export const CLASSIFICATION_BANDS: { min: number; max: number; label: string }[] = [
@@ -769,6 +805,9 @@ export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig 
         { id: uid('r'), label: 'Matricule No.', field: 'student.studentId' },
         { id: uid('r'), label: 'Programme', field: 'student.classLevel' },
         { id: uid('r'), label: 'Sex', field: 'student.gender' },
+        // Optional per student: blank when not recorded (see formatBirthDate/resolveField).
+        { id: uid('r'), label: 'Date of Birth', field: 'student.dateOfBirth' },
+        { id: uid('r'), label: 'Place of Birth', field: 'student.placeOfBirth' },
         { id: uid('r'), label: 'Academic Year', field: 'term.session' },
       ],
     },
@@ -882,6 +921,9 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
       { label: 'Matricule No.', field: 'student.studentId' },
       { label: 'Programme', field: 'student.classLevel' },
       { label: 'Sex / Gender', field: 'student.gender' },
+      // Optional per student: blank when not recorded.
+      { label: 'Date of Birth', field: 'student.dateOfBirth' },
+      { label: 'Place of Birth', field: 'student.placeOfBirth' },
       { label: 'Semester', field: 'term.name' },
       { label: 'Academic Year', field: 'term.session' },
     ],

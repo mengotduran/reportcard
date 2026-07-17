@@ -2,19 +2,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
+import api from '@/lib/api/client'
 import {
   getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
-  RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
+  RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec,
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
   SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
   officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
   TranscriptPeriod, transcriptPeriodsFor, transcriptPeriodLabel,
+  DocVariant, sectionShowsOn,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor, LayoutTemplate } from 'lucide-react'
 import { useT } from '@/lib/i18n'
@@ -101,6 +104,9 @@ function resolveField(field: string, schoolName: string, schoolType?: string) {
     'student.classLevel':  stu.classLevel,
     'student.guardianName': stu.guardianName,
     'student.gender':      isUni ? SD_UNI.student.gender : '—',
+    // Sample values: these are optional per student, so a real card may print them blank.
+    'student.dateOfBirth': '12 May 2003',
+    'student.placeOfBirth': 'Bamenda',
     'term.name':           term.name,
     'term.session':        term.session,
     'school.name':         schoolName,
@@ -275,10 +281,17 @@ function ColorableCell({ sampleText, color, onColorChange, style }: {
 }
 
 // ── Section wrapper (drag + up/down + delete) ─────────────────────────────────
-function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, onDrop, dragging, children }: {
+function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, onDrop, dragging, showOn, onShowOn, hiddenHere, children }: {
   index: number; total: number; onMove: (d: 'up'|'down') => void
   onDelete: () => void; onDragStart: () => void; onDragOver: (e: React.DragEvent) => void
-  onDrop: () => void; dragging: boolean; children: React.ReactNode
+  onDrop: () => void; dragging: boolean
+  /** Which printed copy this section is restricted to (undefined = both). */
+  showOn?: DocVariant; onShowOn?: (v: DocVariant | undefined) => void
+  /** True when the section is scoped to the copy NOT currently being previewed: it stays
+   *  editable but is dimmed and badged, so the canvas shows what the other copy leaves out
+   *  instead of the section vanishing and looking deleted. */
+  hiddenHere?: boolean
+  children: React.ReactNode
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   return (
@@ -316,7 +329,33 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
           <Trash2 size={12} />
         </button>
       </div>
-      {children}
+
+      {/* Which printed copy this section belongs to. Right-hand side so it never collides
+          with the reorder/delete toolbar on the left. */}
+      {onShowOn && (
+        <div className="absolute -right-44 top-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ width: 168 }}>
+          <select
+            value={showOn ?? 'both'}
+            onChange={e => onShowOn(e.target.value === 'both' ? undefined : e.target.value as DocVariant)}
+            className="text-[10px] border border-border rounded bg-card text-muted-foreground px-1 py-0.5 cursor-pointer"
+            title="Which printed copy this section appears on"
+          >
+            <option value="both">Both copies</option>
+            <option value="official">Official only</option>
+            <option value="student">Student copy only</option>
+          </select>
+        </div>
+      )}
+
+      {/* Badge on a section the previewed copy leaves out. */}
+      {hiddenHere && (
+        <div className="absolute right-1 top-1 z-10 text-[9px] font-semibold uppercase tracking-wide bg-muted text-muted-foreground border border-border rounded px-1.5 py-0.5 pointer-events-none">
+          {showOn === 'official' ? 'Official only' : 'Student copy only'}
+        </div>
+      )}
+      <div style={hiddenHere ? { opacity: 0.35 } : undefined}>
+        {children}
+      </div>
     </div>
   )
 }
@@ -533,6 +572,8 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
     { label: 'Class',         value: 'student.classLevel' },
     { label: 'Gender',        value: 'student.gender' },
     { label: 'Guardian',      value: 'student.guardianName' },
+    { label: 'Date of Birth', value: 'student.dateOfBirth' },
+    { label: 'Place of Birth', value: 'student.placeOfBirth' },
     { label: 'Term',          value: 'term.name' },
     { label: 'Session',       value: 'term.session' },
     { label: 'School',        value: 'school.name' },
@@ -665,6 +706,73 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap' }}>
         <span>Highlighted row repeats per subject. Double-click any data cell to choose its key.</span>
         <button style={smallBtn} onClick={seedMarksTable}>↺ Reseed from defaults</button>
+      </div>
+    </div>
+  )
+}
+
+/** The school's official stamp/seal. The image itself is uploaded once in School
+ *  Settings (School.stamp) rather than here, so every design uses the same seal; this
+ *  section only decides where it sits, how big it is, and which copy it prints on. */
+function RenderStamp({ sec, schoolStamp, uploading, onUpload, update }: { sec: StampSec; schoolStamp?: string | null; uploading?: boolean; onUpload?: (file: File) => void; update: (s: StampSec) => void }) {
+  const t = useT()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const size = sec.size || 110
+  const justify = sec.align === 'left' ? 'flex-start' : sec.align === 'right' ? 'flex-end' : 'center'
+  return (
+    <div style={{ padding: '8px 0', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: justify }}>
+        <div style={{ textAlign: 'center' }}>
+          {/* Click the seal (or the empty space) to upload. Unlike the watermark's logo,
+              this does NOT embed a data URL in the design: it uploads to School.stamp, so
+              one seal is shared by every layout and template saves stay small. */}
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || !onUpload}
+            title={onUpload ? t('Upload the official stamp. It is shared by every layout in this school.') : undefined}
+            style={{ display: 'block', border: 0, background: 'transparent', padding: 0, cursor: onUpload ? 'pointer' : 'default' }}
+          >
+            {schoolStamp
+              ? <img src={schoolStamp} alt="" style={{ width: size, height: size, objectFit: 'contain', display: 'block', opacity: uploading ? 0.4 : 1 }} />
+              : (
+                <div style={{ width: size, height: size, border: '1px dashed #cbd5e1', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 6 }}>
+                  <span style={{ fontSize: 8.5, color: '#94a3b8', lineHeight: 1.3 }}>
+                    {uploading ? t('Uploading…') : t('Click to upload a stamp. With no stamp this prints nothing, and the Official Copy note at the top marks the document.')}
+                  </span>
+                </div>
+              )}
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f && onUpload) onUpload(f); e.target.value = '' }} />
+          <input
+            value={sec.label ?? ''}
+            onChange={e => update({ ...sec, label: e.target.value })}
+            placeholder={t('caption (optional)')}
+            className="mt-1 w-full text-center bg-transparent border-0 outline-none"
+            style={{ fontSize: 9, color: '#64748b' }}
+          />
+        </div>
+      </div>
+      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap', justifyContent: 'center' }}>
+        {onUpload && (
+          <button onClick={() => fileRef.current?.click()} disabled={uploading}
+            className="text-[10px] border border-border rounded px-1.5 py-0.5 bg-card hover:bg-muted transition disabled:opacity-50">
+            {uploading ? t('Uploading…') : schoolStamp ? t('Change stamp') : t('Upload stamp')}
+          </button>
+        )}
+        <label className="flex items-center gap-1">
+          {t('Size')}
+          <input type="range" min={60} max={220} value={size}
+            onChange={e => update({ ...sec, size: Number(e.target.value) })} style={{ width: 90 }} />
+        </label>
+        <div className="flex rounded border border-border overflow-hidden">
+          {(['left', 'center', 'right'] as const).map(a => (
+            <button key={a} onClick={() => update({ ...sec, align: a })}
+              className={`px-1.5 py-0.5 transition ${(sec.align ?? 'right') === a ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}>
+              {t(a)}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -1114,6 +1222,7 @@ const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true;
   { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
   { type: 'remarks'        as const, label: '💬 Remarks' },
   { type: 'signatures'     as const, label: '✍ Signatures' },
+  { type: 'stamp'          as const, label: '🔏 Stamp / Seal' },
   { type: 'text_block'     as const, label: '📝 Text Block' },
   { type: 'divider'        as const, label: '── Divider' },
 ]
@@ -1129,6 +1238,9 @@ function newSection(type: AddSectionType, color: string, schoolType?: string): L
   if (type === 'divider')      return { id, type, style: 'solid' }
   if (type === 'remarks')      return { id, type, label: 'General Remarks' }
   if (type === 'signatures')   return { id, type, lines: [{ id: `s_${Date.now()}`, label: 'Signature' }] }
+  // Defaults to the official copy: a seal is the whole point of the official one, and
+  // putting it on a student copy would be wrong. Admin can still change it.
+  if (type === 'stamp')        return { id, type, size: 110, align: 'right', label: '', showOn: 'official' }
   if (type === 'summary')      return { id, type, boxes: [{ id: `b_${Date.now()}`, label: 'Total Score', field: 'total' }] }
   if (type === 'student_info') return { id, type, columns: 2, rows: [{ id: `r_${Date.now()}`, label: 'Student Name', field: 'student.name' }] }
   if (type === 'marks_table') {
@@ -1157,7 +1269,7 @@ function ensureMarksTables(
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ReportCardDesignPage() {
   const router = useRouter()
-  const { isAuthenticated, school } = useAuthStore()
+  const { isAuthenticated, school, updateSchool } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const tr = useT()
   const [config, setConfig] = useState<TemplateConfig & { sections: LayoutSection[] }>(getDefaultLayout('classic'))
@@ -1207,12 +1319,22 @@ export default function ReportCardDesignPage() {
   const schoolName = school?.name || 'Your School Name'
   const schoolType = school?.type || 'SECONDARY'
   const schoolLogo = school?.logo ?? null
+  // Uploaded once in School Settings and shared by every design; the stamp section only
+  // places it. Null shows a dashed area to stamp by hand.
+  const schoolStamp = school?.stamp ?? null
   // Every school type has an annual transcript (2 semester tables at a university,
   // 3 term tables at a primary/secondary school) — see getDefaultTranscriptLayout.
   const isTranscript = config.layoutType === 'transcript'
   const isLedger = schoolType !== 'UNIVERSITY' && config.layoutType === 'ledger'
   // The three layouts are mutually exclusive — Standard is "neither of the others".
   const isStandard = !isLedger && !isTranscript
+  // Every layout gets the official/student split: the ledger is a primary/secondary
+  // report card, so leaving it out meant those schools had no official copy at all.
+  // Harmless where unused, since sections default to printing on both copies.
+  const supportsVariants = true
+  // Design-time preview only: which copy the canvas is showing. Never saved — the real
+  // choice is made when printing, so both copies stay available to everyone at once.
+  const [previewVariant, setPreviewVariant] = useState<DocVariant>('official')
   // Field-level defaults merged UNDER the saved object — a watermark saved in
   // Logo mode has no `text`/`color` keys at all (JSON drops undefined), and
   // feeding undefined into the controlled text/color inputs below flips them
@@ -1221,6 +1343,49 @@ export default function ReportCardDesignPage() {
   const setWatermark = (patch: Partial<typeof watermark>) =>
     setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
   const wmUploadRef = useRef<HTMLInputElement>(null)
+  const [uploadingStamp, setUploadingStamp] = useState(false)
+  const [showRemoveStamp, setShowRemoveStamp] = useState(false)
+  const stampInputRef = useRef<HTMLInputElement>(null)
+  // The stamp is school-wide (School.stamp), not part of the design, so uploading it from
+  // the designer hits the same endpoint School Settings does and every layout picks it up.
+  const handleStampUpload = async (file: File) => {
+    setUploadingStamp(true)
+    try {
+      const fd = new FormData()
+      fd.append('stamp', file)
+      const res = await api.post('/school/stamp', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      updateSchool(res.data.school)
+      // Put it on the page straight away. Storing the image without placing it printed it
+      // nowhere and looked like the upload had failed ("i do not see the stamp when i
+      // upload it"). Official-only by default; drag, resize or delete it like any section.
+      // Placed just above the signatures, where a seal belongs, rather than appended to
+      // the very bottom of a long transcript where it is easy to miss.
+      setConfig(c => {
+        const secs = c.sections ?? []
+        if (secs.some(x => x.type === 'stamp')) return c
+        const stamp = newSection('stamp', c.primaryColor, schoolType)
+        const sigAt = secs.findIndex(x => x.type === 'signatures')
+        const next = [...secs]
+        next.splice(sigAt < 0 ? next.length : sigAt, 0, stamp)
+        return { ...c, sections: next }
+      })
+      showToast(tr('Official stamp uploaded and placed above the signatures'))
+    } catch {
+      showToast(tr('Upload failed. Make sure the file is an image under 5MB.'), 'error')
+    } finally { setUploadingStamp(false) }
+  }
+
+  const handleStampRemove = async () => {
+    setShowRemoveStamp(false)
+    try {
+      await api.delete('/school/stamp')
+      updateSchool({ ...school!, stamp: null })
+      showToast(tr('Official stamp removed'))
+    } catch {
+      showToast(tr('Failed to remove the stamp'), 'error')
+    }
+  }
+
   const handleWmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -1284,6 +1449,9 @@ export default function ReportCardDesignPage() {
   }, [isAuthenticated])
 
   const sections = config.sections || []
+  // Drives the toolbar's "Place on page" button: a stamp that is uploaded but never
+  // placed prints nowhere, which is the easy mistake to make here.
+  const hasStampSection = sections.some(sec => sec.type === 'stamp')
 
   const updateSection = (index: number, sec: LayoutSection) =>
     setConfig(c => {
@@ -1506,6 +1674,72 @@ export default function ReportCardDesignPage() {
           )}
         </div>
 
+        {/* Official stamp. Lives in the toolbar, not only inside the stamp section: the
+            section has to be ADDED before it can show an upload, so a design without one
+            gave no hint the stamp existed at all. Uploading here stores it on the school
+            (shared by every layout, same as School Settings); "Place on page" drops in the
+            section that actually prints it. Separate from the school logo in every way.
+            Shown only while previewing the OFFICIAL copy: a stamp never appears on a
+            student copy, so offering it there would just be misleading. A school with no
+            stamp is fine and needs nothing here: the "Official Copy" note under the title
+            already marks the document. */}
+        {supportsVariants && previewVariant === 'official' && (
+          <div className="flex items-center gap-1.5 ml-2 border-l border-border pl-4">
+            <span className="text-xs text-muted-foreground">{tr('Official stamp')}</span>
+            {schoolStamp && (
+              <img src={schoolStamp} alt="" className="w-6 h-6 object-contain rounded border border-border bg-white" />
+            )}
+            <button
+              onClick={() => stampInputRef.current?.click()}
+              disabled={uploadingStamp}
+              title={tr('Used on official copies only. This is not the school logo.')}
+              className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition disabled:opacity-50">
+              {uploadingStamp ? tr('Uploading…') : schoolStamp ? tr('Change') : tr('Upload')}
+            </button>
+            {schoolStamp && (
+              <button
+                onClick={() => setShowRemoveStamp(true)}
+                disabled={uploadingStamp}
+                title={tr('Remove the stamp. Official copies then rely on the Official Copy note alone.')}
+                className="text-xs px-2 py-1 rounded border border-destructive/30 text-destructive hover:bg-destructive/10 transition disabled:opacity-50">
+                {tr('Remove')}
+              </button>
+            )}
+            {schoolStamp && !hasStampSection && (
+              <button
+                onClick={() => addSection('stamp')}
+                title={tr('Add the stamp section so it prints on official copies')}
+                className="text-xs px-2 py-1 rounded border border-primary/40 text-primary hover:bg-primary/10 transition">
+                + {tr('Place on page')}
+              </button>
+            )}
+            <input ref={stampInputRef} type="file" accept="image/*" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleStampUpload(f); e.target.value = '' }} />
+          </div>
+        )}
+
+        {/* Which copy the canvas previews. A design-time view switch only: it is not
+            saved and does not decide what anyone prints, because a school needs the
+            sealed official copy and the student copy available at the same time. The
+            real choice is made when printing. Sections carry "Show on" (see SectionWrap)
+            and everything else appears on both. */}
+        {supportsVariants && (
+          <div className="flex items-center gap-1.5 ml-2 border-l border-border pl-4">
+            <span className="text-xs text-muted-foreground">{tr('Preview')}</span>
+            {(['official', 'student'] as DocVariant[]).map(v => (
+              <button key={v} onClick={() => setPreviewVariant(v)}
+                title={v === 'official'
+                  ? tr('The sealed copy the school sends out itself')
+                  : tr('The copy handed to students at the end of the term')}
+                className={`text-xs px-2 py-1 rounded border transition ${previewVariant === v
+                  ? 'border-primary text-primary bg-primary/10 font-medium'
+                  : 'border-border text-muted-foreground hover:text-foreground'}`}>
+                {v === 'official' ? tr('Official') : tr('Student copy')}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Failing marks colour. School-wide, not per-layout: it's a marking policy, so
             it applies to the report card and the transcript alike (handleSave always
             stores it at the top level). A failed subject prints its numbers and grade
@@ -1525,6 +1759,19 @@ export default function ReportCardDesignPage() {
           </label>
           {watermark.enabled && (
             <>
+              {/* Scope the watermark to one copy. This is how an UNOFFICIAL stamp goes
+                  across the student copy while the sealed official stays clean. */}
+              {supportsVariants && (
+                <select
+                  value={watermark.showOn ?? 'both'}
+                  onChange={e => setWatermark({ showOn: e.target.value === 'both' ? undefined : e.target.value as DocVariant })}
+                  className="text-xs border border-border rounded bg-card text-muted-foreground px-1.5 py-1 cursor-pointer"
+                  title="Which printed copy the watermark appears on">
+                  <option value="both">{tr('Both copies')}</option>
+                  <option value="official">{tr('Official only')}</option>
+                  <option value="student">{tr('Student copy only')}</option>
+                </select>
+              )}
               {/* Type toggle */}
               <div className="flex rounded border border-border overflow-hidden text-xs">
                 <button
@@ -1709,7 +1956,9 @@ export default function ReportCardDesignPage() {
           '--destructive': '#ef4444', '--ring': '#F03E2F',
         } as React.CSSProperties}>
           {/* Watermark */}
-          {watermark.enabled && (() => {
+          {/* Mirrors the print renderer: a watermark scoped to the other copy is not drawn
+              on this preview either. */}
+          {watermark.enabled && (!watermark.showOn || watermark.showOn === previewVariant) && (() => {
             const opacity = watermark.opacity / 100
             const rotation = watermark.rotation ?? -45
             const x = watermark.x ?? 50
@@ -1729,7 +1978,10 @@ export default function ReportCardDesignPage() {
               onDragStart={() => setDragIndex(i)}
               onDragOver={e => { e.preventDefault() }}
               onDrop={() => handleDrop(i)}
-              dragging={dragIndex === i}>
+              dragging={dragIndex === i}
+              showOn={sec.showOn}
+              onShowOn={supportsVariants ? v => updateSection(i, { ...sec, showOn: v }) : undefined}
+              hiddenHere={!sectionShowsOn(sec, previewVariant)}>
               {sec.type === 'header' && (
                 <RenderHeader sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={s => updateSection(i, s)} />
               )}
@@ -1747,6 +1999,9 @@ export default function ReportCardDesignPage() {
               )}
               {sec.type === 'signatures' && (
                 <RenderSignatures sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
+              )}
+              {sec.type === 'stamp' && (
+                <RenderStamp sec={sec} schoolStamp={schoolStamp} uploading={uploadingStamp} onUpload={handleStampUpload} update={s => updateSection(i, s)} />
               )}
               {sec.type === 'text_block' && (
                 <RenderTextBlock sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
@@ -1985,6 +2240,17 @@ export default function ReportCardDesignPage() {
       )}
 
 
+      {/* The stamp is school-wide, so removing it strips the seal from every official
+          copy this school prints, not just this design. Worth a confirm. */}
+      <ConfirmModal
+        isOpen={showRemoveStamp}
+        title={tr('Remove official stamp?')}
+        message={tr('This deletes the stamp image for the whole school, so no official copy will print a seal. Official copies will still be marked by the Official Copy note under the title. You can upload a new stamp at any time.')}
+        confirmLabel={tr('Remove')}
+        confirmColor="red"
+        onConfirm={handleStampRemove}
+        onCancel={() => setShowRemoveStamp(false)}
+      />
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
       </div>
     </>

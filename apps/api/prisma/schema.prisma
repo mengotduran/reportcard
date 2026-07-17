@@ -25,6 +25,10 @@ model School {
   address            String?
   website            String?
   logo               String?
+  // Official stamp/seal image. Prints on OFFICIAL copies only, via a `stamp` section
+  // the admin places on the report card or transcript. Separate from `logo`: the logo
+  // is the letterhead mark on every copy, the stamp is what makes a copy official.
+  stamp              String?
   subdomain          String              @unique
   isActive           Boolean             @default(true)
   createdAt          DateTime            @default(now())
@@ -148,6 +152,12 @@ model Student {
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   gender              String?
+  // Birth details. Optional everywhere: a student registered without them simply prints
+  // a blank row. Stored as "YYYY-MM-DD" TEXT rather than a DateTime on purpose — a birth
+  // date is a calendar date with no time or zone, and round-tripping it through a
+  // timestamp shifts it by a day for anyone west of UTC.
+  dateOfBirth         String?
+  placeOfBirth        String?
   status              StudentStatus @default(ACTIVE)
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]

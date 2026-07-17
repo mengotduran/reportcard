@@ -25,7 +25,7 @@ import { downloadZip } from '@/lib/zip'
 
 interface Student {
   id: string; name: string; studentId: string
-  classLevel: string; gender?: string; guardianName?: string
+  classLevel: string; gender?: string; dateOfBirth?: string | null; placeOfBirth?: string | null; guardianName?: string
   guardianPhone?: string; guardianEmail?: string
   status?: StudentStatus
   directLevel2Entry?: boolean
@@ -42,7 +42,7 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   DISMISSED: 'bg-red-100 text-red-700',
 }
 
-const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
+const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', dateOfBirth: '', placeOfBirth: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
 
 // Secondary non-default departments store classes with a " (Department)" suffix;
 // strip it for display since the department is shown separately.
@@ -269,6 +269,8 @@ export default function StudentsPage() {
       classLevel: baseClass,
       stream,
       gender: s.gender || '',
+      dateOfBirth: s.dateOfBirth || '',
+      placeOfBirth: s.placeOfBirth || '',
       guardianName: s.guardianName || '',
       guardianPhone: s.guardianPhone || '',
       guardianEmail: s.guardianEmail || '',
@@ -828,6 +830,21 @@ export default function StudentsPage() {
                       <span className="text-sm text-foreground">{t(g)}</span>
                     </label>
                   ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-2">{t('Date of Birth')}</label>
+                  <input type="date" value={form.dateOfBirth}
+                    onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card text-foreground" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-2">{t('Place of Birth')}</label>
+                  <input type="text" value={form.placeOfBirth}
+                    onChange={(e) => setForm({ ...form, placeOfBirth: e.target.value })}
+                    placeholder={t('e.g. Bamenda')}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card text-foreground" />
                 </div>
               </div>
               {needsStream && (

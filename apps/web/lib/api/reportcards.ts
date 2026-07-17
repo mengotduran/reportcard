@@ -185,7 +185,9 @@ export interface StudentTranscript {
     id: string; name: string; studentId: string; classLevel: string; gender?: string | null
     dateOfBirth?: string | null; nationality?: string | null
   }
-  school: { name: string; logo?: string | null; language?: string | null; type?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
+  // `stamp` is the official seal, printed on official copies via the designer's stamp
+  // section (the endpoint selects it explicitly, see getStudentTranscript).
+  school: { name: string; logo?: string | null; stamp?: string | null; language?: string | null; type?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   session: string
   reportCards: TranscriptReportCard[]
   /** Periods in this academic year (2 semesters / 3 terms) — reportCards only carries

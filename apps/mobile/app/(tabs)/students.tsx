@@ -227,12 +227,18 @@ function CreateStudentModal({
   const [name, setName] = useState('')
   const [classLevel, setClassLevel] = useState('')
   const [gender, setGender] = useState('')
+  // Optional birth details. Typed as YYYY-MM-DD text, the same pattern the fees ledger
+  // uses, rather than pulling in a native date-picker dependency. The API normalises and
+  // rejects anything that is not a plain date, so a typo lands as blank, never half-saved.
+  const [dateOfBirth, setDateOfBirth] = useState('')
+  const [placeOfBirth, setPlaceOfBirth] = useState('')
   const [guardianName, setGuardianName] = useState('')
   const [creating, setCreating] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
 
   const reset = () => {
     setName(''); setClassLevel(''); setGender(''); setGuardianName('')
+    setDateOfBirth(''); setPlaceOfBirth('')
   }
 
   const handleCreate = async () => {
@@ -246,7 +252,12 @@ function CreateStudentModal({
     }
     setCreating(true)
     try {
-      await createStudent({ name: name.trim(), classLevel, gender, guardianName: guardianName.trim() || undefined })
+      await createStudent({
+        name: name.trim(), classLevel, gender,
+        guardianName: guardianName.trim() || undefined,
+        dateOfBirth: dateOfBirth.trim() || undefined,
+        placeOfBirth: placeOfBirth.trim() || undefined,
+      })
       reset()
       onClose()
       onCreated()
@@ -296,6 +307,14 @@ function CreateStudentModal({
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <Text style={styles.formLabel}>{t('Date of Birth (optional)')}</Text>
+              <TextInput style={styles.formInput} value={dateOfBirth} onChangeText={setDateOfBirth}
+                placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" autoCapitalize="none" />
+
+              <Text style={styles.formLabel}>{t('Place of Birth (optional)')}</Text>
+              <TextInput style={styles.formInput} value={placeOfBirth} onChangeText={setPlaceOfBirth}
+                placeholder={t('e.g. Bamenda')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
               <Text style={styles.formLabel}>{t('Guardian Name (optional)')}</Text>
               <TextInput style={styles.formInput} value={guardianName} onChangeText={setGuardianName} placeholder={t('e.g. Mrs. Jane Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />

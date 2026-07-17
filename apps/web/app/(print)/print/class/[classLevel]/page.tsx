@@ -79,7 +79,7 @@ export default function PrintClassPage() {
   if (!config) return null
 
   const schoolData = {
-    name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null,
+    name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null,
     email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
     authorizationNumber: school?.authorizationNumber,
     officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr,
@@ -139,6 +139,9 @@ export default function PrintClassPage() {
               classSize={rc.classSize ?? null}
               classAverage={rc.classAverage ?? null}
               config={config}
+              // A whole-class print run is the end-of-term hand-out, so these are STUDENT
+              // copies. Official copies are printed per student, sealed and sent by the school.
+              variant="student"
               gradeBands={gradingRanges}
               classificationBands={classBands}
               cgpa={rc.cgpa ?? undefined}
