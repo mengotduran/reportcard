@@ -3,6 +3,11 @@ import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 
+// University marking split: CA out of 30, exam out of 70, course out of 100. The same
+// split the marks grid and the report card print with.
+const UNIVERSITY_EXAM_MAX = 70
+const UNIVERSITY_COURSE_MAX = 100
+
 // A subject scoped to one term (university courses) only counts for that term;
 // a subject with no term (primary/secondary, and any non-term-scoped subject)
 // always counts. Matched by term NAME, same reasoning as Subject.classLevel
@@ -510,8 +515,14 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       await prisma.reportCard.update({ where: { id }, data: { marksEditGrantedTo: null } })
     }
 
-    // Delete existing entries and recreate
-    await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
+    // The resit marks already on file, read BEFORE anything is deleted. Saving any tab
+    // re-sends every subject's existing resitScore untouched, so eligibility is enforced
+    // only against marks that are actually being added or changed (see below).
+    const priorEntries = await prisma.reportEntry.findMany({
+      where: { reportCardId: id },
+      select: { subjectId: true, resitScore: true },
+    })
+    const priorResit = new Map(priorEntries.map(e => [e.subjectId, e.resitScore]))
 
     // Fetch subjects for maxScore and coefficient
     const subjectIds = entries.map((e: { subjectId: string }) => e.subjectId)
@@ -521,7 +532,9 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // Fetch grading scale — drives BOTH the letter grade and the auto-remark
     // so report cards reflect the school's grading design.
     const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
-    let gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string }[] =
+    // juryDecision lets a school fail a passing-looking letter (CITEC juries D as FAIL),
+    // so it outranks the grade letter wherever a pass/fail question is asked.
+    let gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string; juryDecision?: string }[] =
       gradingScale?.ranges ? (gradingScale.ranges as any) : []
     // For secondary schools, discard any stale 0–100 percent-scale ranges (boundary > 20).
     // University ranges are intentionally 0–100 and must NOT be stripped.
@@ -554,6 +567,53 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     }
     const getAutoRemark = (score: number): string => matchRange(score)?.remark ?? ''
     const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade(isUniversity ? score : (score / 20) * 100)
+
+    // ── Resit eligibility (university) ───────────────────────────────────────────
+    // A resit re-sits the EXAM only, so it may be recorded only for a student who
+    // failed the exam AND failed the course overall: a weak CA is not a resit matter,
+    // and a student whose CA carried them to a pass has nothing to re-sit. The marks
+    // grid already locks ineligible rows; this is the rule actually being enforced,
+    // rather than trusting whatever the client sends.
+    //
+    // Judged on the school's own scale, so no pass mark is hardcoded. Bands are matched
+    // on their lower bound: real scales use integer bounds (0-44, 45-49) and an exam
+    // normalised out of 100 is fractional (31/70 = 44.29), which falls straight through
+    // the gap between bands under min..max containment and reads a fail as a pass.
+    const isFailingApi = (score: number): boolean => {
+      const sorted = [...effectiveRanges].sort((a, b) => b.minScore - a.minScore)
+      const band = sorted.find(r => score >= r.minScore)
+      if (!band) return false
+      const jury = (band as { juryDecision?: string }).juryDecision
+      if (jury?.trim()) return jury.trim().toUpperCase() === 'FAIL'
+      return band.grade?.trim().toUpperCase() === 'F' || band.remark?.trim().toUpperCase() === 'FAIL'
+    }
+    if (isUniversity) {
+      const ineligible: string[] = []
+      for (const entry of entries as { subjectId: string; seq1Score?: number; seq2Score?: number; resitScore?: number }[]) {
+        const incoming = entry.resitScore ?? null
+        if (incoming == null) continue
+        // Untouched marks pass through: rows predating this rule must not block a teacher
+        // from saving CA or Exam marks for that student (they are re-sent on every save).
+        const prior = priorResit.get(entry.subjectId) ?? null
+        if (prior != null && prior === incoming) continue
+        const ca = entry.seq1Score ?? null
+        const exam = entry.seq2Score ?? null
+        const eligible = ca != null && exam != null
+          && isFailingApi((exam / UNIVERSITY_EXAM_MAX) * UNIVERSITY_COURSE_MAX)
+          && isFailingApi(ca + exam)
+        if (!eligible) ineligible.push(subjectMap[entry.subjectId]?.name ?? entry.subjectId)
+      }
+      if (ineligible.length > 0) {
+        res.status(400).json({
+          message: `A resit mark can only be recorded for a student who failed the exam and failed the course overall. Not eligible: ${ineligible.join(', ')}.`,
+        })
+        return
+      }
+    }
+
+    // Delete existing entries and recreate. Deliberately after every validation above:
+    // bailing out once these are gone would wipe the card's marks.
+    await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
 
     const createdEntries = await Promise.all(
       entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; resitScore?: number; grade?: string; remarks?: string }) => {
