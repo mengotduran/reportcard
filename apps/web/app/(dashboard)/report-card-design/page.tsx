@@ -13,7 +13,7 @@ import {
   SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
   officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
   TranscriptPeriod, transcriptPeriodsFor, transcriptPeriodLabel,
-  DocVariant, sectionShowsOn,
+  DocVariant, sectionShowsOn, ensureBirthRows,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
@@ -1437,6 +1437,10 @@ export default function ReportCardDesignPage() {
             : { ...getDefaultTranscriptLayout(sType), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' as const })
         : buildMergedConfig(saved ?? null, lang, sType)
           ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+      // Backfill Date/Place of Birth into an already-saved university design: defaults
+      // only reach designs built after they changed, so an existing layout would never
+      // show them. Once only, and the admin still has to Save.
+      Object.assign(merged, ensureBirthRows(merged, sType))
       // "Failing marks in red" is stored school-wide at the top level (see handleSave),
       // so stamp it onto whichever layout loaded — the checkbox must read the same in
       // every view, not whatever a layout happened to be saved with.
@@ -1530,7 +1534,7 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.layoutType !== 'transcript' && (saved as any)?.sections?.length > 0)
       ? buildMergedConfig(saved, lang, sType) : null
-    const layout = restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+    const layout = ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType)
     setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
@@ -1562,7 +1566,8 @@ export default function ReportCardDesignPage() {
     const layout = hasTranscriptSections
       ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
       : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
-    setConfig(c => ({ ...layout, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed }))
+    const seeded = ensureBirthRows(layout, schoolType)
+    setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }

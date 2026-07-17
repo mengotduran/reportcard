@@ -59,6 +59,15 @@ export interface TemplateConfig {
   // and every regular report card then printed with the transcript layout —
   // whose semester-scoped tables render nothing outside the transcript page.
   transcript?: Partial<TemplateConfig>
+  /**
+   * One-time marker: the Date/Place of Birth rows have been offered to this design.
+   * Adding them to the built-in defaults only reaches designs created AFTERWARDS, and a
+   * school that had already saved its layout would never see them. So a saved design
+   * picks them up once (see ensureBirthRows) and this records that it happened, which is
+   * what stops them reappearing for an admin who deliberately deletes them.
+   * Lives inside each design, so the report card and the transcript are marked separately.
+   */
+  birthRowsSeeded?: boolean
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -889,6 +898,43 @@ function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sectio
 }
 
 /** Default report-card layout tailored to the school's section type. */
+/**
+ * Give an already-saved university design the Date/Place of Birth rows, once.
+ *
+ * Defaults only apply to designs built after the default changed, so a school that had
+ * saved its layout would never see a newly added row. This backfills the student_info
+ * section in the designer (the admin still has to Save, and can delete or move the rows
+ * first), then marks the design so it never happens twice: nobody could have deliberately
+ * removed these rows before they existed, but they can afterwards, and that must stick.
+ *
+ * University only, matching where these rows are shown by default. Idempotent: the field
+ * check alone prevents duplicates even on a fresh default that already has them.
+ */
+export function ensureBirthRows<T extends Partial<TemplateConfig>>(cfg: T, schoolType?: string): T {
+  if (schoolType !== 'UNIVERSITY' || cfg.birthRowsSeeded) return cfg
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, birthRowsSeeded: true }
+  const idx = sections.findIndex(s => s.type === 'student_info')
+  if (idx < 0) return { ...cfg, birthRowsSeeded: true }
+
+  const info = sections[idx] as StudentInfoSec
+  const has = (field: string) => info.rows.some(r => r.field === field)
+  const additions: InfoRow[] = []
+  if (!has('student.dateOfBirth')) additions.push({ id: uid('r'), label: 'Date of Birth', field: 'student.dateOfBirth' })
+  if (!has('student.placeOfBirth')) additions.push({ id: uid('r'), label: 'Place of Birth', field: 'student.placeOfBirth' })
+  if (additions.length === 0) return { ...cfg, birthRowsSeeded: true }
+
+  // Slot them in ahead of the academic-year/term rows, where the defaults put them, so a
+  // backfilled design reads the same as a fresh one instead of tacking them on the end.
+  const at = info.rows.findIndex(r => r.field === 'term.session' || r.field === 'term.name')
+  const rows = [...info.rows]
+  rows.splice(at < 0 ? rows.length : at, 0, ...additions)
+
+  const next = [...sections]
+  next[idx] = { ...info, rows }
+  return { ...cfg, sections: next, birthRowsSeeded: true }
+}
+
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   if (schoolType === 'PRIMARY') return buildLayout({
     primaryColor: '#0f766e',
