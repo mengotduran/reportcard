@@ -120,7 +120,7 @@ export default function TeachersScreen() {
         { text: tr('Cancel'), style: 'cancel' },
         {
           text: tr('Reset'),
-          onPress: async (newPassword) => {
+          onPress: async (newPassword?: string) => {
             if (!newPassword || newPassword.length < 6) {
               Alert.alert(tr('Error'), tr('Password must be at least 6 characters.'))
               return

@@ -417,7 +417,6 @@ function AdminReportCards() {
           value={search}
           onChangeText={setSearch}
           placeholderTextColor="#9ca3af"
-          backgroundColor="transparent"
         />
       </View>
 

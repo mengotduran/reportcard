@@ -151,7 +151,7 @@ function SchoolCard({ school, onToggle, onPress }: { school: SchoolSection; onTo
                   { text: 'Cancel', style: 'cancel' },
                   {
                     text: 'Set',
-                    onPress: async (pw) => {
+                    onPress: async (pw?: string) => {
                       if (!pw || pw.length < 6) { Alert.alert('Error', 'Min 6 characters.'); return }
                       try {
                         await resetUserPasswordApi(admin.id, pw)

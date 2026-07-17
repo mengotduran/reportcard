@@ -679,8 +679,12 @@ export default function AdminReportCardDetail() {
                       <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : colors.text }]}>
                         {unfilled ? '—' : `${entry!.score ?? 0}/${maxScore}`}
                       </Text>
+                      {/* The badge background is a flat grey: gradeFromScore returns no
+                          bgColor here (unlike web's), so this always resolved to the
+                          fallback. Left as-is; tinting it per grade would be a design
+                          change rather than a typing fix. */}
                       {gr ? (
-                        <View style={[styles.gradeBadge, { backgroundColor: gr.bgColor ?? '#f3f4f6' }]}>
+                        <View style={[styles.gradeBadge, { backgroundColor: '#f3f4f6' }]}>
                           <Text style={[styles.gradeText, { color: gr.color }]}>{gr.remark || gr.grade}</Text>
                         </View>
                       ) : (

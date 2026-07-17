@@ -5,7 +5,9 @@ export interface ReportCardSummary {
   status: string
   average: number | null
   student: { name: string; classLevel: string }
-  term: { name: string; session: string }
+  // The list endpoint returns the whole term; `id` was missing here, so the term filter
+  // on the report cards tab could not compile against it.
+  term: { id: string; name: string; session: string }
 }
 
 export interface ReportCardDetail {
