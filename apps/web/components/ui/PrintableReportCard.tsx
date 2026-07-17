@@ -52,6 +52,19 @@ const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July
 const MONTHS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
 
 /**
+ * Does a resolved student_info field actually carry information?
+ *
+ * "Not recorded" arrives in two shapes: '' (birth details) and the '—' placeholder that
+ * older fields like gender/guardian fall back to. Both mean the school has nothing to
+ * print, so both hide the row. A dash is not a value; it is the absence of one dressed up.
+ */
+function hasValue(v: React.ReactNode): boolean {
+  if (v == null) return false
+  const s = String(v).trim()
+  return s !== '' && s !== '—' && s !== '-'
+}
+
+/**
  * A birth date, spelled out: "12 May 2003". Deliberately not numeric — these documents go
  * to WES and embassies, where 12/05/2003 is read as 5 December by half the world.
  *
@@ -806,9 +819,18 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'student_info') {
       const s = sec as StudentInfoSec
+      // A row with nothing to show is dropped entirely, label and all: printing
+      // "Place of Birth:" followed by blank space states that the school holds no
+      // birthplace for this student, when in truth nobody typed one in. The label only
+      // earns its place once there is a value behind it, so the same design prints a
+      // full header for a student with complete details and a shorter one for a student
+      // without, instead of a row of empty prompts.
+      const filled = s.rows.filter(row => hasValue(resolveField(row.field)))
+      // Every row empty means an empty bordered box, so the section stands down too.
+      if (filled.length === 0) return null
       return (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.columns}, 1fr)`, gap: '5px 12px', background: `rgba(${rgb},0.05)`, padding: 12, border: `1px solid rgba(${rgb},0.25)`, marginBottom: 16, fontSize: 12 }}>
-          {s.rows.map(row => (
+          {filled.map(row => (
             <div key={row.id}>
               <span style={{ fontWeight: 'bold' }} dangerouslySetInnerHTML={{ __html: localizeLabel(row.label, lang) + ':' }} />
               {' '}<span style={{ color: row.valueColor ?? undefined }}>{resolveField(row.field)}</span>
