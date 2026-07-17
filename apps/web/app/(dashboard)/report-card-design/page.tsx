@@ -11,12 +11,12 @@ import {
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
   SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
   officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
+  TranscriptPeriod, transcriptPeriodsFor, transcriptPeriodLabel,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor, LayoutTemplate } from 'lucide-react'
-import type { StudentTranscript } from '@/lib/api/reportcards'
 import { useT } from '@/lib/i18n'
 import { DEFAULT_UNIVERSITY_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import {
@@ -43,7 +43,6 @@ const SD = {
 const U_SEQ1    = [23, 19, 25, 17, 21]         // CA /30
 const U_SEQ2    = [53, 43, 58, 39, 50]         // Exam /70
 const U_SCORES  = U_SEQ1.map((s, i) => s + U_SEQ2[i])  // [76, 62, 83, 56, 71]
-const U_CREDITS = [3, 3, 3, 3, 4]
 function _gpForScore(score: number) {
   const sorted = [...DEFAULT_UNIVERSITY_RANGES].sort((a, b) => b.minScore - a.minScore)
   const r = sorted.find(x => score >= x.minScore && score <= x.maxScore)
@@ -69,37 +68,6 @@ const SD_UNI = {
   remarks:     ['Very Good', 'Good', 'Excellent', 'Fairly Good', 'Very Good'],
   juryDecisions: ['VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED'],
   position:    3,
-}
-
-// ── Mock StudentTranscript for transcript template canvas preview ─────────────
-const MOCK_TRANSCRIPT: StudentTranscript = {
-  student: {
-    id: 'mock', name: SD_UNI.student.name, studentId: SD_UNI.student.studentId,
-    classLevel: SD_UNI.student.classLevel, gender: SD_UNI.student.gender,
-  },
-  school: { name: 'Your University Name', logo: null, type: 'UNIVERSITY', language: 'EN' },
-  session: SD_UNI.term.session,
-  reportCards: [
-    {
-      id: 'mock-1',
-      term: { id: 'mock-1', name: 'First Semester', session: SD_UNI.term.session },
-      entries: SD_UNI.subjects.map((name, i) => ({
-        id: `me-${i}`, score: SD_UNI.entries[i], seq1Score: SD_UNI.seq1[i], seq2Score: SD_UNI.seq2[i],
-        subject: { id: `ms-${i}`, name, code: SD_UNI.codes[i], credit: U_CREDITS[i], term: 'First Semester', classLevel: SD_UNI.student.classLevel },
-      })),
-    },
-    {
-      id: 'mock-2',
-      term: { id: 'mock-2', name: 'Second Semester', session: SD_UNI.term.session },
-      entries: SD_UNI.subjects.map((name, i) => ({
-        id: `me2-${i}`, score: Math.max(40, SD_UNI.entries[i] - 5), seq1Score: SD_UNI.seq1[i] - 3, seq2Score: SD_UNI.seq2[i] - 2,
-        subject: { id: `ms-${i}`, name, code: SD_UNI.codes[i], credit: U_CREDITS[i], term: 'Second Semester', classLevel: SD_UNI.student.classLevel },
-      })),
-    },
-  ],
-  maxScore: 100,
-  gradingScale: DEFAULT_UNIVERSITY_RANGES,
-  classificationBands: DEFAULT_CLASSIFICATION_BANDS,
 }
 
 // Bilingual labels are authored "Français / English"; show only the school's language.
@@ -662,9 +630,9 @@ const UNIVERSITY_ONLY_MARKS_KEYS = new Set(['m:code', 'm:credit', 'm:gradePoint'
 function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableSec; color: string; schoolType?: string; update: (s: MarksTableSec) => void }) {
   const isUni = schoolType === 'UNIVERSITY'
 
-  const seedMarksTable = () => update({ ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(color) : seedMarksTableSection(sec, color, schoolType) })
+  const seedMarksTable = () => update({ ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(color, schoolType) : seedMarksTableSection(sec, color, schoolType) })
   // sec.template is guaranteed by ensureMarksTables() at load + newSection()
-  const tpl: SpreadsheetTable = sec.template ?? (sec.transcriptSemester ? seedTranscriptMarksTable(color) : seedMarksTableSection(sec, color, schoolType))
+  const tpl: SpreadsheetTable = sec.template ?? (sec.transcriptSemester ? seedTranscriptMarksTable(color, schoolType) : seedMarksTableSection(sec, color, schoolType))
 
   const smallBtn: React.CSSProperties = {
     fontSize: 10, padding: '2px 8px', border: '1px solid #e5e7eb',
@@ -673,6 +641,17 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
 
   return (
     <div style={{ marginBottom: 12 }}>
+      {/* Transcript only: the period caption the print renderer puts above this table.
+          Shown here (not editable) so the canvas matches the printed document, where
+          it comes from the student's real term name. */}
+      {sec.transcriptSemester && (
+        <div style={{
+          fontWeight: 'bold', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+          color: '#fff', background: color, padding: '4px 8px',
+        }}>
+          {transcriptPeriodLabel(sec.transcriptSemester, schoolType)}
+        </div>
+      )}
       {/* No resolveField — every bound cell shows its raw [field] key, same as the
           grading legend's tables, so the design canvas never looks like it's showing
           real marks. Only the actual report card/transcript print shows real data. */}
@@ -1119,14 +1098,18 @@ const TEMPLATES = [
   { id: 'official' as TemplateName, label: 'Official',     color: '#92400e' },
 ]
 
-type AddSectionType = LayoutSection['type'] | 'marks_table_sem1' | 'marks_table_sem2'
+type AddSectionType = LayoutSection['type'] | 'marks_table_sem1' | 'marks_table_sem2' | 'marks_table_sem3'
 
-const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true }[] = [
+// `period` marks the transcript-only per-period marks tables. Their labels follow the
+// school type ("First Semester Table" / "First Term Table") and the third slot only
+// exists where the year has three periods — see transcriptPeriodsFor.
+const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true; period?: TranscriptPeriod }[] = [
   { type: 'header'         as const, label: '🏷 Header' },
   { type: 'student_info'   as const, label: '👤 Student Info' },
   { type: 'marks_table'    as const, label: '📋 Marks Table' },
-  { type: 'marks_table_sem1' as const, label: '📋 Semester 1 Table', transcriptOnly: true },
-  { type: 'marks_table_sem2' as const, label: '📋 Semester 2 Table', transcriptOnly: true },
+  { type: 'marks_table_sem1' as const, label: '📋 Period 1 Table', transcriptOnly: true, period: 'sem1' },
+  { type: 'marks_table_sem2' as const, label: '📋 Period 2 Table', transcriptOnly: true, period: 'sem2' },
+  { type: 'marks_table_sem3' as const, label: '📋 Period 3 Table', transcriptOnly: true, period: 'sem3' },
   { type: 'summary'        as const, label: '📊 Summary Boxes' },
   { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
   { type: 'remarks'        as const, label: '💬 Remarks' },
@@ -1137,10 +1120,10 @@ const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true 
 
 function newSection(type: AddSectionType, color: string, schoolType?: string): LayoutSection {
   const id = `sec_${Date.now()}`
-  if (type === 'marks_table_sem1' || type === 'marks_table_sem2') {
-    const transcriptSemester = type === 'marks_table_sem1' ? 'sem1' : 'sem2'
-    const sec: MarksTableSec = { id, type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, transcriptSemester }
-    return { ...sec, template: seedTranscriptMarksTable(color) }
+  if (type === 'marks_table_sem1' || type === 'marks_table_sem2' || type === 'marks_table_sem3') {
+    const transcriptSemester = type.replace('marks_table_', '') as TranscriptPeriod
+    const sec: MarksTableSec = { id, type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: schoolType !== 'UNIVERSITY', transcriptSemester }
+    return { ...sec, template: seedTranscriptMarksTable(color, schoolType) }
   }
   if (type === 'text_block')   return { id, type, content: 'New text block', align: 'left' }
   if (type === 'divider')      return { id, type, style: 'solid' }
@@ -1165,7 +1148,7 @@ function ensureMarksTables(
     ...cfg,
     sections: cfg.sections.map(sec =>
       sec.type === 'marks_table' && !sec.template
-        ? { ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(cfg.primaryColor) : seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
+        ? { ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(cfg.primaryColor, schoolType) : seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
         : sec
     ),
   }
@@ -1224,9 +1207,17 @@ export default function ReportCardDesignPage() {
   const schoolName = school?.name || 'Your School Name'
   const schoolType = school?.type || 'SECONDARY'
   const schoolLogo = school?.logo ?? null
-  const isTranscript = schoolType === 'UNIVERSITY' && config.layoutType === 'transcript'
+  // Every school type has an annual transcript (2 semester tables at a university,
+  // 3 term tables at a primary/secondary school) — see getDefaultTranscriptLayout.
+  const isTranscript = config.layoutType === 'transcript'
   const isLedger = schoolType !== 'UNIVERSITY' && config.layoutType === 'ledger'
-  const watermark = config.watermark ?? { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null, size: 240, rotation: -45 }
+  // The three layouts are mutually exclusive — Standard is "neither of the others".
+  const isStandard = !isLedger && !isTranscript
+  // Field-level defaults merged UNDER the saved object — a watermark saved in
+  // Logo mode has no `text`/`color` keys at all (JSON drops undefined), and
+  // feeding undefined into the controlled text/color inputs below flips them
+  // to uncontrolled (React console error). Every field must always be defined.
+  const watermark = { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null as string | null, size: 240, rotation: -45, ...(config.watermark ?? {}) }
   const setWatermark = (patch: Partial<typeof watermark>) =>
     setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
   const wmUploadRef = useRef<HTMLInputElement>(null)
@@ -1277,8 +1268,8 @@ export default function ReportCardDesignPage() {
         && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
       const merged = saved?.layoutType === 'transcript'
         ? (hasTranscriptSections
-            ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(), ...saved } as any, lang), sType)
-            : { ...getDefaultTranscriptLayout(), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' as const })
+            ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(sType), ...saved } as any, lang), sType)
+            : { ...getDefaultTranscriptLayout(sType), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' as const })
         : buildMergedConfig(saved ?? null, lang, sType)
           ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
       setConfig(merged)
@@ -1291,7 +1282,23 @@ export default function ReportCardDesignPage() {
   const sections = config.sections || []
 
   const updateSection = (index: number, sec: LayoutSection) =>
-    setConfig(c => { const s = [...c.sections]; s[index] = sec; return { ...c, sections: s } })
+    setConfig(c => {
+      const s = [...c.sections]
+      s[index] = sec
+      // The transcript's per-period tables share ONE design — a real transcript never
+      // has differently-shaped First/Second/Third period tables. Any template edit
+      // (add/delete/re-key a column, style a cell) on one is mirrored to all the
+      // others; the period scoping lives on the section's transcriptSemester flag,
+      // not in the table, so a structural copy is safe.
+      if (sec.type === 'marks_table' && sec.transcriptSemester && sec.template) {
+        for (let j = 0; j < s.length; j++) {
+          const other = s[j] as MarksTableSec
+          if (j === index || other.type !== 'marks_table' || !other.transcriptSemester) continue
+          s[j] = { ...other, template: JSON.parse(JSON.stringify(sec.template)) }
+        }
+      }
+      return { ...c, sections: s }
+    })
 
   const deleteSection = (index: number) =>
     setConfig(c => ({ ...c, sections: c.sections.filter((_, i) => i !== index) }))
@@ -1375,12 +1382,14 @@ export default function ReportCardDesignPage() {
   const loadTranscriptLayout = () => {
     const saved = savedConfigRef.current
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
-    const hasTranscriptSections = saved?.layoutType === 'transcript'
-      && Array.isArray((saved as any).sections)
-      && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+    // The transcript design lives under saved.transcript; legacy rows (from
+    // before the sub-key existed) saved it at the top level instead.
+    const savedT = saved?.transcript ?? (saved?.layoutType === 'transcript' ? saved : null)
+    const hasTranscriptSections = Array.isArray(savedT?.sections)
+      && savedT!.sections!.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
     const layout = hasTranscriptSections
-      ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(), ...saved } as any, lang), schoolType)
-      : { ...getDefaultTranscriptLayout(), layoutType: 'transcript' as const }
+      ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
+      : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
     setConfig({ ...layout, layoutType: 'transcript' as const })
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
@@ -1389,13 +1398,24 @@ export default function ReportCardDesignPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await saveTemplateApi(config as TemplateConfig)
+      // One saved row holds BOTH designs: the standard/ledger design at the
+      // top level and the transcript design under `transcript` — saving one
+      // must never clobber the other. (Legacy rows saved the transcript at
+      // the top level; detect that and migrate it into the sub-key here.)
+      const prev = savedConfigRef.current
+      const legacyTranscript = prev?.layoutType === 'transcript' ? prev : undefined
+      const { transcript: _prevT, ...prevTop } = (prev ?? {}) as Partial<TemplateConfig>
+      const { transcript: _curT, ...configTop } = config as TemplateConfig
+      const payload: TemplateConfig = config.layoutType === 'transcript'
+        ? { ...(legacyTranscript ? {} : prevTop), transcript: configTop } as TemplateConfig
+        : { ...configTop, transcript: prev?.transcript ?? legacyTranscript } as TemplateConfig
+      await saveTemplateApi(payload)
       // loadTemplate/loadStandardLayout/loadLedger/loadTranscriptLayout (the
       // layout-type thumbnails) all restore from this ref, not from the API —
       // without updating it here, switching thumbnails after a save reverts
       // to whatever was saved BEFORE this session started, silently discarding
       // every edit made (and saved) during the current visit.
-      savedConfigRef.current = config
+      savedConfigRef.current = payload
       showToast(tr('Design saved successfully'))
     } catch {
       showToast(tr('Failed to save'), 'error')
@@ -1659,7 +1679,7 @@ export default function ReportCardDesignPage() {
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
-        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The two semester tables have a fixed design' : ''}</p>}
+        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
         {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
         <div ref={canvasRef} className="shadow-sm border border-[#e4e4e7] rounded-xl p-10 pl-14" style={{
@@ -1828,7 +1848,7 @@ export default function ReportCardDesignPage() {
           <button
             onClick={() => loadTemplate('classic')}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: !isLedger ? config.primaryColor : '#e5e7eb', background: !isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: isStandard ? config.primaryColor : '#e5e7eb', background: isStandard ? `${config.primaryColor}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
               <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1853,7 +1873,7 @@ export default function ReportCardDesignPage() {
                 {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${config.primaryColor}30`, borderRadius: 2 }} />)}
               </div>
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: !isLedger ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isStandard ? config.primaryColor : '#6b7280' }}>
               Standard
             </div>
           </button>
@@ -1861,7 +1881,7 @@ export default function ReportCardDesignPage() {
           {/* Ledger thumbnail — totals folded into the table itself */}
           <button
             onClick={loadLedger}
-            className="w-full rounded-lg border-2 overflow-hidden transition"
+            className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
             style={{ borderColor: isLedger ? config.primaryColor : '#e5e7eb', background: isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
@@ -1894,6 +1914,35 @@ export default function ReportCardDesignPage() {
             </div>
           </button>
 
+          {/* Annual transcript thumbnail — the year's three terms stacked, printed
+              from the third term once every term is published. */}
+          <button
+            onClick={loadTranscriptLayout}
+            className="w-full rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+          >
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: config.primaryColor, height: 12, borderRadius: 2, marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 50, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              {['FIRST TERM', 'SECOND TERM', 'THIRD TERM'].map(label => (
+                <div key={label} style={{ marginBottom: 3 }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', color: '#fff', background: config.primaryColor, padding: '0 2px' }}>{label}</div>
+                  <div style={{ border: '1px solid #e5e7eb' }}>
+                    {[0, 1].map(i => (
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: i ? '1px solid #f0f0f0' : undefined }}>
+                        {[0, 1, 2].map(j => <div key={j} style={{ height: 3, margin: '1px', background: '#e5e7eb', borderRadius: 1 }} />)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? config.primaryColor : '#6b7280' }}>
+              Annual
+            </div>
+          </button>
+
         </div>
       )}
 
@@ -1906,10 +1955,14 @@ export default function ReportCardDesignPage() {
           <div className="fixed inset-0 z-40" onClick={() => setAddMenuCoords(null)} />
           <div className="fixed z-50 bg-card border border-border rounded-xl shadow-lg py-1 w-max"
             style={{ top: addMenuCoords.top, left: addMenuCoords.left }}>
-            {ADD_OPTIONS.filter(o => !o.transcriptOnly || isTranscript).map(o => (
+            {ADD_OPTIONS
+              .filter(o => !o.transcriptOnly || isTranscript)
+              // A university year has no third period, so no third table to add.
+              .filter(o => !o.period || transcriptPeriodsFor(schoolType).includes(o.period))
+              .map(o => (
               <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
                 className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition whitespace-nowrap">
-                {tr(o.label)}
+                {o.period ? `📋 ${transcriptPeriodLabel(o.period, schoolType)} Table` : tr(o.label)}
               </button>
             ))}
           </div>

@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
@@ -35,9 +35,10 @@ export interface PrintableReportCardProps {
   classificationBands?: ClassificationBand[] // CGPA classification bands (university)
   cgpa?: number                       // cumulative GPA (university), if known
   subjectStats?: Record<string, { min: number; avg: number; max: number }> // class-wide per-subject stats
-  // University transcript only: per-semester data for marks_table sections with
-  // `transcriptSemester` set. Absent for every other document type/layout.
-  transcriptSemesters?: { sem1?: TranscriptSemesterData; sem2?: TranscriptSemesterData }
+  // Annual transcript only: per-period data for marks_table sections with
+  // `transcriptSemester` set (2 semesters for a university, 3 terms otherwise).
+  // Absent for every other document type/layout.
+  transcriptSemesters?: Partial<Record<TranscriptPeriod, TranscriptSemesterData>>
 }
 
 function ordinalPos(n: number): string {
@@ -745,26 +746,45 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       const semData = s.transcriptSemester ? props.transcriptSemesters?.[s.transcriptSemester] : undefined
       const scopedSubjects = semData?.subjects ?? subjects
       const scopedEntries  = semData?.entries ?? entries
-      // Credit/mark/grade-point/weighted-point sums for THIS semester, used by the
-      // 'credits'/'total'/'gpTotal'/'wpTotal'/'gpa' footer fields below (statResolver).
+      // Caption naming the period this table covers — a transcript stacks two or three
+      // identical-looking tables, so without it there's no way to tell which is which.
+      // Prefer the term's real name (already localized by the school's own naming);
+      // the slot's ordinal label is the fallback when the data doesn't carry one.
+      const periodCaption = s.transcriptSemester ? (
+        <div style={{
+          fontWeight: 'bold', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+          color: '#fff', backgroundColor: color, padding: '4px 8px', marginBottom: 0,
+        }}>
+          {t(semData?.term.name || transcriptPeriodLabel(s.transcriptSemester, school.type))}
+        </div>
+      ) : null
+      // Sums for THIS period only, used by the footer fields below (statResolver).
+      // University tables band on credits/grade points; primary/secondary term tables
+      // band on coefficients and the term's own coefficient-weighted average — hence
+      // both sets are computed here regardless of school type.
       const scopedAgg = s.transcriptSemester ? (() => {
-        let credit = 0, mark = 0, gp = 0, wp = 0
+        let credit = 0, mark = 0, gp = 0, wp = 0, coef = 0, weightedMark = 0
         for (const subj of scopedSubjects) {
           const e = scopedEntries.find(x => x.subjectId === subj.id)
           const c = subj.credit ?? 0
+          const cf = subj.coefficient ?? 1
           const g = e?.score == null ? null : gradePointForScore20(e.score, bands)
           credit += c; mark += e?.score ?? 0
           if (g != null) { gp += g; wp += g * c }
+          if (e?.score != null) { coef += cf; weightedMark += e.score * cf }
         }
-        return { credit, mark, gp, wp }
+        return { credit, mark, gp, wp, coef, weightedMark }
       })() : null
       const statResolver = (field: string): React.ReactNode => {
         if (scopedAgg) {
-          if (field === 'credits') return String(scopedAgg.credit)
-          if (field === 'total')   return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
-          if (field === 'gpTotal') return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
-          if (field === 'wpTotal') return scopedAgg.wp.toFixed(2)
-          if (field === 'gpa')     return (scopedAgg.credit > 0 ? scopedAgg.wp / scopedAgg.credit : 0).toFixed(2)
+          if (field === 'credits')   return String(scopedAgg.credit)
+          if (field === 'total')     return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
+          if (field === 'gpTotal')   return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
+          if (field === 'wpTotal')   return scopedAgg.wp.toFixed(2)
+          if (field === 'gpa')       return (scopedAgg.credit > 0 ? scopedAgg.wp / scopedAgg.credit : 0).toFixed(2)
+          if (field === 'coefTotal') return String(scopedAgg.coef)
+          // Scoped to this period — the document-level 'average' is the ANNUAL one.
+          if (field === 'average')   return (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(2)
         }
         return resolveStat(field)
       }
@@ -879,6 +899,40 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
         const dataRowFields: string[] = dataRowTpl?.cells.map((c: SheetCell) => c.field ?? '') ?? []
 
+        // ── Header text must stay inside its own column ─────────────────────────
+        // A header word wider than its fixed column (e.g. "WEIGHTED" in the 44px
+        // weighted-point column) doesn't wrap — it paints straight across the column
+        // border, so the vertical rule appears to cut through the label. Headers are
+        // freely renamable, so rather than hand-tuning NARROW_PX per label, widen each
+        // fixed column to fit its own longest header word.
+        //
+        // The header font is Arial bold at HDR_FONT_PX. Per-character width is
+        // deliberately over-estimated: measured uppercase Arial bold peaks around
+        // 0.72em per character ("GRADE"), so 0.78em keeps a margin for wider labels
+        // and font fallback. Over-reserving only costs slack from the flex column.
+        const HDR_FONT_PX = 9
+        const HDR_CHAR_EM = 0.78
+        const HDR_PAD_PX  = 6 // 3px of padding either side
+        const headerWordWidth = (text: string): number => {
+          const longestWord = String(text).replace(/<[^>]*>/g, ' ').split(/\s+/)
+            .reduce((max, w) => Math.max(max, w.length), 0)
+          return Math.ceil(longestWord * HDR_CHAR_EM * HDR_FONT_PX + HDR_PAD_PX)
+        }
+        // Width each column needs for its own header. Only cells spanning a single
+        // column pin to one column; a spanning cell's text is shared across several,
+        // so it can't dictate any one column's width.
+        const headerNeedByCol: number[] = []
+        for (const row of headerRows) {
+          let col = 0
+          for (const c of row.cells) {
+            if (c._consumed) continue
+            const span = c.colSpan ?? 1
+            if (span === 1 && !c.field && c.text)
+              headerNeedByCol[col] = Math.max(headerNeedByCol[col] ?? 0, headerWordWidth(c.text))
+            col += span
+          }
+        }
+
         const renderTplRow = (row: SheetRow, resolver: (f: string) => React.ReactNode, key?: string, isHdr = false) => (
           <tr key={key ?? row.id}>
             {row.cells.map((c: SheetCell, ci: number) => {
@@ -900,6 +954,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                     color: c.textColor ?? 'inherit',
                     border: '1px solid #d1d5db',
                     lineHeight: isHdr ? 1.2 : 1.4,
+                    // Backstop for the column sizing above: a header can be renamed to
+                    // anything, so keep its text inside its own cell no matter what
+                    // rather than letting it paint over the column border.
+                    ...(isHdr ? { overflowWrap: 'break-word' as const, overflow: 'hidden' as const } : {}),
                     // data cells in narrow cols stay on one line; clip any overflow
                     // (wrap-listed fields fold to a second line instead)
                     ...(!isHdr && !isFlex && !WRAP_FIELDS.has(colField) ? { whiteSpace: 'nowrap' as const, overflow: 'hidden' as const } : {}),
@@ -913,11 +971,16 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
         const colCount = tpl.colCount || (dataRowTpl?.cells.length ?? 1)
         return (
+          <>
+          {periodCaption}
           <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', marginBottom: 16, fontSize: colCount > 8 ? 10 : 12 }}>
             <colgroup>
               {dataRowFields.map((field, ci) => {
                 const px = NARROW_PX[field]
-                return <col key={ci} style={px ? { width: `${px}px` } : {}} />
+                // Flex columns (no fixed width) absorb the slack and never clip, so
+                // only fixed columns need widening to fit their header.
+                if (!px) return <col key={ci} />
+                return <col key={ci} style={{ width: `${Math.max(px, headerNeedByCol[ci] ?? 0)}px` }} />
               })}
             </colgroup>
             {headerRows.length > 0 && (
@@ -937,10 +1000,13 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
               {footerRows.map((row: SheetRow) => renderTplRow(row, statResolver))}
             </tbody>
           </table>
+          </>
         )
       }
 
       return (
+        <>
+        {periodCaption}
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: 12 }}>
           <thead>
             <tr style={{ backgroundColor: color }}>
@@ -966,6 +1032,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             })}
           </tbody>
         </table>
+        </>
       )
     }
 

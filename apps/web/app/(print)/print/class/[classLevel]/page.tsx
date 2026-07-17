@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi } from '@/lib/api/reportcards'
-import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
@@ -45,9 +45,9 @@ export default function PrintClassPage() {
         if (published.length === 0) { setStatus('empty'); return }
         if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
 
-        const saved = tplData.config as Partial<TemplateConfig> | undefined
-        const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-        setConfig(saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : base)
+        // Resolves the saved standard/ledger design; never the transcript one
+        // (that lives under config.transcript and only the transcript page uses it).
+        setConfig(mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, school?.type))
         if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
         if (scaleData.classificationBands?.length > 0) setClassBands(scaleData.classificationBands)
         setCards(published)

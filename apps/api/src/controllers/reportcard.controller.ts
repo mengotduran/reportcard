@@ -117,6 +117,42 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // Whether each card's student can print an ANNUAL transcript yet — ready once a
+    // PUBLISHED report card exists for EVERY period of that card's session. Keyed
+    // studentId::session because the list can span sessions when filtered that way.
+    // Counted from the session's actual terms, so it covers a university's two
+    // semesters and a primary/secondary school's three terms alike.
+    const transcriptReadyByKey: Record<string, boolean> = {}
+    // Which term CLOSES each session (last by startDate) — the annual transcript action
+    // only shows on that term's rows (it's a year-end document, not a per-period one).
+    // That's the second semester at a university and the third term everywhere else.
+    const finalTermIdBySession = new Map<string, string>()
+    if (reportCards.length > 0) {
+      const sessions = [...new Set(reportCards.map(rc => rc.term.session))]
+      const sIds = [...new Set(reportCards.map(rc => rc.studentId))]
+      const [sessionTerms, publishedCards] = await Promise.all([
+        prisma.term.findMany({ where: { schoolId, session: { in: sessions } }, select: { id: true, session: true }, orderBy: { startDate: 'asc' } }),
+        prisma.reportCard.findMany({
+          where: { schoolId, studentId: { in: sIds }, status: 'PUBLISHED', term: { session: { in: sessions } } },
+          select: { studentId: true, termId: true, term: { select: { session: true } } },
+        }),
+      ])
+      const termCountBySession = new Map<string, number>()
+      for (const t of sessionTerms) termCountBySession.set(t.session, (termCountBySession.get(t.session) ?? 0) + 1)
+      for (const t of sessionTerms) finalTermIdBySession.set(t.session, t.id) // asc — last write = latest startDate
+      const publishedTermsByKey = new Map<string, Set<string>>()
+      for (const c of publishedCards) {
+        const key = `${c.studentId}::${c.term.session}`
+        if (!publishedTermsByKey.has(key)) publishedTermsByKey.set(key, new Set())
+        publishedTermsByKey.get(key)!.add(c.termId)
+      }
+      for (const rc of reportCards) {
+        const key = `${rc.studentId}::${rc.term.session}`
+        const total = termCountBySession.get(rc.term.session) ?? 0
+        transcriptReadyByKey[key] = total > 0 && (publishedTermsByKey.get(key)?.size ?? 0) >= total
+      }
+    }
+
     // Class size per term: how many students in this class + term actually got
     // ranked (non-null average) — the denominator next to "Position". Computed
     // in-memory from the already-fetched set (it always includes every card
@@ -194,6 +230,8 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       return {
         ...rc,
         cgpa: cgpaByStudent[rc.studentId] ?? null,
+        transcriptReady: transcriptReadyByKey[`${rc.studentId}::${rc.term.session}`] ?? false,
+        isFinalTerm: finalTermIdBySession.get(rc.term.session) === rc.termId,
         classSize,
         classAverage: classSize && classAverageSum != null ? classAverageSum / classSize : null,
         annualAverage: annualByCardId[rc.id]?.average ?? null,
@@ -1187,18 +1225,25 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const [student, reportCards, gradingScale, school, classLevel] = await Promise.all([
+    const [student, reportCards, gradingScale, school, classLevel, termCount] = await Promise.all([
       prisma.student.findFirst({ where: { id: studentId, schoolId } }),
       prisma.reportCard.findMany({
-        where: { studentId, schoolId, term: { session: resolvedSession } },
+        // Published only — an official annual transcript must never reflect
+        // draft marks that can still change (same rule as bulk printing).
+        where: { studentId, schoolId, term: { session: resolvedSession }, status: 'PUBLISHED' },
         include: {
           term: true,
           entries: {
-            include: { subject: { select: { id: true, name: true, code: true, credit: true, term: true, classLevel: true } } },
+            // coefficient drives the term tables + annual average on primary/secondary
+            // transcripts (credit is the university's equivalent).
+            include: { subject: { select: { id: true, name: true, code: true, credit: true, coefficient: true, term: true, classLevel: true } } },
             orderBy: [{ subject: { name: 'asc' } }],
           },
         },
-        orderBy: { term: { name: 'asc' } },
+        // Chronological — the transcript stacks its tables in year order. Ordering by
+        // term NAME only happened to work while terms sorted alphabetically by
+        // coincidence ("First…" < "Second…" < "Third…"); startDate is the real order.
+        orderBy: { term: { startDate: 'asc' } },
       }),
       prisma.gradingScale.findUnique({ where: { schoolId } }),
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, logo: true, language: true, type: true, email: true, phone: true, address: true, website: true, authorizationNumber: true, officialLeftTextEn: true, officialLeftTextFr: true, officialRightTextEn: true, officialRightTextFr: true } }),
@@ -1206,6 +1251,9 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
         where: { id: studentId, schoolId },
         select: { classLevel: true },
       }).then(async (s) => s ? prisma.classLevel.findFirst({ where: { schoolId, name: s.classLevel }, select: { maxScore: true } }) : null),
+      // How many periods this year actually has (2 semesters / 3 terms) — the page
+      // needs it to tell a complete transcript from a partially published one.
+      prisma.term.count({ where: { schoolId, session: resolvedSession } }),
     ])
 
     if (!student) {
@@ -1228,6 +1276,7 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
       school,
       session: resolvedSession,
       reportCards,
+      termCount,
       maxScore: (classLevel as { maxScore: number } | null)?.maxScore ?? 20,
       gradingScale: gradingRanges,
       classificationBands,

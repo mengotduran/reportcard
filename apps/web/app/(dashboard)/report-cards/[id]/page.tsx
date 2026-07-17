@@ -11,7 +11,7 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
-import { getTemplateApi, TemplateConfig, TemplateName, DEFAULT_CONFIG, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
 import { gradeFromScore } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
@@ -109,15 +109,9 @@ export default function ReportCardDetailPage() {
       setTeachers((teacherData.teachers ?? []).filter((t: any) => ['CLASS_TEACHER', 'CLASS_MASTER'].includes(t.role)))
       if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
       if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
-      if (tplData.config && Object.keys(tplData.config).length > 0) {
-        const { TEMPLATE_DEFAULTS } = await import('@/lib/api/reportCardTemplate')
-        const saved = tplData.config as Partial<TemplateConfig>
-        const base = TEMPLATE_DEFAULTS[(saved.template ?? 'classic') as TemplateName]
-        setTemplateConfig({ ...base, ...saved } as TemplateConfig)
-      } else {
-        // No saved design → use the section-type default (university gets the GPA transcript).
-        setTemplateConfig(getDefaultLayoutForType(rc.school?.type) as TemplateConfig)
-      }
+      // Resolves the saved standard/ledger design; never the transcript one
+      // (that lives under config.transcript and only the transcript page uses it).
+      setTemplateConfig(mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, rc.school?.type))
       if (rc.cgpa != null) setStudentCgpa(rc.cgpa)
       setReportCard(rc)
       if (rc.subjectStats) setSubjectStats(rc.subjectStats)

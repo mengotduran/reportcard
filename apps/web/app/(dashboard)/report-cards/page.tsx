@@ -17,7 +17,7 @@ import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 import DesktopOnly from '@/components/ui/DesktopOnly'
-import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { ClassListDocOptions, classListPrintPortalHtml } from '@/lib/classListDocument'
 import ClassPickerModal, { ClassOption } from '@/components/ui/ClassPickerModal'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
@@ -66,6 +66,13 @@ interface ReportCard {
   totalScore: number | null
   average: number | null
   decision?: string | null
+  // Every period of this card's session has a published report card, so the
+  // annual transcript can be printed (see getReportCards).
+  transcriptReady?: boolean
+  // This card belongs to the session's CLOSING period — the only rows that carry
+  // the annual transcript action (a year-end document). That's the second
+  // semester at a university and the third term at a primary/secondary school.
+  isFinalTerm?: boolean
   student: { id: string; name: string; classLevel: string; studentId: string }
   term: { id: string; name: string; session: string }
   entries: { id: string; score: number; grade: string; subject: { name: string } }[]
@@ -123,9 +130,7 @@ function TeacherClassesView() {
       // time from their own report-card detail page if ever needed.
       const published: RawRC[] = (rcData.reportCards as RawRC[]).filter(rc => rc.status === 'PUBLISHED' && rc.student.isActive !== false)
       if (!published.length) { setPrinting(false); return }
-      const saved = tplData.config as Partial<TemplateConfig> | undefined
-      const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
+      const config = mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, school?.type)
       setPrintJob({ cards: published, config })
     } catch {
       setPrinting(false)
@@ -488,9 +493,7 @@ export default function ReportCardsPage() {
     setPickerBusy(true)
     try {
       const tplData = await getTemplateApi().catch(() => ({ config: {} }))
-      const saved = tplData.config as Partial<TemplateConfig> | undefined
-      const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
+      const config = mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, school?.type)
       const lists = await Promise.all(classes.map((cl) => getReportCardsApi({ termId: activeTerm.id, classLevel: cl })))
       // Disabled/Dismissed students are excluded from bulk printing — see Student.status in schema.prisma.
       const cards: RawRC[] = lists.flatMap((d) => (d.reportCards as RawRC[]).filter((rc) => rc.status === 'PUBLISHED' && rc.student.isActive !== false))
@@ -887,8 +890,12 @@ export default function ReportCardsPage() {
                         className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('View / Print')}>
                         <Eye size={14} />
                       </button>
-                      {school?.type === 'UNIVERSITY' && (() => {
-                        const matchedTpl = excelTemplates.find(t => t.classLevels.includes(rc.student.classLevel))
+                      {(() => {
+                        // Excel transcript templates are a university-only feature; the
+                        // annual transcript below applies to every school type.
+                        const matchedTpl = school?.type === 'UNIVERSITY'
+                          ? excelTemplates.find(t => t.classLevels.includes(rc.student.classLevel))
+                          : undefined
                         if (matchedTpl) {
                           return (<>
                             <button
@@ -907,11 +914,21 @@ export default function ReportCardsPage() {
                             </button>
                           </>)
                         }
+                        // The annual transcript is a year-end document — its action only
+                        // lives on the rows of the period that CLOSES the year (second
+                        // semester at a university, third term everywhere else).
+                        if (!rc.isFinalTerm) return null
+                        const isUni = school?.type === 'UNIVERSITY'
                         return (
                           <button
                             onClick={() => router.push(`/report-cards/transcript/${rc.student.id}?session=${encodeURIComponent(rc.term.session)}`)}
-                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition"
-                            title={tr('Print Annual Transcript')}>
+                            disabled={!rc.transcriptReady}
+                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-transparent"
+                            title={rc.transcriptReady
+                              ? tr(isUni ? 'Print Annual Transcript' : 'Print Annual Report')
+                              : tr(isUni
+                                  ? 'Annual transcript is available once every semester of the year is published'
+                                  : 'Annual report is available once every term of the year is published')}>
                             <Scroll size={14} />
                           </button>
                         )

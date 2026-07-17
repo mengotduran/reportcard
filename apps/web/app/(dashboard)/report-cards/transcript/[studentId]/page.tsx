@@ -6,7 +6,7 @@ import { getStudentTranscriptApi, StudentTranscript, TranscriptReportCard } from
 import PrintableReportCard, { PrintEntry, TranscriptSemesterData } from '@/components/ui/PrintableReportCard'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { ArrowLeft, Printer } from 'lucide-react'
-import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor } from '@/lib/api/reportCardTemplate'
 
 // Build a per-semester bundle (subjects + entries, PrintableReportCard's shapes) from
 // one transcript report card. `subjects` is derived from the entries themselves since
@@ -15,7 +15,7 @@ function toSemesterData(card?: TranscriptReportCard): TranscriptSemesterData | u
   if (!card) return undefined
   return {
     term: { name: card.term.name, session: card.term.session },
-    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined })),
+    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined, coefficient: e.subject.coefficient ?? undefined })),
     entries: card.entries.map((e): PrintEntry => ({
       subjectId: e.subject.id, score: e.score ?? 0, seq1Score: e.seq1Score, seq2Score: e.seq2Score,
       resitScore: e.resitScore, grade: e.grade ?? '', remarks: '',
@@ -46,15 +46,21 @@ export default function AnnualTranscriptPage() {
       .then(([transcript, tpl]) => {
         setData(transcript)
         const saved = tpl.config as Partial<TemplateConfig> | undefined
-        // A school that never customized the transcript layout (or only ever customized
-        // the standard one) has no transcriptSemester-flagged marks_table in its saved
-        // sections — fall back to the built-in transcript default rather than rendering
-        // whatever unrelated layout happens to be saved.
-        const hasTranscriptSections = Array.isArray((saved as any)?.sections)
-          && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+        // The school's transcript design lives under saved.transcript (the top
+        // level holds the standard/ledger report-card design; legacy rows from
+        // before the sub-key existed saved the transcript at the top level).
+        // A school that never customized the transcript layout has no
+        // transcriptSemester-flagged marks_table in either place — fall back
+        // to the built-in transcript default rather than rendering whatever
+        // unrelated layout happens to be saved.
+        const savedT = (saved?.transcript ?? (saved?.layoutType === 'transcript' ? saved : undefined)) as Partial<TemplateConfig> | undefined
+        const hasTranscriptSections = Array.isArray(savedT?.sections)
+          && savedT!.sections!.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+        const primaryColor = savedT?.primaryColor ?? saved?.primaryColor
+        const sType = transcript.school.type ?? undefined
         const finalConfig: TemplateConfig = hasTranscriptSections
-          ? (saved as TemplateConfig)
-          : { ...getDefaultTranscriptLayout(), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' }
+          ? (savedT as TemplateConfig)
+          : { ...getDefaultTranscriptLayout(sType), ...(primaryColor ? { primaryColor } : {}), layoutType: 'transcript' }
         setConfig(finalConfig)
       })
       .catch(() => setError('Failed to load transcript.'))
@@ -84,14 +90,47 @@ export default function AnnualTranscriptPage() {
       <button onClick={() => router.back()} className="mt-4 text-sm text-primary underline">Go back</button>
     </div>
   )
+  const isUniversity = (data.school.type ?? 'UNIVERSITY') === 'UNIVERSITY'
+  const periodWord = isUniversity ? 'semester' : 'term'
+  // Safety net for direct URL access — the report-cards list already disables its
+  // transcript button until every period is published, but nothing stops someone
+  // pasting this page's URL mid-year. The API only returns PUBLISHED cards, so fewer
+  // than the year's term count means it isn't complete for this student.
+  if (data.reportCards.length < data.termCount) return (
+    <div className="text-center py-16">
+      <p className="text-muted-foreground text-sm">
+        The annual transcript is available once every {periodWord} of {data.session} has a published report card for this student.
+      </p>
+      <button onClick={() => router.back()} className="mt-4 text-sm text-primary underline">Go back</button>
+    </div>
+  )
 
-  // First Semester before Second Semester.
-  const sorted = [...data.reportCards].sort((a, b) => a.term.name.localeCompare(b.term.name))
-  const sem1 = toSemesterData(sorted[0])
-  const sem2 = toSemesterData(sorted[1])
-  // Combined across both semesters — drives the grading_legend's Credits/CGPA/Remark box.
-  const allSubjects = [...(sem1?.subjects ?? []), ...(sem2?.subjects ?? [])]
-  const allEntries = [...(sem1?.entries ?? []), ...(sem2?.entries ?? [])]
+  // Already chronological from the API (ordered by term startDate). Slot N of the
+  // layout takes the Nth period of the year: 2 semesters at a university, 3 terms at a
+  // primary/secondary school.
+  const periodData: Partial<Record<TranscriptPeriod, TranscriptSemesterData>> = {}
+  transcriptPeriodsFor(data.school.type ?? undefined).forEach((p, i) => {
+    const d = toSemesterData(data.reportCards[i])
+    if (d) periodData[p] = d
+  })
+  const periods = Object.values(periodData)
+  // Combined across the whole year — drives the grading_legend's summary box
+  // (Credits/CGPA/Remark at a university, Annual Average/Grade elsewhere).
+  const allSubjects = periods.flatMap(p => p.subjects)
+  const allEntries = periods.flatMap(p => p.entries)
+  // Annual average = mean of the year's term averages, each coefficient-weighted.
+  // University transcripts summarise by CGPA instead and ignore this.
+  const termAverages = periods.map(p => {
+    let coef = 0, weighted = 0
+    for (const subj of p.subjects) {
+      const e = p.entries.find(x => x.subjectId === subj.id)
+      if (e?.score == null) continue
+      const c = subj.coefficient ?? 1
+      coef += c; weighted += e.score * c
+    }
+    return coef > 0 ? weighted / coef : 0
+  })
+  const annualAverage = termAverages.length ? termAverages.reduce((s, a) => s + a, 0) / termAverages.length : 0
 
   const printableProps = {
     school: {
@@ -106,11 +145,13 @@ export default function AnnualTranscriptPage() {
     subjects: allSubjects,
     entries: allEntries,
     generalRemarks: '',
-    average: 0,
+    // The document-level average is the ANNUAL one (each table resolves its own period's
+    // average itself). Universities summarise by CGPA and never read this.
+    average: annualAverage,
     config,
     gradeBands: data.gradingScale,
     classificationBands: data.classificationBands,
-    transcriptSemesters: { sem1, sem2 },
+    transcriptSemesters: periodData,
   }
 
   return (

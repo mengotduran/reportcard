@@ -43,6 +43,14 @@ export interface TemplateConfig {
     reportTitle?: string
     academicYearLabel?: string
   }
+  // The school's saved TRANSCRIPT design (university only) — stored under its
+  // own key so it can coexist with the standard/ledger design at the top
+  // level. One school = one saved row, but saving the transcript must never
+  // clobber the report-card design (or vice versa): before this key existed,
+  // saving from the designer's Transcript view overwrote the whole config,
+  // and every regular report card then printed with the transcript layout —
+  // whose semester-scoped tables render nothing outside the transcript page.
+  transcript?: Partial<TemplateConfig>
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -215,9 +223,37 @@ export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|
 export interface MarksTableSec { id: string; type: 'marks_table';  showSeq1: boolean; showSeq2: boolean; showCoef?: boolean; showGrade: boolean; showRemarks: boolean; headers?: Record<string,string>; headerColor?: string; colColors?: Record<string,string>; columnOrder?: string[];
   /** When set, the marks table is rendered from this SpreadsheetTable template instead of the default layout. The row marked _isDataRow repeats per subject in the print renderer. */
   template?: SpreadsheetTable
-  /** Transcript layout only: renders as the fixed banded semester table (TOTAL + SEMESTER GPA rows,
-   *  resit asterisks) sourced from ONE specific semester's data instead of the spreadsheet template. */
-  transcriptSemester?: 'sem1' | 'sem2'
+  /** Transcript layout only: sources this table's data from ONE specific period of the
+   *  academic year instead of the document's combined subjects/entries. The slots are
+   *  ordinal, not literally semesters — a university year has two (sem1/sem2), a primary
+   *  or secondary year has three terms (sem1/sem2/sem3). The key keeps its original name
+   *  so designs saved before terms were supported still resolve. */
+  transcriptSemester?: TranscriptPeriod
+}
+
+/** Ordinal period slot a transcript marks table can be scoped to. Slot N = the Nth
+ *  period of the academic year, whatever that school type calls it. */
+export type TranscriptPeriod = 'sem1' | 'sem2' | 'sem3'
+
+/** Every slot, in year order. Slice with transcriptPeriodCount() for a given school type. */
+export const TRANSCRIPT_PERIODS: TranscriptPeriod[] = ['sem1', 'sem2', 'sem3']
+
+/** Periods in one academic year: universities run 2 semesters, primary/secondary 3 terms. */
+export function transcriptPeriodCount(schoolType?: string): number {
+  return schoolType === 'UNIVERSITY' ? 2 : 3
+}
+
+/** Slots a given school type's transcript uses, in year order. */
+export function transcriptPeriodsFor(schoolType?: string): TranscriptPeriod[] {
+  return TRANSCRIPT_PERIODS.slice(0, transcriptPeriodCount(schoolType))
+}
+
+/** Human label for a period slot ("First Semester" / "First Term"). Used as the caption
+ *  above each transcript marks table when the real term name isn't available (the print
+ *  renderer prefers the actual term name from the student's data). */
+export function transcriptPeriodLabel(period: TranscriptPeriod, schoolType?: string): string {
+  const ordinal = { sem1: 'First', sem2: 'Second', sem3: 'Third' }[period]
+  return `${ordinal} ${schoolType === 'UNIVERSITY' ? 'Semester' : 'Term'}`
 }
 
 // Secondary marks-table columns, in their default order. `subject` and `score` always show.
@@ -302,7 +338,8 @@ export function seedMarksTableSection(sec: MarksTableSec, color: string, schoolT
  *  just a different starting shape. The footer fields (`credits`/`total`/`gpTotal`/
  *  `wpTotal`/`gpa`) resolve scoped to THIS section's own semester — see the
  *  transcriptSemester-aware resolver in PrintableReportCard.tsx. */
-export function seedTranscriptMarksTable(color: string): SpreadsheetTable {
+export function seedTranscriptMarksTable(color: string, schoolType?: string): SpreadsheetTable {
+  if (schoolType && schoolType !== 'UNIVERSITY') return seedTranscriptTermMarksTable(color)
   const cols = ['code', 'subject', 'credit', 'score', 'grade', 'gradePoint', 'weighted'] as const
   const labels: Record<string, string> = { code: 'CODE', subject: 'TITLE', credit: 'CREDIT', score: 'MARK /100', grade: 'GRADE', gradePoint: 'GRADE POINT', weighted: 'WEIGHTED POINT' }
   const ts = Date.now()
@@ -346,6 +383,62 @@ export function seedTranscriptMarksTable(color: string): SpreadsheetTable {
         cells: [
           { text: 'SEMESTER GPA:', bold: true, colSpan: 6, align: 'right', textColor: color },
           { field: 'gpa', bold: true, align: 'center', textColor: color, fontSize: 15 },
+        ],
+      } as SheetRow,
+    ],
+  }
+}
+
+/** Primary/secondary counterpart of seedTranscriptMarksTable — one term's marks on the
+ *  annual transcript. No GPA machinery (that's university-only): subjects carry a
+ *  coefficient rather than credit hours, and the hero line is the term's own
+ *  coefficient-weighted average out of 20, not a GPA. */
+function seedTranscriptTermMarksTable(color: string): SpreadsheetTable {
+  const cols = ['subject', 'coef', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const
+  const labels: Record<string, string> = { subject: 'SUBJECT', coef: 'COEF', seq1: 'SEQ 1', seq2: 'SEQ 2', score: 'AVERAGE', grade: 'GRADE', remarks: 'REMARKS' }
+  const ts = Date.now()
+  const bandBg = '#f1f5f9'
+  const bandFg = '#111827'
+  return {
+    id: `marks_${ts}`,
+    title: '',
+    colCount: cols.length,
+    rows: [
+      {
+        id: `mhdr_${ts}`,
+        cells: cols.map(k => ({
+          text: labels[k], bold: true, align: k === 'subject' || k === 'remarks' ? 'left' : 'center',
+          bgColor: color, textColor: '#ffffff',
+        })),
+      } as SheetRow,
+      {
+        id: `mdata_${ts + 1}`,
+        _isDataRow: true,
+        cells: cols.map(k => ({
+          field: `m:${k}`, align: k === 'subject' || k === 'remarks' ? 'left' : 'center',
+          ...(k === 'score' || k === 'grade' ? { bold: true } : {}),
+        })),
+      } as SheetRow,
+      // TOTAL row — coefficient and weighted-mark sums, scoped to this table's term.
+      {
+        id: `mfoot_${ts + 2}`,
+        cells: [
+          { text: 'TOTAL', bold: true, align: 'left', bgColor: bandBg, textColor: bandFg },
+          { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', bgColor: bandBg },
+          { text: '', bgColor: bandBg },
+          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', bgColor: bandBg },
+          { text: '', bgColor: bandBg },
+        ],
+      } as SheetRow,
+      // Hero line — this term's own average.
+      {
+        id: `mfoot_${ts + 3}`,
+        cells: [
+          { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+          { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
+          { text: '', colSpan: 2 },
         ],
       } as SheetRow,
     ],
@@ -645,15 +738,19 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
 }
 
 /**
- * University annual transcript, built from the same section system as every other
- * layout — a marks_table section with `transcriptSemester: 'sem1' | 'sem2'` sources
- * its data from that semester specifically (instead of the document's combined
- * subjects/entries) but is otherwise a completely normal, editable SpreadsheetTable
- * (columns removable/re-keyable via double-click, same as any other marks table).
- * Everything else (header, student info, grading legend, signatures) is a normal,
- * freely editable section too.
+ * Annual transcript, built from the same section system as every other layout — a
+ * marks_table section with `transcriptSemester` set sources its data from that ONE
+ * period of the year (instead of the document's combined subjects/entries) but is
+ * otherwise a completely normal, editable SpreadsheetTable (columns removable/re-keyable
+ * via double-click, same as any other marks table). Everything else (header, student
+ * info, grading legend, signatures) is a normal, freely editable section too.
+ *
+ * Shape follows the school type: a university year is two semesters summarised by
+ * credits/CGPA, a primary or secondary year is three terms summarised by the annual
+ * average (see getTranscriptTermLayout).
  */
-export function getDefaultTranscriptLayout(): TemplateConfig & { sections: LayoutSection[] } {
+export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  if (schoolType && schoolType !== 'UNIVERSITY') return getTranscriptTermLayout(schoolType)
   const color = '#1e3a5f'
   const sections: LayoutSection[] = [
     // Same non-official defaults as the standard university layout (logo left,
@@ -695,6 +792,56 @@ export function getDefaultTranscriptLayout(): TemplateConfig & { sections: Layou
   ]
 
   return { ...TEMPLATE_DEFAULTS.classic, template: 'classic', primaryColor: color, reportTitle: 'ANNUAL TRANSCRIPT', schoolSubtitle: '', sections }
+}
+
+/**
+ * Primary/secondary annual transcript: the year's THREE terms, one marks table each,
+ * summarised by the annual average rather than the university's credits/CGPA. Printed
+ * from the third term, once every term of the year is published.
+ */
+function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  const color = schoolType === 'PRIMARY' ? '#0f766e' : '#1e3a5f'
+  const pupil = schoolType === 'PRIMARY'
+  const sections: LayoutSection[] = [
+    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    {
+      id: uid('info'), type: 'student_info', columns: 2,
+      rows: [
+        { id: uid('r'), label: pupil ? 'Pupil Name' : 'Student Name', field: 'student.name' },
+        { id: uid('r'), label: pupil ? 'Pupil ID' : 'Student ID', field: 'student.studentId' },
+        { id: uid('r'), label: 'Class', field: 'student.classLevel' },
+        { id: uid('r'), label: 'Sex', field: 'student.gender' },
+        { id: uid('r'), label: 'Academic Year', field: 'term.session' },
+      ],
+    },
+    ...transcriptPeriodsFor(schoolType).map(p => ({
+      id: uid(`tbl_${p}`), type: 'marks_table' as const,
+      showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true,
+      transcriptSemester: p, template: seedTranscriptMarksTable(color, schoolType),
+    })),
+    {
+      id: uid('leg'), type: 'grading_legend', title: 'Grading Scale',
+      showGradeSystem: true, showClassification: false, showLegend: false,
+      rightLayout: 'columns',
+      rightTables: [{
+        id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
+        rows: [
+          { id: uid('rr'), cells: [{ text: 'Annual Average', bold: true }, { field: 'average' }] },
+          { id: uid('rr'), cells: [{ text: 'Grade', bold: true }, { field: 'grade' }] },
+        ],
+      }],
+    },
+    {
+      id: uid('sig'), type: 'signatures',
+      lines: [
+        { id: uid('s'), label: "Class Teacher's Signature" },
+        { id: uid('s'), label: pupil ? "Head Teacher's Signature" : "Principal's Signature" },
+        { id: uid('s'), label: "Parent / Guardian's Signature" },
+      ],
+    },
+  ]
+
+  return { ...TEMPLATE_DEFAULTS.classic, template: 'classic', primaryColor: color, reportTitle: 'ANNUAL REPORT', schoolSubtitle: '', sections }
 }
 
 /** Default report-card layout tailored to the school's section type. */
@@ -750,6 +897,22 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
     gradingLegend: true,
   })
   return getDefaultLayout('classic') // secondary / default
+}
+
+/**
+ * Resolve the school's saved STANDARD/LEDGER design from a fetched template
+ * config, for printing regular report cards. Never returns the transcript
+ * design: the `transcript` sub-key is dropped, and a legacy row whose top
+ * level IS the transcript (saved before the sub-key existed) counts as having
+ * no standard design at all — its semester-scoped tables render nothing
+ * outside the transcript page, so falling back to the school-type default is
+ * the only rendering that shows the student's marks.
+ */
+export function mergeSavedStandardConfig(saved: Partial<TemplateConfig> | null | undefined, schoolType?: string): TemplateConfig {
+  const { transcript: _t, ...top } = (saved ?? {}) as Partial<TemplateConfig>
+  if (Object.keys(top).length === 0 || top.layoutType === 'transcript') return getDefaultLayoutForType(schoolType)
+  const base = TEMPLATE_DEFAULTS[(top.template as TemplateName) ?? 'classic']
+  return { ...base, ...top } as TemplateConfig
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────

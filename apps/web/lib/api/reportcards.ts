@@ -169,7 +169,7 @@ export interface TranscriptEntry {
   seq2Score?: number | null
   resitScore?: number | null
   grade?: string | null
-  subject: { id: string; name: string; code?: string | null; credit?: number | null; term?: string | null; classLevel: string }
+  subject: { id: string; name: string; code?: string | null; credit?: number | null; coefficient?: number | null; term?: string | null; classLevel: string }
 }
 
 export interface TranscriptReportCard {
@@ -188,6 +188,9 @@ export interface StudentTranscript {
   school: { name: string; logo?: string | null; language?: string | null; type?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   session: string
   reportCards: TranscriptReportCard[]
+  /** Periods in this academic year (2 semesters / 3 terms) — reportCards only carries
+   *  the PUBLISHED ones, so fewer than this means the year isn't complete yet. */
+  termCount: number
   maxScore: number
   gradingScale: { id: string; minScore: number; maxScore: number; grade: string; remark: string; color: string; gradePoint?: number }[]
   classificationBands: { min: number; max: number; label: string }[]
