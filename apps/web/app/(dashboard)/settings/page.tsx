@@ -215,6 +215,14 @@ export default function SettingsPage() {
   const [savingInfo, setSavingInfo] = useState(false)
   const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
   const [savingThreshold, setSavingThreshold] = useState(false)
+  // Who records marks. University only: some keep marks out of teachers' hands so the
+  // person who teaches a course never enters its marks.
+  const [marksMode, setMarksMode] = useState<'TEACHERS' | 'ADMIN_ONLY'>((school as any)?.marksEntryMode ?? 'TEACHERS')
+  const [savingMarksMode, setSavingMarksMode] = useState(false)
+  // Switching is capped at 2 per semester (then the provider does it), and every switch
+  // is logged. Surfaced here so the cap is visible BEFORE the third attempt fails.
+  const [marksSwitches, setMarksSwitches] = useState<{ used: number; limit: number; termId: string | null; allowed: boolean } | null>(null)
+  const [marksHistory, setMarksHistory] = useState<{ id: string; mode: string; changedByName: string; changedAt: string; byProvider?: boolean }[]>([])
 
   // Official header letterhead text (the "Official" style's left/right text
   // blocks) — one English and one French variant per side, set once here so
@@ -241,6 +249,9 @@ export default function SettingsPage() {
         authorizationNumber: s.authorizationNumber ?? '',
       })
       setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
+      setMarksMode((s as any).marksEntryMode ?? 'TEACHERS')
+      setMarksSwitches(res.data.marksEntrySwitches ?? null)
+      setMarksHistory(res.data.marksEntryModeHistory ?? [])
       setOfficialTextForm({
         leftEn: s.officialLeftTextEn ?? '', leftFr: s.officialLeftTextFr ?? '',
         rightEn: s.officialRightTextEn ?? '', rightFr: s.officialRightTextFr ?? '',
@@ -262,6 +273,28 @@ export default function SettingsPage() {
       showToast(err.response?.data?.message ?? t('Failed to save'), 'error')
     }
     finally { setSavingInfo(false) }
+  }
+
+  const handleSaveMarksMode = async (mode: 'TEACHERS' | 'ADMIN_ONLY') => {
+    const previous = marksMode
+    setMarksMode(mode)          // optimistic: the radio should not lag behind the click
+    setSavingMarksMode(true)
+    try {
+      const res = await api.put('/school/settings', { marksEntryMode: mode })
+      updateSchool(res.data.school)
+      showToast(mode === 'ADMIN_ONLY' ? t('Only administrators can enter marks now') : t('Teachers can enter marks now'))
+      // The switch used one of the semester's two: refetch so the counter and history tell
+      // the truth without a reload.
+      const fresh = await api.get('/school/settings')
+      setMarksSwitches(fresh.data.marksEntrySwitches ?? null)
+      setMarksHistory(fresh.data.marksEntryModeHistory ?? [])
+    } catch (err: unknown) {
+      setMarksMode(previous)    // put it back: a silent revert would misstate the policy
+      // The cap's refusal explains itself ("contact your provider"); a generic "failed"
+      // would send the admin hunting for a bug instead.
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to save'), 'error')
+    } finally { setSavingMarksMode(false) }
   }
 
   const handleSaveThreshold = async () => {
@@ -729,6 +762,66 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+
+            {/* Who enters marks. University only: some universities record marks centrally
+                so the person who teaches a course never enters its marks. Saving is
+                refused by the API too, not just hidden here. */}
+            {isUniversity && (
+              <div className={CARD}>
+                <CardHead
+                  icon={UserCircle}
+                  title={t('Who enters marks')}
+                  desc={t('Some universities record all marks centrally, so that the person who teaches a course is never the person who enters its marks. Teachers can still open the marks sheet and check their subject, they just cannot change it.')}
+                />
+                <div className="mt-5 space-y-3">
+                  {([
+                    { value: 'TEACHERS' as const, label: t('Teachers'), hint: t('Teachers enter marks for the subjects they teach. Administrators can enter marks too.') },
+                    { value: 'ADMIN_ONLY' as const, label: t('Administration only'), hint: t('Only administrators enter marks (CA, Exam and Resit). Teachers see the marks sheet read-only. You can still grant one teacher access to one class when you need to.') },
+                  ]).map(opt => (
+                    <label key={opt.value}
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
+                      <input type="radio" name="marksEntryMode" value={opt.value}
+                        checked={marksMode === opt.value}
+                        // Cap reached: the unselected option is disabled rather than
+                        // failing on click, and the note below says who to contact. The
+                        // API refuses regardless; this just stops the doomed attempt.
+                        disabled={savingMarksMode || (marksSwitches?.allowed === false && marksMode !== opt.value)}
+                        onChange={() => handleSaveMarksMode(opt.value)}
+                        className="accent-primary mt-0.5" />
+                      <span>
+                        <span className="block text-sm font-medium text-foreground">{opt.label}</span>
+                        <span className="block text-xs text-muted-foreground mt-0.5">{opt.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+
+                  {/* The cap, stated before it bites: 2 switches per semester, then the
+                      provider. Between academic years there is no semester and no cap. */}
+                  {marksSwitches && marksSwitches.termId && (
+                    <p className={`text-xs ${marksSwitches.allowed ? 'text-muted-foreground' : 'text-destructive font-medium'}`}>
+                      {marksSwitches.allowed
+                        ? `${t('Switches used this semester:')} ${marksSwitches.used} ${t('of')} ${marksSwitches.limit}`
+                        : t('You have used both switches for this semester. Contact your provider to change who enters marks.')}
+                    </p>
+                  )}
+
+                  {/* Every switch, newest first, with who and when. A change here can be
+                      seen but never made quietly. */}
+                  {marksHistory.length > 0 && (
+                    <div className="border-t border-border pt-3 mt-1 space-y-1">
+                      {marksHistory.map(h => (
+                        <p key={h.id} className="text-xs text-muted-foreground">
+                          {t('Set to')}{' '}
+                          <span className="font-medium text-foreground">{h.mode === 'ADMIN_ONLY' ? t('Administration only') : t('Teachers')}</span>{' '}
+                          {t('by')} {h.changedByName}{h.byProvider ? ` (${t('provider')})` : ''}{' '}
+                          · {new Date(h.changedAt).toLocaleDateString()} {new Date(h.changedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Grading Scale */}
             <div className={CARD}>

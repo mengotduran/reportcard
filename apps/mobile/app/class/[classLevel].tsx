@@ -161,7 +161,7 @@ export default function ClassScreen() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="book-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>{t('No subjects found for')} {decodedClass}</Text>
+            <Text style={styles.emptyText}>{t(isUniversity ? 'No courses found for' : 'No subjects found for')} {decodedClass}</Text>
           </View>
         }
         renderItem={({ item }) => (

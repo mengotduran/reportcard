@@ -22,6 +22,7 @@ import {
   Subject,
 } from '@/lib/api/reportcards'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
+import { useAuthStore } from '@/lib/store/auth.store'
 import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
@@ -231,6 +232,7 @@ export default function AdminReportCardDetail() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const tr = useT()
+  const { school } = useAuthStore()
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
 
@@ -408,6 +410,9 @@ export default function AdminReportCardDetail() {
   }
 
   const isDraft = reportCard.status === 'DRAFT'
+  // This school records marks centrally, so a missing mark is the administration's own
+  // job and naming a teacher beside it points at the wrong person.
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY'
   const average = reportCard.average ?? 0
   const avgMaxScore = subjects[0]?.maxScore ?? 20
   const gradeResult = gradeFromScore(average, avgMaxScore, gradingRanges)
@@ -475,7 +480,7 @@ export default function AdminReportCardDetail() {
 
       <View style={styles.statsGrid}>
         {[
-          { label: tr('Subjects'), value: String(subjects.length || reportCard.entries.length) },
+          { label: tr(isUniversity ? 'Courses' : 'Subjects'), value: String(subjects.length || reportCard.entries.length) },
           { label: tr('Terms Average'), value: average.toFixed(1) },
           { label: tr('Overall Grade'), value: gradeResult.remark || gradeResult.grade },
           { label: tr('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
@@ -525,9 +530,13 @@ export default function AdminReportCardDetail() {
               <View key={s.subjectId} style={styles.attributionRow}>
                 <Ionicons name="ellipse" size={6} color="#ef4444" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
-                  {s.teacher
-                    ? <Text><Text style={{ fontWeight: '700' }}>{s.teacher.name}</Text> {tr('has not filled marks for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
-                    : <Text><Text style={{ fontWeight: '700' }}>{s.subjectName}</Text> {tr('has no teacher assigned')}</Text>
+                  {adminOnlyMarks
+                    // Marks are the administration's job at this school, so naming a
+                    // teacher beside a missing mark points at the wrong person.
+                    ? <Text>{tr('No marks yet for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
+                    : s.teacher
+                      ? <Text><Text style={{ fontWeight: '700' }}>{s.teacher.name}</Text> {tr('has not filled marks for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
+                      : <Text><Text style={{ fontWeight: '700' }}>{s.subjectName}</Text> {tr('has no teacher assigned')}</Text>
                   }
                 </Text>
               </View>
@@ -536,7 +545,11 @@ export default function AdminReportCardDetail() {
               <View style={styles.attributionRow}>
                 <Ionicons name="ellipse" size={6} color="#f59e0b" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
-                  {tr('Class Master')} <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> {tr('has not written general remarks')}
+                  {adminOnlyMarks
+                    // No class masters at a school where the administration records marks,
+                    // so there is nobody to name: the remark is the admin's to write.
+                    ? tr('General remarks have not been written yet')
+                    : <Text>{tr('Class Master')} <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> {tr('has not written general remarks')}</Text>}
                 </Text>
               </View>
             )}
@@ -600,6 +613,11 @@ export default function AdminReportCardDetail() {
                   {revokingMarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>{tr('Revoke')}</Text>}
                 </TouchableOpacity>
               </View>
+            ) : adminOnlyMarks ? (
+              // Handing marks back to a teacher is what this school's policy exists to
+              // prevent, so do not offer it. An existing grant still shows above, so it
+              // can be revoked rather than being stranded and invisible.
+              <Text style={styles.emptyText}>{tr('The administration enters marks at this school.')}</Text>
             ) : (
               <TouchableOpacity
                 style={[styles.grantBtn, grantingMarks && styles.disabled]}
@@ -632,6 +650,8 @@ export default function AdminReportCardDetail() {
                   {revokingRemarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>{tr('Revoke')}</Text>}
                 </TouchableOpacity>
               </View>
+            ) : adminOnlyMarks ? (
+              <Text style={styles.emptyText}>{tr('The administration writes the general remarks at this school.')}</Text>
             ) : (
               <TouchableOpacity
                 style={[styles.grantBtn, grantingRemarks && styles.disabled]}

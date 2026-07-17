@@ -224,7 +224,7 @@ export default function TeachersPage() {
       if (result.reassigned?.length) {
         setReassignedInfo(result.reassigned)
       } else {
-        showToast(tr('Subjects assigned successfully'))
+        showToast(tr(isUniversity ? 'Courses assigned successfully' : 'Subjects assigned successfully'))
         setAssignTarget(null)
       }
     } catch {
@@ -430,11 +430,11 @@ export default function TeachersPage() {
                 <div className="flex items-start gap-2">
                   <Info size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="text-xs font-semibold text-amber-800 mb-1">{tr('Subjects reassigned:')}</p>
+                    <p className="text-xs font-semibold text-amber-800 mb-1">{tr(isUniversity ? 'Courses reassigned:' : 'Subjects reassigned:')}</p>
                     {reassignedInfo.map((msg, i) => (
                       <p key={i} className="text-xs text-amber-700">{msg}</p>
                     ))}
-                    <button onClick={() => { setReassignedInfo([]); setAssignTarget(null); showToast(tr('Subjects assigned successfully')) }}
+                    <button onClick={() => { setReassignedInfo([]); setAssignTarget(null); showToast(tr(isUniversity ? 'Courses assigned successfully' : 'Subjects assigned successfully')) }}
                       className="mt-2 text-xs text-amber-800 font-semibold underline">
                       {tr('OK, got it')}
                     </button>
@@ -473,7 +473,7 @@ export default function TeachersPage() {
                   </div>
                 </div>
               ))}
-              {allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr('No subjects found. Add subjects first.')}</p>}
+              {allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr(isUniversity ? 'No courses found. Add courses first.' : 'No subjects found. Add subjects first.')}</p>}
             </div>
             <div className="flex gap-3 pt-4 border-t border-gray-100 mt-4">
               <button onClick={() => setAssignTarget(null)}

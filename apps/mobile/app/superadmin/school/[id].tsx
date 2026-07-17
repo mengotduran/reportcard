@@ -120,7 +120,8 @@ export default function SchoolDetailScreen() {
   const stats = [
     { label: 'Students', value: school.totalStudents, icon: 'people-outline', color: '#7c3aed', bg: '#ede9fe' },
     { label: 'Teachers', value: teachers, icon: 'person-outline', color: '#16a34a', bg: '#f0fdf4' },
-    { label: 'Subjects', value: subjects, icon: 'book-outline', color: '#ea580c', bg: '#fff7ed' },
+    // The school being viewed decides the word, not the superadmin's own school.
+    { label: school.type === 'UNIVERSITY' ? 'Courses' : 'Subjects', value: subjects, icon: 'book-outline', color: '#ea580c', bg: '#fff7ed' },
     { label: 'Report Cards', value: school.totalReportCards, icon: 'document-text-outline', color: '#F03E2F', bg: '#FEF2F1' },
   ]
 

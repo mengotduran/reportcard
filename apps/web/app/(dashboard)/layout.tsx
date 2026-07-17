@@ -83,6 +83,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     'Classes': 'Departments',
     'My Class': 'My Department',
   }
+  // Relabelling the nav left the address bar contradicting it: clicking "Courses" landed
+  // on /subjects. /courses re-exports the same page, so the url matches the word.
+  const UNIVERSITY_NAV_HREFS: Record<string, string> = {
+    '/subjects': '/courses',
+  }
   // Secondary schools track exam (GCE) registration too — same feature, different label.
   const SECONDARY_NAV_LABELS: Record<string, string> = {
     'HND Registration': 'GCE Registration',
@@ -90,7 +95,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const navItems = baseNavItems
     .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY')
     .map((item) => {
-      if (school?.type === 'UNIVERSITY' && UNIVERSITY_NAV_LABELS[item.label]) return { ...item, label: UNIVERSITY_NAV_LABELS[item.label] }
+      if (school?.type === 'UNIVERSITY' && (UNIVERSITY_NAV_LABELS[item.label] || UNIVERSITY_NAV_HREFS[item.href])) {
+        return {
+          ...item,
+          label: UNIVERSITY_NAV_LABELS[item.label] ?? item.label,
+          href: UNIVERSITY_NAV_HREFS[item.href] ?? item.href,
+        }
+      }
       if (school?.type === 'SECONDARY' && SECONDARY_NAV_LABELS[item.label]) return { ...item, label: SECONDARY_NAV_LABELS[item.label] }
       return item
     })

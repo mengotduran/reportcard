@@ -1,6 +1,8 @@
 import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import prisma from '../config/prisma'
+import { AuthRequest } from '../middleware/auth'
+import { logMarksEntryModeChange, currentTermIdFor } from '../utils/marksEntryMode'
 
 const schoolInclude = {
   _count: { select: { students: true, users: true, reportCards: true } },
@@ -268,7 +270,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
 export const updateSchool = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id)
-    const { name, email, phone, address, website, subdomain, type, language } = req.body
+    const { name, email, phone, address, website, subdomain, type, language, marksEntryMode } = req.body
     const lang = language === undefined ? undefined : (language === 'FR' ? 'FR' : 'EN')
 
     const school = await prisma.school.findUnique({ where: { id } })
@@ -291,11 +293,33 @@ export const updateSchool = async (req: Request, res: Response) => {
       if (typeExists) { res.status(400).json({ message: `A ${nextLang} ${nextType} section already exists for this school` }); return }
     }
 
+    // The provider setting who enters marks IS the permission that lifts the school's
+    // two-per-semester cap, so it is deliberately uncapped here and logged as ours.
+    const nextMode = marksEntryMode === 'TEACHERS' || marksEntryMode === 'ADMIN_ONLY' ? marksEntryMode : undefined
+    const switching = nextMode !== undefined && nextMode !== school.marksEntryMode
+
     const updated = await prisma.school.update({
       where: { id },
-      data: { name, email, phone, address, website, subdomain: subdomain?.toLowerCase(), type, ...(lang !== undefined ? { language: lang } : {}) },
+      data: {
+        name, email, phone, address, website, subdomain: subdomain?.toLowerCase(), type,
+        ...(lang !== undefined ? { language: lang } : {}),
+        ...(nextMode !== undefined ? { marksEntryMode: nextMode } : {}),
+      },
       include: schoolInclude,
     })
+
+    if (switching) {
+      const actor = await prisma.user.findUnique({ where: { id: (req as AuthRequest).user!.id }, select: { name: true } })
+      await logMarksEntryModeChange({
+        schoolId: id,
+        mode: updated.marksEntryMode,
+        changedById: (req as AuthRequest).user!.id,
+        changedByName: actor?.name ?? 'Provider',
+        termId: await currentTermIdFor(id),
+        // Excluded from the school's quota: this row IS the permission, not a use of it.
+        byProvider: true,
+      })
+    }
     res.json({ message: 'School updated', school: updated })
   } catch (error) {
     console.error(error)
@@ -426,6 +450,9 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
         subdomain: school.subdomain,
         isActive: school.isActive,
         createdAt: school.createdAt,
+        // Hand-listed response: a field omitted here simply never reaches the page,
+        // however correct everything upstream is (the stamp taught this lesson).
+        marksEntryMode: school.marksEntryMode,
         parentSchool: school.parentSchool,
         totalStudents: school._count.students,
         totalUsers: school._count.users,

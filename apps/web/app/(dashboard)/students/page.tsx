@@ -451,7 +451,7 @@ export default function StudentsPage() {
       { label: t('Student ID'), value: (s: Student) => s.studentId },
       ...(isSecondary ? [{ label: t('Department'), value: (s: Student) => deptNameOf(s.classLevel) }] : []),
       { label: t('Class'), value: (s: Student) => isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel },
-      { label: t('Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
+      { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
       { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
       { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
       { label: t('Guardian Email'), value: (s: Student) => s.guardianEmail || '' },

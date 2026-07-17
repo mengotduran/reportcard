@@ -2,6 +2,26 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
+import { parseStoredScale } from '../utils/gradingScale'
+
+// Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
+// the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on.
+const TEACHER_ROLES: string[] = ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'CLASS_MASTER']
+
+/**
+ * A school where the administration records marks appoints no class masters, so the
+ * general remarks are the administration's to write too. Returns a refusal message when
+ * this role must not touch remarks here, or null when it may.
+ *
+ * Enforced server-side rather than only hiding the field: the UI is a courtesy, the
+ * endpoint is the rule.
+ */
+async function remarksBlockedForRole(schoolId: string, role: string): Promise<string | null> {
+  if (role !== 'CLASS_MASTER') return null
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { marksEntryMode: true } })
+  if (school?.marksEntryMode !== 'ADMIN_ONLY') return null
+  return 'General remarks are written by the administration at this school.'
+}
 
 // University marking split: CA out of 30, exam out of 70, course out of 100. The same
 // split the marks grid and the report card print with.
@@ -501,16 +521,43 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, marksEntryMode: true } })
     const isUniversity = school?.type === 'UNIVERSITY'
 
     const role = req.user!.role
     const userId = req.user!.id
-    if (reportCard.status === 'PUBLISHED' && (role === 'CLASS_TEACHER' || role === 'CLASS_MASTER')) {
-      if (reportCard.marksEditGrantedTo !== userId) {
-        res.status(403).json({ message: 'This report card has been published. Request permission from your admin to make changes.' })
-        return
-      }
+
+    // School policy: some universities record marks centrally so that the person who
+    // teaches a course is never the person who enters its marks. Enforced here rather
+    // than only in the UI, because a locked grid is a suggestion: the endpoint is what
+    // actually decides. Teachers keep READ access; only saving is refused.
+    //
+    // `marksEditGrantedTo` stays the escape hatch: an admin can hand one class to one
+    // teacher without changing the school's policy (same grant used for published cards).
+    if (school?.marksEntryMode === 'ADMIN_ONLY' && TEACHER_ROLES.includes(role) && reportCard.marksEditGrantedTo !== userId) {
+      res.status(403).json({ message: 'Marks are entered by the administration at this school. Ask an admin to record them, or to grant you access to this class.' })
+      return
+    }
+
+    // A published card is frozen for EVERYONE, the administration included: to change a
+    // mark you unpublish first. Publishing is what fixes a class's averages and positions,
+    // so a mark moving underneath a published card silently invalidates the cards already
+    // handed out. Making the admin unpublish makes that consequence a deliberate act.
+    //
+    // This also closes a hole: the rule used to name CLASS_TEACHER and CLASS_MASTER only,
+    // so a SUBJECT_TEACHER could edit a published card outright.
+    //
+    // The one exception stays the explicit grant, which an admin hands to one teacher for
+    // one card; it is consumed on use, below.
+    if (reportCard.status === 'PUBLISHED' && reportCard.marksEditGrantedTo !== userId) {
+      res.status(403).json({
+        message: TEACHER_ROLES.includes(role)
+          ? 'This report card has been published. Ask your admin to unpublish it, or to grant you access.'
+          : 'This report card is published. Unpublish it before changing its marks.',
+      })
+      return
+    }
+    if (reportCard.status === 'PUBLISHED' && reportCard.marksEditGrantedTo === userId) {
       // Permission granted — revoke after this save
       await prisma.reportCard.update({ where: { id }, data: { marksEditGrantedTo: null } })
     }
@@ -532,10 +579,13 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // Fetch grading scale — drives BOTH the letter grade and the auto-remark
     // so report cards reflect the school's grading design.
     const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
-    // juryDecision lets a school fail a passing-looking letter (CITEC juries D as FAIL),
-    // so it outranks the grade letter wherever a pass/fail question is asked.
-    let gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string; juryDecision?: string }[] =
-      gradingScale?.ranges ? (gradingScale.ranges as any) : []
+    // Parsed, never read straight off the column: the scale is stored either as a bare
+    // array (legacy) or as { ranges, … } (what saveGradingScale writes today). Reading it
+    // directly meant `.length` was undefined for the object shape, so this silently used
+    // the DEFAULT scale instead of the school's own, and `.some()` below would have thrown
+    // outright for a non-university school. juryDecision, which only the school's real
+    // scale carries, is exactly what resit eligibility turns on.
+    let gradeRanges = parseStoredScale(gradingScale?.ranges).ranges
     // For secondary schools, discard any stale 0–100 percent-scale ranges (boundary > 20).
     // University ranges are intentionally 0–100 and must NOT be stripped.
     if (!isUniversity && gradeRanges.some(r => Number(r?.maxScore) > 20 || Number(r?.minScore) > 20)) gradeRanges = []
@@ -569,11 +619,12 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade(isUniversity ? score : (score / 20) * 100)
 
     // ── Resit eligibility (university) ───────────────────────────────────────────
-    // A resit re-sits the EXAM only, so it may be recorded only for a student who
-    // failed the exam AND failed the course overall: a weak CA is not a resit matter,
-    // and a student whose CA carried them to a pass has nothing to re-sit. The marks
-    // grid already locks ineligible rows; this is the rule actually being enforced,
-    // rather than trusting whatever the client sends.
+    // A resit may be recorded for any student who FAILED THE COURSE, whatever their exam
+    // mark was. Re-sitting only replaces the exam (the CA carries over), so a student who
+    // passed the exam but failed the course on a weak CA is exactly who it helps: lifting
+    // the exam is their only route to a pass. A student who PASSED the course is refused:
+    // there is nothing to fix. The marks grid already locks ineligible rows; this is the
+    // rule actually being enforced, rather than trusting whatever the client sends.
     //
     // Judged on the school's own scale, so no pass mark is hardcoded. Bands are matched
     // on their lower bound: real scales use integer bounds (0-44, 45-49) and an exam
@@ -598,14 +649,12 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
         if (prior != null && prior === incoming) continue
         const ca = entry.seq1Score ?? null
         const exam = entry.seq2Score ?? null
-        const eligible = ca != null && exam != null
-          && isFailingApi((exam / UNIVERSITY_EXAM_MAX) * UNIVERSITY_COURSE_MAX)
-          && isFailingApi(ca + exam)
+        const eligible = ca != null && exam != null && isFailingApi(ca + exam)
         if (!eligible) ineligible.push(subjectMap[entry.subjectId]?.name ?? entry.subjectId)
       }
       if (ineligible.length > 0) {
         res.status(400).json({
-          message: `A resit mark can only be recorded for a student who failed the exam and failed the course overall. Not eligible: ${ineligible.join(', ')}.`,
+          message: `A resit mark can only be recorded for a student who failed the course. Not eligible: ${ineligible.join(', ')}.`,
         })
         return
       }
@@ -907,13 +956,19 @@ export const updateRemarks = async (req: AuthRequest, res: Response) => {
     const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
     if (!reportCard) { res.status(404).json({ message: 'Report card not found' }); return }
 
+    const role = req.user!.role
+    const userId = req.user!.id
+
+    // Authorisation first: "enter all the marks before writing the remark" is misleading
+    // advice for someone who may not write this remark at all.
+    const remarksBlocked = await remarksBlockedForRole(schoolId, role)
+    if (remarksBlocked) { res.status(403).json({ message: remarksBlocked }); return }
+
     if (!(await offeredSubjectsAllMarked(schoolId, id))) {
       res.status(400).json({ message: "Enter marks for all of the student's subjects before writing the general remark." })
       return
     }
 
-    const role = req.user!.role
-    const userId = req.user!.id
     if (reportCard.status === 'PUBLISHED' && role === 'CLASS_MASTER') {
       if (reportCard.remarksEditGrantedTo !== userId) {
         res.status(403).json({ message: 'This report card has been published. Request permission from your admin to edit remarks.' })
@@ -955,6 +1010,11 @@ export const generateRemarks = async (req: AuthRequest, res: Response) => {
 
     const role = req.user!.role
     const userId = req.user!.id
+
+    // Same rule as writing a remark by hand: generating one is still writing it.
+    const remarksBlocked = await remarksBlockedForRole(schoolId, role)
+    if (remarksBlocked) { res.status(403).json({ message: remarksBlocked }); return }
+
     if (reportCard.status === 'PUBLISHED' && role === 'CLASS_MASTER' && reportCard.remarksEditGrantedTo !== userId) {
       res.status(403).json({ message: 'This report card has been published. Request permission from your admin to edit remarks.' })
       return

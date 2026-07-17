@@ -385,6 +385,8 @@ export default function ReportCardsPage() {
   const tr = useT()
   const router = useRouter()
   const { isAuthenticated, user, school, activeSession } = useAuthStore()
+  // A university teaches courses, not subjects.
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   if (TEACHER_ROLES.includes(user?.role ?? '') || user?.role === 'CLASS_MASTER') return <TeacherClassesView />
   const { toast, showToast, hideToast } = useToast()
@@ -663,7 +665,7 @@ export default function ReportCardsPage() {
           { label: tr('Name'), value: (s: ExportStudent) => s.name },
           { label: tr('Student ID'), value: (s: ExportStudent) => s.studentId },
           { label: tr('Class'), value: (s: ExportStudent) => s.classLevel },
-          { label: tr('Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
+          { label: tr(isUniversity ? 'Courses' : 'Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
           { label: tr('Guardian'), value: (s: ExportStudent) => s.guardianName || '' },
           { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
           { label: tr('Guardian Email'), value: (s: ExportStudent) => s.guardianEmail || '' },
@@ -848,7 +850,7 @@ export default function ReportCardsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Student')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Class')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Term')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Subjects')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr(isUniversity ? 'Courses' : 'Subjects')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Average')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Decision')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Status')}</th>

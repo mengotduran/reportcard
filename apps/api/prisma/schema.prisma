@@ -25,6 +25,9 @@ model School {
   address            String?
   website            String?
   logo               String?
+  // Defaults to TEACHERS, so existing schools keep behaving exactly as they did.
+  marksEntryMode     MarksEntryMode      @default(TEACHERS)
+  marksEntryChanges  MarksEntryModeChange[]
   // Official stamp/seal image. Prints on OFFICIAL copies only, via a `stamp` section
   // the admin places on the report card or transcript. Separate from `logo`: the logo
   // is the letterhead mark on every copy, the stamp is what makes a copy official.
@@ -321,4 +324,53 @@ enum StudentStatus {
   ACTIVE
   DISABLED
   DISMISSED
+}
+
+/**
+ * Who records marks at a school.
+ *
+ * TEACHERS   - the default and how every school worked before this existed.
+ * ADMIN_ONLY - only SCHOOL_ADMIN/VICE_PRINCIPAL may save marks. Some universities keep
+ *              marks out of teachers' hands entirely to remove the opportunity to cheat.
+ *              Teachers still SEE the grid, read-only, so they can check their subject.
+ *
+ * An enum rather than a boolean: the obvious next mode is "teachers keep CA, admin owns
+ * the exam", which a boolean could not grow into.
+ */
+enum MarksEntryMode {
+  TEACHERS
+  ADMIN_ONLY
+}
+
+/**
+ * Every switch of who records marks, kept forever.
+ *
+ * A log, NOT a "changedBy/changedAt" pair on School: switching to TEACHERS and back would
+ * overwrite itself and leave only the innocent-looking final state, hiding exactly the
+ * window this exists to reveal. Two flips must leave two rows.
+ *
+ * This does not PREVENT a switch, and cannot: an admin can already enter and change any
+ * mark directly. What it removes is the ability to do it quietly.
+ *
+ * `changedByName` is a snapshot, not a join: an audit record must still read the same
+ * after the user is renamed or deleted.
+ */
+model MarksEntryModeChange {
+  id            String         @id @default(uuid())
+  schoolId      String
+  mode          MarksEntryMode
+  changedById   String?
+  changedByName String
+  changedAt     DateTime       @default(now())
+  /// The semester this switch happened in, so the "twice per semester" cap counts rows
+  /// rather than doing date arithmetic. Null when no semester was running: between
+  /// academic years there is nothing to count against, and switching is unrestricted.
+  termId        String?
+  /// A switch made BY the provider (superadmin) on the school's behalf. Never counts
+  /// against the school's two, because it IS the permission that lifts the cap.
+  byProvider    Boolean        @default(false)
+  school        School         @relation(fields: [schoolId], references: [id])
+
+  @@index([schoolId, changedAt])
+  @@index([schoolId, termId])
 }

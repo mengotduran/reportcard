@@ -665,7 +665,7 @@ export default function StudentsScreen() {
         { label: t('Name'), value: (s) => s.name },
         { label: t('Student ID'), value: (s) => s.studentId },
         { label: t('Class'), value: (s) => s.classLevel },
-        { label: t('Subjects'), value: (s) => (subjectsByClass[s.classLevel] || []).join(', ') },
+        { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s) => (subjectsByClass[s.classLevel] || []).join(', ') },
         { label: t('Guardian'), value: (s) => s.guardianName || '' },
         { label: t('Status'), value: (s) => { const st = effectiveStatus(s); return t(st === 'ACTIVE' ? 'Active' : st === 'DISABLED' ? 'Disabled' : 'Dismissed') } },
       ])

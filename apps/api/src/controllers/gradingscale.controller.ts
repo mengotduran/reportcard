@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { parseStoredScale } from '../utils/gradingScale'
 
 const DEFAULT_RANGES = [
   { id: '1', minScore: 18, maxScore: 20, grade: 'A+', remark: 'Excellent',   color: '#15803d' },
@@ -34,13 +35,10 @@ const isOldPercentScale = (ranges: any[]): boolean =>
   Array.isArray(ranges) && ranges.some(r => Number(r?.maxScore) > 20 || Number(r?.minScore) > 20)
 
 // Stored value is either old array format or new { ranges, classificationBands, legendRows } object format
-function parseStoredData(raw: any): { ranges: any[]; classificationBands: any[]; legendRows: any[] } {
-  if (Array.isArray(raw)) return { ranges: raw, classificationBands: [], legendRows: [] }
-  if (raw && typeof raw === 'object' && Array.isArray(raw.ranges)) {
-    return { ranges: raw.ranges, classificationBands: raw.classificationBands ?? [], legendRows: raw.legendRows ?? [] }
-  }
-  return { ranges: [], classificationBands: [], legendRows: [] }
-}
+// Both storage shapes are handled in one place now (utils/gradingScale): this file had
+// the only correct parser, and every other reader hand-rolled its own, which is how
+// saveEntries came to ignore the school's scale entirely.
+const parseStoredData = parseStoredScale
 
 export const getGradingScale = async (req: AuthRequest, res: Response) => {
   try {

@@ -109,13 +109,13 @@ export default function ClassSubjectsPage() {
       {/* Subject list */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 bg-muted">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Subjects')}</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t(isUniversity ? 'Courses' : 'Subjects')}</p>
         </div>
         {loading ? (
-          <div className="text-center py-8 text-muted-foreground text-sm">{t('Loading subjects...')}</div>
+          <div className="text-center py-8 text-muted-foreground text-sm">{t(isUniversity ? 'Loading courses...' : 'Loading subjects...')}</div>
         ) : subjects.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            {t('No subjects for')} {classLevel}
+            {t(isUniversity ? 'No courses for' : 'No subjects for')} {classLevel}
           </div>
         ) : (
           <div className="divide-y divide-border">

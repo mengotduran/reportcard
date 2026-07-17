@@ -51,8 +51,12 @@ function ordinal(n: number): string {
 export default function ReportCardDetailPage() {
   const router = useRouter()
   const params = useParams()
-  const { isAuthenticated, user } = useAuthStore()
+  const { isAuthenticated, user, school } = useAuthStore()
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  // This school records marks centrally (School.marksEntryMode). Then a missing mark is
+  // the administration's own job, so naming a teacher beside it is not just noise, it
+  // points at the wrong person.
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY'
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const { toast, showToast, hideToast } = useToast()
@@ -312,11 +316,20 @@ export default function ReportCardDetailPage() {
   const classReady = readiness ? readiness.otherStudentsBlocking === 0 : false
   const canPublish = allSeqsFilled && hasRemarks && classReady
   // Class master can only give remarks once ALL sequences for this report card are filled
-  const canEditRemarks = isClassMaster && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
+  const canEditRemarks = isClassMaster && !adminOnlyMarks && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
   // Admin / VP can also write the general remarks — once every offered subject is
   // marked (same gate as the class master).
-  const noClassMaster = readiness ? !readiness.classMaster : false
+  // A school where the administration records marks does not appoint class masters, so
+  // the card must never name one, chase one, or hand them the remarks. The app already
+  // has wording for "no class master" — this simply makes that the case.
+  const noClassMaster = adminOnlyMarks || (readiness ? !readiness.classMaster : false)
   const canAdminEditRemarks = isAdmin && allSeqsFilled && reportCard.status === 'DRAFT'
+  // Who is offered the way through to the marks sheet. An admin always: they may edit even
+  // a published card (the API allows it, and they can unpublish anyway), which is the whole
+  // point of being able to correct a mark. A teacher only where the school lets teachers
+  // record marks at all. The sheet itself still locks whatever the rules say; this only
+  // decides whether the door is shown.
+  const canEditMarks = isAdmin || (!adminOnlyMarks && (isClassMaster || user?.role === 'CLASS_TEACHER' || user?.role === 'SUBJECT_TEACHER'))
 
   return (
     <div>
@@ -351,8 +364,12 @@ export default function ReportCardDetailPage() {
 
                   {/* Grant permissions */}
                   <div className="flex items-center gap-2 border-l border-border pl-2">
-                    {/* Marks */}
-                    {reportCard.marksEditGrantedTo ? (
+                    {/* Marks. Hidden where the administration records marks: handing marks
+                        back to a teacher is the very thing that policy exists to prevent,
+                        so offering it here would contradict the school's own setting. An
+                        existing grant still shows, so it can be revoked rather than being
+                        stranded and invisible. */}
+                    {adminOnlyMarks && !reportCard.marksEditGrantedTo ? null : reportCard.marksEditGrantedTo ? (
                       <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 rounded-md px-2.5 py-1.5">
                         <span className="text-xs text-primary font-medium">{tr('Marks')} → {teachers.find(t => t.id === reportCard.marksEditGrantedTo)?.name?.split(' ')[0]}</span>
                         <button onClick={() => handleRevokePermission('marks')} className="text-primary/60 hover:text-destructive text-xs leading-none">✕</button>
@@ -375,8 +392,11 @@ export default function ReportCardDetailPage() {
                       </div>
                     )}
 
-                    {/* Remarks */}
-                    {reportCard.remarksEditGrantedTo ? (
+                    {/* Remarks. Hidden where the administration records marks: those schools
+                        appoint no class master, so there is nobody to hand the remarks to.
+                        An existing grant still shows, so it can be revoked rather than
+                        being stranded and invisible. */}
+                    {adminOnlyMarks && !reportCard.remarksEditGrantedTo ? null : reportCard.remarksEditGrantedTo ? (
                       <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 rounded-md px-2.5 py-1.5">
                         <span className="text-xs text-primary font-medium">{tr('Remarks')} → {teachers.find(t => t.id === reportCard.remarksEditGrantedTo)?.name?.split(' ')[0]}</span>
                         <button onClick={() => handleRevokePermission('remarks')} className="text-primary/60 hover:text-destructive text-xs leading-none">✕</button>
@@ -504,7 +524,7 @@ export default function ReportCardDetailPage() {
           <>
             <div className="bg-card rounded-xl border border-border p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
-              <p className="text-xs text-muted-foreground mt-1">{tr('Subjects')}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr(isUniversity ? 'Courses' : 'Subjects')}</p>
             </div>
             <div className="bg-card rounded-xl border border-border p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{average.toFixed(1)}</p>
@@ -553,8 +573,22 @@ export default function ReportCardDetailPage() {
       ) : (
         <>
           <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
-            <div className="px-4 py-3 bg-muted border-b border-border">
+            <div className="px-4 py-3 bg-muted border-b border-border flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-foreground">{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</h3>
+              {/* This table is read-only; marks are entered on the class sheet. Without a
+                  way through, a card whose marks are already complete offered no route to
+                  correct one at all: the only other path is Report Cards > class > subject
+                  > sequence, which you have to already know. termName is required, not
+                  decoration: the class sheet filters courses by it. */}
+              {canEditMarks && (
+                <button
+                  onClick={() => router.push(`/report-cards/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}`)}
+                  className="text-xs font-medium border border-border bg-card text-foreground px-3 py-1.5 rounded-md hover:bg-muted transition-colors whitespace-nowrap"
+                  title={tr('Marks are entered on the class sheet')}
+                >
+                  {tr('Edit marks')}
+                </button>
+              )}
             </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
               <thead className="border-b border-gray-100 dark:border-border">
@@ -645,16 +679,23 @@ export default function ReportCardDetailPage() {
               {readiness.missingSubjects.map(s => (
                 <div key={s.subjectId} className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
-                  {s.teacher
-                    ? <span className="text-foreground"><span className="font-medium">{s.teacher.name}</span> {tr('has not filled marks for')} <span className="font-medium">{s.subjectName}</span></span>
-                    : <span className="text-foreground"><span className="font-medium">{s.subjectName}</span> {tr('has no teacher assigned')}</span>
+                  {adminOnlyMarks
+                    // Marks are the administration's to enter here, so state the fact and
+                    // offer the way to fix it, rather than naming a teacher who is not
+                    // allowed to enter marks in the first place.
+                    ? <span className="text-foreground">
+                        {tr('No marks yet for')} <span className="font-medium">{s.subjectName}</span>
+                      </span>
+                    : s.teacher
+                      ? <span className="text-foreground"><span className="font-medium">{s.teacher.name}</span> {tr('has not filled marks for')} <span className="font-medium">{s.subjectName}</span></span>
+                      : <span className="text-foreground"><span className="font-medium">{s.subjectName}</span> {tr('has no teacher assigned')}</span>
                   }
                 </div>
               ))}
               {readiness.missingRemarks && (
                 <div className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-                  {readiness.classMaster
+                  {readiness.classMaster && !adminOnlyMarks
                     ? <span className="text-foreground">{tr('Class Master')} <span className="font-medium">{readiness.classMaster.name}</span> {tr('has not written general remarks')}</span>
                     : <span className="text-foreground">{tr('General remarks have not been written yet —')} <span className="font-medium">{tr('admin / vice-principal')}</span> {tr('can add them below')}</span>
                   }

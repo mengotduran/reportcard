@@ -48,6 +48,10 @@ export default function MarksEntryScreen() {
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
   const isUniversity = school?.type === 'UNIVERSITY'
+  // The school records marks centrally AND I am a teacher. Admins are never locked out.
+  // Same rule as the web grid; the API is the real gate either way.
+  const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY' && !isAdminRole
   const isResit = isUniversity && seqIndex === 2
   const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
@@ -92,13 +96,13 @@ export default function MarksEntryScreen() {
             if (entry) {
               if (isResit) {
                 score = entry.resitScore != null ? String(entry.resitScore) : ''
-                // Same rule as the web marks grid: a resit re-sits the EXAM only, so it's
-                // offered when the student failed the exam AND failed the course overall.
+                // Same rule as the web marks grid: offered to anyone who FAILED THE COURSE,
+                // whatever their exam mark. Only the exam is re-sat, so a student who passed
+                // the exam but failed the course on a weak CA is exactly who it helps.
                 // Judged on the ORIGINAL CA+Exam so the row stays editable once the resit
                 // mark is in, and via the school's own scale rather than a hardcoded 'F'.
                 const ca = entry.seq1Score, exam = entry.seq2Score
                 resitEligible = ca != null && exam != null
-                  && isFailingMark(exam, EXAM_MAX, scaleData.ranges)
                   && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
               } else {
                 score = seqIndex === 0
@@ -111,11 +115,15 @@ export default function MarksEntryScreen() {
         }
         const isPublished = s.reportCard?.status === 'PUBLISHED'
         const grantedToMe = s.reportCard?.marksEditGrantedTo === user?.id
+        // Publishing freezes a card for EVERYONE, the administration included: unpublish
+        // to change a mark. Same rule as the web grid, and the API enforces it.
+        const frozenByPublish = isPublished && !grantedToMe
         return {
           studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null,
           score, otherSeqScore,
-          isLocked: (isPublished && !grantedToMe) || (isResit && !resitEligible),
-          isPublished: isPublished && !grantedToMe,
+          // Marks recorded centrally: readable, not editable (see the web grid).
+          isLocked: frozenByPublish || (isResit && !resitEligible) || (adminOnlyMarks && !grantedToMe),
+          isPublished: frozenByPublish,
           resitEligible,
         }
       })
@@ -257,16 +265,28 @@ export default function MarksEntryScreen() {
         {publishedCount > 0 && (
           <View style={s.lockBanner}>
             <Text style={s.lockBannerText}>
-              🔒 {publishedCount === rows.length ? t('All cards published') : `${publishedCount} ${t('card(s) published')}`} — {t('contact admin to edit')}
+              {/* The remedy depends on who is reading: unpublishing is the admin's to do,
+                  so telling them to "contact admin" would be a dead end. */}
+              🔒 {publishedCount === rows.length ? t('All cards published') : `${publishedCount} ${t('card(s) published')}`}
+              {' '}{isAdminRole ? t('· unpublish to edit') : t('· contact admin to edit')}
             </Text>
           </View>
         )}
 
         {/* Copy bar — resit has nothing to copy from */}
+        {/* Why the sheet is read-only, or a teacher meets a dead grid and assumes the
+            app is broken rather than seeing a school policy. */}
+        {adminOnlyMarks && (
+          <View style={s.resitBar}>
+            <Text style={s.resitBarText}>
+              {t('Marks are entered by the administration at this school. You can check the marks here, but not change them.')}
+            </Text>
+          </View>
+        )}
         {isResit ? (
           <View style={s.resitBar}>
             <Text style={s.resitBarText}>
-              {t('Only students who failed the exam and failed the course overall can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is.')}
+              {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
             </Text>
           </View>
         ) : (
