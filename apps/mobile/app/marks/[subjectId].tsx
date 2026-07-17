@@ -5,7 +5,7 @@ import {
   StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView,
   Platform, Keyboard,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useFocusEffect } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getClassOverview, getReportCard, createReportCard,
@@ -41,6 +41,7 @@ export default function MarksEntryScreen() {
     termName: string; subjectName: string; sequence: string
   }>()
   const navigation = useNavigation()
+  const router = useRouter()
   const { user, school } = useAuthStore()
   const { colors, isDark } = useTheme()
   const t = useT()
@@ -258,7 +259,24 @@ export default function MarksEntryScreen() {
               </View>
             ) : null}
           </View>
-          <Text style={s.seqPill}>{seqLabel}</Text>
+          {/* Switch assessment without leaving the sheet, same as the web grid. setParams
+              swaps the sequence in place rather than stacking a history entry, and the
+              fetch keys on it, so the marks reload. */}
+          <View style={{ flexDirection: 'row', gap: 4 }}>
+            {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
+              <TouchableOpacity key={i}
+                onPress={() => router.setParams({ sequence: String(i) })}
+                style={{
+                  paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1,
+                  borderColor: seqIndex === i ? '#F03E2F' : colors.border,
+                  backgroundColor: seqIndex === i ? '#FEF2F1' : 'transparent',
+                }}>
+                <Text style={{ fontSize: 11, fontWeight: seqIndex === i ? '700' : '500', color: seqIndex === i ? '#F03E2F' : colors.textSecondary }}>
+                  {isUniversity ? (i === 0 ? t('CA') : i === 1 ? t('Exam') : t('Resit')) : seqShort(termName, i, lang)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         {/* Published lock banner */}

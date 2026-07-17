@@ -1,6 +1,6 @@
 // app/admin/subjects/index.tsx
 import { useEffect, useState, useCallback } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import {
   View, Text, SectionList, TouchableOpacity, StyleSheet,
   ActivityIndicator, RefreshControl, Alert, Modal, TextInput,
@@ -149,7 +149,12 @@ export default function SubjectsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
-  const { school, activeSession } = useAuthStore()
+  const { school, activeSession, user } = useAuthStore()
+  const router = useRouter()
+  // Marks entry from the course list, same scope as the web Courses page: an admin, at a
+  // university where the administration records marks. Teachers keep their own route.
+  const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  const canEnterMarksHere = school?.type === 'UNIVERSITY' && isAdminRole && school?.marksEntryMode === 'ADMIN_ONLY'
   const isUniversity = school?.type === 'UNIVERSITY'
   // Universities call subjects "courses" and classes "departments" — same data/routes, just different wording.
   const tt = (subjectStr: string, courseStr: string) => t(isUniversity ? courseStr : subjectStr)
@@ -302,11 +307,22 @@ export default function SubjectsScreen() {
             <Text style={styles.emptySubText}>{tt('Tap + to add a subject', 'Tap + to add a course')}</Text>
           </View>
         }
-        renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>{section.title}</Text>
-          </View>
-        )}
+        renderSectionHeader={({ section }) => {
+          // Badge the running semester's sections: First and Second look interchangeable,
+          // and marks entered against the wrong one surface only much later.
+          const activeName = termList.find(tm => tm.isCurrent)?.name
+          const isActive = !!activeName && section.title.endsWith(`— ${activeName}`)
+          return (
+            <View style={[styles.sectionHeader, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+              <Text style={styles.sectionTitle}>{section.title}</Text>
+              {isActive && (
+                <View style={{ backgroundColor: '#FEF2F1', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(240,62,47,0.25)' }}>
+                  <Text style={{ fontSize: 9, fontWeight: '700', color: '#F03E2F' }}>{t('ACTIVE')}</Text>
+                </View>
+              )}
+            </View>
+          )
+        }}
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={styles.iconBox}>
@@ -316,6 +332,16 @@ export default function SubjectsScreen() {
               <Text style={styles.subjectName}>{item.name}</Text>
               <Text style={styles.meta}>{t('Max:')} {item.maxScore} · {isUniversity ? `${t('Credit:')} ${item.credit ?? '—'}` : `${t('Coeff:')} ${item.coefficient}`}</Text>
             </View>
+            {canEnterMarksHere && item.term && termList.some(tm => tm.name === item.term) && (
+              <TouchableOpacity
+                style={{ paddingHorizontal: 8, paddingVertical: 6, marginRight: 2 }}
+                onPress={() => {
+                  const tm = termList.find(x => x.name === item.term)!
+                  router.push(`/marks/${encodeURIComponent(item.id)}?classLevel=${encodeURIComponent(item.classLevel)}&termId=${tm.id}&termName=${encodeURIComponent(tm.name)}&subjectName=${encodeURIComponent(item.name)}&sequence=0` as any)
+                }}>
+                <Ionicons name="create-outline" size={18} color="#F03E2F" />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
               <Ionicons name="trash-outline" size={17} color="#ef4444" />
             </TouchableOpacity>

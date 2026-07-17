@@ -22,8 +22,9 @@ import {
   Subject,
 } from '@/lib/api/reportcards'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
+import api from '@/lib/api/client'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { getGradingScale, gradeFromScore, isFailingScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -233,6 +234,14 @@ export default function AdminReportCardDetail() {
   const styles = makeStylesStyles(colors)
   const tr = useT()
   const { school } = useAuthStore()
+  // Print's school-wide "failing marks in red" policy, honoured on this screen too. One
+  // config fetch; default ON matches the print side.
+  const [redFailing, setRedFailing] = useState(true)
+  useEffect(() => {
+    api.get('/report-card-template')
+      .then((res: { data?: { config?: { highlightFailingRed?: boolean } } }) => setRedFailing(res.data?.config?.highlightFailingRed !== false))
+      .catch(() => {})
+  }, [])
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
 
@@ -674,6 +683,16 @@ export default function AdminReportCardDetail() {
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
           <Text style={styles.sectionTitle}>{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</Text>
+          {/* This list is read-only; marks live on the class sheet. Without a way through,
+              a complete card offers no route to correct a mark. Draft only: published is
+              frozen for everyone, and the button would just open a locked sheet. */}
+          {isDraft && (
+            <TouchableOpacity
+              onPress={() => router.push(`/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}` as any)}
+              style={{ marginLeft: 'auto', borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: '#F03E2F' }}>{tr('Edit marks')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
         {subjects.length === 0 ? (
           <Text style={styles.emptyText}>{isUniversity ? tr('No courses found for this class') : tr('No subjects found for this class')}</Text>
@@ -696,7 +715,9 @@ export default function AdminReportCardDetail() {
                       </Text>
                     </View>
                     <View style={styles.scoreRight}>
-                      <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : colors.text }]}>
+                      {/* A failed course's mark prints red on the report card; the screen
+                          says the same thing, judged by the school's own scale. */}
+                      <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : (redFailing && isFailingScore(entry!.score ?? 0, gradingRanges)) ? '#dc2626' : colors.text }]}>
                         {unfilled ? '—' : `${entry!.score ?? 0}/${maxScore}`}
                       </Text>
                       {/* The badge background is a flat grey: gradeFromScore returns no

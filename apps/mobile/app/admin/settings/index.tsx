@@ -1,5 +1,7 @@
 // app/admin/settings/index.tsx
-import { View, Text, ScrollView, StyleSheet, Image } from 'react-native'
+import { useEffect, useState } from 'react'
+import { View, Text, ScrollView, StyleSheet, Image, TouchableOpacity, Alert } from 'react-native'
+import api from '@/lib/api/client'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
@@ -106,7 +108,43 @@ export default function SettingsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
-  const { school } = useAuthStore()
+  const { school, setSchool } = useAuthStore()
+
+  // Who records marks (university only). The one setting that IS editable here, because
+  // an admin standing in a marks-entry dispute should not need a computer to resolve it.
+  // The cap (2 switches per semester, then the provider) is enforced by the API; this
+  // screen just states it before it bites.
+  const isUniversity = school?.type === 'UNIVERSITY'
+  const [marksMode, setMarksMode] = useState<'TEACHERS' | 'ADMIN_ONLY'>(school?.marksEntryMode ?? 'TEACHERS')
+  const [switches, setSwitches] = useState<{ used: number; limit: number; termId: string | null; allowed: boolean } | null>(null)
+  const [savingMode, setSavingMode] = useState(false)
+
+  useEffect(() => {
+    if (!isUniversity) return
+    api.get('/school/settings').then(res => {
+      setMarksMode(res.data.school?.marksEntryMode ?? 'TEACHERS')
+      setSwitches(res.data.marksEntrySwitches ?? null)
+      if (res.data.school) setSchool(res.data.school)
+    }).catch(() => {})
+  }, [isUniversity])
+
+  const handleSetMode = async (mode: 'TEACHERS' | 'ADMIN_ONLY') => {
+    if (mode === marksMode || savingMode) return
+    const previous = marksMode
+    setMarksMode(mode)
+    setSavingMode(true)
+    try {
+      const res = await api.put('/school/settings', { marksEntryMode: mode })
+      if (res.data.school) setSchool(res.data.school)
+      const fresh = await api.get('/school/settings')
+      setSwitches(fresh.data.marksEntrySwitches ?? null)
+    } catch (err: any) {
+      setMarksMode(previous)   // a silent revert would misstate the policy
+      // The cap's 403 explains itself ("contact your provider"); a generic error would
+      // send the admin hunting a bug instead.
+      Alert.alert(t('Not changed'), err?.response?.data?.message ?? t('Failed to save'))
+    } finally { setSavingMode(false) }
+  }
 
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
 
@@ -134,6 +172,37 @@ export default function SettingsScreen() {
         <View style={styles.divider} />
         <SettingRow label={t('School Type')} value={school?.type ? t(school.type) : school?.type} />
       </View>
+
+      {isUniversity && (
+        <>
+          <Text style={styles.sectionLabel}>{t('WHO ENTERS MARKS')}</Text>
+          <View style={styles.card}>
+            {([
+              { value: 'TEACHERS' as const, label: t('Teachers') },
+              { value: 'ADMIN_ONLY' as const, label: t('Administration only') },
+            ]).map((opt, i) => (
+              <View key={opt.value}>
+                {i > 0 && <View style={styles.divider} />}
+                <TouchableOpacity
+                  style={styles.row}
+                  disabled={savingMode || (switches?.allowed === false && marksMode !== opt.value)}
+                  onPress={() => handleSetMode(opt.value)}
+                >
+                  <Text style={[styles.rowLabel, marksMode === opt.value && { color: '#F03E2F', fontWeight: '700' }]}>{opt.label}</Text>
+                  {marksMode === opt.value && <Ionicons name="checkmark-circle" size={18} color="#F03E2F" />}
+                </TouchableOpacity>
+              </View>
+            ))}
+            {switches && switches.termId && (
+              <Text style={{ fontSize: 12, color: switches.allowed ? colors.textMuted : '#ef4444', paddingHorizontal: 14, paddingBottom: 12 }}>
+                {switches.allowed
+                  ? `${t('Switches used this semester:')} ${switches.used} ${t('of')} ${switches.limit}`
+                  : t('Both switches used this semester. Contact your provider to change this.')}
+              </Text>
+            )}
+          </View>
+        </>
+      )}
 
       <View style={styles.webNote}>
         <Ionicons name="desktop-outline" size={18} color="#F03E2F" />
