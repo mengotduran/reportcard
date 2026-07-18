@@ -7,6 +7,7 @@ import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
 import DesktopOnly from '@/components/ui/DesktopOnly'
 import { useT } from '@/lib/i18n'
@@ -223,6 +224,10 @@ export default function SettingsPage() {
   // is logged. Surfaced here so the cap is visible BEFORE the third attempt fails.
   const [marksSwitches, setMarksSwitches] = useState<{ used: number; limit: number; termId: string | null; allowed: boolean } | null>(null)
   const [marksHistory, setMarksHistory] = useState<{ id: string; mode: string; changedByName: string; changedAt: string; byProvider?: boolean }[]>([])
+  // Switching to Administration only takes marks entry away from every teacher at once,
+  // and it burns one of the semester's two switches — worth a confirmation so a stray
+  // click doesn't cost a chance and lock out teachers by accident.
+  const [confirmAdminOnly, setConfirmAdminOnly] = useState(false)
 
   // Official header letterhead text (the "Official" style's left/right text
   // blocks) — one English and one French variant per side, set once here so
@@ -295,6 +300,17 @@ export default function SettingsPage() {
       const e = err as { response?: { data?: { message?: string } } }
       showToast(e.response?.data?.message || t('Failed to save'), 'error')
     } finally { setSavingMarksMode(false) }
+  }
+
+  // Switching to Administration only is the consequential direction (every teacher
+  // loses write access at once) and spends a switch, so it's confirmed first. Switching
+  // back to Teachers just restores their normal access, so it applies immediately.
+  const handleMarksModeChange = (mode: 'TEACHERS' | 'ADMIN_ONLY') => {
+    if (mode === 'ADMIN_ONLY' && marksMode !== 'ADMIN_ONLY') {
+      setConfirmAdminOnly(true)
+      return
+    }
+    handleSaveMarksMode(mode)
   }
 
   const handleSaveThreshold = async () => {
@@ -786,7 +802,7 @@ export default function SettingsPage() {
                         // failing on click, and the note below says who to contact. The
                         // API refuses regardless; this just stops the doomed attempt.
                         disabled={savingMarksMode || (marksSwitches?.allowed === false && marksMode !== opt.value)}
-                        onChange={() => handleSaveMarksMode(opt.value)}
+                        onChange={() => handleMarksModeChange(opt.value)}
                         className="accent-primary mt-0.5" />
                       <span>
                         <span className="block text-sm font-medium text-foreground">{opt.label}</span>
@@ -1111,6 +1127,16 @@ export default function SettingsPage() {
       </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+
+      <ConfirmModal
+        isOpen={confirmAdminOnly}
+        title={t('Switch to Administration only?')}
+        message={t('Teachers will lose the ability to enter marks, even for the subjects they teach. This uses one of your switches for the semester.')}
+        confirmLabel={t('Switch')}
+        confirmColor="red"
+        onConfirm={() => { setConfirmAdminOnly(false); handleSaveMarksMode('ADMIN_ONLY') }}
+        onCancel={() => setConfirmAdminOnly(false)}
+      />
     </div>
     </DesktopOnly>
   )
