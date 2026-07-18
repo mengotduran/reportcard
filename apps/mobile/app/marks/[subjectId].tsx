@@ -5,16 +5,20 @@ import {
   StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView,
   Platform, Keyboard,
 } from 'react-native'
-import { useLocalSearchParams, useNavigation, useFocusEffect } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getClassOverview, getReportCard, createReportCard,
   saveEntries, getSubjects,
 } from '@/lib/api/reportcards'
-import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { getGradingScale, gradeFromScore, isFailingMark, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { seqFull, seqShort } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
+
+// University marking split: CA out of 30, exam out of 70, course out of 100.
+const EXAM_MAX = 70
+const COURSE_MAX = 100
 
 interface Row {
   studentId: string
@@ -23,7 +27,12 @@ interface Row {
   reportCardId: string | null
   score: string
   otherSeqScore: number | null
+  /** Not editable, for ANY reason (published, or not eligible for this resit). */
   isLocked: boolean
+  /** Locked specifically by publishing — the only case an admin can unlock. Kept apart
+   *  from isLocked so the banner can't blame publishing for a row that simply passed. */
+  isPublished?: boolean
+  resitEligible?: boolean
 }
 
 export default function MarksEntryScreen() {
@@ -32,6 +41,7 @@ export default function MarksEntryScreen() {
     termName: string; subjectName: string; sequence: string
   }>()
   const navigation = useNavigation()
+  const router = useRouter()
   const { user, school } = useAuthStore()
   const { colors, isDark } = useTheme()
   const t = useT()
@@ -39,7 +49,12 @@ export default function MarksEntryScreen() {
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
   const isUniversity = school?.type === 'UNIVERSITY'
-  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : 'Exam') : seqFull(termName, seqIndex, lang)
+  // The school records marks centrally AND I am a teacher. Admins are never locked out.
+  // Same rule as the web grid; the API is the real gate either way.
+  const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY' && !isAdminRole
+  const isResit = isUniversity && seqIndex === 2
+  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
   const decodedSubjectName = decodeURIComponent(subjectName)
@@ -49,6 +64,7 @@ export default function MarksEntryScreen() {
   const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [saving, setSaving] = useState(false)
   const [activeCell, setActiveCell] = useState<string | null>(null)
   const inputRefs = useRef<Record<string, TextInput | null>>({})
@@ -70,32 +86,60 @@ export default function MarksEntryScreen() {
     // Sort alphabetically
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
 
-    const loaded: Row[] = await Promise.all(
-      sorted.map(async (s) => {
+    // Rows come straight off the overview response — ONE request for the whole class.
+    // This used to fetch every student's report card individually (16 students = 16
+    // requests), which on a phone's wifi routinely blew the 15s timeout.
+    const loaded: Row[] = sorted.map((s) => {
         let score = ''
         let otherSeqScore: number | null = null
+        let resitEligible = false
         if (s.reportCard) {
-          try {
-            const rc = await getReportCard(s.reportCard.id)
-            const entry = rc.entries.find((e) => e.subject.id === decodedSubjectId) as any
+          {
+            const entry = s.reportCard.entries?.find((e) => e.subjectId === decodedSubjectId)
             if (entry) {
-              score = seqIndex === 0
-                ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
-                : (entry.seq2Score != null ? String(entry.seq2Score) : '')
-              otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              if (isResit) {
+                score = entry.resitScore != null ? String(entry.resitScore) : ''
+                // Same rule as the web marks grid: offered to anyone who FAILED THE COURSE,
+                // whatever their exam mark. Only the exam is re-sat, so a student who passed
+                // the exam but failed the course on a weak CA is exactly who it helps.
+                // Judged on the ORIGINAL CA+Exam so the row stays editable once the resit
+                // mark is in, and via the school's own scale rather than a hardcoded 'F'.
+                const ca = entry.seq1Score, exam = entry.seq2Score
+                resitEligible = ca != null && exam != null
+                  && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
+              } else {
+                score = seqIndex === 0
+                  ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
+                  : (entry.seq2Score != null ? String(entry.seq2Score) : '')
+                otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              }
             }
-          } catch { /* no entries yet */ }
+          }
         }
         const isPublished = s.reportCard?.status === 'PUBLISHED'
         const grantedToMe = s.reportCard?.marksEditGrantedTo === user?.id
-        return { studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null, score, otherSeqScore, isLocked: isPublished && !grantedToMe }
+        // Publishing freezes a card for EVERYONE, the administration included: unpublish
+        // to change a mark. Same rule as the web grid, and the API enforces it.
+        const frozenByPublish = isPublished && !grantedToMe
+        return {
+          studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null,
+          score, otherSeqScore,
+          // Marks recorded centrally: readable, not editable (see the web grid).
+          isLocked: frozenByPublish || (isResit && !resitEligible) || (adminOnlyMarks && !grantedToMe),
+          isPublished: frozenByPublish,
+          resitEligible,
+        }
       })
-    )
     setRows(loaded)
   }, [termId, decodedClass, decodedSubjectId, seqIndex])
 
   useFocusEffect(useCallback(() => {
-    fetchData().finally(() => setLoading(false))
+    // Catch here or a timeout surfaces as an unhandled-rejection red box instead of a
+    // screen the user can act on.
+    setLoadError('')
+    fetchData()
+      .catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.')))
+      .finally(() => setLoading(false))
   }, [fetchData]))
 
   const updateScore = (studentId: string, value: string) => {
@@ -109,7 +153,10 @@ export default function MarksEntryScreen() {
   }
 
   const editableRows = rows.filter(r => !r.isLocked)
-  const publishedCount = rows.length - editableRows.length
+  // Only rows locked BY PUBLISHING. Counting every locked row told teachers on the Resit
+  // tab that N cards were published and to contact their admin, when those rows were
+  // really just students who passed and were never resit-eligible.
+  const publishedCount = rows.filter(r => r.isPublished).length
 
   const handleSaveAll = async () => {
     setSaving(true)
@@ -143,6 +190,7 @@ export default function MarksEntryScreen() {
                 subjectId: sid,
                 seq1Score: seqIndex === 0 ? cur : (existing?.seq1Score ?? null),
                 seq2Score: seqIndex === 1 ? cur : (existing?.seq2Score ?? null),
+                resitScore: isResit ? cur : (existing?.resitScore ?? null),
                 // no remarks — API auto-fills from grading scale
               }
             }
@@ -150,6 +198,7 @@ export default function MarksEntryScreen() {
               subjectId: sid,
               seq1Score: existing?.seq1Score ?? undefined,
               seq2Score: existing?.seq2Score ?? undefined,
+              resitScore: existing?.resitScore ?? undefined,
               score: existing?.score ?? 0,
               // no remarks — API auto-fills from grading scale
             }
@@ -204,6 +253,16 @@ export default function MarksEntryScreen() {
       <View style={s.container}>
         {loading ? (
           <View style={s.center}><ActivityIndicator size="large" color="#F03E2F" /></View>
+        ) : loadError ? (
+          <View style={s.center}>
+            <Ionicons name="cloud-offline-outline" size={40} color="#9ca3af" />
+            <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 10, marginBottom: 14 }}>{loadError}</Text>
+            <TouchableOpacity
+              onPress={() => { setLoading(true); setLoadError(''); fetchData().catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.'))).finally(() => setLoading(false)) }}
+              style={{ backgroundColor: '#F03E2F', borderRadius: 10, paddingHorizontal: 22, paddingVertical: 10 }}>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>{t('Retry')}</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
         <>
         {/* Info bar */}
@@ -216,24 +275,61 @@ export default function MarksEntryScreen() {
               </View>
             ) : null}
           </View>
-          <Text style={s.seqPill}>{seqLabel}</Text>
+          {/* Switch assessment without leaving the sheet, same as the web grid. setParams
+              swaps the sequence in place rather than stacking a history entry, and the
+              fetch keys on it, so the marks reload. */}
+          <View style={{ flexDirection: 'row', gap: 4 }}>
+            {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
+              <TouchableOpacity key={i}
+                onPress={() => router.setParams({ sequence: String(i) })}
+                style={{
+                  paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1,
+                  borderColor: seqIndex === i ? '#F03E2F' : colors.border,
+                  backgroundColor: seqIndex === i ? '#FEF2F1' : 'transparent',
+                }}>
+                <Text style={{ fontSize: 11, fontWeight: seqIndex === i ? '700' : '500', color: seqIndex === i ? '#F03E2F' : colors.textSecondary }}>
+                  {isUniversity ? (i === 0 ? t('CA') : i === 1 ? t('Exam') : t('Resit')) : seqShort(termName, i, lang)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         {/* Published lock banner */}
         {publishedCount > 0 && (
           <View style={s.lockBanner}>
             <Text style={s.lockBannerText}>
-              🔒 {publishedCount === rows.length ? t('All cards published') : `${publishedCount} ${t('card(s) published')}`} — {t('contact admin to edit')}
+              {/* The remedy depends on who is reading: unpublishing is the admin's to do,
+                  so telling them to "contact admin" would be a dead end. */}
+              🔒 {publishedCount === rows.length ? t('All cards published') : `${publishedCount} ${t('card(s) published')}`}
+              {' '}{isAdminRole ? t('· unpublish to edit') : t('· contact admin to edit')}
             </Text>
           </View>
         )}
 
-        {/* Copy bar — always visible */}
-        <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
-          <Ionicons name="copy-outline" size={15} color="#7c3aed" />
-          <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
-          <Ionicons name="chevron-forward" size={14} color="#7c3aed" />
-        </TouchableOpacity>
+        {/* Copy bar — resit has nothing to copy from */}
+        {/* Why the sheet is read-only, or a teacher meets a dead grid and assumes the
+            app is broken rather than seeing a school policy. */}
+        {adminOnlyMarks && (
+          <View style={s.resitBar}>
+            <Text style={s.resitBarText}>
+              {t('Marks are entered by the administration at this school. You can check the marks here, but not change them.')}
+            </Text>
+          </View>
+        )}
+        {isResit ? (
+          <View style={s.resitBar}>
+            <Text style={s.resitBarText}>
+              {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
+            </Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
+            <Ionicons name="copy-outline" size={15} color="#7c3aed" />
+            <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
+            <Ionicons name="chevron-forward" size={14} color="#7c3aed" />
+          </TouchableOpacity>
+        )}
 
         {/* Table */}
         <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
@@ -241,7 +337,7 @@ export default function MarksEntryScreen() {
           <View style={s.headerRow}>
             <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
             <View style={s.colName}><Text style={s.headerText}>{t('STUDENT NAME')}</Text></View>
-            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : 'MARKS / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
+            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
             <View style={s.colRemark}><Text style={s.headerText}>{t('PERFORMANCE')}</Text></View>
           </View>
 
@@ -356,6 +452,11 @@ const makeSStyles = (colors: Colors) => StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   copyBarText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#7c3aed' },
+  resitBar: {
+    backgroundColor: '#eff6ff', paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#bfdbfe',
+  },
+  resitBarText: { fontSize: 12.5, color: '#1d4ed8' },
 
   // Table
   headerRow: {

@@ -7,13 +7,18 @@ import {
 } from '@/lib/api/reportcards'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getGradingScaleApi, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
-import { gradeFromScore } from '@/lib/grading'
+import { gradeFromScore, isFailingMark } from '@/lib/grading'
 import { seqShort, seqFull } from '@/lib/sequences'
 import { ArrowLeft, Save, Copy, AlertTriangle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT, useLang } from '@/lib/i18n'
+
+// University marking split: CA is out of 30, the exam out of 70, the course out of 100.
+// The same numbers the column headers below print.
+const EXAM_MAX = 70
+const COURSE_MAX = 100
 
 interface Row {
   studentId: string
@@ -22,8 +27,13 @@ interface Row {
   reportCardId: string | null
   score: string
   otherSeqScore: number | null
+  /** Not editable, for ANY reason (published, or not eligible for this resit). */
   isLocked: boolean
+  /** Locked specifically because the report card is published — the only case an admin
+   *  can unlock. Kept apart from isLocked so the banner can't blame publishing for a
+   *  row that's simply passed the course. */
   isPublished?: boolean
+  resitEligible?: boolean
 }
 
 export default function MarksEntryPage() {
@@ -39,7 +49,14 @@ export default function MarksEntryPage() {
   const termName = searchParams.get('termName') ?? ''
   const lang = useLang()
   const isUniversity = school?.type === 'UNIVERSITY'
-  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : 'Exam') : seqFull(termName, seqIndex, lang)
+  // The school records marks centrally AND I am a teacher. Admins are never locked out by
+  // this, and an older cached session with no mode reads as TEACHERS, matching the API's
+  // permissive default: the API is the real gate, so guessing wrong here only costs a
+  // pointless 403 rather than letting anything through.
+  const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY' && !isAdminRole
+  const isResit = isUniversity && seqIndex === 2
+  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
   const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
 
@@ -87,25 +104,56 @@ export default function MarksEntryPage() {
       sorted.map(async (s) => {
         let score = ''
         let otherSeqScore: number | null = null
+        let resitEligible = false
         if (s.reportCard) {
           try {
             const rc = await getReportCardApi(s.reportCard.id)
             const entry = rc.entries.find((e: any) => e.subject.id === subjectId) as any
             if (entry) {
-              score = seqIndex === 0
-                ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
-                : (entry.seq2Score != null ? String(entry.seq2Score) : '')
-              otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              if (isResit) {
+                score = entry.resitScore != null ? String(entry.resitScore) : ''
+                // A resit is offered to anyone who FAILED THE COURSE, whatever their exam
+                // mark was. Re-sitting only replaces the exam (the CA carries over), so a
+                // student who passed the exam but failed the course on a weak CA is exactly
+                // who a resit helps: a better exam mark is their only way to lift the total.
+                // Requiring a failed exam too locked those students out of their own remedy.
+                //
+                // Someone who PASSED the course is not offered one: there is nothing to fix.
+                //
+                // Judged against the ORIGINAL CA+Exam (ignoring any resit already recorded),
+                // so a row stays editable after its resit mark is entered. Via the school's
+                // own scale, never a hardcoded 'F' or pass mark: CITEC juries grade D as FAIL.
+                const ca = entry.seq1Score, exam = entry.seq2Score
+                resitEligible = ca != null && exam != null
+                  && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
+              } else {
+                score = seqIndex === 0
+                  ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
+                  : (entry.seq2Score != null ? String(entry.seq2Score) : '')
+                otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
+              }
             }
           } catch { /* no entries yet */ }
         }
         const isPublished  = s.reportCard?.status === 'PUBLISHED'
         const grantedToMe  = s.reportCard?.marksEditGrantedTo === user?.id
+        // Publishing freezes a card for EVERYONE, the administration included: to change a
+        // mark you unpublish it first, which the API enforces too. Publishing is what fixes
+        // the class's averages and positions, so a mark moving underneath a published card
+        // would silently invalidate the cards already handed out.
+        const frozenByPublish = isPublished && !grantedToMe
+        // School policy: some universities record marks centrally so a teacher never
+        // enters marks for a course they teach. The sheet stays READABLE (they can check
+        // their subject); only saving is refused, and the API refuses it too. An admin
+        // can still grant one teacher one class without changing the policy.
+        const marksLockedToAdmin = adminOnlyMarks && !grantedToMe
         return {
           studentId: s.id, name: s.name, studentIdCode: s.studentId,
           reportCardId: s.reportCard?.id ?? null,
           score, otherSeqScore,
-          isLocked: isPublished && !grantedToMe,
+          isLocked: frozenByPublish || (isResit && !resitEligible) || marksLockedToAdmin,
+          isPublished: frozenByPublish,
+          resitEligible,
         }
       })
     )
@@ -332,7 +380,11 @@ export default function MarksEntryPage() {
   }
 
   // ── Save ────────────────────────────────────────────────────────────────────
-  const publishedCount = rows.filter(r => r.isLocked).length
+  // Only rows locked BY PUBLISHING — the ones an admin can actually unlock. Counting
+  // every locked row here told teachers on the Resit tab that N report cards were
+  // published and to go contact their admin, when those rows were simply students who
+  // passed the course and were never resit-eligible.
+  const publishedCount = rows.filter(r => r.isPublished).length
   const editableRows   = rows.filter(r => !r.isLocked)
 
   const handleSaveAll = async () => {
@@ -379,6 +431,7 @@ export default function MarksEntryPage() {
               subjectId: sid,
               seq1Score: seqIndex === 0 ? cur : (existing?.seq1Score ?? null),
               seq2Score: seqIndex === 1 ? cur : (existing?.seq2Score ?? null),
+              resitScore: isResit ? cur : (existing?.resitScore ?? null),
               remarks: existing?.remarks || '',
             }
           }
@@ -386,6 +439,7 @@ export default function MarksEntryPage() {
             subjectId: sid,
             seq1Score: existing?.seq1Score ?? undefined,
             seq2Score: existing?.seq2Score ?? undefined,
+            resitScore: existing?.resitScore ?? undefined,
             score: existing?.score ?? 0,
             remarks: existing?.remarks || '',
           }
@@ -416,9 +470,24 @@ export default function MarksEntryPage() {
           className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition">
           <ArrowLeft size={20} />
         </button>
-        <div>
+        <div className="flex-1 min-w-0">
           <h2 className="text-xl font-bold text-foreground">{subjectName} · {seqLabel}</h2>
           <p className="text-sm text-muted-foreground">{classLevel}</p>
+        </div>
+
+        {/* Switch assessment without leaving the sheet. The sequence has always come from
+            the url, so moving from CA to Exam meant navigating back to the class sheet and
+            starting again, once per course. Same marks, same students, one click. */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
+            <button key={i}
+              onClick={() => router.replace(`/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subjectId)}?termId=${termId}&termName=${encodeURIComponent(termName)}&subjectName=${encodeURIComponent(subjectName)}&sequence=${i}`)}
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition ${seqIndex === i
+                ? 'border-primary bg-primary/10 text-primary font-semibold'
+                : 'border-border text-muted-foreground hover:text-foreground'}`}>
+              {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqShort(termName, i, lang)}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -436,25 +505,46 @@ export default function MarksEntryPage() {
         </span>
       </div>
 
-      {/* Copy-from-other-seq bar */}
-      <button
-        onClick={handleCopyFromOther}
-        className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"
-      >
-        <Copy size={15} className="text-violet-600 flex-shrink-0" />
-        <span className="flex-1 text-sm font-semibold text-violet-600">
-          {t('Copy marks from')} {otherSeqLabel} {t('→ fill here')}
-        </span>
-        <span className="text-violet-400 text-sm">›</span>
-      </button>
+      {/* Copy-from-other-seq bar — resit has nothing to copy from */}
+      {isResit ? (
+        <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
+          <span className="flex-1 text-sm text-sky-700">
+            {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
+          </span>
+        </div>
+      ) : (
+        <button
+          onClick={handleCopyFromOther}
+          className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"
+        >
+          <Copy size={15} className="text-violet-600 flex-shrink-0" />
+          <span className="flex-1 text-sm font-semibold text-violet-600">
+            {t('Copy marks from')} {otherSeqLabel} {t('→ fill here')}
+          </span>
+          <span className="text-violet-400 text-sm">›</span>
+        </button>
+      )}
 
       {/* Published banner */}
+      {/* Why the sheet is read-only. Without this a teacher meets a dead grid and assumes
+          the app is broken, rather than seeing a school policy. Shown above the published
+          banner because it explains the whole sheet, not a few rows. */}
+      {adminOnlyMarks && (
+        <div className="flex items-center gap-2 bg-sky-50 border-b border-sky-200 px-4 py-2.5 text-sm text-sky-700">
+          🔒 {t('Marks are entered by the administration at this school. You can check the marks here, but not change them. Ask an admin if something needs correcting.')}
+        </div>
+      )}
       {publishedCount > 0 && (
         <div className="flex items-center gap-2 bg-orange-50 border-b border-orange-200 px-4 py-2.5 text-sm text-orange-700">
           🔒 {publishedCount === rows.length
             ? t('All report cards are published')
             : `${publishedCount} ${t('report card(s) are published')}`
-          } {t('— those rows are locked. Contact your admin to make changes.')}
+          }{' '}
+          {/* The remedy depends on who is reading. Telling an admin to "contact your
+              admin" is a dead end: unpublishing is theirs to do. */}
+          {isAdminRole
+            ? t('and those rows are locked. Unpublish a report card to change its marks.')
+            : t('and those rows are locked. Ask your admin to unpublish it, or to grant you access.')}
         </div>
       )}
 
@@ -482,7 +572,7 @@ export default function MarksEntryPage() {
                 <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
                 <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">{t('STUDENT NAME')}</th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white w-44 border-r border-white/10">
-                  {isUniversity ? (seqIndex === 0 ? 'CA / 30' : 'MARKS / 70') : `${t('MARKS /')} ${effectiveMax}`}
+                  {isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}
                 </th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white">{t('PERFORMANCE')}</th>
               </tr>
@@ -587,7 +677,9 @@ export default function MarksEntryPage() {
           {saving
             ? t('Saving...')
             : editableRows.length === 0
-              ? t('All Cards Published')
+              // Nothing editable has two causes now, and blaming publishing when the real
+              // reason is school policy sends the teacher to argue with the wrong person.
+              ? (adminOnlyMarks ? t('Administration enters marks here') : t('All Cards Published'))
               : t('Save All Marks')}
         </button>
       </div>

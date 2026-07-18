@@ -11,14 +11,14 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
-import { getTemplateApi, TemplateConfig, TemplateName, DEFAULT_CONFIG, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfig, DocVariant } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
 import { gradeFromScore } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
 
 interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number; credit?: number; compulsory?: boolean; term?: string | null }
-interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string }
+interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string }
 interface ReportCard {
   id: string
   status: string
@@ -37,8 +37,8 @@ interface ReportCard {
   remarksEditGrantedTo: string | null
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
-  school: { name: string; type: string; language?: string; logo?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
-  entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
+  school: { name: string; type: string; language?: string; logo?: string | null; stamp?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
+  entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
 }
 
 
@@ -51,8 +51,12 @@ function ordinal(n: number): string {
 export default function ReportCardDetailPage() {
   const router = useRouter()
   const params = useParams()
-  const { isAuthenticated, user } = useAuthStore()
+  const { isAuthenticated, user, school } = useAuthStore()
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  // This school records marks centrally (School.marksEntryMode). Then a missing mark is
+  // the administration's own job, so naming a teacher beside it is not just noise, it
+  // points at the wrong person.
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY'
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const { toast, showToast, hideToast } = useToast()
@@ -78,22 +82,34 @@ export default function ReportCardDetailPage() {
   const [teachers, setTeachers] = useState<{ id: string; name: string; role: string }[]>([])
   const [grantMarksUserId, setGrantMarksUserId] = useState('')
   const [grantRemarksUserId, setGrantRemarksUserId] = useState('')
+  // Which copy prints: the student copy handed out at the end of the term, or the
+  // official one the school seals and sends itself. Chosen per print, never saved.
+  const [variant, setVariant] = useState<DocVariant>('student')
+  const [pendingPrint, setPendingPrint] = useState(false)
 
-  const handlePrint = useCallback(() => {
+  // Printing runs from an effect, not the click: picking a copy has to re-render the
+  // print portal first, or window.print() would capture the previous one.
+  useEffect(() => {
+    if (!pendingPrint) return
     const el = document.getElementById('report-card-printable')
-    if (!el) return
+    if (!el) { setPendingPrint(false); return }
     const imgs = Array.from(el.getElementsByTagName('img'))
-    const doPrint = () => window.print()
+    const doPrint = () => { window.print(); setPendingPrint(false) }
     if (imgs.length === 0) {
-      setTimeout(doPrint, 200)
-    } else {
-      let done = 0
-      imgs.forEach(img => {
-        const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
-        if (img.complete) tick()
-        else { img.onload = tick; img.onerror = tick }
-      })
+      const t = setTimeout(doPrint, 200)
+      return () => clearTimeout(t)
     }
+    let done = 0
+    imgs.forEach(img => {
+      const tick = () => { if (++done === imgs.length) setTimeout(doPrint, 200) }
+      if (img.complete) tick()
+      else { img.onload = tick; img.onerror = tick }
+    })
+  }, [pendingPrint])
+
+  const handlePrint = useCallback((v: DocVariant) => {
+    setVariant(v)
+    setPendingPrint(true)
   }, [])
 
   const fetchData = useCallback(async () => {
@@ -109,15 +125,9 @@ export default function ReportCardDetailPage() {
       setTeachers((teacherData.teachers ?? []).filter((t: any) => ['CLASS_TEACHER', 'CLASS_MASTER'].includes(t.role)))
       if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
       if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
-      if (tplData.config && Object.keys(tplData.config).length > 0) {
-        const { TEMPLATE_DEFAULTS } = await import('@/lib/api/reportCardTemplate')
-        const saved = tplData.config as Partial<TemplateConfig>
-        const base = TEMPLATE_DEFAULTS[(saved.template ?? 'classic') as TemplateName]
-        setTemplateConfig({ ...base, ...saved } as TemplateConfig)
-      } else {
-        // No saved design → use the section-type default (university gets the GPA transcript).
-        setTemplateConfig(getDefaultLayoutForType(rc.school?.type) as TemplateConfig)
-      }
+      // Resolves the saved standard/ledger design; never the transcript one
+      // (that lives under config.transcript and only the transcript page uses it).
+      setTemplateConfig(mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, rc.school?.type))
       if (rc.cgpa != null) setStudentCgpa(rc.cgpa)
       setReportCard(rc)
       if (rc.subjectStats) setSubjectStats(rc.subjectStats)
@@ -141,6 +151,7 @@ export default function ReportCardDetailPage() {
           score: existing?.score || 0,
           seq1Score: existing?.seq1Score ?? null,
           seq2Score: existing?.seq2Score ?? null,
+          resitScore: existing?.resitScore ?? null,
           grade: existing?.grade || '',
           remarks: existing?.remarks || ''
         }
@@ -292,19 +303,33 @@ export default function ReportCardDetailPage() {
   })()
   const cgpa = studentCgpa ?? semGpaInfo.gpa
 
-  // Publish readiness checks
-  const allSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
+  // Publish readiness checks — prefer the backend's readiness detail (admin-only)
+  // once it loads, since it also catches subjects with zero entries at all, not
+  // just entries with a missing sequence score. Falls back to the local, weaker
+  // check for non-admins (who never fetch readiness) so their remarks-edit gate
+  // still works.
+  const localSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
+  const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!(reportCard.remarks?.trim() || reportCard.remarksFr?.trim())
   // Positions are class-relative — every other active student in this class + term
   // must also be complete (or already published) before this one can publish.
   const classReady = readiness ? readiness.otherStudentsBlocking === 0 : false
   const canPublish = allSeqsFilled && hasRemarks && classReady
   // Class master can only give remarks once ALL sequences for this report card are filled
-  const canEditRemarks = isClassMaster && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
+  const canEditRemarks = isClassMaster && !adminOnlyMarks && allSeqsFilled && (reportCard.status === 'DRAFT' || reportCard.remarksEditGrantedTo === user?.id)
   // Admin / VP can also write the general remarks — once every offered subject is
   // marked (same gate as the class master).
-  const noClassMaster = readiness ? !readiness.classMaster : false
+  // A school where the administration records marks does not appoint class masters, so
+  // the card must never name one, chase one, or hand them the remarks. The app already
+  // has wording for "no class master" — this simply makes that the case.
+  const noClassMaster = adminOnlyMarks || (readiness ? !readiness.classMaster : false)
   const canAdminEditRemarks = isAdmin && allSeqsFilled && reportCard.status === 'DRAFT'
+  // Who is offered the way through to the marks sheet. An admin always: they may edit even
+  // a published card (the API allows it, and they can unpublish anyway), which is the whole
+  // point of being able to correct a mark. A teacher only where the school lets teachers
+  // record marks at all. The sheet itself still locks whatever the rules say; this only
+  // decides whether the door is shown.
+  const canEditMarks = isAdmin || (!adminOnlyMarks && (isClassMaster || user?.role === 'CLASS_TEACHER' || user?.role === 'SUBJECT_TEACHER'))
 
   return (
     <div>
@@ -339,8 +364,12 @@ export default function ReportCardDetailPage() {
 
                   {/* Grant permissions */}
                   <div className="flex items-center gap-2 border-l border-border pl-2">
-                    {/* Marks */}
-                    {reportCard.marksEditGrantedTo ? (
+                    {/* Marks. Hidden where the administration records marks: handing marks
+                        back to a teacher is the very thing that policy exists to prevent,
+                        so offering it here would contradict the school's own setting. An
+                        existing grant still shows, so it can be revoked rather than being
+                        stranded and invisible. */}
+                    {adminOnlyMarks && !reportCard.marksEditGrantedTo ? null : reportCard.marksEditGrantedTo ? (
                       <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 rounded-md px-2.5 py-1.5">
                         <span className="text-xs text-primary font-medium">{tr('Marks')} → {teachers.find(t => t.id === reportCard.marksEditGrantedTo)?.name?.split(' ')[0]}</span>
                         <button onClick={() => handleRevokePermission('marks')} className="text-primary/60 hover:text-destructive text-xs leading-none">✕</button>
@@ -363,8 +392,11 @@ export default function ReportCardDetailPage() {
                       </div>
                     )}
 
-                    {/* Remarks */}
-                    {reportCard.remarksEditGrantedTo ? (
+                    {/* Remarks. Hidden where the administration records marks: those schools
+                        appoint no class master, so there is nobody to hand the remarks to.
+                        An existing grant still shows, so it can be revoked rather than
+                        being stranded and invisible. */}
+                    {adminOnlyMarks && !reportCard.remarksEditGrantedTo ? null : reportCard.remarksEditGrantedTo ? (
                       <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 rounded-md px-2.5 py-1.5">
                         <span className="text-xs text-primary font-medium">{tr('Remarks')} → {teachers.find(t => t.id === reportCard.remarksEditGrantedTo)?.name?.split(' ')[0]}</span>
                         <button onClick={() => handleRevokePermission('remarks')} className="text-primary/60 hover:text-destructive text-xs leading-none">✕</button>
@@ -394,14 +426,24 @@ export default function ReportCardDetailPage() {
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground bg-muted border border-border px-3 py-2 rounded-lg" title="Printing has been disabled for this term by your administrator">
                     <Printer size={14} /> {tr('Printing disabled')}
                   </span>
-                ) : (
+                ) : (<>
+                  {/* Both copies stay available: the student copy is the everyday one,
+                      the official is sealed and sent by the school itself. */}
                   <button
-                    onClick={handlePrint}
+                    onClick={() => handlePrint('student')}
                     className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    title={tr('The copy handed to students at the end of the term')}
                   >
-                    <Printer size={14} /> {tr('Print / Save PDF')}
+                    <Printer size={14} /> {tr('Print Student Copy')}
                   </button>
-                )
+                  <button
+                    onClick={() => handlePrint('official')}
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    title={tr('The sealed copy the school sends out itself')}
+                  >
+                    <Printer size={14} /> {tr('Print Official')}
+                  </button>
+                </>)
               )}
             </div>
           ) : (
@@ -482,7 +524,7 @@ export default function ReportCardDetailPage() {
           <>
             <div className="bg-card rounded-xl border border-border p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
-              <p className="text-xs text-muted-foreground mt-1">{tr('Subjects')}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr(isUniversity ? 'Courses' : 'Subjects')}</p>
             </div>
             <div className="bg-card rounded-xl border border-border p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{average.toFixed(1)}</p>
@@ -522,22 +564,36 @@ export default function ReportCardDetailPage() {
       {subjects.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <p className="text-muted-foreground text-sm">
-            {tr('No subjects for')} <strong>{reportCard.student.classLevel}</strong>.
+            {isUniversity ? tr('No courses for') : tr('No subjects for')} <strong>{reportCard.student.classLevel}</strong>.
           </p>
           <button onClick={() => router.push('/subjects')} className="mt-3 text-primary text-sm hover:underline">
-            {tr('Go to Subjects →')}
+            {isUniversity ? tr('Go to Courses →') : tr('Go to Subjects →')}
           </button>
         </div>
       ) : (
         <>
           <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
-            <div className="px-4 py-3 bg-muted border-b border-border">
-              <h3 className="text-sm font-semibold text-foreground">{tr('Subject Scores')}</h3>
+            <div className="px-4 py-3 bg-muted border-b border-border flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-foreground">{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</h3>
+              {/* This table is read-only; marks are entered on the class sheet. Without a
+                  way through, a card whose marks are already complete offered no route to
+                  correct one at all: the only other path is Report Cards > class > subject
+                  > sequence, which you have to already know. termName is required, not
+                  decoration: the class sheet filters courses by it. */}
+              {canEditMarks && (
+                <button
+                  onClick={() => router.push(`/report-cards/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}`)}
+                  className="text-xs font-medium border border-border bg-card text-foreground px-3 py-1.5 rounded-md hover:bg-muted transition-colors whitespace-nowrap"
+                  title={tr('Marks are entered on the class sheet')}
+                >
+                  {tr('Edit marks')}
+                </button>
+              )}
             </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
               <thead className="border-b border-gray-100 dark:border-border">
                 <tr>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Subject')}</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{isUniversity ? tr('Course') : tr('Subject')}</th>
                   {isUniversity ? (
                     <>
                       <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">CA / 30</th>
@@ -623,16 +679,23 @@ export default function ReportCardDetailPage() {
               {readiness.missingSubjects.map(s => (
                 <div key={s.subjectId} className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
-                  {s.teacher
-                    ? <span className="text-foreground"><span className="font-medium">{s.teacher.name}</span> {tr('has not filled marks for')} <span className="font-medium">{s.subjectName}</span></span>
-                    : <span className="text-foreground"><span className="font-medium">{s.subjectName}</span> {tr('has no teacher assigned')}</span>
+                  {adminOnlyMarks
+                    // Marks are the administration's to enter here, so state the fact and
+                    // offer the way to fix it, rather than naming a teacher who is not
+                    // allowed to enter marks in the first place.
+                    ? <span className="text-foreground">
+                        {tr('No marks yet for')} <span className="font-medium">{s.subjectName}</span>
+                      </span>
+                    : s.teacher
+                      ? <span className="text-foreground"><span className="font-medium">{s.teacher.name}</span> {tr('has not filled marks for')} <span className="font-medium">{s.subjectName}</span></span>
+                      : <span className="text-foreground"><span className="font-medium">{s.subjectName}</span> {tr('has no teacher assigned')}</span>
                   }
                 </div>
               ))}
               {readiness.missingRemarks && (
                 <div className="flex items-start gap-2 text-sm">
                   <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-                  {readiness.classMaster
+                  {readiness.classMaster && !adminOnlyMarks
                     ? <span className="text-foreground">{tr('Class Master')} <span className="font-medium">{readiness.classMaster.name}</span> {tr('has not written general remarks')}</span>
                     : <span className="text-foreground">{tr('General remarks have not been written yet —')} <span className="font-medium">{tr('admin / vice-principal')}</span> {tr('can add them below')}</span>
                   }
@@ -737,6 +800,7 @@ export default function ReportCardDetailPage() {
             config={templateConfig}
             gradeBands={gradingRanges}
             classificationBands={classificationBands}
+            variant={variant}
             cgpa={studentCgpa ?? undefined}
             subjectStats={subjectStats}
           />

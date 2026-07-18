@@ -120,7 +120,9 @@ export default function StudentFeesModal({
                 {data?.isRepeatingYear
                   ? ` · Repeat Year · ${data.session ?? '—'}`
                   : data?.isHndProgram
-                    ? ' · HND program (all sessions)'
+                    ? data.student.directLevel2Entry
+                      ? ' · Direct Level 2 entry (1-year fee)'
+                      : ' · HND program (all sessions)'
                     : data?.session ? ` · ${data.session}` : ''}
               </p>
             </div>
@@ -162,7 +164,11 @@ export default function StudentFeesModal({
               <div>
                 <span className="text-xs text-muted-foreground block">{(data.isHndProgram || data.isRepeatingYear) ? 'Program' : t('Session')}</span>
                 <span className="text-sm text-foreground font-medium">
-                  {data.isRepeatingYear ? 'HND – Repeat Year' : data.isHndProgram ? 'HND (2 years)' : (data.session || '—')}
+                  {data.isRepeatingYear
+                    ? 'HND – Repeat Year'
+                    : data.isHndProgram
+                      ? data.student.directLevel2Entry ? 'Direct Entry (1 year)' : 'HND (2 years)'
+                      : (data.session || '—')}
                 </span>
               </div>
               <div>
@@ -178,6 +184,16 @@ export default function StudentFeesModal({
                 {chip && <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${chip.cls}`}>{chip.label}</span>}
               </div>
             </div>
+
+            {/* Direct Level 2 entry notice — clarifies this student is not on the 2-year program */}
+            {data.isHndProgram && data.student.directLevel2Entry && (
+              <div className="rounded-xl border border-sky-200 bg-sky-50 dark:bg-sky-950/30 dark:border-sky-800 px-4 py-3 mb-4">
+                <p className="text-sm font-medium text-sky-800 dark:text-sky-300">Direct Level 2 entry</p>
+                <p className="text-xs text-sky-700 dark:text-sky-400 mt-0.5">
+                  This student enrolled directly at Level 2 and was not here for Level 1. They are on a 1-year fee, not the 2-year program.
+                </p>
+              </div>
+            )}
 
             {/* Repeat Year toggle — Level 1 HND only */}
             {(data.isHndProgram || data.isRepeatingYear) && / - Level 1$/i.test(data.student.classLevel) && (
@@ -246,13 +262,13 @@ export default function StudentFeesModal({
                 <p className="text-xs font-semibold text-foreground mb-2">{t('Record a payment')}</p>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="flex-1 min-w-[120px]">
-                    <label className="block text-xs text-muted-foreground mb-1">{t('Amount paid')}</label>
+                    <label className="block text-xs text-muted-foreground mb-1">{t('Amount paid')} <span className="text-destructive">*</span></label>
                     <input type="number" min="1" step="any" placeholder="75000" value={amount}
                       onChange={(e) => setAmount(e.target.value)} required
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>
                   <div className="min-w-[140px]">
-                    <label className="block text-xs text-muted-foreground mb-1">{t('Payment date')}</label>
+                    <label className="block text-xs text-muted-foreground mb-1">{t('Payment date')} <span className="text-destructive">*</span></label>
                     <input type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} required
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>

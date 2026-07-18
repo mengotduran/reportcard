@@ -28,7 +28,7 @@ const CHART_CONFIG = [
   { key: 'students' as const,    label: 'Students',     color: '#F03E2F', type: 'area' as const,  icon: Users,    statKey: 'students' as const },
   { key: 'reportCards' as const, label: 'Report Cards', color: '#7c3aed', type: 'line' as const,  icon: FileText, statKey: 'reportCards' as const },
   { key: 'teachers' as const,    label: 'Teachers',     color: '#16a34a', type: 'bar' as const,   icon: School,   statKey: 'teachers' as const },
-  { key: 'subjects' as const,    label: 'Subjects',     color: '#ea580c', type: 'bar' as const,   icon: BookOpen, statKey: 'subjects' as const },
+  { key: 'subjects' as const,    label: 'Courses',      color: '#ea580c', type: 'bar' as const,   icon: BookOpen, statKey: 'subjects' as const },
 ]
 
 function TrendIndicator({ data }: { data: number[] }) {
@@ -271,7 +271,7 @@ export default function UniversityDashboard() {
     { label: 'Total Students',  value: stats?.students,    icon: Users,     color: 'bg-primary/10 text-primary' },
     { label: 'Total Teachers',  value: stats?.teachers,    icon: School,    color: 'bg-green-500/10 text-green-500' },
     { label: 'Report Cards',    value: stats?.reportCards, icon: FileText,  color: 'bg-violet-500/10 text-violet-500' },
-    { label: 'Subjects',        value: stats?.subjects,    icon: BookOpen,  color: 'bg-orange-500/10 text-orange-500' },
+    { label: 'Courses',         value: stats?.subjects,    icon: BookOpen,  color: 'bg-orange-500/10 text-orange-500' },
   ]
 
   const emptyWeekly: WeeklyStats = { labels: Array(8).fill(''), students: Array(8).fill(0), reportCards: Array(8).fill(0), teachers: Array(8).fill(0), subjects: Array(8).fill(0) }

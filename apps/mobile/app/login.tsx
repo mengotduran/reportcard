@@ -1,8 +1,10 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView,
+  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView, Animated,
 } from 'react-native'
+import AuthBackground from '@/components/AuthBackground'
+import { useThemeStore } from '@/lib/store/theme.store'
 import { Redirect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
@@ -12,7 +14,8 @@ import { useTheme, Colors } from '@/lib/useTheme'
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   outer: {
     flex: 1,
-    backgroundColor: colors.bgSecondary,
+    // The animated AuthBackground paints the base; an opaque colour here would hide it.
+    backgroundColor: 'transparent',
   },
   inner: {
     flexGrow: 1,
@@ -111,8 +114,29 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
 }))
 
 export default function LoginScreen() {
-  const { colors } = useTheme()
+  const { colors, isDark } = useTheme()
   const styles = useMemo(() => makeStylesStyles(colors), [colors])
+  // The theme toggler the web login has, top-right.
+  // A plain two-state toggle on what you SEE: cycling through 'system' meant a tap from
+  // dark to system looked like nothing happened on a dark-mode phone, and reaching light
+  // took two taps. The icon shows what a tap gives you (sun while dark, moon while light).
+  const { setTheme } = useThemeStore()
+  const cycleTheme = () => setTheme(isDark ? 'light' : 'dark')
+  const themeIcon = isDark ? 'sunny-outline' : 'moon-outline'
+
+  // The web login shakes its error box on every failed attempt; same here. Keyed on a
+  // counter so a SECOND failure re-fires even though the message text is identical.
+  const [errorKey, setErrorKey] = useState(0)
+  const shake = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    if (!errorKey) return
+    shake.setValue(0)
+    Animated.sequence(
+      [1, -1, 0.8, -0.8, 0.4, 0].map(v =>
+        Animated.timing(shake, { toValue: v, duration: 70, useNativeDriver: true })
+      )
+    ).start()
+  }, [errorKey, shake])
   const { isAuthenticated, _hasHydrated, login } = useAuthStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -131,15 +155,29 @@ export default function LoginScreen() {
     try {
       const data = await loginApi({ email, password })
       login(data.token, data.user, data.school)
-    } catch {
-      // Fields kept — user can correct without retyping
-      setError('One of your credentials is incorrect. Please check and try again.')
+    } catch (err: any) {
+      // Fields kept — user can correct without retyping.
+      // Only a real server REJECTION means bad credentials. A timeout or refused
+      // connection used to show the same message, sending people to re-type a correct
+      // password while the actual problem was the phone not reaching the server at all.
+      setError(err?.response
+        ? 'One of your credentials is incorrect. Please check and try again.'
+        : 'Cannot reach the school server. Check that your phone and the server are on the same network.')
+      setErrorKey(k => k + 1)
     } finally {
       setLoading(false)
     }
   }
 
   return (
+    <View style={{ flex: 1 }}>
+      <AuthBackground dark={isDark} />
+      <TouchableOpacity
+        onPress={cycleTheme}
+        activeOpacity={0.7}
+        style={{ position: 'absolute', top: 52, right: 20, zIndex: 20, padding: 10, borderRadius: 12, backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }}>
+        <Ionicons name={themeIcon} size={20} color={isDark ? '#cfe0f4' : '#6f6553'} />
+      </TouchableOpacity>
     <KeyboardAvoidingView
       style={styles.outer}
       behavior={Platform.OS === 'ios' ? undefined : 'height'}
@@ -151,17 +189,19 @@ export default function LoginScreen() {
         bounces={false}
         automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       >
-        <View style={styles.card}>
+        {/* Light mode: warm parchment, not stark white — the card sat too bright on the
+            paper backdrop. Dark mode keeps the theme card colour. */}
+        <View style={[styles.card, !isDark && { backgroundColor: '#f6f0e2', borderWidth: 1, borderColor: 'rgba(140,120,85,0.28)' }]}>
           <View style={styles.logoBox}>
             <Ionicons name="school" size={26} color="#fff" />
           </View>
           <Text style={styles.title}>Bulletin</Text>
           <Text style={styles.subtitle}>Sign in to your school account</Text>
 
-          {/* Fixed-height error row — card height never shifts */}
-          <View style={styles.errorRow}>
+          {/* Fixed-height error row — card height never shifts; shakes on each failure */}
+          <Animated.View style={[styles.errorRow, { transform: [{ translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-6, 6] }) }] }]}>
             {!!error && <Text style={styles.errorText}>{error}</Text>}
-          </View>
+          </Animated.View>
 
           <TextInput
             style={styles.input}
@@ -221,5 +261,6 @@ export default function LoginScreen() {
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+    </View>
   )
 }

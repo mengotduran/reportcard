@@ -1,6 +1,6 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-06-15 (Demo tenant + caps · remarks required for all classes · letter grades)
+> Last updated: 2026-07-17 (annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
 > This document is updated every time a new feature or change is made.
 
 ---
@@ -86,14 +86,15 @@ npx prisma studio          # View data at localhost:5555
 | Model | Purpose |
 |-------|---------|
 | `ParentSchool` | Groups multiple school sections under one institution |
-| `School` | A single school section (PRIMARY / SECONDARY / UNIVERSITY). Has logo, cover image, subdomain |
+| `School` | A single school section (PRIMARY / SECONDARY / UNIVERSITY). Has logo, cover image, subdomain, **stamp** (official seal image, prints on official copies only), **marksEntryMode** (`TEACHERS` default / `ADMIN_ONLY`) |
+| `MarksEntryModeChange` | Audit log of every who-enters-marks switch: mode, snapshotted user name, timestamp, termId it counted against, `byProvider` flag. A log (not a last-changed-by field) so a flip-and-back leaves two rows |
 
 ### People
 
 | Model | Key Fields |
 |-------|-----------|
 | `User` | name, email, password, role, schoolId, **masterClassLevel** (CLASS_MASTER only) |
-| `Student` | name, studentId, classLevel (e.g. "Form 4 Arts"), guardianName/Phone/Email |
+| `Student` | name, studentId, classLevel (e.g. "Form 4 Arts"), guardianName/Phone/Email, **dateOfBirth**/**placeOfBirth** (optional; DOB stored as `"YYYY-MM-DD"` TEXT, never a timestamp — a timezone would shift a birth date by a day), status |
 
 ### Academic
 
@@ -109,13 +110,13 @@ npx prisma studio          # View data at localhost:5555
 | Model | Key Fields |
 |-------|-----------|
 | `ReportCard` | studentId, termId, status (DRAFT/PUBLISHED), totalScore, **average** (raw X.X e.g. 14.4), **position** (int), remarks |
-| `ReportEntry` | reportCardId, subjectId, seq1Score, seq2Score, **score** (avg of both seqs), grade, **remarks** (auto-filled from grading scale) |
+| `ReportEntry` | reportCardId, subjectId, seq1Score, seq2Score, **resitScore** (university: exam re-sat; `score` then = CA + resit), **score** (secondary: avg of seqs · university: CA + effective exam), grade, **remarks** (auto-filled from grading scale) |
 
 ### Configuration (per school)
 
 | Model | Purpose |
 |-------|---------|
-| `GradingScale` | Stores custom grade ranges as JSON |
+| `GradingScale` | Stores custom grade ranges as JSON. **Two storage shapes exist** (legacy bare array, or `{ ranges, classificationBands, legendRows }` which saving always writes now). Every reader must parse via `apps/api/src/utils/gradingScale.ts` — reading the column raw silently graded with the built-in defaults for years |
 | `ReportCardTemplate` | Stores full card layout config as JSON |
 | `ClassListTemplate` | Stores the printable class list / marks register design as JSON |
 
@@ -208,7 +209,7 @@ Base URL: `http://localhost:5000/api`
 | GET | `/report-cards` | All | List report cards |
 | GET | `/report-cards/:id` | All | Get single report card with entries |
 | POST | `/report-cards` | Admin, CLASS_TEACHER, CLASS_MASTER | Create a report card |
-| PUT | `/report-cards/:id/entries` | Admin, CLASS_TEACHER, CLASS_MASTER | Save subject marks; auto-fills entry.grade + entry.remarks from grading scale |
+| PUT | `/report-cards/:id/entries` | Admin, teachers | Save marks; auto-fills grade + remarks from the school's scale (parsed, both storage shapes). Refuses: teachers under `ADMIN_ONLY` (403), anyone on a **PUBLISHED** card (unpublish first; explicit grant excepted), and resit marks for students who didn't fail the course |
 | PUT | `/report-cards/:id/remarks` | Admin, VP, CLASS_MASTER | Update general remarks only (admin/VP used when class has no master) |
 | PUT | `/report-cards/:id/publish` | Admin, VP | Publish one card — enforces subjects + all sequences + general remarks |
 | PUT | `/report-cards/:id/unpublish` | Admin, VP | Unpublish (unlocks for editing) |
@@ -236,6 +237,10 @@ Base URL: `http://localhost:5000/api`
 | GET/PUT | `/report-card-template` | Get/update the report card layout config |
 | GET/PUT | `/class-list-template` | Get/update the class list / marks register design config (save: admin/VP) |
 | POST/DELETE | `/school/logo` | Upload/remove school logo |
+| POST/DELETE | `/school/stamp` | Upload/remove the official stamp/seal (prints on official copies only, via the designer's `stamp` section) |
+| PUT | `/school/settings` | Also accepts `marksEntryMode` — validated against the enum, capped at 2 real switches per semester (403 past that), each switch audit-logged. GET returns `marksEntrySwitches` (used/limit/allowed) + `marksEntryModeHistory` |
+| PUT | `/superadmin/schools/:id` | Also accepts `marksEntryMode` — the provider's override: uncapped, logged with `byProvider: true`, never counts against the school's quota |
+| GET | `/report-cards/student/:id/transcript` | Annual transcript data: published cards of the session (chronological), `termCount`, grading scale, classification bands, school incl. `stamp` |
 | POST/DELETE | `/school/cover` | Upload/remove cover image |
 
 ### SuperAdmin
@@ -405,7 +410,7 @@ The CGPA maps to a classification (shown as the transcript "REMARK"):
 
 #### Annual Transcript
 
-The annual transcript is a separate print format that combines both semesters. It is accessed from the report-cards list via the scroll icon (university schools only) next to each student's row. The transcript page is at `/report-cards/transcript/[studentId]?session=XXXX/XXXX`.
+The annual transcript combines every period of the year — **all school types** now, not university only (primary/secondary get a three-term "Annual Report" variant; see §12 → *Annual transcript*). Accessed from the report-cards list via the scroll icon on the **closing period's** rows (2nd semester / 3rd term), enabled once every period of that year is published for the student. The page is `/report-cards/transcript/[studentId]?session=XXXX/XXXX`, with Student copy / Official print buttons and a preview toggle.
 
 The transcript shows:
 1. School header + student info (name, matricule, department, session, sex)
@@ -415,6 +420,20 @@ The transcript shows:
 5. Bottom section (3 side-by-side panels): Grade System table · Classification table · Legend
 6. Overall summary: Credits Earned + CGPA + Remark classification
 7. Signature lines: Dean of Studies + Registrar
+
+---
+
+### University marking (CA / Exam / Resit)
+
+Universities mark differently from primary/secondary:
+
+- **CA is out of 30, the Exam out of 70, the course out of 100** (`TOTAL = CA + Exam`). The grading scale is written on the /100 scale and its bands carry `gradePoint` (/4.0) and `juryDecision` (`VALIDATED` / `FAIL`).
+- **`juryDecision` outranks the grade letter** wherever a pass/fail question is asked — a school can jury a passing-looking letter as a fail (e.g. D 45–49 = FAIL). Shared helpers: `isFailingScore` / `isFailingMark` (web `lib/grading.ts` + `lib/api/gradingScale.ts`, mobile `lib/api/gradingScale.ts`, API inline). Bands match on their **lower bound** (not min..max containment): integer bands leave gaps that fractional marks (e.g. an exam of 31/70 = 44.29/100) would fall through and wrongly read as a pass.
+- **Resit**: re-sits the **exam only**; CA carries over. `score` becomes `CA + resitScore`, and the original exam stays on file. **Eligibility = the student failed the course** (per the school's own scale) — nothing else. A student who passed the exam but failed the course on a weak CA is exactly who a resit helps. Enforced in `saveEntries` (unchanged pre-rule marks are grandfathered), not just the UI.
+
+### Failing marks in red
+
+School-wide toggle in Report Card Design (`highlightFailingRed`, default **on**, stored top-level in the template config so the report card and transcript can never disagree). A subject the student **failed** (per the school's own scale, `juryDecision` first) prints its **numbers and grade letter** in red — seq scores, score, coef/credit, grade point, weighted point. Text cells (code, title, remark, jury decision) stay black; passed subjects are untouched. Applies to every school type and to the Resits appendix table. Mobile shows the same red on the report-card score list.
 
 ---
 
@@ -437,7 +456,7 @@ Each subject has:
 | Step | Who | What |
 |------|-----|------|
 | 1 | **Admin** | Creates report card explicitly for student + term (or auto-created by teacher on first save) |
-| 2 | **CLASS_TEACHER / CLASS_MASTER** | Fills marks (Seq1, Seq2) via marks entry page for their assigned subjects |
+| 2 | **CLASS_TEACHER / CLASS_MASTER** (or **Admin/VP** when the school is set to Administration-only marks) | Fills marks (Seq1, Seq2 — university: CA, Exam, Resit) via the marks entry page |
 | 3 | **API** | Auto-fills per-subject grade + remark from grading scale on every save |
 | 4 | **CLASS_MASTER** (or **Admin/VP** if the class has no master) | Adds/edits general remarks for all students in the class |
 | 5 | **Admin** | Reviews everything and publishes the report card |
@@ -456,6 +475,20 @@ The bulk **"Publish Class"** action checks the whole class: the dropdown button 
 
 - Class **has** a class master → only that master writes the general remarks (as before).
 - Class has **no** class master → **SCHOOL_ADMIN / VICE_PRINCIPAL** write the general remarks themselves, on the report-card detail page (a "Save Remarks" box appears). This keeps every class publishable.
+- School is set to **Administration only** (see below) → such a school appoints no class masters at all: the admin writes the remarks, the card never names a master, and a class master role is refused by the API on both writing and AI-generating remarks (authorisation is checked before the "fill all marks first" validation).
+
+### Published = frozen, for everyone
+
+Once a card is **PUBLISHED**, nobody can save marks on it — the administration included. Unpublish first. Publishing fixes a class's averages and positions, so a mark moving underneath a published card would silently invalidate cards already handed out; making the admin unpublish makes that consequence a deliberate act. Enforced in `saveEntries` with **no role exemption** (this also closed a hole where SUBJECT_TEACHER, unnamed in the old check, could edit published marks). The one exception is the explicit `marksEditGrantedTo` grant, consumed on use. The marks-grid banner names the remedy per role: an admin is told to unpublish, a teacher to ask their admin.
+
+### Who enters marks (`School.marksEntryMode`, university setting)
+
+Some universities record marks centrally so the person who teaches a course never enters its marks:
+
+- **TEACHERS** (default) — exactly the flow above; nothing changes.
+- **ADMIN_ONLY** — only SCHOOL_ADMIN / VICE_PRINCIPAL may save marks (CA, Exam **and** Resit). Teachers open the marks sheet **read-only** with a banner naming the policy, so they can still check their subject. Enforced in `saveEntries` (403), not just the UI. Admins enter marks from the **Courses page** (Level → Department → Semester → course → *Enter marks*) or via the report card's *Edit marks* button; the marks sheet has an in-place **CA / Exam / Resit switcher** (web + mobile).
+
+**Switching the mode is capped and audited**: a school may switch **twice per semester** (free between academic years, when nothing is running); after that the **provider (superadmin)** sets it from the superadmin school page — uncapped, logged as the provider, never counting against the school's two. Every switch is a permanent `MarksEntryModeChange` row (who, when, which semester) shown in Settings with a "used X of 2" counter. This cannot stop a dishonest admin (they can already change any mark); it removes the ability to flip quietly.
 
 ### Admin view
 
@@ -541,6 +574,10 @@ Layout stored as `sections` array. Section types:
 | `remarks` | General remarks block |
 | `text_block` | Free text |
 | `divider` | Horizontal line |
+| `stamp` | The school's official seal (`School.stamp`, uploaded once in School Settings **or** from the designer toolbar). Defaults to *Official only*. No stamp uploaded → prints **nothing** (the "Official Copy" note carries the identification; schools may stamp the printed page by hand) |
+| `grading_legend` | Grade-system table, classification bands, abbreviation legend, editable side tables |
+
+Every section also carries **`showOn`** (*Both copies* / *Official only* / *Student copy only*) — see **Official vs Student copies** below. `student_info` rows whose value is empty are **dropped at print time, label and all** (a dash asserts "none"; an untyped birthplace is not the same thing), and an all-empty section stands down entirely.
 
 ### Display format on printed card
 - **Grade column**: shows the remark text (e.g. "Good") from the grading scale
@@ -558,6 +595,27 @@ A school with **no saved report-card design** starts from a layout tailored to i
 | **University** | Navy theme · "STUDENT SEMESTER REPORT" · **Matric No / Programme / Semester** · **CA + Exam** columns · **GPA / CGPA / Total Credits** summary · **Course Adviser / HOD / Dean** signatures |
 
 Hand-filled fields (Conduct, Attendance, GPA, CGPA, Credits) render as `—` placeholders — design only, no change to grade calculation.
+
+University default headers also include **Date of Birth** and **Place of Birth** rows (optional per student, blank when not recorded, printed spelled out — `12 May 2003` / `12 mai 2003` — because `12/05/2003` reads as 5 December to half the world). Already-saved university designs pick these rows up **once** in the designer (`ensureBirthRows`; deleting them afterwards sticks). **A changed default never reaches an already-saved design** — any new default row/section needs a one-time backfill like this.
+
+### Annual transcript (all school types)
+
+A second design per school, stored under the template config's `transcript` key so it can never clobber the standard design. Edited on the same section canvas via the **Transcript** (university) / **Annual** (primary & secondary) layout thumbnail:
+
+- **Period tables are ordinal**: `transcriptSemester: 'sem1' | 'sem2' | 'sem3'` means the Nth period of the year — two semesters at a university, three terms elsewhere. Each table prints a **caption naming its period** (the student's real term name).
+- University tables: CODE / TITLE / CREDIT / MARK / GRADE / GRADE POINT / WEIGHTED POINT with per-semester TOTAL + SEMESTER GPA; summary box = Credits / **CGPA** / Remark. Primary & secondary tables: subject / coef / seqs / average / grade / remarks with TOTAL + TERM AVERAGE; summary = **Annual Average** / Grade.
+- Printed **from the closing period's row** (2nd semester / 3rd term) on the report-cards list, enabled only when **every** period of that year is published for the student. The transcript endpoint returns published cards only.
+- All period tables share one table design (edits mirror across them).
+
+### Official vs Student copies
+
+A school needs both copies alive at once, so **the copy is chosen when printing, never saved into the design**:
+
+- **Student copy** — handed out at term end; the default on every print surface, and the only thing bulk printing produces (officials are per-student, on request).
+- **Official copy** — the school seals and sends it itself (WES, embassies). Prints an automatic, non-editable **"Official Copy"** note under the title; the student copy prints nothing there (absence of the note is what makes it unofficial).
+- Per-section `showOn` decides what differs (signatures/seal official-only; a "not valid for official use" note student-only). The **watermark** is scoped the same way (`watermark.showOn`) — an UNOFFICIAL wash on student copies while the official stays clean.
+- The designer has a **Preview: Official | Student copy** switch (view-only, never saved); sections scoped to the other copy dim with a badge rather than vanishing.
+- Transcript and report-card pages have **two print buttons**; the preview follows the chosen copy.
 
 ---
 
@@ -616,6 +674,14 @@ On the report card detail page, **Print / Save PDF**:
 4. `page-break-after: always` between cards → one card per printed page
 5. Shows "Loading..." while data loads
 
+### Official vs student copies at print time
+
+Every print surface produces one of two copies (see §12): report-card detail and transcript pages offer **Print Student Copy** and **Print Official**; bulk class printing always produces **student copies** (officials are per-student, on request). Printing runs from a `useEffect` keyed on a pending flag — choosing a copy must re-render the portal *before* `window.print()`, or the dialog captures the previous copy.
+
+### Annual transcript pagination
+
+The university transcript is a **two-page document by design** (content ≈1370px vs A4's 1123px): page 1 = header + semester tables + grading system, page 2 = stamp + signatures. A seal beside the signatures on a signature page is normal transcript convention — deliberate, not a bug.
+
 ### Class list / marks register
 **Class List** dropdown (Report Cards toolbar) → pick a class → opens a popup that prints the roster (A4) using the school's saved **Class List Design** (see Section 13). Mark cells print blank for hand-filling, plus extra blank rows for new admissions.
 
@@ -654,10 +720,13 @@ On the report card detail page, **Print / Save PDF**:
 | Schools | `(tabs)/schools.tsx` | SUPERADMIN | All schools grouped by ParentSchool; toggle active/inactive per group/section; FAB to create standalone school |
 | Classes | `(tabs)/report-cards.tsx` | Teachers, Class Master | Class list; tapping navigates to subjects screen |
 | Class subjects | `class/[classLevel].tsx` | CLASS_TEACHER, CLASS_MASTER | Subjects + sequence selector; CLASS_MASTER sees purple "Add/Edit General Remarks" banner at top |
-| Marks entry | `marks/[subjectId].tsx` | CLASS_TEACHER, CLASS_MASTER | Enter marks; **REMARK** column (squared badges), grading scale from API, no stale remarks on save |
+| Marks entry | `marks/[subjectId].tsx` | Teachers + Admin/VP | Enter marks; in-place **CA / Exam / Resit switcher** (`router.setParams`); rows lock read-only under `ADMIN_ONLY` (for teachers) and on published cards (for everyone), with a banner naming the remedy per role |
 | Class Master remarks | `class-master/[classLevel].tsx` | CLASS_MASTER | Students list with averages + card status; bottom sheet modal to edit per-student general remarks |
 | Report card detail | `report-card/[id].tsx` | CLASS_TEACHER, CLASS_MASTER | Grading scale loaded; per-subject badge shows remark + color (squared); summary: Average (X.X), Grade (remark), Position (ordinal) |
-| Students | `(tabs)/students.tsx` | SCHOOL_ADMIN, VICE_PRINCIPAL | Admin student list |
+| Students | `(tabs)/students.tsx` | SCHOOL_ADMIN, VICE_PRINCIPAL | Admin student list; registration form includes optional Date/Place of Birth (DOB as `YYYY-MM-DD` text, same pattern as the fees ledger) |
+| Admin report card | `admin/report-card/[id].tsx` | Admin/VP | Score list shows **failing marks in red** (honours the school toggle); **Edit marks** button (drafts only) to the class sheet; grant buttons hidden under `ADMIN_ONLY`; readiness panel names no teacher when marks are the administration's job |
+| Courses/Subjects admin | `admin/subjects/index.tsx` | Admin/VP | Sections grouped "class — semester" with an **ACTIVE** badge on the running semester; per-course **Enter marks** pencil (university + `ADMIN_ONLY`) straight to that course's CA sheet |
+| Settings | `admin/settings/index.tsx` | Admin/VP | Read-only school info **plus the one editable setting: Who enters marks** (university only), with the "used X of 2 switches" counter and cap messaging |
 
 ### Mobile tab layout per role
 
@@ -691,7 +760,13 @@ On the report card detail page, **Print / Save PDF**:
 | **Stream support** | `ClassLevel.hasStream = true` → student registration shows Arts/Science; baked into classLevel string |
 | **Subject filter** | Teachers and class masters see only their assigned subjects (API enforces this for all teacher-type roles) |
 | **Report card auto-creation** | Created automatically when teacher/class master first saves marks for a student who doesn't have one |
-| **Admin is read-only for marks** | Admin cannot edit marks. Admin/VP CAN write general remarks when the class has no master. Mobile admin remarks-writing not yet implemented. |
+| **Admins CAN edit marks (drafts only)** | Admin/VP save marks like teachers do — and are the ONLY mark-writers when `marksEntryMode = ADMIN_ONLY`. A **published** card is frozen for everyone including admins: unpublish first |
+| **Who-enters-marks switching is capped** | 2 school switches per semester (free between years), then only the provider from the superadmin page; every switch audit-logged (`MarksEntryModeChange`) and shown in Settings |
+| **Resit = failed the course** | University resit eligibility is course failure per the school's own scale (`juryDecision` first), regardless of the exam mark; only the exam is re-sat |
+| **Grading scale must be parsed** | `GradingScale.ranges` has two storage shapes; read it only via `utils/gradingScale.ts` (`parseStoredScale`) — never raw |
+| **Universities say Course, not Subject** | All university-facing UI (nav, pages, exports, mobile) says Course/Courses; the DB/API keep `Subject`. `/courses` serves the page; `/subjects` remains for other school types |
+| **Hand-listed payloads are a trap** | Several pages/controllers rebuild school/student objects field-by-field; a field omitted there silently never prints (this bit twice: the stamp, then birth details). Check every hand-list when adding a School/Student field |
+| **Empty student-info rows hide** | A row with no value ('' or the '—' placeholder) is dropped from the printed card, label and all |
 | **Demo school resource caps** | The demo tenant only (subdomain `demo`) is capped: 20 students, 20 subjects, 10 teachers, 10 cover images. Real schools are unlimited. See §19 |
 
 ---

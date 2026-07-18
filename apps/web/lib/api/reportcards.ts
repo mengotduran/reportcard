@@ -23,7 +23,7 @@ export const getClassOverviewApi = async (termId: string, classLevel: string): P
 }
 
 export const saveEntriesWithSeqApi = async (id: string, data: {
-  entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]
+  entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]
   remarks?: string
 }) => {
   const res = await api.put(`/report-cards/${id}/entries`, data)
@@ -167,8 +167,9 @@ export interface TranscriptEntry {
   score: number | null
   seq1Score?: number | null
   seq2Score?: number | null
+  resitScore?: number | null
   grade?: string | null
-  subject: { id: string; name: string; code?: string | null; credit?: number | null; term?: string | null; classLevel: string }
+  subject: { id: string; name: string; code?: string | null; credit?: number | null; coefficient?: number | null; term?: string | null; classLevel: string }
 }
 
 export interface TranscriptReportCard {
@@ -184,9 +185,14 @@ export interface StudentTranscript {
     id: string; name: string; studentId: string; classLevel: string; gender?: string | null
     dateOfBirth?: string | null; nationality?: string | null
   }
-  school: { name: string; logo?: string | null; language?: string | null; type?: string | null }
+  // `stamp` is the official seal, printed on official copies via the designer's stamp
+  // section (the endpoint selects it explicitly, see getStudentTranscript).
+  school: { name: string; logo?: string | null; stamp?: string | null; language?: string | null; type?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   session: string
   reportCards: TranscriptReportCard[]
+  /** Periods in this academic year (2 semesters / 3 terms) — reportCards only carries
+   *  the PUBLISHED ones, so fewer than this means the year isn't complete yet. */
+  termCount: number
   maxScore: number
   gradingScale: { id: string; minScore: number; maxScore: number; grade: string; remark: string; color: string; gradePoint?: number }[]
   classificationBands: { min: number; max: number; label: string }[]

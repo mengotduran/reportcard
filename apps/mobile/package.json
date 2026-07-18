@@ -5,12 +5,13 @@
   "scripts": {
     "dev": "expo start",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "build:android": "eas build --platform android --profile production"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
     "axios": "^1.7.9",
-    "expo": "~54.0.0",
+    "expo": "~54.0.36",
     "expo-constants": "~18.0.13",
     "expo-document-picker": "~14.0.8",
     "expo-linking": "~8.0.12",
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@babel/core": "^7.24.0",
     "@types/react": "~19.1.0",
+    "babel-preset-expo": "~54.0.12",
     "typescript": "^5.3.3"
   }
 }

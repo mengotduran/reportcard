@@ -307,10 +307,11 @@ export default function FeesPage() {
 
           {/* HND context banner */}
           {isHnd && (
-            <div className="mb-3 flex items-center gap-2 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-lg px-4 py-2.5">
-              <span className="inline-flex px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-semibold">2-year program</span>
+            <div className="mb-3 flex items-center gap-2 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-sm px-4 py-2.5">
+              <span className="inline-flex px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-sm text-xs font-semibold whitespace-nowrap">2-year program</span>
               <p className="text-xs text-indigo-700 dark:text-indigo-300">
                 The fee shown is the <strong>total HND program fee</strong> covering both Level 1 and Level 2. Paid amounts include all installments across both years.
+                Students tagged <strong>Direct entry · 1 yr</strong> enrolled fresh at Level 2 and pay a separate 1-year fee instead.
               </p>
             </div>
           )}
@@ -355,6 +356,11 @@ export default function FeesPage() {
                           <td className={`sticky left-0 z-10 w-12 px-4 py-2.5 text-muted-foreground text-sm border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-muted/60'}`}>{start + i + 1}</td>
                           <td className={`sticky left-12 z-10 px-4 py-2.5 border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-muted/60'}`}>
                             <span className="text-sm font-medium text-foreground whitespace-nowrap">{s.name}</span>
+                            {isHnd && s.directLevel2Entry && (
+                              <span className="ml-1.5 inline-flex px-1.5 py-0.5 bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-400 rounded-full text-[10px] font-semibold whitespace-nowrap align-middle">
+                                Direct entry · 1 yr
+                              </span>
+                            )}
                             <span className="block text-xs text-muted-foreground">{s.studentIdCode}</span>
                           </td>
                           <td className="px-4 py-2.5 text-right border-b border-border whitespace-nowrap">

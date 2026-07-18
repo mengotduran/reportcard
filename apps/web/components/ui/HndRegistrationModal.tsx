@@ -201,13 +201,13 @@ export default function HndRegistrationModal({
                 <p className="text-xs font-semibold text-foreground mb-2">Record a payment</p>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="flex-1 min-w-[120px]">
-                    <label className="block text-xs text-muted-foreground mb-1">Amount paid</label>
+                    <label className="block text-xs text-muted-foreground mb-1">Amount paid <span className="text-destructive">*</span></label>
                     <input type="number" min="1" step="any" placeholder="65000" value={amount}
                       onChange={(e) => setAmount(e.target.value)} required
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>
                   <div className="min-w-[140px]">
-                    <label className="block text-xs text-muted-foreground mb-1">Payment date</label>
+                    <label className="block text-xs text-muted-foreground mb-1">Payment date <span className="text-destructive">*</span></label>
                     <input type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} required
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>

@@ -25,7 +25,7 @@ import { downloadZip } from '@/lib/zip'
 
 interface Student {
   id: string; name: string; studentId: string
-  classLevel: string; gender?: string; guardianName?: string
+  classLevel: string; gender?: string; dateOfBirth?: string | null; placeOfBirth?: string | null; guardianName?: string
   guardianPhone?: string; guardianEmail?: string
   status?: StudentStatus
   directLevel2Entry?: boolean
@@ -42,7 +42,7 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   DISMISSED: 'bg-red-100 text-red-700',
 }
 
-const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
+const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', dateOfBirth: '', placeOfBirth: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
 
 // Secondary non-default departments store classes with a " (Department)" suffix;
 // strip it for display since the department is shown separately.
@@ -269,6 +269,8 @@ export default function StudentsPage() {
       classLevel: baseClass,
       stream,
       gender: s.gender || '',
+      dateOfBirth: s.dateOfBirth || '',
+      placeOfBirth: s.placeOfBirth || '',
       guardianName: s.guardianName || '',
       guardianPhone: s.guardianPhone || '',
       guardianEmail: s.guardianEmail || '',
@@ -449,7 +451,7 @@ export default function StudentsPage() {
       { label: t('Student ID'), value: (s: Student) => s.studentId },
       ...(isSecondary ? [{ label: t('Department'), value: (s: Student) => deptNameOf(s.classLevel) }] : []),
       { label: t('Class'), value: (s: Student) => isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel },
-      { label: t('Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
+      { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
       { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
       { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
       { label: t('Guardian Email'), value: (s: Student) => s.guardianEmail || '' },
@@ -723,7 +725,7 @@ export default function StudentsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="e.g. Nguemo Alice"
                   value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
@@ -799,7 +801,7 @@ export default function StudentsPage() {
                 </div>
               ) : (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Class')}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Class')} <span className="text-destructive">*</span></label>
                   {definedClasses.length > 0 ? (
                     <select
                       value={form.classLevel}
@@ -828,6 +830,21 @@ export default function StudentsPage() {
                       <span className="text-sm text-foreground">{t(g)}</span>
                     </label>
                   ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-2">{t('Date of Birth')}</label>
+                  <input type="date" value={form.dateOfBirth}
+                    onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card text-foreground" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-2">{t('Place of Birth')}</label>
+                  <input type="text" value={form.placeOfBirth}
+                    onChange={(e) => setForm({ ...form, placeOfBirth: e.target.value })}
+                    placeholder={t('e.g. Bamenda')}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card text-foreground" />
                 </div>
               </div>
               {needsStream && (
@@ -893,7 +910,7 @@ export default function StudentsPage() {
             </button>
 
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1">{t('Upload file (.xlsx or .csv)')}</label>
+              <label className="block text-xs font-medium text-foreground mb-1">{t('Upload file (.xlsx or .csv)')} <span className="text-destructive">*</span></label>
               <input type="file" accept=".xlsx,.csv"
                 onChange={handleImportFileChange}
                 className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />

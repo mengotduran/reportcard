@@ -18,7 +18,9 @@ export const getStudents = async (params?: { classLevel?: string; search?: strin
   return res.data
 }
 
-export const createStudent = async (data: { name: string; classLevel: string; gender: string; guardianName?: string }) => {
+/** dateOfBirth is "YYYY-MM-DD"; both birth fields are optional and print blank when
+ *  not recorded. The API normalises them (see student.controller). */
+export const createStudent = async (data: { name: string; classLevel: string; gender: string; guardianName?: string; dateOfBirth?: string; placeOfBirth?: string }) => {
   const res = await api.post('/students', data)
   return res.data
 }

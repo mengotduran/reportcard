@@ -138,7 +138,7 @@ export default function ClassScreen() {
           ) : null}
         </View>
         <View style={styles.seqRow}>
-          {[0, 1].map((i) => (
+          {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
             <TouchableOpacity
               key={i}
               style={[styles.seqBtn, selectedSeq === i && styles.seqBtnActive]}
@@ -146,7 +146,7 @@ export default function ClassScreen() {
               activeOpacity={0.7}
             >
               <Text style={[styles.seqBtnText, selectedSeq === i && styles.seqBtnTextActive]}>
-                {isUniversity ? (i === 0 ? t('CA (30)') : t('Exam (70)')) : seqFull(termName, i, lang)}
+                {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqFull(termName, i, lang)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -161,7 +161,7 @@ export default function ClassScreen() {
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="book-outline" size={40} color="#d1d5db" />
-            <Text style={styles.emptyText}>{t('No subjects found for')} {decodedClass}</Text>
+            <Text style={styles.emptyText}>{t(isUniversity ? 'No courses found for' : 'No subjects found for')} {decodedClass}</Text>
           </View>
         }
         renderItem={({ item }) => (

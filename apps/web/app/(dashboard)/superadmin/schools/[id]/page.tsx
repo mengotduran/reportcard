@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { getSchoolDetailApi, toggleTermPrintingApi, SchoolDetail, TermRow } from '@/lib/api/superadmin'
+import { getSchoolDetailApi, toggleTermPrintingApi, updateSchoolApi, SchoolDetail, TermRow } from '@/lib/api/superadmin'
 import {
   ArrowLeft, Users, BookOpen, FileText, CheckCircle, Clock,
   School, Building2, Layers, MapPin, Mail, Phone, Globe, Printer
@@ -28,6 +28,7 @@ export default function SchoolDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [togglingTerm, setTogglingTerm] = useState<string | null>(null)
+  const [savingMode, setSavingMode] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -43,6 +44,21 @@ export default function SchoolDetailPage() {
       <p className="text-destructive text-sm">{error || 'School not found.'}</p>
     </div>
   )
+
+  // The provider setting who enters marks IS the permission that lifts the school's
+  // two-per-semester cap, so this control is uncapped; the API logs it as the provider.
+  const handleSetMarksMode = async (mode: 'TEACHERS' | 'ADMIN_ONLY') => {
+    if (!detail || detail.school.marksEntryMode === mode) return
+    setSavingMode(true)
+    try {
+      await updateSchoolApi(detail.school.id, { marksEntryMode: mode })
+      setDetail(prev => prev ? { ...prev, school: { ...prev.school, marksEntryMode: mode } } : prev)
+    } catch {
+      setError('Failed to update who enters marks.')
+    } finally {
+      setSavingMode(false)
+    }
+  }
 
   const handleTogglePrinting = async (term: TermRow) => {
     setTogglingTerm(term.id)
@@ -68,7 +84,8 @@ export default function SchoolDetailPage() {
   const stats = [
     { label: 'Total Students', value: school.totalStudents, icon: Users, color: 'bg-purple-50 text-purple-600' },
     { label: 'Teachers', value: teachers, icon: School, color: 'bg-green-50 text-green-600' },
-    { label: 'Subjects', value: subjects, icon: BookOpen, color: 'bg-orange-50 text-orange-600' },
+    // The school being viewed decides the word, not the superadmin's own school.
+    { label: school.type === 'UNIVERSITY' ? 'Courses' : 'Subjects', value: subjects, icon: BookOpen, color: 'bg-orange-50 text-orange-600' },
     { label: 'Report Cards', value: school.totalReportCards, icon: FileText, color: 'bg-primary/10 text-primary' },
   ]
 
@@ -185,6 +202,32 @@ export default function SchoolDetailPage() {
               </div>
             </div>
           </div>
+
+          {/* Who enters marks — provider override. Uncapped: once a school has used its
+              two switches for the semester, this is how the change happens. */}
+          {school.type === 'UNIVERSITY' && (
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+                <BookOpen size={15} className="text-muted-foreground" />
+                <h3 className="font-semibold text-foreground text-sm">Who enters marks</h3>
+              </div>
+              <div className="p-5 flex items-center gap-3 flex-wrap">
+                {(['TEACHERS', 'ADMIN_ONLY'] as const).map(m => (
+                  <button key={m}
+                    onClick={() => handleSetMarksMode(m)}
+                    disabled={savingMode}
+                    className={`text-sm px-4 py-2 rounded-lg border transition disabled:opacity-50 ${(school.marksEntryMode ?? 'TEACHERS') === m
+                      ? 'border-primary bg-primary/10 text-primary font-semibold'
+                      : 'border-border text-muted-foreground hover:text-foreground'}`}>
+                    {m === 'ADMIN_ONLY' ? 'Administration only' : 'Teachers'}
+                  </button>
+                ))}
+                <p className="text-xs text-muted-foreground w-full">
+                  Your changes here are logged as the provider and never count against the school's two switches per semester.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Terms & Printing */}
           {detail.terms.length > 0 && (

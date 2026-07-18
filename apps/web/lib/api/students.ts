@@ -16,6 +16,10 @@ export const createStudentApi = async (data: {
   name: string
   classLevel: string
   gender: string
+  /** Optional birth details, "YYYY-MM-DD" and free text. Omitted or blank = not recorded,
+   *  and the row prints blank on the report card/transcript. */
+  dateOfBirth?: string
+  placeOfBirth?: string
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string
@@ -29,6 +33,8 @@ export const updateStudentApi = async (id: string, data: {
   name?: string
   classLevel?: string
   gender?: string
+  dateOfBirth?: string
+  placeOfBirth?: string
   guardianName?: string
   guardianPhone?: string
   guardianEmail?: string

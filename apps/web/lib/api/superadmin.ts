@@ -70,6 +70,9 @@ export const addSectionToSchoolApi = async (id: string, data: {
 
 export const updateSchoolApi = async (id: string, data: {
   name?: string; email?: string; phone?: string; address?: string; subdomain?: string; type?: string; language?: string
+  /** Who records marks. Setting it as the provider is uncapped and logged as the provider:
+   *  it IS the permission once a school has used its two switches for the semester. */
+  marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
 }) => {
   const res = await api.put(`/superadmin/schools/${id}`, data)
   return res.data
@@ -112,6 +115,7 @@ export interface SchoolDetail {
     id: string; name: string; type: string; email: string; phone: string | null
     address: string | null; subdomain: string; isActive: boolean; createdAt: string
     parentSchool: { id: string; name: string } | null
+    marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
     totalStudents: number; totalUsers: number; totalReportCards: number
   }
   classes: { classLevel: string; students: number }[]

@@ -22,7 +22,9 @@ import {
   Subject,
 } from '@/lib/api/reportcards'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
-import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import api from '@/lib/api/client'
+import { useAuthStore } from '@/lib/store/auth.store'
+import { getGradingScale, gradeFromScore, isFailingScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -231,6 +233,15 @@ export default function AdminReportCardDetail() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const tr = useT()
+  const { school } = useAuthStore()
+  // Print's school-wide "failing marks in red" policy, honoured on this screen too. One
+  // config fetch; default ON matches the print side.
+  const [redFailing, setRedFailing] = useState(true)
+  useEffect(() => {
+    api.get('/report-card-template')
+      .then((res: { data?: { config?: { highlightFailingRed?: boolean } } }) => setRedFailing(res.data?.config?.highlightFailingRed !== false))
+      .catch(() => {})
+  }, [])
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
 
@@ -408,13 +419,19 @@ export default function AdminReportCardDetail() {
   }
 
   const isDraft = reportCard.status === 'DRAFT'
+  // This school records marks centrally, so a missing mark is the administration's own
+  // job and naming a teacher beside it points at the wrong person.
+  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY'
   const average = reportCard.average ?? 0
   const avgMaxScore = subjects[0]?.maxScore ?? 20
   const gradeResult = gradeFromScore(average, avgMaxScore, gradingRanges)
 
-  // Publish readiness (same rules as web + bulk-publish)
-  const allSeqsFilled = reportCard.entries.length > 0 &&
+  // Publish readiness (same rules as web + bulk-publish) — prefer the backend's
+  // readiness detail once loaded, since it also catches subjects with zero
+  // entries at all, not just entries with a missing sequence score.
+  const localSeqsFilled = reportCard.entries.length > 0 &&
     reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null)
+  const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
   // Positions are class-relative — every other active student in this class + term
   // must also be complete (or already published) before this one can publish.
@@ -472,7 +489,7 @@ export default function AdminReportCardDetail() {
 
       <View style={styles.statsGrid}>
         {[
-          { label: tr('Subjects'), value: String(subjects.length || reportCard.entries.length) },
+          { label: tr(isUniversity ? 'Courses' : 'Subjects'), value: String(subjects.length || reportCard.entries.length) },
           { label: tr('Terms Average'), value: average.toFixed(1) },
           { label: tr('Overall Grade'), value: gradeResult.remark || gradeResult.grade },
           { label: tr('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
@@ -522,9 +539,13 @@ export default function AdminReportCardDetail() {
               <View key={s.subjectId} style={styles.attributionRow}>
                 <Ionicons name="ellipse" size={6} color="#ef4444" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
-                  {s.teacher
-                    ? <Text><Text style={{ fontWeight: '700' }}>{s.teacher.name}</Text> {tr('has not filled marks for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
-                    : <Text><Text style={{ fontWeight: '700' }}>{s.subjectName}</Text> {tr('has no teacher assigned')}</Text>
+                  {adminOnlyMarks
+                    // Marks are the administration's job at this school, so naming a
+                    // teacher beside a missing mark points at the wrong person.
+                    ? <Text>{tr('No marks yet for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
+                    : s.teacher
+                      ? <Text><Text style={{ fontWeight: '700' }}>{s.teacher.name}</Text> {tr('has not filled marks for')} <Text style={{ fontWeight: '700' }}>{s.subjectName}</Text></Text>
+                      : <Text><Text style={{ fontWeight: '700' }}>{s.subjectName}</Text> {tr('has no teacher assigned')}</Text>
                   }
                 </Text>
               </View>
@@ -533,7 +554,11 @@ export default function AdminReportCardDetail() {
               <View style={styles.attributionRow}>
                 <Ionicons name="ellipse" size={6} color="#f59e0b" style={{ marginTop: 4 }} />
                 <Text style={styles.attributionText}>
-                  {tr('Class Master')} <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> {tr('has not written general remarks')}
+                  {adminOnlyMarks
+                    // No class masters at a school where the administration records marks,
+                    // so there is nobody to name: the remark is the admin's to write.
+                    ? tr('General remarks have not been written yet')
+                    : <Text>{tr('Class Master')} <Text style={{ fontWeight: '700' }}>{readiness.missingRemarks.name}</Text> {tr('has not written general remarks')}</Text>}
                 </Text>
               </View>
             )}
@@ -597,6 +622,11 @@ export default function AdminReportCardDetail() {
                   {revokingMarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>{tr('Revoke')}</Text>}
                 </TouchableOpacity>
               </View>
+            ) : adminOnlyMarks ? (
+              // Handing marks back to a teacher is what this school's policy exists to
+              // prevent, so do not offer it. An existing grant still shows above, so it
+              // can be revoked rather than being stranded and invisible.
+              <Text style={styles.emptyText}>{tr('The administration enters marks at this school.')}</Text>
             ) : (
               <TouchableOpacity
                 style={[styles.grantBtn, grantingMarks && styles.disabled]}
@@ -629,6 +659,8 @@ export default function AdminReportCardDetail() {
                   {revokingRemarks ? <ActivityIndicator size="small" color="#ef4444" /> : <Text style={styles.revokeBtnText}>{tr('Revoke')}</Text>}
                 </TouchableOpacity>
               </View>
+            ) : adminOnlyMarks ? (
+              <Text style={styles.emptyText}>{tr('The administration writes the general remarks at this school.')}</Text>
             ) : (
               <TouchableOpacity
                 style={[styles.grantBtn, grantingRemarks && styles.disabled]}
@@ -650,10 +682,20 @@ export default function AdminReportCardDetail() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
-          <Text style={styles.sectionTitle}>{tr('Subject Scores')}</Text>
+          <Text style={styles.sectionTitle}>{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</Text>
+          {/* This list is read-only; marks live on the class sheet. Without a way through,
+              a complete card offers no route to correct a mark. Draft only: published is
+              frozen for everyone, and the button would just open a locked sheet. */}
+          {isDraft && (
+            <TouchableOpacity
+              onPress={() => router.push(`/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}` as any)}
+              style={{ marginLeft: 'auto', borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: '#F03E2F' }}>{tr('Edit marks')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
         {subjects.length === 0 ? (
-          <Text style={styles.emptyText}>{tr('No subjects found for this class')}</Text>
+          <Text style={styles.emptyText}>{isUniversity ? tr('No courses found for this class') : tr('No subjects found for this class')}</Text>
         ) : (
           <View style={{ gap: 10 }}>
             {subjects.map((subject) => {
@@ -673,11 +715,17 @@ export default function AdminReportCardDetail() {
                       </Text>
                     </View>
                     <View style={styles.scoreRight}>
-                      <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : colors.text }]}>
+                      {/* A failed course's mark prints red on the report card; the screen
+                          says the same thing, judged by the school's own scale. */}
+                      <Text style={[styles.scoreValue, { color: unfilled ? colors.textMuted : (redFailing && isFailingScore(entry!.score ?? 0, gradingRanges)) ? '#dc2626' : colors.text }]}>
                         {unfilled ? '—' : `${entry!.score ?? 0}/${maxScore}`}
                       </Text>
+                      {/* The badge background is a flat grey: gradeFromScore returns no
+                          bgColor here (unlike web's), so this always resolved to the
+                          fallback. Left as-is; tinting it per grade would be a design
+                          change rather than a typing fix. */}
                       {gr ? (
-                        <View style={[styles.gradeBadge, { backgroundColor: gr.bgColor ?? '#f3f4f6' }]}>
+                        <View style={[styles.gradeBadge, { backgroundColor: '#f3f4f6' }]}>
                           <Text style={[styles.gradeText, { color: gr.color }]}>{gr.remark || gr.grade}</Text>
                         </View>
                       ) : (

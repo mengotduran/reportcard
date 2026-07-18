@@ -5,7 +5,9 @@ export interface ReportCardSummary {
   status: string
   average: number | null
   student: { name: string; classLevel: string }
-  term: { name: string; session: string }
+  // The list endpoint returns the whole term; `id` was missing here, so the term filter
+  // on the report cards tab could not compile against it.
+  term: { id: string; name: string; session: string }
 }
 
 export interface ReportCardDetail {
@@ -25,7 +27,7 @@ export interface ReportCardDetail {
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string }
   term: { id: string; name: string; session: string }
   school: { name: string; type: string; language?: string }
-  entries: { id: string; score: number | null; seq1Score?: number | null; seq2Score?: number | null; grade: string | null; remarks: string; subject: { id: string; name: string; maxScore: number; coefficient: number } }[]
+  entries: { id: string; score: number | null; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string | null; remarks: string; subject: { id: string; name: string; maxScore: number; coefficient: number } }[]
 }
 
 export interface Subject {
@@ -51,7 +53,13 @@ export interface ClassStudentOverview {
   name: string
   studentId: string
   classLevel: string
-  reportCard: { id: string; status: string; average: number | null; marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean } | null
+  reportCard: {
+    id: string; status: string; average: number | null
+    marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean
+    /** Per-subject marks, returned so the marks sheet needs ONE request instead of one
+     *  per student — a phone on shaky wifi cannot afford an N+1. */
+    entries?: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null }[]
+  } | null
 }
 
 export const getCurrentTerm = async (): Promise<{ term: Term }> => {
@@ -67,7 +75,7 @@ export const getClassLevels = async (): Promise<{ classLevels: string[] }> => {
 export const getClassOverview = async (
   termId: string,
   classLevel: string
-): Promise<{ students: ClassStudentOverview[]; subjectCount: number }> => {
+): Promise<{ students: ClassStudentOverview[]; subjectCount: number; teacherSubjectCount: number }> => {
   const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel } })
   return res.data
 }
@@ -97,7 +105,7 @@ export const getSubjects = async (): Promise<{ subjects: Subject[] }> => {
 
 export const saveEntries = async (
   id: string,
-  data: { entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]; remarks?: string }
+  data: { entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]; remarks?: string }
 ) => {
   const res = await api.put(`/report-cards/${id}/entries`, data)
   return res.data

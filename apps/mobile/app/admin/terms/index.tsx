@@ -103,6 +103,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   optRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   optChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary },
   optChipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
@@ -309,7 +310,7 @@ export default function TermsScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{tt('Term Name', 'Semester Name')}</Text>
+            <Text style={styles.label}>{tt('Term Name', 'Semester Name')} <Text style={styles.required}>*</Text></Text>
             <View style={styles.optRow}>
               {termNameOptions.map((n) => {
                 const active = termName === n
@@ -322,7 +323,7 @@ export default function TermsScreen() {
               })}
             </View>
 
-            <Text style={styles.label}>{tr('Session')}</Text>
+            <Text style={styles.label}>{tr('Session')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
               value={session}

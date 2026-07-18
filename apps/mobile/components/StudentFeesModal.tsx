@@ -208,10 +208,10 @@ export default function StudentFeesModal({
               {data.due > 0 && data.balance > 0 ? (
                 <View style={s.addBox}>
                   <Text style={s.addTitle}>{t('Record a payment')}</Text>
-                  <Text style={s.fieldLabel}>{t('Amount paid')}</Text>
+                  <Text style={s.fieldLabel}>{t('Amount paid')} <Text style={s.required}>*</Text></Text>
                   <TextInput style={s.input} value={amount} onChangeText={setAmount}
                     placeholder="75000" placeholderTextColor="#9ca3af" keyboardType="numeric" />
-                  <Text style={s.fieldLabel}>{t('Payment date')}</Text>
+                  <Text style={s.fieldLabel}>{t('Payment date')} <Text style={s.required}>*</Text></Text>
                   <TextInput style={s.input} value={paidOn} onChangeText={setPaidOn}
                     placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" autoCapitalize="none" />
                   <Text style={s.fieldLabel}>{t('Note (optional)')}</Text>
@@ -263,6 +263,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   addBox: { backgroundColor: colors.bgSecondary, borderRadius: 12, padding: 12, marginBottom: 8 },
   addTitle: { fontSize: 12, fontWeight: '700', color: colors.text, marginBottom: 8 },
   fieldLabel: { fontSize: 11, color: colors.textSecondary, marginBottom: 4, marginTop: 6 },
+  required: { color: '#ef4444' },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 10, fontSize: 14, color: colors.text, backgroundColor: colors.card },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#F03E2F', borderRadius: 10, paddingVertical: 12, marginTop: 12 },
   addBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },

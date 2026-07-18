@@ -17,6 +17,13 @@ interface School {
   language?: string
   subdomain: string
   logo: string | null
+  /** Official stamp/seal, printed on OFFICIAL copies only via the designer's stamp
+   *  section. Null when the school stamps its printed pages by hand instead. */
+  stamp?: string | null
+  /** Who records marks. ADMIN_ONLY = teachers see the marks sheet read-only and only
+   *  administrators may save (enforced by the API, not just the UI). Undefined on older
+   *  cached sessions, which read as TEACHERS: the permissive default, matching the API. */
+  marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
   coverImage: string | null
   coverImages: string[]
   repeatThreshold?: number | null
@@ -25,6 +32,10 @@ interface School {
   address?: string | null
   website?: string | null
   authorizationNumber?: string | null
+  officialLeftTextEn?: string | null
+  officialLeftTextFr?: string | null
+  officialRightTextEn?: string | null
+  officialRightTextFr?: string | null
 }
 
 interface AuthState {

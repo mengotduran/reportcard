@@ -21,12 +21,23 @@ export interface TemplateConfig {
   showParentSig: boolean
   principalTitle: string
   footerText: string
+  // School-wide marking policy (NOT per-layout): print a failed subject's numbers and
+  // grade letter in red instead of black. Applies to the report card, the ledger and
+  // the transcript alike, so it always lives at the TOP level of the saved config, even
+  // when the transcript design is the one being saved — see the designer's handleSave.
+  // Undefined/true = red (matches the printed transcript convention this was modeled on).
+  // What counts as a fail comes from the school's own grading scale (isFailingScore),
+  // so it's a mark /100 at a university and a subject's term average /20 elsewhere.
+  highlightFailingRed?: boolean
   // sections-based layout (overrides toggle config if present)
   sections?: LayoutSection[]
   // background color of the card paper
   bgColor?: string
   // watermark
-  watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number }
+  // `showOn` scopes the watermark to one printed copy, the way a section's does — it is
+  // what stamps UNOFFICIAL across a student copy while the sealed official stays clean.
+  // Undefined = both copies, so existing watermarks are unaffected.
+  watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
   // top-level layout type — 'standard' (section-based designer), 'transcript' (annual
   // transcript style, university only), or 'ledger' (totals-in-table style, non-university only)
   layoutType?: 'standard' | 'transcript' | 'ledger'
@@ -40,6 +51,23 @@ export interface TemplateConfig {
     reportTitle?: string
     academicYearLabel?: string
   }
+  // The school's saved TRANSCRIPT design (university only) — stored under its
+  // own key so it can coexist with the standard/ledger design at the top
+  // level. One school = one saved row, but saving the transcript must never
+  // clobber the report-card design (or vice versa): before this key existed,
+  // saving from the designer's Transcript view overwrote the whole config,
+  // and every regular report card then printed with the transcript layout —
+  // whose semester-scoped tables render nothing outside the transcript page.
+  transcript?: Partial<TemplateConfig>
+  /**
+   * One-time marker: the Date/Place of Birth rows have been offered to this design.
+   * Adding them to the built-in defaults only reaches designs created AFTERWARDS, and a
+   * school that had already saved its layout would never see them. So a saved design
+   * picks them up once (see ensureBirthRows) and this records that it happened, which is
+   * what stops them reappearing for an admin who deliberately deletes them.
+   * Lives inside each design, so the report card and the transcript are marked separately.
+   */
+  birthRowsSeeded?: boolean
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -71,7 +99,13 @@ export interface SpreadsheetTable {
   rows: SheetRow[]
 }
 
-export interface HeaderSec     { id: string; type: 'header';       reportTitle: string; subtitle: string; showSchoolType: boolean; showLogo: boolean; logoSize: number; logoPosition: 'left'|'center'|'right'; schoolNameColor?: string; schoolTypeColor?: string; officialHeader?: boolean; leftText?: string; rightText?: string
+export interface HeaderSec     { id: string; type: 'header';       reportTitle: string; subtitle: string; showSchoolType: boolean; showLogo: boolean; logoSize: number; logoPosition: 'left'|'center'|'right'; schoolNameColor?: string; schoolTypeColor?: string; officialHeader?: boolean
+  // Legacy — the official header's left/right text used to be edited per
+  // template here. It now lives in School Settings (English + French per
+  // side, see School.officialLeftTextEn etc. and resolveOfficialText below),
+  // read-only in the designer. Kept only as a fallback for templates saved
+  // before the move, so they keep rendering unchanged until Settings is filled in.
+  leftText?: string; rightText?: string
   // Official header only — independent per-field toggles for the contact line.
   // Each one only takes effect if the school actually has that value on file
   // (see buildOfficialContactLine); the line is computed live, never stored.
@@ -79,7 +113,20 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   // Official header only — same pattern as the contact-line toggles above:
   // the authorization/registration number lives in School Settings, and this
   // just switches on whether it's shown, never stores the text itself.
-  showAuthorization?: boolean }
+  showAuthorization?: boolean
+  // Official header only — manual multiplier (default 1) on top of the automatic
+  // logoSize-based scale (see officialTextScaleFor below), so the admin can fine
+  // tune the left/right text block sizing independently of the logo.
+  officialTextScale?: number }
+
+// Official header only: the left/right text blocks auto-scale with the logo size
+// (bigger logo -> bigger text, so they stay visually balanced), on top of the
+// admin's own manual officialTextScale multiplier. 60 is the shared default
+// logoSize used across every header style, so it's the scale-1.0 baseline.
+// Default manual multiplier is 1.15 (115%), matching the default 60px logo.
+export function officialTextScaleFor(sec: { logoSize: number; officialTextScale?: number }): number {
+  return (sec.officialTextScale ?? 1.15) * (sec.logoSize / 60)
+}
 
 // School contact fields used by the Official header's contact line.
 export interface SchoolContactInfo { email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
@@ -105,6 +152,33 @@ export function buildOfficialContactLine(
   return parts.join(' | ')
 }
 
+// The official header's left/right blocks live in School Settings (one EN and
+// one FR variant per side) so they stay consistent across every report-card
+// template instead of being retyped per-template — see School Settings'
+// "Official Header Letterhead" card.
+export interface SchoolOfficialTextInfo {
+  officialLeftTextEn?: string | null
+  officialLeftTextFr?: string | null
+  officialRightTextEn?: string | null
+  officialRightTextFr?: string | null
+}
+
+/**
+ * Combines the left/right official-header text's English and French variants
+ * — real Cameroon institutional letterheads are always bilingual (both
+ * languages shown together, not one-or-the-other), so both saved blocks are
+ * stacked with a blank-line gap when both exist. Falls back to `legacy` (a
+ * per-template leftText/rightText saved before this moved to Settings) only
+ * when NEITHER language has been filled in yet in Settings, so older
+ * templates keep rendering unchanged until an admin fills in the new fields.
+ */
+export function resolveOfficialText(school: SchoolOfficialTextInfo | null | undefined, side: 'left' | 'right', legacy: string): string {
+  const en = (side === 'left' ? school?.officialLeftTextEn : school?.officialRightTextEn)?.trim()
+  const fr = (side === 'left' ? school?.officialLeftTextFr : school?.officialRightTextFr)?.trim()
+  if (en && fr) return `${en}\n\n${fr}`
+  return en || fr || legacy
+}
+
 // ── Official header text blocks ──────────────────────────────────────────────
 // One renderer shared by the designer canvas AND the print output (same
 // no-drift rule as buildOfficialContactLine). Styling follows Cameroon
@@ -114,31 +188,89 @@ export function buildOfficialContactLine(
 //   • one short ALL-CAPS word     → large display line (the school acronym)
 //   • Mixed-case line             → small italic (mottos: "Peace-Work-Fatherland")
 //   • blank line                  → a small gap between groups, not a full row
-export const OFFICIAL_HEADER_FONT = 'Arial,Helvetica,sans-serif'
+// "Share Tech" (Google Fonts), loaded as a real stylesheet link in
+// app/layout.tsx — matches the real Cameroon institutional letterhead this
+// header style is modeled on. Falls back to Arial/Helvetica if the stylesheet
+// fails to load.
+export const OFFICIAL_HEADER_FONT = "'Share Tech', Arial, Helvetica, sans-serif"
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-export function officialTextBlockHtml(text: string): string {
+// No artificial word-spacing (justify). Every multi-word ALL-CAPS line
+// individually scales its own font-size toward the block's longest such line, by
+// character-count ratio (with a small boost since Share Tech isn't perfectly
+// monospace, so a plain ratio tends to undershoot the real rendered width) --
+// capped as a sanity ceiling against a truly extreme outlier. The one-word
+// acronym line and the italic motto line are the ONLY lines that don't reach the
+// edge -- fixed size, centered, regardless of the surrounding lines' lengths.
+// `scale` (see officialTextScaleFor) multiplies every size uniformly -- the
+// boost/cap ratios that drive edge-alignment stay the same at any scale.
+export function officialTextBlockHtml(text: string, edge: 'left' | 'right', scale = 1): string {
   const base = `font-family:${OFFICIAL_HEADER_FONT};text-align:center;line-height:1.35;`
-  return text.split('\n').map(raw => {
-    // contentEditable round-trips blank rows as &nbsp; — normalize before testing
-    const line = raw.replace(/\u00a0/g, ' ').trim()
-    if (!line) return `<div style="${base}font-size:4px;">&nbsp;</div>`
+  const CAPS_BASE_PX = 8.5 * scale
+  // Same boost on both sides so the right block reaches the edge exactly like
+  // the left does — `edge` here only decides which outer edge each block hugs.
+  const CAPS_BOOST = 1.6
+  const CAPS_MAX_SCALE = 2.2
+  const isScalableCaps = (l: string) => l.length > 0 && l === l.toUpperCase() && /[A-Z]/.test(l) && l.includes(' ')
+  // contentEditable round-trips blank rows as a non-breaking space -- normalize first
+  const rawLines = text.split('\n').map(raw => raw.replace(/\u00a0/g, ' ').trim())
+  const maxCapsLen = Math.max(0, ...rawLines.filter(isScalableCaps).map(l => l.length))
+
+  const lines = rawLines.map(line => {
+    if (!line) return `<div style="${base}font-size:${(4 * scale).toFixed(1)}px;">&nbsp;</div>`
     const esc = escapeHtml(line)
     const caps = line === line.toUpperCase() && /[A-Z]/.test(line)
     if (caps && !line.includes(' ') && line.length <= 12)
-      return `<div style="${base}font-size:16px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
-    if (caps)
-      return `<div style="${base}font-size:9.5px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
-    return `<div style="${base}font-size:8.5px;font-style:italic;color:#333;">${esc}</div>`
+      return `<div style="${base}font-size:${(13.5 * scale).toFixed(1)}px;font-weight:800;letter-spacing:3px;padding:1px 0;">${esc}</div>`
+    if (caps) {
+      const s = Math.min(CAPS_MAX_SCALE, (maxCapsLen / line.length) * CAPS_BOOST)
+      return `<div style="${base}font-size:${(CAPS_BASE_PX * s).toFixed(1)}px;font-weight:bold;letter-spacing:0.3px;">${esc}</div>`
+    }
+    return `<div style="${base}font-size:${(7.5 * scale).toFixed(1)}px;font-style:italic;color:#333;">${esc}</div>`
   }).join('')
+  // Shrink-wrap to the widest natural line and hug the block's outer edge (left
+  // block flush-left, right block flush-right).
+  const edgeMargin = edge === 'left' ? 'margin-right:auto' : 'margin-left:auto'
+  return `<div style="width:fit-content;${edgeMargin}">${lines}</div>`
 }
 
 export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|3; rows: InfoRow[] }
 export interface MarksTableSec { id: string; type: 'marks_table';  showSeq1: boolean; showSeq2: boolean; showCoef?: boolean; showGrade: boolean; showRemarks: boolean; headers?: Record<string,string>; headerColor?: string; colColors?: Record<string,string>; columnOrder?: string[];
   /** When set, the marks table is rendered from this SpreadsheetTable template instead of the default layout. The row marked _isDataRow repeats per subject in the print renderer. */
   template?: SpreadsheetTable
+  /** Transcript layout only: sources this table's data from ONE specific period of the
+   *  academic year instead of the document's combined subjects/entries. The slots are
+   *  ordinal, not literally semesters — a university year has two (sem1/sem2), a primary
+   *  or secondary year has three terms (sem1/sem2/sem3). The key keeps its original name
+   *  so designs saved before terms were supported still resolve. */
+  transcriptSemester?: TranscriptPeriod
+}
+
+/** Ordinal period slot a transcript marks table can be scoped to. Slot N = the Nth
+ *  period of the academic year, whatever that school type calls it. */
+export type TranscriptPeriod = 'sem1' | 'sem2' | 'sem3'
+
+/** Every slot, in year order. Slice with transcriptPeriodCount() for a given school type. */
+export const TRANSCRIPT_PERIODS: TranscriptPeriod[] = ['sem1', 'sem2', 'sem3']
+
+/** Periods in one academic year: universities run 2 semesters, primary/secondary 3 terms. */
+export function transcriptPeriodCount(schoolType?: string): number {
+  return schoolType === 'UNIVERSITY' ? 2 : 3
+}
+
+/** Slots a given school type's transcript uses, in year order. */
+export function transcriptPeriodsFor(schoolType?: string): TranscriptPeriod[] {
+  return TRANSCRIPT_PERIODS.slice(0, transcriptPeriodCount(schoolType))
+}
+
+/** Human label for a period slot ("First Semester" / "First Term"). Used as the caption
+ *  above each transcript marks table when the real term name isn't available (the print
+ *  renderer prefers the actual term name from the student's data). */
+export function transcriptPeriodLabel(period: TranscriptPeriod, schoolType?: string): string {
+  const ordinal = { sem1: 'First', sem2: 'Second', sem3: 'Third' }[period]
+  return `${ordinal} ${schoolType === 'UNIVERSITY' ? 'Semester' : 'Term'}`
 }
 
 // Secondary marks-table columns, in their default order. `subject` and `score` always show.
@@ -215,10 +347,132 @@ export function seedMarksTableSection(sec: MarksTableSec, color: string, schoolT
     ],
   }
 }
+
+/** Build the banded SpreadsheetTable a university transcript's per-semester marks
+ *  table starts from (CODE/TITLE/CREDIT/MARK/GRADE/GRADE POINT/WEIGHTED POINT, a
+ *  TOTAL row, and a big SEMESTER GPA row) — same section mechanics as any other
+ *  marks_table (draggable, deletable, columns removable/re-keyable via double-click),
+ *  just a different starting shape. The footer fields (`credits`/`total`/`gpTotal`/
+ *  `wpTotal`/`gpa`) resolve scoped to THIS section's own semester — see the
+ *  transcriptSemester-aware resolver in PrintableReportCard.tsx. */
+export function seedTranscriptMarksTable(color: string, schoolType?: string): SpreadsheetTable {
+  if (schoolType && schoolType !== 'UNIVERSITY') return seedTranscriptTermMarksTable(color)
+  const cols = ['code', 'subject', 'credit', 'score', 'grade', 'gradePoint', 'weighted'] as const
+  const labels: Record<string, string> = { code: 'CODE', subject: 'TITLE', credit: 'CREDIT', score: 'MARK /100', grade: 'GRADE', gradePoint: 'GRADE POINT', weighted: 'WEIGHTED POINT' }
+  const ts = Date.now()
+  const bandBg = '#f1f5f9'
+  const bandFg = '#111827'
+  return {
+    id: `marks_${ts}`,
+    title: '',
+    colCount: cols.length,
+    rows: [
+      {
+        id: `mhdr_${ts}`,
+        cells: cols.map(k => ({
+          text: labels[k], bold: true, align: k === 'subject' ? 'left' : 'center',
+          bgColor: color, textColor: '#ffffff',
+        })),
+      } as SheetRow,
+      {
+        id: `mdata_${ts + 1}`,
+        _isDataRow: true,
+        cells: cols.map(k => ({
+          field: `m:${k}`, align: k === 'subject' ? 'left' : 'center',
+          ...(k === 'score' || k === 'grade' ? { bold: true } : {}),
+        })),
+      } as SheetRow,
+      // TOTAL row — credit/mark/GP/WP sums, scoped to this table's semester.
+      {
+        id: `mfoot_${ts + 2}`,
+        cells: [
+          { text: 'TOTAL', bold: true, colSpan: 2, align: 'left', bgColor: bandBg, textColor: bandFg },
+          { field: 'credits', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', bgColor: bandBg },
+          { field: 'gpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+        ],
+      } as SheetRow,
+      // Hero line — this semester's own GPA.
+      {
+        id: `mfoot_${ts + 3}`,
+        cells: [
+          { text: 'SEMESTER GPA:', bold: true, colSpan: 6, align: 'right', textColor: color },
+          { field: 'gpa', bold: true, align: 'center', textColor: color, fontSize: 15 },
+        ],
+      } as SheetRow,
+    ],
+  }
+}
+
+/** Primary/secondary counterpart of seedTranscriptMarksTable — one term's marks on the
+ *  annual transcript. No GPA machinery (that's university-only): subjects carry a
+ *  coefficient rather than credit hours, and the hero line is the term's own
+ *  coefficient-weighted average out of 20, not a GPA. */
+function seedTranscriptTermMarksTable(color: string): SpreadsheetTable {
+  const cols = ['subject', 'coef', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const
+  const labels: Record<string, string> = { subject: 'SUBJECT', coef: 'COEF', seq1: 'SEQ 1', seq2: 'SEQ 2', score: 'AVERAGE', grade: 'GRADE', remarks: 'REMARKS' }
+  const ts = Date.now()
+  const bandBg = '#f1f5f9'
+  const bandFg = '#111827'
+  return {
+    id: `marks_${ts}`,
+    title: '',
+    colCount: cols.length,
+    rows: [
+      {
+        id: `mhdr_${ts}`,
+        cells: cols.map(k => ({
+          text: labels[k], bold: true, align: k === 'subject' || k === 'remarks' ? 'left' : 'center',
+          bgColor: color, textColor: '#ffffff',
+        })),
+      } as SheetRow,
+      {
+        id: `mdata_${ts + 1}`,
+        _isDataRow: true,
+        cells: cols.map(k => ({
+          field: `m:${k}`, align: k === 'subject' || k === 'remarks' ? 'left' : 'center',
+          ...(k === 'score' || k === 'grade' ? { bold: true } : {}),
+        })),
+      } as SheetRow,
+      // TOTAL row — coefficient and weighted-mark sums, scoped to this table's term.
+      {
+        id: `mfoot_${ts + 2}`,
+        cells: [
+          { text: 'TOTAL', bold: true, align: 'left', bgColor: bandBg, textColor: bandFg },
+          { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', bgColor: bandBg },
+          { text: '', bgColor: bandBg },
+          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+          { text: '', bgColor: bandBg },
+          { text: '', bgColor: bandBg },
+        ],
+      } as SheetRow,
+      // Hero line — this term's own average.
+      {
+        id: `mfoot_${ts + 3}`,
+        cells: [
+          { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+          { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
+          { text: '', colSpan: 2 },
+        ],
+      } as SheetRow,
+    ],
+  }
+}
+
 export interface SummarySec    { id: string; type: 'summary';      boxes: SummaryBox[]; valueColor?: string }
 export interface RemarksSec    { id: string; type: 'remarks';      label: string; placeholderColor?: string }
 export interface SignaturesSec { id: string; type: 'signatures';   lines: SignatureLine[] }
 export interface TextBlockSec  { id: string; type: 'text_block';   content: string; align: 'left'|'center'|'right' }
+/**
+ * The school's official stamp/seal (School.stamp, uploaded in School Settings).
+ * Nothing here decides whether it prints: mark the section `showOn: 'official'` so it
+ * appears on the sealed copy and never on the student's. Prints nothing when the school
+ * hasn't uploaded a stamp, leaving room to stamp the page by hand instead.
+ */
+export interface StampSec      { id: string; type: 'stamp';        size: number; align: 'left'|'center'|'right'; label?: string }
 export interface DividerSec    { id: string; type: 'divider';      style: 'solid'|'dashed' }
 // University transcript footer: the grading system, degree classification and a
 // legend of abbreviations. Grade rows come from the school's GPA grading scale.
@@ -238,9 +492,35 @@ export interface GradingLegendSec {
   rightLayout?: 'columns' | 'rows'
 }
 
-export type LayoutSection =
+/**
+ * Which printed copy a document is: the OFFICIAL one the school seals and sends on
+ * itself (WES and the like), or the STUDENT copy handed out at the end of a term.
+ *
+ * Deliberately NOT called "official header" — `HeaderSec.officialHeader` already means
+ * the Cameroon letterhead block and has nothing to do with this.
+ *
+ * The variant is chosen when PRINTING, never saved into the design: a school needs both
+ * copies available at once, so it can't be a property of the one saved layout.
+ */
+export type DocVariant = 'official' | 'student'
+
+/** Per-section variant scoping. Undefined means the section prints on BOTH copies, so
+ *  an untouched design behaves exactly as it did before this existed. */
+export interface SectionVariant {
+  /** Restrict this section to one copy (e.g. the registrar's signature and school seal
+   *  on the official only; a "not valid for official use" note on the student copy). */
+  showOn?: DocVariant
+}
+
+/** Does this section print on the copy being produced? */
+export function sectionShowsOn(sec: SectionVariant, variant: DocVariant): boolean {
+  return !sec.showOn || sec.showOn === variant
+}
+
+export type LayoutSection = (
   | HeaderSec | StudentInfoSec | MarksTableSec | SummarySec
-  | RemarksSec | SignaturesSec | TextBlockSec | DividerSec | GradingLegendSec
+  | RemarksSec | SignaturesSec | TextBlockSec | DividerSec | GradingLegendSec | StampSec
+) & SectionVariant
 
 // Degree classification by CGPA (mirrors classificationForGpa in lib/api/gradingScale).
 export const CLASSIFICATION_BANDS: { min: number; max: number; label: string }[] = [
@@ -507,7 +787,154 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
   return { ...TEMPLATE_DEFAULTS.ledger, sections }
 }
 
+/**
+ * Annual transcript, built from the same section system as every other layout — a
+ * marks_table section with `transcriptSemester` set sources its data from that ONE
+ * period of the year (instead of the document's combined subjects/entries) but is
+ * otherwise a completely normal, editable SpreadsheetTable (columns removable/re-keyable
+ * via double-click, same as any other marks table). Everything else (header, student
+ * info, grading legend, signatures) is a normal, freely editable section too.
+ *
+ * Shape follows the school type: a university year is two semesters summarised by
+ * credits/CGPA, a primary or secondary year is three terms summarised by the annual
+ * average (see getTranscriptTermLayout).
+ */
+export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  if (schoolType && schoolType !== 'UNIVERSITY') return getTranscriptTermLayout(schoolType)
+  const color = '#1e3a5f'
+  const sections: LayoutSection[] = [
+    // Same non-official defaults as the standard university layout (logo left,
+    // school type shown) — so unchecking "Official" on this header behaves the
+    // same way it does on standard, instead of falling back to its own look.
+    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL TRANSCRIPT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    {
+      id: uid('info'), type: 'student_info', columns: 2,
+      rows: [
+        { id: uid('r'), label: 'Student Name', field: 'student.name' },
+        { id: uid('r'), label: 'Matricule No.', field: 'student.studentId' },
+        { id: uid('r'), label: 'Programme', field: 'student.classLevel' },
+        { id: uid('r'), label: 'Sex', field: 'student.gender' },
+        // Optional per student: blank when not recorded (see formatBirthDate/resolveField).
+        { id: uid('r'), label: 'Date of Birth', field: 'student.dateOfBirth' },
+        { id: uid('r'), label: 'Place of Birth', field: 'student.placeOfBirth' },
+        { id: uid('r'), label: 'Academic Year', field: 'term.session' },
+      ],
+    },
+    { id: uid('tbl1'), type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, transcriptSemester: 'sem1', template: seedTranscriptMarksTable(color) },
+    { id: uid('tbl2'), type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: false, transcriptSemester: 'sem2', template: seedTranscriptMarksTable(color) },
+    {
+      id: uid('leg'), type: 'grading_legend', title: 'Grading System',
+      showGradeSystem: true, showClassification: true, showLegend: true, legendText: DEFAULT_TRANSCRIPT_LEGEND,
+      rightLayout: 'columns',
+      rightTables: [{
+        id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
+        rows: [
+          { id: uid('rr'), cells: [{ text: 'Credits Earned', bold: true }, { field: 'credits' }] },
+          { id: uid('rr'), cells: [{ text: 'Cumulative GPA', bold: true }, { field: 'cgpa' }] },
+          { id: uid('rr'), cells: [{ text: 'Remark', bold: true }, { field: 'classification' }] },
+        ],
+      }],
+    },
+    {
+      id: uid('sig'), type: 'signatures',
+      lines: [
+        { id: uid('s'), label: "Dean of Studies' Signature" },
+        { id: uid('s'), label: "Registrar's Signature" },
+      ],
+    },
+  ]
+
+  return { ...TEMPLATE_DEFAULTS.classic, template: 'classic', primaryColor: color, reportTitle: 'ANNUAL TRANSCRIPT', schoolSubtitle: '', sections }
+}
+
+/**
+ * Primary/secondary annual transcript: the year's THREE terms, one marks table each,
+ * summarised by the annual average rather than the university's credits/CGPA. Printed
+ * from the third term, once every term of the year is published.
+ */
+function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  const color = schoolType === 'PRIMARY' ? '#0f766e' : '#1e3a5f'
+  const pupil = schoolType === 'PRIMARY'
+  const sections: LayoutSection[] = [
+    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    {
+      id: uid('info'), type: 'student_info', columns: 2,
+      rows: [
+        { id: uid('r'), label: pupil ? 'Pupil Name' : 'Student Name', field: 'student.name' },
+        { id: uid('r'), label: pupil ? 'Pupil ID' : 'Student ID', field: 'student.studentId' },
+        { id: uid('r'), label: 'Class', field: 'student.classLevel' },
+        { id: uid('r'), label: 'Sex', field: 'student.gender' },
+        { id: uid('r'), label: 'Academic Year', field: 'term.session' },
+      ],
+    },
+    ...transcriptPeriodsFor(schoolType).map(p => ({
+      id: uid(`tbl_${p}`), type: 'marks_table' as const,
+      showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true,
+      transcriptSemester: p, template: seedTranscriptMarksTable(color, schoolType),
+    })),
+    {
+      id: uid('leg'), type: 'grading_legend', title: 'Grading Scale',
+      showGradeSystem: true, showClassification: false, showLegend: false,
+      rightLayout: 'columns',
+      rightTables: [{
+        id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
+        rows: [
+          { id: uid('rr'), cells: [{ text: 'Annual Average', bold: true }, { field: 'average' }] },
+          { id: uid('rr'), cells: [{ text: 'Grade', bold: true }, { field: 'grade' }] },
+        ],
+      }],
+    },
+    {
+      id: uid('sig'), type: 'signatures',
+      lines: [
+        { id: uid('s'), label: "Class Teacher's Signature" },
+        { id: uid('s'), label: pupil ? "Head Teacher's Signature" : "Principal's Signature" },
+        { id: uid('s'), label: "Parent / Guardian's Signature" },
+      ],
+    },
+  ]
+
+  return { ...TEMPLATE_DEFAULTS.classic, template: 'classic', primaryColor: color, reportTitle: 'ANNUAL REPORT', schoolSubtitle: '', sections }
+}
+
 /** Default report-card layout tailored to the school's section type. */
+/**
+ * Give an already-saved university design the Date/Place of Birth rows, once.
+ *
+ * Defaults only apply to designs built after the default changed, so a school that had
+ * saved its layout would never see a newly added row. This backfills the student_info
+ * section in the designer (the admin still has to Save, and can delete or move the rows
+ * first), then marks the design so it never happens twice: nobody could have deliberately
+ * removed these rows before they existed, but they can afterwards, and that must stick.
+ *
+ * University only, matching where these rows are shown by default. Idempotent: the field
+ * check alone prevents duplicates even on a fresh default that already has them.
+ */
+export function ensureBirthRows<T extends Partial<TemplateConfig>>(cfg: T, schoolType?: string): T {
+  if (schoolType !== 'UNIVERSITY' || cfg.birthRowsSeeded) return cfg
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, birthRowsSeeded: true }
+  const idx = sections.findIndex(s => s.type === 'student_info')
+  if (idx < 0) return { ...cfg, birthRowsSeeded: true }
+
+  const info = sections[idx] as StudentInfoSec
+  const has = (field: string) => info.rows.some(r => r.field === field)
+  const additions: InfoRow[] = []
+  if (!has('student.dateOfBirth')) additions.push({ id: uid('r'), label: 'Date of Birth', field: 'student.dateOfBirth' })
+  if (!has('student.placeOfBirth')) additions.push({ id: uid('r'), label: 'Place of Birth', field: 'student.placeOfBirth' })
+  if (additions.length === 0) return { ...cfg, birthRowsSeeded: true }
+
+  // Slot them in ahead of the academic-year/term rows, where the defaults put them, so a
+  // backfilled design reads the same as a fresh one instead of tacking them on the end.
+  const at = info.rows.findIndex(r => r.field === 'term.session' || r.field === 'term.name')
+  const rows = [...info.rows]
+  rows.splice(at < 0 ? rows.length : at, 0, ...additions)
+
+  const next = [...sections]
+  next[idx] = { ...info, rows }
+  return { ...cfg, sections: next, birthRowsSeeded: true }
+}
+
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   if (schoolType === 'PRIMARY') return buildLayout({
     primaryColor: '#0f766e',
@@ -540,6 +967,9 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
       { label: 'Matricule No.', field: 'student.studentId' },
       { label: 'Programme', field: 'student.classLevel' },
       { label: 'Sex / Gender', field: 'student.gender' },
+      // Optional per student: blank when not recorded.
+      { label: 'Date of Birth', field: 'student.dateOfBirth' },
+      { label: 'Place of Birth', field: 'student.placeOfBirth' },
       { label: 'Semester', field: 'term.name' },
       { label: 'Academic Year', field: 'term.session' },
     ],
@@ -560,6 +990,26 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
     gradingLegend: true,
   })
   return getDefaultLayout('classic') // secondary / default
+}
+
+/**
+ * Resolve the school's saved STANDARD/LEDGER design from a fetched template
+ * config, for printing regular report cards. Never returns the transcript
+ * design: the `transcript` sub-key is dropped, and a legacy row whose top
+ * level IS the transcript (saved before the sub-key existed) counts as having
+ * no standard design at all — its semester-scoped tables render nothing
+ * outside the transcript page, so falling back to the school-type default is
+ * the only rendering that shows the student's marks.
+ */
+export function mergeSavedStandardConfig(saved: Partial<TemplateConfig> | null | undefined, schoolType?: string): TemplateConfig {
+  const { transcript: _t, ...top } = (saved ?? {}) as Partial<TemplateConfig>
+  // `highlightFailingRed` is a school-wide marking policy rather than part of any one
+  // design, so it has to survive even the fallbacks below that discard the saved design.
+  const policy = top.highlightFailingRed != null ? { highlightFailingRed: top.highlightFailingRed } : {}
+  if (Object.keys(top).length === 0 || top.layoutType === 'transcript')
+    return { ...getDefaultLayoutForType(schoolType), ...policy }
+  const base = TEMPLATE_DEFAULTS[(top.template as TemplateName) ?? 'classic']
+  return { ...base, ...top } as TemplateConfig
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────

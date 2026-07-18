@@ -224,7 +224,7 @@ export default function TeachersPage() {
       if (result.reassigned?.length) {
         setReassignedInfo(result.reassigned)
       } else {
-        showToast(tr('Subjects assigned successfully'))
+        showToast(tr(isUniversity ? 'Courses assigned successfully' : 'Subjects assigned successfully'))
         setAssignTarget(null)
       }
     } catch {
@@ -359,17 +359,17 @@ export default function TeachersPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Full Name')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Full Name')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="Jane Smith" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Email')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Email')} <span className="text-destructive">*</span></label>
                 <input type="email" placeholder="jane@school.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')} <span className="text-destructive">*</span></label>
                 <div className="relative">
                   <input type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring pr-10" />
@@ -388,7 +388,7 @@ export default function TeachersPage() {
               </div>
               {form.role === 'CLASS_MASTER' && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')}</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')} <span className="text-destructive">*</span></label>
                   <select value={form.masterClassLevel} onChange={(e) => setForm({ ...form, masterClassLevel: e.target.value })} required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                     <option value="">{tr('Select a class')}</option>
@@ -430,11 +430,11 @@ export default function TeachersPage() {
                 <div className="flex items-start gap-2">
                   <Info size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="text-xs font-semibold text-amber-800 mb-1">{tr('Subjects reassigned:')}</p>
+                    <p className="text-xs font-semibold text-amber-800 mb-1">{tr(isUniversity ? 'Courses reassigned:' : 'Subjects reassigned:')}</p>
                     {reassignedInfo.map((msg, i) => (
                       <p key={i} className="text-xs text-amber-700">{msg}</p>
                     ))}
-                    <button onClick={() => { setReassignedInfo([]); setAssignTarget(null); showToast(tr('Subjects assigned successfully')) }}
+                    <button onClick={() => { setReassignedInfo([]); setAssignTarget(null); showToast(tr(isUniversity ? 'Courses assigned successfully' : 'Subjects assigned successfully')) }}
                       className="mt-2 text-xs text-amber-800 font-semibold underline">
                       {tr('OK, got it')}
                     </button>
@@ -473,7 +473,7 @@ export default function TeachersPage() {
                   </div>
                 </div>
               ))}
-              {allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr('No subjects found. Add subjects first.')}</p>}
+              {allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr(isUniversity ? 'No courses found. Add courses first.' : 'No subjects found. Add subjects first.')}</p>}
             </div>
             <div className="flex gap-3 pt-4 border-t border-gray-100 mt-4">
               <button onClick={() => setAssignTarget(null)}
@@ -511,9 +511,9 @@ export default function TeachersPage() {
               </div>
               {editForm.role === 'CLASS_MASTER' && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')}</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')} <span className="text-destructive">*</span></label>
                   <select value={editForm.masterClassLevel}
-                    onChange={(e) => setEditForm({ ...editForm, masterClassLevel: e.target.value })}
+                    onChange={(e) => setEditForm({ ...editForm, masterClassLevel: e.target.value })} required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                     <option value="">{tr('Select a class')}</option>
                     {classLevels.map(cl => (
@@ -550,10 +550,12 @@ export default function TeachersPage() {
               </button>
             </div>
             {resetError && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">{resetError}</p>}
+            <label className="block text-xs font-medium text-foreground mb-1">{tr('New Password')} <span className="text-destructive">*</span></label>
             <div className="relative mb-4">
               <input
                 type={showResetPw ? 'text' : 'password'}
                 placeholder={tr('New password (min 6 characters)')}
+                required
                 value={resetPassword}
                 onChange={e => setResetPassword(e.target.value)}
                 className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"

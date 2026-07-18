@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getSubjectsApi, createSubjectApi, deleteSubjectApi, updateSubjectApi } from '@/lib/api/subjects'
 import { getClassLevelsApi, ClassLevel as ClassLevelOption } from '@/lib/api/classLevels'
@@ -8,6 +8,7 @@ import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
 import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar, Layers } from 'lucide-react'
 import { useT } from '@/lib/i18n'
+import { levelGroupOf, programmeOf, sortLevelGroups } from '@/lib/universityLevels'
 
 // Non-default departments store classes with a " (Department)" suffix; strip it
 // for display since the department is already the active context.
@@ -24,11 +25,13 @@ interface Subject {
   term?: string | null
 }
 
-interface TermOption { id: string; name: string; session: string; startDate: string }
+interface TermOption { id: string; name: string; session: string; startDate: string; isCurrent?: boolean }
 
 export default function SubjectsPage() {
   const router = useRouter()
-  const { isAuthenticated, school, activeSession } = useAuthStore()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const { isAuthenticated, school, activeSession, user } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
   const t = useT()
@@ -41,10 +44,17 @@ export default function SubjectsPage() {
   const [terms, setTerms] = useState<TermOption[]>([])
   const [loading, setLoading] = useState(true)
   // Secondary schools drill down department -> class -> subjects.
-  const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null)
-  const [selectedClass, setSelectedClass] = useState<string | null>(null)
+  // Where you are in the picker lives in the URL, not only in memory. Entering marks
+  // navigates away, and coming back remounts this page: with the position in state alone
+  // you landed on the level list again and had to walk Level > Department > Semester back
+  // down for every single course. The url also makes a given list linkable and survives a
+  // refresh.
+  const [selectedDeptId, setSelectedDeptId] = useState<string | null>(searchParams.get('dept'))
+  // University only: the level chosen on the first screen (Level 1 / Level 2 / Degree).
+  const [selectedLevel, setSelectedLevel] = useState<string | null>(searchParams.get('level'))
+  const [selectedClass, setSelectedClass] = useState<string | null>(searchParams.get('class'))
   // University only — a course belongs to one semester (see Subject.term in schema.prisma).
-  const [selectedTerm, setSelectedTerm] = useState<string | null>(null)
+  const [selectedTerm, setSelectedTerm] = useState<string | null>(searchParams.get('term'))
 
   // Create modal
   const [showModal, setShowModal] = useState(false)
@@ -75,11 +85,45 @@ export default function SubjectsPage() {
 
   // Semesters available to pick from — distinct names within the active academic
   // session, ordered by start date (so "First Semester" lists before "Second").
+  // Mirror the picker into the url. `replace`, not `push`: this is where you ARE, not a
+  // step you took, so it should not pile up history entries that Back has to walk. The
+  // page's own arrows move between steps. Entering marks pushes, so Back from the marks
+  // sheet lands on this exact list again.
+  useEffect(() => {
+    const p = new URLSearchParams()
+    if (selectedDeptId) p.set('dept', selectedDeptId)
+    if (selectedLevel) p.set('level', selectedLevel)
+    if (selectedClass) p.set('class', selectedClass)
+    if (selectedTerm) p.set('term', selectedTerm)
+    const qs = p.toString()
+    const next = qs ? `${pathname}?${qs}` : pathname
+    // Guard the no-op: replacing with the url we are already on would loop the router.
+    if (next !== `${pathname}${window.location.search}`) router.replace(next, { scroll: false })
+  }, [selectedDeptId, selectedLevel, selectedClass, selectedTerm, pathname, router])
+
   const availableTerms = Array.from(
     new Map(
       terms.filter(tm => tm.session === activeSession).map(tm => [tm.name, tm])
     ).values()
   ).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
+
+  // Marks entry from here is for schools where the administration records marks (see
+  // School.marksEntryMode); teachers reach marks through Report Cards as they always have.
+  const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
+  const canEnterMarksHere = isUniversity && isAdminRole && school?.marksEntryMode === 'ADMIN_ONLY'
+
+  /** Straight to this course's marks sheet, on the level + semester already chosen here.
+   *  Lands on CA; the sheet itself switches between CA, Exam and Resit. termName is
+   *  required as well as termId: the sheet filters courses by it. */
+  const goToMarks = (subjectId: string, subjectName: string) => {
+    const term = availableTerms.find(tm => tm.name === selectedTerm)
+    if (!selectedClass || !term) return
+    router.push(
+      `/report-cards/class/${encodeURIComponent(selectedClass)}/${encodeURIComponent(subjectId)}` +
+      `?termId=${term.id}&termName=${encodeURIComponent(term.name)}` +
+      `&subjectName=${encodeURIComponent(subjectName)}&sequence=0`
+    )
+  }
 
   const classSubjects = selectedClass
     ? subjects.filter(s => s.classLevel === selectedClass && (!isUniversity || s.term === selectedTerm))
@@ -201,21 +245,79 @@ export default function SubjectsPage() {
     )
   }
 
+  // ── Level picker (university only) ────────────────────────────────────────
+  // A university's programmes repeat per level (HND Nursing exists at Level 1 and Level
+  // 2), so the level comes first: it halves the list before you read it, and it is how
+  // the school itself thinks about its courses.
+  if (isUniversity && !selectedLevel) {
+    const groups = Array.from(new Set(classLevels.map(cl => levelGroupOf(cl.name)))).sort(sortLevelGroups)
+    return (
+      <div>
+        <div className="mb-6">
+          <h2 className="text-2xl font-bold text-foreground">{t('Courses')}</h2>
+          <p className="text-muted-foreground text-sm mt-1">{t('Select a level, then a department, to manage its courses')}</p>
+        </div>
+
+        {groups.length === 0 ? (
+          <div className="bg-card rounded-xl border border-border text-center py-12">
+            <Layers size={32} className="mx-auto mb-2 text-muted-foreground" />
+            <p className="text-muted-foreground text-sm">{t('No departments found.')}</p>
+            <button onClick={() => router.push('/classes')} className="mt-3 text-primary text-sm hover:underline">
+              {t('Go to Departments →')}
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
+            {groups.map(g => {
+              const inGroup = classLevels.filter(cl => levelGroupOf(cl.name) === g)
+              const courseCount = subjects.filter(sub => inGroup.some(cl => cl.name === sub.classLevel)).length
+              return (
+                <button
+                  key={g}
+                  onClick={() => setSelectedLevel(g)}
+                  className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 hover:bg-primary/5 transition group active:scale-[0.98]"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center font-bold text-sm">
+                      <Layers size={18} />
+                    </div>
+                    <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition" />
+                  </div>
+                  <p className="font-semibold text-foreground">{t(g)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {inGroup.length} {inGroup.length !== 1 ? t('departments') : t('department')} · {courseCount} {courseCount !== 1 ? t('courses') : t('course')}
+                  </p>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // ── Class picker ─────────────────────────────────────────────────────────
   if (!selectedClass) {
-    const pickerClasses = isSecondary ? classLevels.filter(cl => cl.departmentId === selectedDeptId) : classLevels
+    const pickerClasses = isSecondary
+      ? classLevels.filter(cl => cl.departmentId === selectedDeptId)
+      : isUniversity
+        // Only the departments that exist at the chosen level.
+        ? classLevels.filter(cl => levelGroupOf(cl.name) === selectedLevel)
+        : classLevels
     const activeDept = departments.find(d => d.id === selectedDeptId)
     return (
       <div>
         <div className="flex items-center gap-3 mb-6">
-          {isSecondary && (
-            <button onClick={() => setSelectedDeptId(null)}
+          {(isSecondary || isUniversity) && (
+            <button onClick={() => isSecondary ? setSelectedDeptId(null) : setSelectedLevel(null)}
               className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition">
               <ArrowLeft size={18} />
             </button>
           )}
           <div>
-            <h2 className="text-2xl font-bold text-foreground">{isSecondary && activeDept ? activeDept.name : tt('Subjects', 'Courses')}</h2>
+            <h2 className="text-2xl font-bold text-foreground">
+              {isSecondary && activeDept ? activeDept.name : isUniversity ? t(selectedLevel ?? 'Courses') : tt('Subjects', 'Courses')}
+            </h2>
             <p className="text-muted-foreground text-sm mt-0.5">{isUniversity ? t('Select a department to manage its courses') : t('Select a class to manage its subjects')}</p>
           </div>
         </div>
@@ -232,7 +334,7 @@ export default function SubjectsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
             {pickerClasses.map(cl => {
               const count = countByClass[cl.name] ?? 0
-              const label = isSecondary ? stripDeptSuffix(cl.name) : cl.name
+              const label = isSecondary ? stripDeptSuffix(cl.name) : isUniversity ? programmeOf(cl.name) : cl.name
               return (
                 <button
                   key={cl.id}
@@ -292,7 +394,7 @@ export default function SubjectsPage() {
                 <button
                   key={tm.id}
                   onClick={() => setSelectedTerm(tm.name)}
-                  className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 hover:bg-primary/5 transition group"
+                  className={`bg-card border rounded-xl p-5 text-left hover:border-primary/40 hover:bg-primary/5 transition group ${tm.isCurrent ? 'border-primary/50' : 'border-border'}`}
                 >
                   <div className="flex items-center justify-between mb-3">
                     <div className="w-10 h-10 bg-violet-100 text-violet-600 rounded-xl flex items-center justify-center">
@@ -300,7 +402,14 @@ export default function SubjectsPage() {
                     </div>
                     <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition" />
                   </div>
-                  <p className="font-semibold text-foreground">{tm.name}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold text-foreground">{tm.name}</p>
+                    {tm.isCurrent && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded">
+                        {t('Active')}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {count === 0 ? t('No courses yet') : `${count} ${count !== 1 ? t('courses') : t('course')}`}
                   </p>
@@ -460,6 +569,16 @@ export default function SubjectsPage() {
                         </>
                       ) : (
                         <>
+                          {/* Only where the ADMINISTRATION records marks. Elsewhere marks
+                              belong to teachers, who work from Report Cards, and this
+                              shortcut would just be a second door to the same room. */}
+                          {canEnterMarksHere && (
+                            <button onClick={() => goToMarks(s.id, s.name)}
+                              className="px-2 py-1 mr-1 text-xs font-medium border border-border rounded-lg text-muted-foreground hover:text-primary hover:border-primary/40 transition whitespace-nowrap"
+                              title={t('Enter marks for this course')}>
+                              {t('Enter marks')}
+                            </button>
+                          )}
                           <button onClick={() => openEdit(s)}
                             className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition" title={t('Edit')}>
                             <Pencil size={14} />
@@ -502,7 +621,7 @@ export default function SubjectsPage() {
 
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{tt('Subject Name', 'Course Name')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{tt('Subject Name', 'Course Name')} <span className="text-destructive">*</span></label>
                 <input
                   type="text" placeholder={isUniversity ? 'e.g. Calculus I' : 'e.g. Mathematics'}
                   value={form.name}
@@ -514,7 +633,7 @@ export default function SubjectsPage() {
 
               {!isUniversity && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Coefficient')}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Coefficient')} <span className="text-destructive">*</span></label>
                   <input
                     type="number" min="1" max="10" placeholder="1"
                     value={form.coefficient}
@@ -542,7 +661,7 @@ export default function SubjectsPage() {
 
               {isUniversity && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Credit hours')}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Credit hours')} <span className="text-destructive">*</span></label>
                   <input
                     type="number" min="0" step="1" placeholder="e.g. 3"
                     value={form.credit}

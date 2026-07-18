@@ -16,6 +16,10 @@ interface School {
   name: string
   type: string
   language?: string
+  /** Who records marks. ADMIN_ONLY = teachers see the marks sheet read-only and only
+   *  administrators may save (the API enforces it; this only shapes the UI). Undefined on
+   *  an older cached session reads as TEACHERS, matching the API's default. */
+  marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
   logo: string | null
   coverImage: string | null
   coverImages: string[]

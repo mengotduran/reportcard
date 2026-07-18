@@ -1,4 +1,4 @@
-import { GradeRange, DEFAULT_RANGES } from './api/gradingScale'
+import { GradeRange, DEFAULT_RANGES, isFailingScore } from './api/gradingScale'
 
 export interface GradeResult {
   grade: string
@@ -15,6 +15,23 @@ export function gradeFromScore(score: number, maxScore: number, ranges: GradeRan
   const rangeScale = ranges.length > 0 && ranges.some(r => r.maxScore > 20) ? 100 : 20
   const normalizedScore = maxScore > 0 ? (score / maxScore) * rangeScale : 0
   return gradeForScore20(normalizedScore, ranges)
+}
+
+/**
+ * Did a mark out of `maxScore` fail, per the school's own scale? Normalises onto the
+ * scale's units exactly like gradeFromScore, then defers to isFailingScore — so it
+ * reads a failing band the same way the printed report card does (jury decision first,
+ * never a hardcoded 'F' or pass mark).
+ *
+ * Works on a COMPONENT as well as a total: a university exam mark out of 70 normalises
+ * to /100 before being judged, which is how resit eligibility asks "did they fail the
+ * exam?" without hardcoding 35.
+ */
+export function isFailingMark(score: number, maxScore: number, ranges: GradeRange[]): boolean {
+  const list = ranges.length > 0 ? ranges : DEFAULT_RANGES
+  const rangeScale = list.some(r => r.maxScore > 20) ? 100 : 20
+  const normalized = maxScore > 0 ? (score / maxScore) * rangeScale : 0
+  return isFailingScore(normalized, list)
 }
 
 /** Grade for a mark already on the /20 scale (e.g. a term average out of 20). */

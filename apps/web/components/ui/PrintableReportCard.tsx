@@ -1,5 +1,5 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, OFFICIAL_HEADER_FONT } from '@/lib/api/reportCardTemplate'
-import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore } from '@/lib/api/gradingScale'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn } from '@/lib/api/reportCardTemplate'
+import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { translate } from '@/lib/i18n'
 
@@ -8,6 +8,7 @@ export interface PrintEntry {
   score: number
   seq1Score?: number | null
   seq2Score?: number | null
+  resitScore?: number | null
   grade: string
   remarks: string
 }
@@ -15,8 +16,8 @@ export interface PrintEntry {
 interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
 
 export interface PrintableReportCardProps {
-  school: { name: string; type: string; logo?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null }
-  student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string }
+  school: { name: string; type: string; logo?: string | null; stamp?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
+  student: { name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; dateOfBirth?: string | null; placeOfBirth?: string | null }
   term: { name: string; session: string }
   subjects: PrintSubject[]
   entries: PrintEntry[]
@@ -34,6 +35,53 @@ export interface PrintableReportCardProps {
   classificationBands?: ClassificationBand[] // CGPA classification bands (university)
   cgpa?: number                       // cumulative GPA (university), if known
   subjectStats?: Record<string, { min: number; avg: number; max: number }> // class-wide per-subject stats
+  // Annual transcript only: per-period data for marks_table sections with
+  // `transcriptSemester` set (2 semesters for a university, 3 terms otherwise).
+  // Absent for every other document type/layout.
+  transcriptSemesters?: Partial<Record<TranscriptPeriod, TranscriptSemesterData>>
+  /** Which copy is being produced: the sealed OFFICIAL one, or the STUDENT copy handed
+   *  out at the end of a term. Chosen per print, never saved into the design. Defaults
+   *  to 'official' = show everything, so callers that don't care are unaffected. */
+  variant?: DocVariant
+}
+
+// Colour a failed subject's marks print in when the admin enables it school-wide.
+const FAIL_RED = '#dc2626'
+
+const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const MONTHS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
+
+/**
+ * Does a resolved student_info field actually carry information?
+ *
+ * "Not recorded" arrives in two shapes: '' (birth details) and the '—' placeholder that
+ * older fields like gender/guardian fall back to. Both mean the school has nothing to
+ * print, so both hide the row. A dash is not a value; it is the absence of one dressed up.
+ */
+function hasValue(v: React.ReactNode): boolean {
+  if (v == null) return false
+  const s = String(v).trim()
+  return s !== '' && s !== '—' && s !== '-'
+}
+
+/**
+ * A birth date, spelled out: "12 May 2003". Deliberately not numeric — these documents go
+ * to WES and embassies, where 12/05/2003 is read as 5 December by half the world.
+ *
+ * Parsed from the stored "YYYY-MM-DD" text by hand, never via `new Date(...)`: that reads
+ * the string as UTC midnight and then prints the PREVIOUS day for any viewer west of UTC,
+ * which would silently misstate a date of birth on an official transcript.
+ * Anything unrecognised is passed through verbatim rather than mangled.
+ */
+function formatBirthDate(value?: string | null, lang: 'EN' | 'FR' = 'EN'): string {
+  const raw = (value ?? '').trim()
+  if (!raw) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw)
+  if (!m) return raw
+  const [, year, mm, dd] = m
+  const month = (lang === 'FR' ? MONTHS_FR : MONTHS_EN)[Number(mm) - 1]
+  if (!month) return raw
+  return `${Number(dd)} ${month} ${year}`
 }
 
 function ordinalPos(n: number): string {
@@ -58,9 +106,11 @@ const cell = (extra?: React.CSSProperties): React.CSSProperties => ({
   padding: '6px 10px', borderBottom: '1px solid #ddd', ...extra,
 })
 
-function Watermark({ cfg, schoolLogo, schoolName }: { cfg: any; schoolLogo?: string | null; schoolName?: string }) {
+function Watermark({ cfg, schoolLogo, schoolName, variant = 'official' }: { cfg: any; schoolLogo?: string | null; schoolName?: string; variant?: DocVariant }) {
   const wm = cfg.watermark
   if (!wm?.enabled) return null
+  // Scoped watermarks (an UNOFFICIAL stamp across the student copy) skip the other copy.
+  if (wm.showOn && wm.showOn !== variant) return null
   const opacity = (wm.opacity ?? 8) / 100
   const rotation = wm.rotation ?? -45
   const x = wm.x ?? 50
@@ -94,6 +144,17 @@ function entryGrade(e: PrintEntry | undefined, bands: GradeRange[]): string {
 function entryRemark(e: PrintEntry | undefined, bands: GradeRange[]): string {
   if (!e || e.score == null) return '—'
   return gradeForScore20(e.score, bands).remark || '—'
+}
+
+// University transcript only: a marks_table section with `transcriptSemester` set
+// sources its subjects/entries from here instead of the document's combined
+// top-level subjects/entries — see the marks_table branch below. Otherwise it's a
+// completely normal, editable SpreadsheetTable (columns removable/re-keyable via
+// double-click, same as any other marks table).
+export interface TranscriptSemesterData {
+  term: { name: string; session: string }
+  subjects: PrintSubject[]
+  entries: PrintEntry[]
 }
 
 // ─── Classic ─────────────────────────────────────────────────────────────────
@@ -577,6 +638,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const { school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, classAverage, annualAverage, annualPosition, annualClassSize, cfg } = props
   const lang: 'EN' | 'FR' = school.language === 'FR' ? 'FR' : 'EN'
+  const variant: DocVariant = props.variant ?? 'official'
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
   const rgb = hexToRgb(color)
@@ -588,6 +650,11 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       'student.classLevel': student.classLevel,
       'student.guardianName': student.guardianName || '—',
       'student.gender': student.gender || '—',
+      // Birth details are optional, so an unknown one prints BLANK rather than the '—'
+      // used above: a dash reads as "none", and a transcript should not assert that a
+      // student has no birthplace just because nobody typed it in.
+      'student.dateOfBirth': formatBirthDate(student.dateOfBirth, lang),
+      'student.placeOfBirth': student.placeOfBirth || '',
       'term.name': term.name,
       'term.session': term.session,
       'school.name': school.name,
@@ -616,6 +683,27 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   })()
   const cgpa = props.cgpa ?? gpaInfo.gpa
 
+  // ── Failing marks in red ─────────────────────────────────────────────────────
+  // When the admin turns it on (school-wide — see TemplateConfig.highlightFailingRed),
+  // every subject the student FAILED prints its numbers and its grade letter in red;
+  // text cells (code, title, remark, jury decision) stay black and passed subjects are
+  // untouched. Fail is judged on the school's OWN grading scale, so this needs no
+  // school-type branching: the failing band is a mark /100 at a university and a
+  // subject's term average /20 at a primary/secondary school.
+  //
+  // `score` is always the mark that COUNTS — for a resat university course the backend
+  // stores CA + resit exam (see reportcard.controller.ts), so a resit that still falls
+  // short is judged on the resit and correctly prints red.
+  //
+  // Shared by the marks table and the Resits appendix so the same course can't print
+  // red in one and black in the other.
+  const highlightRed = cfg.highlightFailingRed !== false
+  const isFailedEntry = (e?: PrintEntry): boolean =>
+    highlightRed && !!e && e.score != null && isFailingScore(e.score, bands)
+  // Class-wide stats (min/avg/max) stay black on purpose — they describe the whole
+  // class, not this student's result. 'sn' is a row index, not a mark.
+  const FAIL_RED_COLS = new Set(['seq1', 'seq2', 'score', 'grade', 'coef', 'credit', 'gradePoint', 'weighted'])
+
   const resolveStat = (field: string) => {
     const total = entries.reduce((s, e) => s + e.score, 0)
     if (field === 'total')          return String(total)
@@ -638,6 +726,26 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     return '—'
   }
 
+  // Marks the OFFICIAL copy under the document title, on every layout and school type.
+  // It is the answer to "how do I know this is the official one just by looking at it",
+  // so it is automatic and not editable: a design must not be able to omit it or word it
+  // into meaning the opposite. The stamp is separate, additional proof.
+  //
+  // The student copy is deliberately left BLANK rather than stamped "not official": the
+  // everyday report card handed to a student is the ordinary document and shouldn't be
+  // branded as a lesser one. Absence of the note is what makes it unofficial.
+  const variantLabel = (align: 'left' | 'center' = 'center') => {
+    if (variant !== 'official') return null
+    return (
+      <p style={{
+        margin: '4px 0 0', fontSize: 9.5, fontWeight: 'bold', letterSpacing: 2,
+        textTransform: 'uppercase', textAlign: align, color,
+      }}>
+        {t('Official Copy')}
+      </p>
+    )
+  }
+
   const renderSec = (sec: LayoutSection) => {
     if (sec.type === 'header') {
       const s = sec as HeaderSec
@@ -653,26 +761,29 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       // authorization line (subtitle), the ruled contact strip, and the title.
       // Per-line styling (bold caps / big acronym / italic motto) comes from
       // officialTextBlockHtml — shared with the designer canvas so they can't
-      // drift. The logo is absolutely positioned so a bigger logo never
-      // stretches the text columns' row height.
+      // drift. The logo sits in the grid's own middle column (not absolutely
+      // positioned) so it vertically centers against the text blocks at any size,
+      // instead of hanging below them once it's larger than the text.
       if (s.officialHeader) {
         return (
           <div style={{ borderBottom: `3px solid ${color}`, paddingBottom: 12, marginBottom: 16 }}>
-            <div style={{ position: 'relative', minHeight: logoSize }}>
-              <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
-                <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.leftText || '') }} />
-                <div />
-                <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(s.rightText || '') }} />
-              </div>
-              <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{s.showLogo && logoEl}</div>
+            {/* minmax(0, 1fr) — not bare 1fr — forces the two side columns to
+                stay exactly equal width regardless of how much text either
+                block holds; bare 1fr lets a wider block's min-content grow
+                its track past the other's, pushing the logo off-center. */}
+            <div style={{ display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${Math.max(logoSize, 40) + 16}px minmax(0, 1fr)`, gap: 16, alignItems: 'center' }}>
+              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(resolveOfficialText(school, 'left', s.leftText || ''), 'left', officialTextScaleFor(s)) }} />
+              <div style={{ display: 'flex', justifyContent: 'center' }}>{s.showLogo && logoEl}</div>
+              <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(resolveOfficialText(school, 'right', s.rightText || ''), 'right', officialTextScaleFor(s)) }} />
             </div>
-            {(s.showAuthorization ?? true) && school.authorizationNumber && <p style={{ textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 'bold', color: '#333', margin: '2px 0 0' }}>{school.authorizationNumber}</p>}
+            {(s.showAuthorization ?? true) && school.authorizationNumber && <p style={{ textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 'bold', color: '#333', margin: '2px 0 0' }}>{school.authorizationNumber}</p>}
             {contactLine && (
-              <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 600, color: '#111' }}>
+              <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 600, color: '#111' }}>
                 {contactLine}
               </div>
             )}
             {s.reportTitle && <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '10px 0 0', letterSpacing: 3, color, textAlign: 'center' }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />}
+            {variantLabel('center')}
           </div>
         )
       }
@@ -683,6 +794,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           <h1 style={{ fontSize: 22, fontWeight: 'bold', margin: '0 0 4px', color: s.schoolNameColor || color }}>{school.name}</h1>
           {s.subtitle && <p style={{ margin: '0 0 6px', fontSize: 12, color: '#555' }} dangerouslySetInnerHTML={{ __html: s.subtitle }} />}
           <h2 style={{ fontSize: 14, fontWeight: 'bold', margin: '8px 0 0', letterSpacing: 3, color }} dangerouslySetInnerHTML={{ __html: s.reportTitle }} />
+          {variantLabel('left')}
           {contactLineEl}
         </div>
       )
@@ -707,9 +819,18 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'student_info') {
       const s = sec as StudentInfoSec
+      // A row with nothing to show is dropped entirely, label and all: printing
+      // "Place of Birth:" followed by blank space states that the school holds no
+      // birthplace for this student, when in truth nobody typed one in. The label only
+      // earns its place once there is a value behind it, so the same design prints a
+      // full header for a student with complete details and a shorter one for a student
+      // without, instead of a row of empty prompts.
+      const filled = s.rows.filter(row => hasValue(resolveField(row.field)))
+      // Every row empty means an empty bordered box, so the section stands down too.
+      if (filled.length === 0) return null
       return (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.columns}, 1fr)`, gap: '5px 12px', background: `rgba(${rgb},0.05)`, padding: 12, border: `1px solid rgba(${rgb},0.25)`, marginBottom: 16, fontSize: 12 }}>
-          {s.rows.map(row => (
+          {filled.map(row => (
             <div key={row.id}>
               <span style={{ fontWeight: 'bold' }} dangerouslySetInnerHTML={{ __html: localizeLabel(row.label, lang) + ':' }} />
               {' '}<span style={{ color: row.valueColor ?? undefined }}>{resolveField(row.field)}</span>
@@ -721,6 +842,55 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'marks_table') {
       const s = sec as MarksTableSec
+      // Transcript only: this table's data comes from ONE specific semester (not the
+      // document's combined top-level subjects/entries). If that semester hasn't
+      // happened yet for this student, the table just has nothing to show.
+      if (s.transcriptSemester && !props.transcriptSemesters?.[s.transcriptSemester]) return null
+      const semData = s.transcriptSemester ? props.transcriptSemesters?.[s.transcriptSemester] : undefined
+      const scopedSubjects = semData?.subjects ?? subjects
+      const scopedEntries  = semData?.entries ?? entries
+      // Caption naming the period this table covers — a transcript stacks two or three
+      // identical-looking tables, so without it there's no way to tell which is which.
+      // Prefer the term's real name (already localized by the school's own naming);
+      // the slot's ordinal label is the fallback when the data doesn't carry one.
+      const periodCaption = s.transcriptSemester ? (
+        <div style={{
+          fontWeight: 'bold', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+          color: '#fff', backgroundColor: color, padding: '4px 8px', marginBottom: 0,
+        }}>
+          {t(semData?.term.name || transcriptPeriodLabel(s.transcriptSemester, school.type))}
+        </div>
+      ) : null
+      // Sums for THIS period only, used by the footer fields below (statResolver).
+      // University tables band on credits/grade points; primary/secondary term tables
+      // band on coefficients and the term's own coefficient-weighted average — hence
+      // both sets are computed here regardless of school type.
+      const scopedAgg = s.transcriptSemester ? (() => {
+        let credit = 0, mark = 0, gp = 0, wp = 0, coef = 0, weightedMark = 0
+        for (const subj of scopedSubjects) {
+          const e = scopedEntries.find(x => x.subjectId === subj.id)
+          const c = subj.credit ?? 0
+          const cf = subj.coefficient ?? 1
+          const g = e?.score == null ? null : gradePointForScore20(e.score, bands)
+          credit += c; mark += e?.score ?? 0
+          if (g != null) { gp += g; wp += g * c }
+          if (e?.score != null) { coef += cf; weightedMark += e.score * cf }
+        }
+        return { credit, mark, gp, wp, coef, weightedMark }
+      })() : null
+      const statResolver = (field: string): React.ReactNode => {
+        if (scopedAgg) {
+          if (field === 'credits')   return String(scopedAgg.credit)
+          if (field === 'total')     return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
+          if (field === 'gpTotal')   return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
+          if (field === 'wpTotal')   return scopedAgg.wp.toFixed(2)
+          if (field === 'gpa')       return (scopedAgg.credit > 0 ? scopedAgg.wp / scopedAgg.credit : 0).toFixed(2)
+          if (field === 'coefTotal') return String(scopedAgg.coef)
+          // Scoped to this period — the document-level 'average' is the ANNUAL one.
+          if (field === 'average')   return (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(2)
+        }
+        return resolveStat(field)
+      }
       const hdrs = s.headers || {}
       const cc   = s.colColors || {}
       const hText = (k: string, fallback: string) => {
@@ -748,13 +918,22 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       }
       const evalForGpa = (gpa: number): string =>
         classificationForGpa(gpa, classBands).toUpperCase()
-      const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
+      // University only: a resat exam mark shows with an asterisk (* = mark obtained after resit).
+      const renderSeq2 = (e?: PrintEntry): React.ReactNode =>
+        e?.resitScore != null ? <>{e.resitScore}<sup>*</sup></> : (e?.seq2Score ?? '—')
+      const renderScore = (e?: PrintEntry): React.ReactNode =>
+        <>{e?.score ?? 0}{e?.resitScore != null ? <sup>*</sup> : null}</>
+
+      const paintFail = (k: string, e: PrintEntry | undefined, node: React.ReactNode): React.ReactNode =>
+        FAIL_RED_COLS.has(k) && isFailedEntry(e) ? <span style={{ color: FAIL_RED }}>{node}</span> : node
+
+      const cellValue = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode => {
         switch (k) {
           case 'subject':      return subj.name
           case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
           case 'seq1':         return e?.seq1Score ?? '—'
-          case 'seq2':         return e?.seq2Score ?? '—'
-          case 'score':        return e?.score ?? 0
+          case 'seq2':         return renderSeq2(e)
+          case 'score':        return renderScore(e)
           case 'grade':        return entryGrade(e, bands)
           case 'remarks':      return entryRemark(e, bands)
           case 'code':         return courseCode(subj, i)
@@ -769,6 +948,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           default: return ''
         }
       }
+      const cell = (k: string, subj: PrintSubject, e: PrintEntry | undefined, i: number): React.ReactNode =>
+        paintFail(k, e, cellValue(k, subj, e, i))
 
       // ── Template mode: SpreadsheetTable with _isDataRow repeat ───────────────
       if (s.template) {
@@ -781,26 +962,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         const resolveMarksField = (field: string, subj: PrintSubject, e: PrintEntry | undefined, si: number): React.ReactNode => {
           if (!field.startsWith('m:')) return resolveStat(field)
           const k = field.slice(2)
-          switch (k) {
-            case 'sn':           return String(si + 1)
-            case 'subject':      return subj.name
-            case 'coef':         return school.type === 'UNIVERSITY' ? '' : (subj.coefficient ?? '—')
-            case 'seq1':         return e?.seq1Score ?? '—'
-            case 'seq2':         return e?.seq2Score ?? '—'
-            case 'score':        return e?.score ?? 0
-            case 'grade':        return entryGrade(e, bands)
-            case 'remarks':      return entryRemark(e, bands)
-            case 'code':         return courseCode(subj, si)
-            case 'credit':       return subj.credit ?? '—'
-            case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
-            case 'weighted':     { const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1) }
-            case 'evaluation':   { const gp = gradePointOf(e); return gp == null ? '—' : evalForGpa(gp) }
-            case 'juryDecision': return !e ? 'FAIL' : juryDecisionForScore(e.score, bands)
-            case 'min':          { const st = subjectStats[subj.id]; return st != null ? st.min.toFixed(1) : '—' }
-            case 'avg':          { const st = subjectStats[subj.id]; return st != null ? st.avg.toFixed(1) : '—' }
-            case 'max':          { const st = subjectStats[subj.id]; return st != null ? st.max.toFixed(1) : '—' }
-            default: return ''
-          }
+          // Same per-subject vocabulary as the non-template table above, plus 'sn'
+          // (a row counter, which only the spreadsheet templates offer).
+          const value = k === 'sn' ? String(si + 1) : cellValue(k, subj, e, si)
+          return paintFail(k, e, value)
         }
 
         // Pixel widths for known narrow fields; flex fields (subject, subject_fr) get no width
@@ -823,6 +988,40 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
         const dataRowFields: string[] = dataRowTpl?.cells.map((c: SheetCell) => c.field ?? '') ?? []
 
+        // ── Header text must stay inside its own column ─────────────────────────
+        // A header word wider than its fixed column (e.g. "WEIGHTED" in the 44px
+        // weighted-point column) doesn't wrap — it paints straight across the column
+        // border, so the vertical rule appears to cut through the label. Headers are
+        // freely renamable, so rather than hand-tuning NARROW_PX per label, widen each
+        // fixed column to fit its own longest header word.
+        //
+        // The header font is Arial bold at HDR_FONT_PX. Per-character width is
+        // deliberately over-estimated: measured uppercase Arial bold peaks around
+        // 0.72em per character ("GRADE"), so 0.78em keeps a margin for wider labels
+        // and font fallback. Over-reserving only costs slack from the flex column.
+        const HDR_FONT_PX = 9
+        const HDR_CHAR_EM = 0.78
+        const HDR_PAD_PX  = 6 // 3px of padding either side
+        const headerWordWidth = (text: string): number => {
+          const longestWord = String(text).replace(/<[^>]*>/g, ' ').split(/\s+/)
+            .reduce((max, w) => Math.max(max, w.length), 0)
+          return Math.ceil(longestWord * HDR_CHAR_EM * HDR_FONT_PX + HDR_PAD_PX)
+        }
+        // Width each column needs for its own header. Only cells spanning a single
+        // column pin to one column; a spanning cell's text is shared across several,
+        // so it can't dictate any one column's width.
+        const headerNeedByCol: number[] = []
+        for (const row of headerRows) {
+          let col = 0
+          for (const c of row.cells) {
+            if (c._consumed) continue
+            const span = c.colSpan ?? 1
+            if (span === 1 && !c.field && c.text)
+              headerNeedByCol[col] = Math.max(headerNeedByCol[col] ?? 0, headerWordWidth(c.text))
+            col += span
+          }
+        }
+
         const renderTplRow = (row: SheetRow, resolver: (f: string) => React.ReactNode, key?: string, isHdr = false) => (
           <tr key={key ?? row.id}>
             {row.cells.map((c: SheetCell, ci: number) => {
@@ -844,6 +1043,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                     color: c.textColor ?? 'inherit',
                     border: '1px solid #d1d5db',
                     lineHeight: isHdr ? 1.2 : 1.4,
+                    // Backstop for the column sizing above: a header can be renamed to
+                    // anything, so keep its text inside its own cell no matter what
+                    // rather than letting it paint over the column border.
+                    ...(isHdr ? { overflowWrap: 'break-word' as const, overflow: 'hidden' as const } : {}),
                     // data cells in narrow cols stay on one line; clip any overflow
                     // (wrap-listed fields fold to a second line instead)
                     ...(!isHdr && !isFlex && !WRAP_FIELDS.has(colField) ? { whiteSpace: 'nowrap' as const, overflow: 'hidden' as const } : {}),
@@ -857,11 +1060,16 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
         const colCount = tpl.colCount || (dataRowTpl?.cells.length ?? 1)
         return (
+          <>
+          {periodCaption}
           <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', marginBottom: 16, fontSize: colCount > 8 ? 10 : 12 }}>
             <colgroup>
               {dataRowFields.map((field, ci) => {
                 const px = NARROW_PX[field]
-                return <col key={ci} style={px ? { width: `${px}px` } : {}} />
+                // Flex columns (no fixed width) absorb the slack and never clip, so
+                // only fixed columns need widening to fit their header.
+                if (!px) return <col key={ci} />
+                return <col key={ci} style={{ width: `${Math.max(px, headerNeedByCol[ci] ?? 0)}px` }} />
               })}
             </colgroup>
             {headerRows.length > 0 && (
@@ -869,22 +1077,25 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                 {/* Rows above the data row can carry general field bindings too
                     (e.g. the Ledger's full-width term banner) — only per-subject
                     m:* keys are meaningless here and resolve to blank. */}
-                {headerRows.map((row: SheetRow) => renderTplRow(row, f => f.startsWith('m:') ? '' : resolveStat(f), undefined, true))}
+                {headerRows.map((row: SheetRow) => renderTplRow(row, f => f.startsWith('m:') ? '' : statResolver(f), undefined, true))}
               </thead>
             )}
             <tbody>
-              {subjects.map((subj, si) => {
+              {scopedSubjects.map((subj, si) => {
                 if (!dataRowTpl) return null
-                const e = entries.find(x => x.subjectId === subj.id)
+                const e = scopedEntries.find(x => x.subjectId === subj.id)
                 return renderTplRow(dataRowTpl, field => resolveMarksField(field, subj, e, si), `subj_${si}`)
               })}
-              {footerRows.map((row: SheetRow) => renderTplRow(row, resolveStat))}
+              {footerRows.map((row: SheetRow) => renderTplRow(row, statResolver))}
             </tbody>
           </table>
+          </>
         )
       }
 
       return (
+        <>
+        {periodCaption}
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: 12 }}>
           <thead>
             <tr style={{ backgroundColor: color }}>
@@ -896,8 +1107,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             </tr>
           </thead>
           <tbody>
-            {subjects.map((subj, i) => {
-              const e = entries.find(x => x.subjectId === subj.id)
+            {scopedSubjects.map((subj, i) => {
+              const e = scopedEntries.find(x => x.subjectId === subj.id)
               return (
                 <tr key={subj.id} style={{ background: i % 2 === 0 ? 'transparent' : `rgba(${rgb},0.04)`, borderBottom: '1px solid #e5e7eb' }}>
                   {cols.map(k => (
@@ -910,6 +1121,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             })}
           </tbody>
         </table>
+        </>
       )
     }
 
@@ -979,6 +1191,26 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <div style={{ textAlign: s.align, fontSize: 12, color: '#555', padding: '6px 0', borderTop: '1px solid #f1f5f9', marginBottom: 8 }}
           dangerouslySetInnerHTML={{ __html: s.content }}
         />
+      )
+    }
+
+    if (sec.type === 'stamp') {
+      const s = sec as StampSec
+      // A school with no stamp prints nothing here, not an empty placeholder box: an
+      // official copy is already marked by the "Official Copy" note under the title, and
+      // a dashed box on a real document reads as a printing fault. Schools that stamp by
+      // hand simply stamp the page. (The designer still shows a placeholder, so the
+      // section can be found and uploaded to.)
+      if (!school.stamp) return null
+      const size = s.size || 110
+      const justify = s.align === 'left' ? 'flex-start' : s.align === 'right' ? 'flex-end' : 'center'
+      return (
+        <div style={{ display: 'flex', justifyContent: justify, padding: '8px 0', marginBottom: 8 }}>
+          <div style={{ textAlign: 'center' }}>
+            <img src={school.stamp} alt="" style={{ width: size, height: size, objectFit: 'contain', display: 'block' }} />
+            {s.label ? <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{t(s.label)}</div> : null}
+          </div>
+        </div>
       )
     }
 
@@ -1124,10 +1356,73 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     return null
   }
 
+  // University only: courses the student resat, listed for transparency — CA carries
+  // over unchanged, the Exam column is the new (resit) mark, and Mark/Grade already
+  // reflect the recalculated total (same numbers shown up in the main marks table).
+  // Scoped per marks_table section — a transcript's two semester tables each get
+  // only their own semester's resits, not a combined/duplicated list.
+  const resitTh: React.CSSProperties = { padding: '5px 7px', border: '1px solid #999', fontWeight: 'bold', textAlign: 'center', fontSize: 10 }
+  const resitTd: React.CSSProperties = { padding: '4px 7px', border: '1px solid #ccc', fontSize: 10, textAlign: 'center' }
+  const renderResitAppendix = (subjList: PrintSubject[], entryList: PrintEntry[]) => {
+    if (school.type !== 'UNIVERSITY') return null
+    const resitEntries = entryList.filter(e => e.resitScore != null)
+    if (resitEntries.length === 0) return null
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ backgroundColor: color, color: '#fff', padding: '5px 10px', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{t('Resits')}</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ backgroundColor: `rgba(${rgb},0.1)` }}>
+              <th style={{ ...resitTh, textAlign: 'left' }}>{t('Course')}</th>
+              <th style={resitTh}>CA</th>
+              <th style={resitTh}>{t('Original Exam')}</th>
+              <th style={resitTh}>{t('Resit Exam')}</th>
+              <th style={resitTh}>{t('New Mark')}</th>
+              <th style={resitTh}>{t('New Grade')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {resitEntries.map(e => {
+              const subj = subjList.find(x => x.id === e.subjectId)
+              // A resit can still fall short: `score` here is the post-resit mark, so a
+              // course that failed even after resitting prints this row's figures red,
+              // exactly as the marks table above does. The course name stays black.
+              const failed = isFailedEntry(e)
+              const num = failed ? { ...resitTd, color: FAIL_RED } : resitTd
+              return (
+                <tr key={e.subjectId}>
+                  <td style={{ ...resitTd, textAlign: 'left' }}>{subj?.name ?? '—'}</td>
+                  <td style={num}>{e.seq1Score ?? '—'}</td>
+                  <td style={num}>{e.seq2Score ?? '—'}</td>
+                  <td style={num}>{e.resitScore}<sup>*</sup></td>
+                  <td style={{ ...num, fontWeight: 'bold' }}>{e.score}</td>
+                  <td style={{ ...resitTd, fontWeight: 'bold', color: failed ? FAIL_RED : color }}>{entryGrade(e, bands)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        <p style={{ fontSize: 10, color: '#666', marginTop: 4 }}>* {t('Mark obtained after resit')}</p>
+      </div>
+    )
+  }
+
   return (
     <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: 40, maxWidth: 800, margin: '0 auto', color: '#111', fontSize: 13, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
-      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} />
-      {sections.map(sec => <div key={sec.id}>{renderSec(sec)}</div>)}
+      <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} variant={variant} />
+      {/* Sections scoped to the OTHER copy are dropped entirely — this is what makes one
+          saved design print both the sealed official document and the student copy. */}
+      {sections.filter(sec => sectionShowsOn(sec, variant)).map(sec => {
+        const ts = sec.type === 'marks_table' ? (sec as MarksTableSec).transcriptSemester : undefined
+        const resitSubjects = ts ? (props.transcriptSemesters?.[ts]?.subjects ?? []) : subjects
+        const resitEntries  = ts ? (props.transcriptSemesters?.[ts]?.entries ?? []) : entries
+        return (
+          <div key={sec.id}>
+            {renderSec(sec)}
+            {sec.type === 'marks_table' && renderResitAppendix(resitSubjects, resitEntries)}
+          </div>
+        )
+      })}
     </div>
   )
 }

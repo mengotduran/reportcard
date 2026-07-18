@@ -3,12 +3,12 @@ import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi } from '@/lib/api/reportcards'
-import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
 interface RawEntry {
-  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
+  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
   grade: string; remarks: string; subject: { id: string; name: string }
 }
 interface RawRC {
@@ -45,9 +45,9 @@ export default function PrintClassPage() {
         if (published.length === 0) { setStatus('empty'); return }
         if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
 
-        const saved = tplData.config as Partial<TemplateConfig> | undefined
-        const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-        setConfig(saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : base)
+        // Resolves the saved standard/ledger design; never the transcript one
+        // (that lives under config.transcript and only the transcript page uses it).
+        setConfig(mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, school?.type))
         if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
         if (scaleData.classificationBands?.length > 0) setClassBands(scaleData.classificationBands)
         setCards(published)
@@ -79,9 +79,11 @@ export default function PrintClassPage() {
   if (!config) return null
 
   const schoolData = {
-    name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null,
+    name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null,
     email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
     authorizationNumber: school?.authorizationNumber,
+    officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr,
+    officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr,
   }
 
   // Compute class-wide min/avg/max per subject from all loaded cards
@@ -119,6 +121,7 @@ export default function PrintClassPage() {
           score: e.score,
           seq1Score: e.seq1Score ?? null,
           seq2Score: e.seq2Score ?? null,
+          resitScore: e.resitScore ?? null,
           grade: e.grade,
           remarks: e.remarks ?? '',
         }))
@@ -136,6 +139,9 @@ export default function PrintClassPage() {
               classSize={rc.classSize ?? null}
               classAverage={rc.classAverage ?? null}
               config={config}
+              // A whole-class print run is the end-of-term hand-out, so these are STUDENT
+              // copies. Official copies are printed per student, sealed and sent by the school.
+              variant="student"
               gradeBands={gradingRanges}
               classificationBands={classBands}
               cgpa={rc.cgpa ?? undefined}

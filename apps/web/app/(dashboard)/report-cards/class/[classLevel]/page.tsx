@@ -93,14 +93,14 @@ export default function ClassSubjectsPage() {
           {isUniversity ? t('Select Assessment') : t('Select Sequence')}
         </p>
         <div className="flex gap-3">
-          {[0, 1].map((i) => (
+          {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
             <button key={i} onClick={() => setSelectedSeq(i)}
               className={`flex-1 py-2.5 px-4 rounded-xl border-2 text-sm font-semibold transition ${
                 selectedSeq === i
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground hover:border-border'
               }`}>
-              {isUniversity ? (i === 0 ? t('CA (30)') : t('Exam (70)')) : seqFull(termName, i, lang)}
+              {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqFull(termName, i, lang)}
             </button>
           ))}
         </div>
@@ -109,13 +109,13 @@ export default function ClassSubjectsPage() {
       {/* Subject list */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 bg-muted">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Subjects')}</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t(isUniversity ? 'Courses' : 'Subjects')}</p>
         </div>
         {loading ? (
-          <div className="text-center py-8 text-muted-foreground text-sm">{t('Loading subjects...')}</div>
+          <div className="text-center py-8 text-muted-foreground text-sm">{t(isUniversity ? 'Loading courses...' : 'Loading subjects...')}</div>
         ) : subjects.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            {t('No subjects for')} {classLevel}
+            {t(isUniversity ? 'No courses for' : 'No subjects for')} {classLevel}
           </div>
         ) : (
           <div className="divide-y divide-border">

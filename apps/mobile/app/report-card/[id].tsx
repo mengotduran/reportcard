@@ -266,9 +266,13 @@ export default function ReportCardDetailScreen() {
 
   const isDraft = reportCard.status === 'DRAFT'
   const isClassMaster = user?.role === 'CLASS_MASTER'
+  const isUniversity = reportCard.school?.type === 'UNIVERSITY'
 
-  // Publish readiness — same rules as admin and web
-  const allSeqsFilled = entries.length > 0 && entries.every(e => e.score !== '' && e.score != null)
+  // Publish readiness — same rules as admin and web. Prefer the backend's
+  // readiness detail once loaded, since it also catches subjects with zero
+  // entries at all, not just entries with a missing sequence score.
+  const localSeqsFilled = entries.length > 0 && entries.every(e => e.score !== '' && e.score != null)
+  const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
   // Positions are class-relative — every other active student in this class + term
   // must also be complete (or already published) before this one can publish.
@@ -338,7 +342,7 @@ export default function ReportCardDetailScreen() {
 
       {/* Subjects */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('Subject Scores')}</Text>
+        <Text style={styles.sectionTitle}>{isUniversity ? t('Course Scores') : t('Subject Scores')}</Text>
         {subjects.map((subject) => {
           const entry = entries.find((e) => e.subjectId === subject.id)
           const isFilled = entry?.score !== '' && entry?.score != null

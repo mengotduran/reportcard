@@ -2,11 +2,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, type LucideIcon } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, type LucideIcon } from 'lucide-react'
 import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
 import DesktopOnly from '@/components/ui/DesktopOnly'
 import { useT } from '@/lib/i18n'
@@ -22,6 +23,33 @@ import { getClassLevelsApi } from '@/lib/api/classLevels'
 
 const CARD = 'bg-card rounded-xl border border-border p-6'
 const FIELD = 'w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50'
+
+// Example/placeholder text for the Official header letterhead blocks — kept
+// per school type so a Primary/Secondary admin never sees university wording
+// (institute/ministry of higher education) and vice versa. Real Cameroon
+// ministry acronyms: MINESUP (higher ed), MINESEC (secondary), MINEDUB (basic).
+function officialTextExamples(schoolType: string | undefined, name: string) {
+  const upperName = name ? name.toUpperCase() : 'YOUR SCHOOL'
+  if (schoolType === 'UNIVERSITY') return {
+    leftEn: `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${upperName}`,
+    leftFr: `INSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION\n${upperName}`,
+    rightEn: 'REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\n\nMINISTRY OF HIGHER EDUCATION',
+    rightFr: "REPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR",
+  }
+  if (schoolType === 'PRIMARY') return {
+    leftEn: `GOVERNMENT PRIMARY SCHOOL\n${upperName}`,
+    leftFr: `ECOLE PUBLIQUE DE\n${upperName}`,
+    rightEn: 'REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\n\nMINISTRY OF BASIC EDUCATION',
+    rightFr: "REPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTERE DE L'EDUCATION DE BASE",
+  }
+  // SECONDARY (also the default fallback)
+  return {
+    leftEn: `GOVERNMENT BILINGUAL HIGH SCHOOL\n${upperName}`,
+    leftFr: `LYCEE BILINGUE DE\n${upperName}`,
+    rightEn: 'REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\n\nMINISTRY OF SECONDARY EDUCATION',
+    rightFr: 'REPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTERE DES ENSEIGNEMENTS SECONDAIRES',
+  }
+}
 
 // One consistent header for every settings card: an icon chip, a title, an
 // optional description, and an optional right-aligned action (a button/link).
@@ -48,6 +76,8 @@ export default function SettingsPage() {
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const logoRef = useRef<HTMLInputElement>(null)
+  const stampRef = useRef<HTMLInputElement>(null)
+  const [uploadingStamp, setUploadingStamp] = useState(false)
   const coverRef = useRef<HTMLInputElement>(null)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
@@ -55,6 +85,7 @@ export default function SettingsPage() {
   const [backingUp, setBackingUp] = useState(false)
   const isOfflineInstall = process.env.NEXT_PUBLIC_OFFLINE_BUILD === '1'
   const isUniversity = school?.type === 'UNIVERSITY'
+  const officialExamples = officialTextExamples(school?.type, school?.name ?? '')
 
   // ── Excel Templates state (university only) ──
   const [excelTemplates, setExcelTemplates] = useState<ExcelTemplate[]>([])
@@ -120,14 +151,16 @@ export default function SettingsPage() {
     } finally { setBackingUp(false) }
   }
 
-  const handleUpload = async (file: File, field: 'logo' | 'cover', setLoading: (v: boolean) => void) => {
+  const handleUpload = async (file: File, field: 'logo' | 'cover' | 'stamp', setLoading: (v: boolean) => void) => {
     setLoading(true)
     try {
       const formData = new FormData()
       formData.append(field, file)
       const res = await api.post(`/school/${field}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
       updateSchool(res.data.school)
-      showToast(field === 'logo' ? t('Logo updated successfully') : t('Cover image updated successfully'))
+      showToast(field === 'logo' ? t('Logo updated successfully')
+        : field === 'stamp' ? t('Official stamp updated successfully')
+        : t('Cover image updated successfully'))
     } catch {
       showToast(t('Upload failed. Make sure the file is an image under 5MB.'), 'error')
     } finally { setLoading(false) }
@@ -158,6 +191,14 @@ export default function SettingsPage() {
     } finally { setRemovingIdx(null) }
   }
 
+  const handleRemoveStamp = async () => {
+    try {
+      await api.delete('/school/stamp')
+      updateSchool({ ...school!, stamp: null })
+      showToast(t('Official stamp removed'))
+    } catch { showToast(t('Failed to remove stamp'), 'error') }
+  }
+
   const handleRemoveLogo = async () => {
     try {
       await api.delete('/school/logo')
@@ -175,6 +216,28 @@ export default function SettingsPage() {
   const [savingInfo, setSavingInfo] = useState(false)
   const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
   const [savingThreshold, setSavingThreshold] = useState(false)
+  // Who records marks. University only: some keep marks out of teachers' hands so the
+  // person who teaches a course never enters its marks.
+  const [marksMode, setMarksMode] = useState<'TEACHERS' | 'ADMIN_ONLY'>((school as any)?.marksEntryMode ?? 'TEACHERS')
+  const [savingMarksMode, setSavingMarksMode] = useState(false)
+  // Switching is capped at 2 per semester (then the provider does it), and every switch
+  // is logged. Surfaced here so the cap is visible BEFORE the third attempt fails.
+  const [marksSwitches, setMarksSwitches] = useState<{ used: number; limit: number; termId: string | null; allowed: boolean } | null>(null)
+  const [marksHistory, setMarksHistory] = useState<{ id: string; mode: string; changedByName: string; changedAt: string; byProvider?: boolean }[]>([])
+  // Switching to Administration only takes marks entry away from every teacher at once,
+  // and it burns one of the semester's two switches — worth a confirmation so a stray
+  // click doesn't cost a chance and lock out teachers by accident.
+  const [confirmAdminOnly, setConfirmAdminOnly] = useState(false)
+
+  // Official header letterhead text (the "Official" style's left/right text
+  // blocks) — one English and one French variant per side, set once here so
+  // it's always consistent and correctly styled everywhere it's used instead
+  // of being retyped per report-card template.
+  const [officialTextForm, setOfficialTextForm] = useState({
+    leftEn: school?.officialLeftTextEn ?? '', leftFr: school?.officialLeftTextFr ?? '',
+    rightEn: school?.officialRightTextEn ?? '', rightFr: school?.officialRightTextFr ?? '',
+  })
+  const [savingOfficialText, setSavingOfficialText] = useState(false)
 
   // The auth store's cached `school` can lag behind the database (e.g. right
   // after login, or if a field was added since this session started), and
@@ -191,6 +254,13 @@ export default function SettingsPage() {
         authorizationNumber: s.authorizationNumber ?? '',
       })
       setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
+      setMarksMode((s as any).marksEntryMode ?? 'TEACHERS')
+      setMarksSwitches(res.data.marksEntrySwitches ?? null)
+      setMarksHistory(res.data.marksEntryModeHistory ?? [])
+      setOfficialTextForm({
+        leftEn: s.officialLeftTextEn ?? '', leftFr: s.officialLeftTextFr ?? '',
+        rightEn: s.officialRightTextEn ?? '', rightFr: s.officialRightTextFr ?? '',
+      })
     }).catch(() => {}).finally(() => setLoadingInfo(false))
   }, [])
 
@@ -210,6 +280,39 @@ export default function SettingsPage() {
     finally { setSavingInfo(false) }
   }
 
+  const handleSaveMarksMode = async (mode: 'TEACHERS' | 'ADMIN_ONLY') => {
+    const previous = marksMode
+    setMarksMode(mode)          // optimistic: the radio should not lag behind the click
+    setSavingMarksMode(true)
+    try {
+      const res = await api.put('/school/settings', { marksEntryMode: mode })
+      updateSchool(res.data.school)
+      showToast(mode === 'ADMIN_ONLY' ? t('Only administrators can enter marks now') : t('Teachers can enter marks now'))
+      // The switch used one of the semester's two: refetch so the counter and history tell
+      // the truth without a reload.
+      const fresh = await api.get('/school/settings')
+      setMarksSwitches(fresh.data.marksEntrySwitches ?? null)
+      setMarksHistory(fresh.data.marksEntryModeHistory ?? [])
+    } catch (err: unknown) {
+      setMarksMode(previous)    // put it back: a silent revert would misstate the policy
+      // The cap's refusal explains itself ("contact your provider"); a generic "failed"
+      // would send the admin hunting for a bug instead.
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to save'), 'error')
+    } finally { setSavingMarksMode(false) }
+  }
+
+  // Switching to Administration only is the consequential direction (every teacher
+  // loses write access at once) and spends a switch, so it's confirmed first. Switching
+  // back to Teachers just restores their normal access, so it applies immediately.
+  const handleMarksModeChange = (mode: 'TEACHERS' | 'ADMIN_ONLY') => {
+    if (mode === 'ADMIN_ONLY' && marksMode !== 'ADMIN_ONLY') {
+      setConfirmAdminOnly(true)
+      return
+    }
+    handleSaveMarksMode(mode)
+  }
+
   const handleSaveThreshold = async () => {
     setSavingThreshold(true)
     try {
@@ -218,6 +321,19 @@ export default function SettingsPage() {
       showToast(t('Decision threshold saved'))
     } catch { showToast(t('Failed to save'), 'error') }
     finally { setSavingThreshold(false) }
+  }
+
+  const handleSaveOfficialText = async () => {
+    setSavingOfficialText(true)
+    try {
+      const res = await api.put('/school/settings', {
+        officialLeftTextEn: officialTextForm.leftEn.trim(), officialLeftTextFr: officialTextForm.leftFr.trim(),
+        officialRightTextEn: officialTextForm.rightEn.trim(), officialRightTextFr: officialTextForm.rightFr.trim(),
+      })
+      updateSchool(res.data.school)
+      showToast(t('Official header text saved'))
+    } catch { showToast(t('Failed to save'), 'error') }
+    finally { setSavingOfficialText(false) }
   }
 
   // My Account — the logged-in admin's own login email, distinct from the
@@ -245,6 +361,7 @@ export default function SettingsPage() {
   }
 
   const logoUrl = school?.logo ?? null
+  const stampUrl = school?.stamp ?? null
   const coverImages: string[] = (school as any)?.coverImages ?? []
 
   const initials = school?.name?.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase() ?? 'SC'
@@ -319,7 +436,7 @@ export default function SettingsPage() {
             <div className={CARD}>
               <CardHead icon={UserCircle} title={t('My Account')} desc={t('Used to sign in — not the same as the school email below')} />
               <div className="mt-5">
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')}</label>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')} <span className="text-destructive">*</span></label>
                 <input
                   type="email"
                   className={FIELD}
@@ -376,7 +493,7 @@ export default function SettingsPage() {
               <CardHead icon={Building2} title={t('School Information')} desc={t('Contact details and identifiers shown across the platform and on report cards.')} />
               <div className="mt-5 grid grid-cols-1 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('School Name')}</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('School Name')} <span className="text-destructive">*</span></label>
                   <input
                     className={FIELD}
                     value={infoForm.name}
@@ -384,7 +501,7 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Email')}</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Email')} <span className="text-destructive">*</span></label>
                   <input
                     type="email"
                     className={FIELD}
@@ -425,7 +542,7 @@ export default function SettingsPage() {
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Authorization / Registration No.')}</label>
                   <input
                     className={FIELD}
-                    placeholder="No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010"
+                    placeholder={isUniversity ? 'No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010' : school?.type === 'PRIMARY' ? 'No .../MINEDUB/SG/DEB of DD/MM/YYYY' : 'No .../MINESEC/DESG of DD/MM/YYYY'}
                     value={infoForm.authorizationNumber}
                     onChange={e => setInfoForm(f => ({ ...f, authorizationNumber: e.target.value }))}
                   />
@@ -509,6 +626,51 @@ export default function SettingsPage() {
                   <input
                     ref={logoRef} type="file" accept="image/*" className="hidden"
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, 'logo', setUploadingLogo); e.target.value = '' }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Official Stamp / Seal — prints on OFFICIAL copies only, via the stamp
+                section in Report Card Design. Not the logo: the logo is the letterhead
+                mark on every copy, the stamp is what makes a copy official. */}
+            <div className={CARD}>
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0">
+                  {stampUrl ? (
+                    <img src={stampUrl} alt="Official stamp" className="w-20 h-20 rounded-2xl object-contain border border-border bg-white p-1" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-2xl border border-dashed border-border flex items-center justify-center">
+                      <Stamp size={22} className="text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-foreground">{t('Official Stamp / Seal')}</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {t('Prints on official copies only, never on student copies. Add a Stamp section in Report Card Design to place it. Leave this empty to stamp printed pages by hand. Use a PNG with a transparent background, max 5MB.')}
+                  </p>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => stampRef.current?.click()}
+                      disabled={uploadingStamp}
+                      className="flex items-center gap-2 bg-primary text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+                    >
+                      <Upload size={14} />
+                      {uploadingStamp ? t('Uploading...') : stampUrl ? t('Change Stamp') : t('Upload Stamp')}
+                    </button>
+                    {stampUrl && (
+                      <button
+                        onClick={handleRemoveStamp}
+                        className="flex items-center gap-2 border border-destructive/20 text-destructive px-3 py-1.5 rounded-lg text-sm hover:bg-destructive/10 transition"
+                      >
+                        <Trash2 size={14} /> {t('Remove')}
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={stampRef} type="file" accept="image/*" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, 'stamp', setUploadingStamp); e.target.value = '' }}
                   />
                 </div>
               </div>
@@ -617,6 +779,66 @@ export default function SettingsPage() {
               </div>
             </div>
 
+            {/* Who enters marks. University only: some universities record marks centrally
+                so the person who teaches a course never enters its marks. Saving is
+                refused by the API too, not just hidden here. */}
+            {isUniversity && (
+              <div className={CARD}>
+                <CardHead
+                  icon={UserCircle}
+                  title={t('Who enters marks')}
+                  desc={t('Some universities record all marks centrally, so that the person who teaches a course is never the person who enters its marks. Teachers can still open the marks sheet and check their subject, they just cannot change it.')}
+                />
+                <div className="mt-5 space-y-3">
+                  {([
+                    { value: 'TEACHERS' as const, label: t('Teachers'), hint: t('Teachers enter marks for the subjects they teach. Administrators can enter marks too.') },
+                    { value: 'ADMIN_ONLY' as const, label: t('Administration only'), hint: t('Only administrators enter marks (CA, Exam and Resit). Teachers see the marks sheet read-only. You can still grant one teacher access to one class when you need to.') },
+                  ]).map(opt => (
+                    <label key={opt.value}
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
+                      <input type="radio" name="marksEntryMode" value={opt.value}
+                        checked={marksMode === opt.value}
+                        // Cap reached: the unselected option is disabled rather than
+                        // failing on click, and the note below says who to contact. The
+                        // API refuses regardless; this just stops the doomed attempt.
+                        disabled={savingMarksMode || (marksSwitches?.allowed === false && marksMode !== opt.value)}
+                        onChange={() => handleMarksModeChange(opt.value)}
+                        className="accent-primary mt-0.5" />
+                      <span>
+                        <span className="block text-sm font-medium text-foreground">{opt.label}</span>
+                        <span className="block text-xs text-muted-foreground mt-0.5">{opt.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+
+                  {/* The cap, stated before it bites: 2 switches per semester, then the
+                      provider. Between academic years there is no semester and no cap. */}
+                  {marksSwitches && marksSwitches.termId && (
+                    <p className={`text-xs ${marksSwitches.allowed ? 'text-muted-foreground' : 'text-destructive font-medium'}`}>
+                      {marksSwitches.allowed
+                        ? `${t('Switches used this semester:')} ${marksSwitches.used} ${t('of')} ${marksSwitches.limit}`
+                        : t('You have used both switches for this semester. Contact your provider to change who enters marks.')}
+                    </p>
+                  )}
+
+                  {/* Every switch, newest first, with who and when. A change here can be
+                      seen but never made quietly. */}
+                  {marksHistory.length > 0 && (
+                    <div className="border-t border-border pt-3 mt-1 space-y-1">
+                      {marksHistory.map(h => (
+                        <p key={h.id} className="text-xs text-muted-foreground">
+                          {t('Set to')}{' '}
+                          <span className="font-medium text-foreground">{h.mode === 'ADMIN_ONLY' ? t('Administration only') : t('Teachers')}</span>{' '}
+                          {t('by')} {h.changedByName}{h.byProvider ? ` (${t('provider')})` : ''}{' '}
+                          · {new Date(h.changedAt).toLocaleDateString()} {new Date(h.changedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Grading Scale */}
             <div className={CARD}>
               <CardHead
@@ -649,6 +871,67 @@ export default function SettingsPage() {
                   </button>
                 }
               />
+            </div>
+
+            {/* Official Header Letterhead Text */}
+            <div className={CARD}>
+              <CardHead
+                icon={Type}
+                title={t('Official Header Letterhead Text')}
+                desc={t('Used by the "Official" header style in Report Card Design (left and right text blocks around the logo). Set once here in English and French — the report card automatically shows the version matching your school\'s language, always sized and aligned consistently.')}
+              />
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Left Block — English')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.leftEn}
+                      value={officialTextForm.leftEn}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, leftEn: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Left Block — French')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.leftFr}
+                      value={officialTextForm.leftFr}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, leftFr: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Right Block — English')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.rightEn}
+                      value={officialTextForm.rightEn}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, rightEn: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Right Block — French')}</label>
+                    <textarea
+                      className={`${FIELD} font-mono`} rows={5}
+                      placeholder={officialExamples.rightFr}
+                      value={officialTextForm.rightFr}
+                      onChange={e => setOfficialTextForm(f => ({ ...f, rightFr: e.target.value }))}
+                    />
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-3">
+                {t('One line per row. An ALL-CAPS line with multiple words is sized to reach the edge automatically; a short ALL-CAPS word (like an acronym) and mottos stay a fixed size; leave a blank line for a small gap between groups.')}
+              </p>
+              <button
+                onClick={handleSaveOfficialText}
+                disabled={savingOfficialText || loadingInfo}
+                className="mt-4 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+              >
+                {savingOfficialText ? t('Saving…') : t('Save Header Text')}
+              </button>
             </div>
 
             {/* Excel Transcript Templates — university only */}
@@ -844,6 +1127,16 @@ export default function SettingsPage() {
       </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+
+      <ConfirmModal
+        isOpen={confirmAdminOnly}
+        title={t('Switch to Administration only?')}
+        message={t('Teachers will lose the ability to enter marks, even for the subjects they teach. This uses one of your switches for the semester.')}
+        confirmLabel={t('Switch')}
+        confirmColor="red"
+        onConfirm={() => { setConfirmAdminOnly(false); handleSaveMarksMode('ADMIN_ONLY') }}
+        onCancel={() => setConfirmAdminOnly(false)}
+      />
     </div>
     </DesktopOnly>
   )

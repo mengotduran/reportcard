@@ -2,22 +2,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
+import api from '@/lib/api/client'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
-  RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec,
+  RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec,
   DEFAULT_TRANSCRIPT_LEGEND, marksColumnOrder, MARKS_COL_LABELS,
-  SpreadsheetTable, SheetRow, seedMarksTableSection, buildOfficialContactLine,
-  officialTextBlockHtml, OFFICIAL_HEADER_FONT,
+  SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
+  officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
+  TranscriptPeriod, transcriptPeriodsFor, transcriptPeriodLabel,
+  DocVariant, sectionShowsOn, ensureBirthRows,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, ChevronUp, ChevronDown, GripVertical, Monitor, LayoutTemplate } from 'lucide-react'
-import { PrintableTranscript } from '@/components/ui/PrintableTranscript'
-import type { StudentTranscript } from '@/lib/api/reportcards'
 import { useT } from '@/lib/i18n'
 import { DEFAULT_UNIVERSITY_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import {
@@ -39,28 +41,17 @@ const SD = {
   remarks: ['Good','Satisfactory','Excellent','Needs improvement','Outstanding'],
   position: 3,
 }
-// Weighted-average preview: average = Σ(score × coeff) / Σ(coeff), out of 20.
-// The sample subjects carry no coefficient, so each weighs 1.
-const SD_TOTAL = SD.entries.reduce((a, b) => a + b, 0)        // Σ(score × coeff) = 74
-const SD_AVG = SD.entries.length ? SD_TOTAL / SD.entries.length : 0  // 14.8 / 20
 
 // ── University sample data (scores /100, GPA derived from DEFAULT_UNIVERSITY_RANGES) ──
 const U_SEQ1    = [23, 19, 25, 17, 21]         // CA /30
 const U_SEQ2    = [53, 43, 58, 39, 50]         // Exam /70
 const U_SCORES  = U_SEQ1.map((s, i) => s + U_SEQ2[i])  // [76, 62, 83, 56, 71]
-const U_CREDITS = [3, 3, 3, 3, 4]
 function _gpForScore(score: number) {
   const sorted = [...DEFAULT_UNIVERSITY_RANGES].sort((a, b) => b.minScore - a.minScore)
   const r = sorted.find(x => score >= x.minScore && score <= x.maxScore)
   return { grade: r?.grade ?? 'F', gp: r?.gradePoint ?? 0 }
 }
 const U_GP     = U_SCORES.map(_gpForScore)
-const U_WP     = U_GP.map((g, i) => g.gp * U_CREDITS[i])  // [10.5, 9.0, 12.0, 7.5, 14.0]
-const U_TOT_CR = U_CREDITS.reduce((a, b) => a + b, 0)      // 16
-const U_TOT_WP = U_WP.reduce((a, b) => a + b, 0)           // 53.0
-const U_GPA    = U_TOT_CR > 0 ? U_TOT_WP / U_TOT_CR : 0   // 3.3125
-const U_CLASS  = [...DEFAULT_CLASSIFICATION_BANDS].sort((a, b) => b.min - a.min)
-                   .find(b => U_GPA >= b.min && U_GPA <= b.max)?.label ?? 'Fail'
 
 const SD_UNI = {
   student: {
@@ -80,37 +71,6 @@ const SD_UNI = {
   remarks:     ['Very Good', 'Good', 'Excellent', 'Fairly Good', 'Very Good'],
   juryDecisions: ['VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED'],
   position:    3,
-}
-
-// ── Mock StudentTranscript for transcript template canvas preview ─────────────
-const MOCK_TRANSCRIPT: StudentTranscript = {
-  student: {
-    id: 'mock', name: SD_UNI.student.name, studentId: SD_UNI.student.studentId,
-    classLevel: SD_UNI.student.classLevel, gender: SD_UNI.student.gender,
-  },
-  school: { name: 'Your University Name', logo: null, type: 'UNIVERSITY', language: 'EN' },
-  session: SD_UNI.term.session,
-  reportCards: [
-    {
-      id: 'mock-1',
-      term: { id: 'mock-1', name: 'First Semester', session: SD_UNI.term.session },
-      entries: SD_UNI.subjects.map((name, i) => ({
-        id: `me-${i}`, score: SD_UNI.entries[i], seq1Score: SD_UNI.seq1[i], seq2Score: SD_UNI.seq2[i],
-        subject: { id: `ms-${i}`, name, code: SD_UNI.codes[i], credit: U_CREDITS[i], term: 'First Semester', classLevel: SD_UNI.student.classLevel },
-      })),
-    },
-    {
-      id: 'mock-2',
-      term: { id: 'mock-2', name: 'Second Semester', session: SD_UNI.term.session },
-      entries: SD_UNI.subjects.map((name, i) => ({
-        id: `me2-${i}`, score: Math.max(40, SD_UNI.entries[i] - 5), seq1Score: SD_UNI.seq1[i] - 3, seq2Score: SD_UNI.seq2[i] - 2,
-        subject: { id: `ms-${i}`, name, code: SD_UNI.codes[i], credit: U_CREDITS[i], term: 'Second Semester', classLevel: SD_UNI.student.classLevel },
-      })),
-    },
-  ],
-  maxScore: 100,
-  gradingScale: DEFAULT_UNIVERSITY_RANGES,
-  classificationBands: DEFAULT_CLASSIFICATION_BANDS,
 }
 
 // Bilingual labels are authored "Français / English"; show only the school's language.
@@ -144,26 +104,14 @@ function resolveField(field: string, schoolName: string, schoolType?: string) {
     'student.classLevel':  stu.classLevel,
     'student.guardianName': stu.guardianName,
     'student.gender':      isUni ? SD_UNI.student.gender : '—',
+    // Sample values: these are optional per student, so a real card may print them blank.
+    'student.dateOfBirth': '12 May 2003',
+    'student.placeOfBirth': 'Bamenda',
     'term.name':           term.name,
     'term.session':        term.session,
     'school.name':         schoolName,
   }
   return map[field] ?? field
-}
-
-function resolveSummary(field: string, schoolType?: string) {
-  if (schoolType === 'UNIVERSITY') {
-    if (field === 'credits')        return String(U_TOT_CR)
-    if (field === 'gpa')            return U_GPA.toFixed(2)
-    if (field === 'cgpa')           return U_GPA.toFixed(2)
-    if (field === 'classification') return U_CLASS
-  }
-  if (field === 'total')    return String(SD_TOTAL)
-  if (field === 'average')  return SD_AVG.toFixed(1)
-  if (field === 'position') return String(SD.position)
-  if (field === 'grade')    return 'B'
-  if (field === 'classAverage') return (SD_AVG - 1.3).toFixed(1)
-  return '—'
 }
 
 // ── Color system ─────────────────────────────────────────────────────────────
@@ -333,20 +281,39 @@ function ColorableCell({ sampleText, color, onColorChange, style }: {
 }
 
 // ── Section wrapper (drag + up/down + delete) ─────────────────────────────────
-function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, onDrop, dragging, children }: {
+function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, onDrop, dragging, showOn, onShowOn, hiddenHere, children }: {
   index: number; total: number; onMove: (d: 'up'|'down') => void
   onDelete: () => void; onDragStart: () => void; onDragOver: (e: React.DragEvent) => void
-  onDrop: () => void; dragging: boolean; children: React.ReactNode
+  onDrop: () => void; dragging: boolean
+  /** Which printed copy this section is restricted to (undefined = both). */
+  showOn?: DocVariant; onShowOn?: (v: DocVariant | undefined) => void
+  /** True when the section is scoped to the copy NOT currently being previewed: it stays
+   *  editable but is dimmed and badged, so the canvas shows what the other copy leaves out
+   *  instead of the section vanishing and looking deleted. */
+  hiddenHere?: boolean
+  children: React.ReactNode
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
   return (
     <div
-      draggable onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
+      ref={wrapRef}
+      onDragOver={onDragOver} onDrop={onDrop}
       style={{ opacity: dragging ? 0.4 : 1, position: 'relative', marginBottom: 2 }}
       className="group"
     >
       {/* Section toolbar — visible on hover */}
       <div className="absolute -left-10 top-0 bottom-0 flex flex-col items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ width: 36 }}>
-        <div className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-muted-foreground p-0.5">
+        {/* draggable lives ONLY on this handle (not the whole section) so dragging
+            an input/slider/checkbox anywhere inside the section — e.g. the header's
+            Text Size or logo Size sliders — never gets hijacked into a reorder-drag.
+            We still set the native drag-ghost image to the whole section (via
+            setDragImage) so reordering looks/feels the same as before — otherwise
+            the browser's default drag preview would just be this tiny 14px icon. */}
+        <div draggable onDragStart={e => {
+          if (wrapRef.current) e.dataTransfer.setDragImage(wrapRef.current, 20, 20)
+          onDragStart()
+        }}
+          className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-muted-foreground p-0.5">
           <GripVertical size={14} />
         </div>
         <button onClick={() => onMove('up')} disabled={index === 0}
@@ -362,18 +329,44 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
           <Trash2 size={12} />
         </button>
       </div>
-      {children}
+
+      {/* Which printed copy this section belongs to. Right-hand side so it never collides
+          with the reorder/delete toolbar on the left. */}
+      {onShowOn && (
+        <div className="absolute -right-44 top-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ width: 168 }}>
+          <select
+            value={showOn ?? 'both'}
+            onChange={e => onShowOn(e.target.value === 'both' ? undefined : e.target.value as DocVariant)}
+            className="text-[10px] border border-border rounded bg-card text-muted-foreground px-1 py-0.5 cursor-pointer"
+            title="Which printed copy this section appears on"
+          >
+            <option value="both">Both copies</option>
+            <option value="official">Official only</option>
+            <option value="student">Student copy only</option>
+          </select>
+        </div>
+      )}
+
+      {/* Badge on a section the previewed copy leaves out. */}
+      {hiddenHere && (
+        <div className="absolute right-1 top-1 z-10 text-[9px] font-semibold uppercase tracking-wide bg-muted text-muted-foreground border border-border rounded px-1.5 py-0.5 pointer-events-none">
+          {showOn === 'official' ? 'Official only' : 'Student copy only'}
+        </div>
+      )}
+      <div style={hiddenHere ? { opacity: 0.35 } : undefined}>
+        {children}
+      </div>
     </div>
   )
 }
 
 // ── Section renderers (edit mode) ─────────────────────────────────────────────
 
-function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null } | null; update: (s: HeaderSec) => void }) {
+function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null; language?: string; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null } | null; update: (s: HeaderSec) => void }) {
   const t = useT()
   const logoSize = sec.logoSize || 60
-  const [leftVer,  setLeftVer]  = useState(0)
-  const [rightVer, setRightVer] = useState(0)
+  const officialLeftResolved = resolveOfficialText(school, 'left', sec.leftText ?? '')
+  const officialRightResolved = resolveOfficialText(school, 'right', sec.rightText ?? '')
 
   const LogoEl = schoolLogo ? (
     <img src={schoolLogo} alt="logo" style={{ width: logoSize, height: logoSize, objectFit: 'contain', borderRadius: 4, display: 'block' }} />
@@ -458,19 +451,17 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
           <input type="checkbox" checked={!!sec.officialHeader}
-            onChange={e => {
-              const on = e.target.checked
-              const patch: Partial<HeaderSec> = { officialHeader: on }
-              // School name uppercased so it renders as a bold heading line;
-              // typing the school's short acronym (e.g. "CITEC") on its own
-              // line instead gets the large display treatment — see
-              // officialTextBlockHtml in reportCardTemplate.ts.
-              if (on && !sec.leftText) patch.leftText = `HIGHER INSTITUTE OF\nTECHNOLOGY AND MANAGEMENT\n${schoolName.toUpperCase()}\nINSTITUT SUPERIEUR EN\nTECHNOLOGIE ET EN GESTION`
-              if (on && !sec.rightText) patch.rightText = `REPUBLIC OF CAMEROON\nPeace-Work-Fatherland\nREPUBLIQUE DU CAMEROUN\nPaix-Travail-Patrie\n\nMINISTRY OF HIGHER EDUCATION\nMINISTERE DE L'ENSEIGNEMENT SUPERIEUR`
-              update({ ...sec, ...patch })
-            }} />
+            onChange={e => update({ ...sec, officialHeader: e.target.checked })} />
           {t('Official (logo center)')}
         </label>
+        {sec.officialHeader && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {t('Text Size:')}
+            <input type="range" min={0.6} max={1.8} step={0.05} value={sec.officialTextScale ?? 1.15}
+              onChange={e => update({ ...sec, officialTextScale: Number(e.target.value) })} style={{ width: 70 }} />
+            {Math.round((sec.officialTextScale ?? 1.15) * 100)}%
+          </label>
+        )}
       </div>
 
       {/* Per-field contact-line toggles — available in every header style, each
@@ -478,7 +469,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
           Defaults to on for whatever data exists, until explicitly unchecked. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, padding: '6px 8px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
         {([
-          ['showAuthorization', 'Show Authorization No.', !!(school as any)?.authorizationNumber],
+          ['showAuthorization', 'Show Authorization No.', !!school?.authorizationNumber],
           ['showEmail', 'Show Email', !!school?.email],
           ['showPhone', 'Show Phone', !!school?.phone],
           ['showAddress', 'Show Address', !!school?.address],
@@ -504,42 +495,46 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
         (() => {
           return (
             <>
-              {/* position:relative + absolutely-positioned logo so a bigger
-                  logo never stretches the text columns' row height. */}
-              <div style={{ position: 'relative', minHeight: logoSize, marginBottom: 4 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: `1fr ${Math.max(logoSize, 40) + 16}px 1fr`, gap: 16, alignItems: 'start' }}>
-                  <div
-                    key={leftVer}
-                    contentEditable suppressContentEditableWarning
-                    dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.leftText ?? '') }}
-                    onBlur={e => { setLeftVer(v => v + 1); update({ ...sec, leftText: e.currentTarget.innerText.trim() }) }}
-                    style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                    title="Click to edit"
-                  />
-                  <div />
-                  <div
-                    key={rightVer + 10000}
-                    contentEditable suppressContentEditableWarning
-                    dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(sec.rightText ?? '') }}
-                    onBlur={e => { setRightVer(v => v + 1); update({ ...sec, rightText: e.currentTarget.innerText.trim() }) }}
-                    style={{ cursor: 'text', outline: 'none', width: '100%', borderRadius: 3, padding: 2 }}
-                    title="Click to edit"
-                  />
-                </div>
-                <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)' }}>{LogoEl}</div>
+              {/* The logo sits in the grid's own middle column (not absolutely
+                  positioned) so it vertically centers against the text blocks at
+                  any size, instead of hanging below them once it's larger than
+                  the text. */}
+              {/* minmax(0, 1fr) — not bare 1fr — forces the two side columns to
+                  stay exactly equal width regardless of how much text either
+                  block holds; bare 1fr lets a wider block's min-content grow
+                  its track past the other's, pushing the logo off-center. */}
+              <div style={{ display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${Math.max(logoSize, 40) + 16}px minmax(0, 1fr)`, gap: 16, alignItems: 'center', marginBottom: 4 }}>
+                {/* Read-only — this text now lives in School Settings (English +
+                    French per side) so it stays consistent and correctly styled
+                    everywhere it's used, instead of being retyped per template. */}
+                {officialLeftResolved ? (
+                  <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(officialLeftResolved, 'left', officialTextScaleFor(sec)) }} />
+                ) : (
+                  <p style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic', textAlign: 'center' }} title="Set this in School Settings">
+                    {t('(Set the left header text in School Settings)')}
+                  </p>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'center' }}>{LogoEl}</div>
+                {officialRightResolved ? (
+                  <div dangerouslySetInnerHTML={{ __html: officialTextBlockHtml(officialRightResolved, 'right', officialTextScaleFor(sec)) }} />
+                ) : (
+                  <p style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic', textAlign: 'center' }} title="Set this in School Settings">
+                    {t('(Set the right header text in School Settings)')}
+                  </p>
+                )}
               </div>
               {/* Authorization / registration line spanning under the columns
                   (e.g. "No 10/04336/L/MINESUP/DDES/ESUP/SER of 03/08/2010").
                   Set once in School Settings, toggled on/off here — same
                   pattern as the contact-line fields below. */}
               {(sec.showAuthorization ?? true) && (
-                <div style={{ textAlign: 'center', marginTop: 2, fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 'bold', color: '#333' }}>
-                  {(school as any)?.authorizationNumber || t('(Set the Authorization No. in School Settings)')}
+                <div style={{ textAlign: 'center', marginTop: 2, fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 'bold', color: '#333' }}>
+                  {school?.authorizationNumber || t('(Set the Authorization No. in School Settings)')}
                 </div>
               )}
               {/* Contact strip between two thin rules, spanning the full width */}
               {anyContactToggleOn && (
-                <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 8.5, fontWeight: 600, color: '#111' }}>
+                <div style={{ borderTop: '1px solid #555', borderBottom: '1px solid #555', padding: '2px 0', marginTop: 5, textAlign: 'center', fontFamily: OFFICIAL_HEADER_FONT, fontSize: 10, fontWeight: 600, color: '#111' }}>
                   {contactLine || t('(Nothing selected above has a value in Settings yet)')}
                 </div>
               )}
@@ -577,6 +572,8 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
     { label: 'Class',         value: 'student.classLevel' },
     { label: 'Gender',        value: 'student.gender' },
     { label: 'Guardian',      value: 'student.guardianName' },
+    { label: 'Date of Birth', value: 'student.dateOfBirth' },
+    { label: 'Place of Birth', value: 'student.placeOfBirth' },
     { label: 'Term',          value: 'term.name' },
     { label: 'Session',       value: 'term.session' },
     { label: 'School',        value: 'school.name' },
@@ -674,46 +671,9 @@ const UNIVERSITY_ONLY_MARKS_KEYS = new Set(['m:code', 'm:credit', 'm:gradePoint'
 function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableSec; color: string; schoolType?: string; update: (s: MarksTableSec) => void }) {
   const isUni = schoolType === 'UNIVERSITY'
 
-  // Preview value for each m:* field key (shows row 0 of sample data). Footer
-  // rows (total/average/position/etc.) use the same resolver as Summary boxes.
-  const resolveMarksPreviewField = (field: string): string => {
-    if (!field.startsWith('m:')) return resolveSummary(field, schoolType)
-    const k = field.slice(2)
-    if (k === 'sn') return '1'
-    if (isUni) {
-      switch (k) {
-        case 'subject':      return SD_UNI.subjects[0] ?? ''
-        case 'code':         return SD_UNI.codes[0]    ?? ''
-        case 'seq1':         return String(SD_UNI.seq1[0])
-        case 'seq2':         return String(SD_UNI.seq2[0])
-        case 'score':        return String(SD_UNI.entries[0])
-        case 'grade':        return SD_UNI.grades[0]   ?? ''
-        case 'gradePoint':   return U_GP[0] ? U_GP[0].gp.toFixed(1) : '—'
-        case 'weighted':     return U_WP[0] != null ? U_WP[0].toFixed(1) : '—'
-        case 'credit':       return String(U_CREDITS[0])
-        case 'evaluation':   return SD_UNI.remarks[0]  ?? '—'
-        case 'juryDecision': return 'VALIDATED'
-        default:             return `[${k}]`
-      }
-    }
-    switch (k) {
-      case 'subject': return SD.subjects[0] ?? ''
-      case 'coef':    return '1'
-      case 'seq1':    return String(SD.seq1[0])
-      case 'seq2':    return String(SD.seq2[0])
-      case 'score':   return String(SD.entries[0])
-      case 'grade':   return SD.grades[0]   ?? ''
-      case 'remarks': return SD.remarks[0]  ?? ''
-      case 'min':     return '10.0'
-      case 'avg':     return '13.5'
-      case 'max':     return '18.0'
-      default:        return `[${k}]`
-    }
-  }
-
-  const seedMarksTable = () => update({ ...sec, template: seedMarksTableSection(sec, color, schoolType) })
+  const seedMarksTable = () => update({ ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(color, schoolType) : seedMarksTableSection(sec, color, schoolType) })
   // sec.template is guaranteed by ensureMarksTables() at load + newSection()
-  const tpl: SpreadsheetTable = sec.template ?? seedMarksTableSection(sec, color, schoolType)
+  const tpl: SpreadsheetTable = sec.template ?? (sec.transcriptSemester ? seedTranscriptMarksTable(color, schoolType) : seedMarksTableSection(sec, color, schoolType))
 
   const smallBtn: React.CSSProperties = {
     fontSize: 10, padding: '2px 8px', border: '1px solid #e5e7eb',
@@ -722,10 +682,23 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
 
   return (
     <div style={{ marginBottom: 12 }}>
+      {/* Transcript only: the period caption the print renderer puts above this table.
+          Shown here (not editable) so the canvas matches the printed document, where
+          it comes from the student's real term name. */}
+      {sec.transcriptSemester && (
+        <div style={{
+          fontWeight: 'bold', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+          color: '#fff', background: color, padding: '4px 8px',
+        }}>
+          {transcriptPeriodLabel(sec.transcriptSemester, schoolType)}
+        </div>
+      )}
+      {/* No resolveField — every bound cell shows its raw [field] key, same as the
+          grading legend's tables, so the design canvas never looks like it's showing
+          real marks. Only the actual report card/transcript print shows real data. */}
       <SpreadsheetGrid
         table={tpl}
         onChange={t => update({ ...sec, template: t })}
-        resolveField={resolveMarksPreviewField}
         color={color}
         marksKeyMode
         marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef') && !(!isUni && UNIVERSITY_ONLY_MARKS_KEYS.has(o.value)))}
@@ -733,6 +706,73 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap' }}>
         <span>Highlighted row repeats per subject. Double-click any data cell to choose its key.</span>
         <button style={smallBtn} onClick={seedMarksTable}>↺ Reseed from defaults</button>
+      </div>
+    </div>
+  )
+}
+
+/** The school's official stamp/seal. The image itself is uploaded once in School
+ *  Settings (School.stamp) rather than here, so every design uses the same seal; this
+ *  section only decides where it sits, how big it is, and which copy it prints on. */
+function RenderStamp({ sec, schoolStamp, uploading, onUpload, update }: { sec: StampSec; schoolStamp?: string | null; uploading?: boolean; onUpload?: (file: File) => void; update: (s: StampSec) => void }) {
+  const t = useT()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const size = sec.size || 110
+  const justify = sec.align === 'left' ? 'flex-start' : sec.align === 'right' ? 'flex-end' : 'center'
+  return (
+    <div style={{ padding: '8px 0', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: justify }}>
+        <div style={{ textAlign: 'center' }}>
+          {/* Click the seal (or the empty space) to upload. Unlike the watermark's logo,
+              this does NOT embed a data URL in the design: it uploads to School.stamp, so
+              one seal is shared by every layout and template saves stay small. */}
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || !onUpload}
+            title={onUpload ? t('Upload the official stamp. It is shared by every layout in this school.') : undefined}
+            style={{ display: 'block', border: 0, background: 'transparent', padding: 0, cursor: onUpload ? 'pointer' : 'default' }}
+          >
+            {schoolStamp
+              ? <img src={schoolStamp} alt="" style={{ width: size, height: size, objectFit: 'contain', display: 'block', opacity: uploading ? 0.4 : 1 }} />
+              : (
+                <div style={{ width: size, height: size, border: '1px dashed #cbd5e1', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 6 }}>
+                  <span style={{ fontSize: 8.5, color: '#94a3b8', lineHeight: 1.3 }}>
+                    {uploading ? t('Uploading…') : t('Click to upload a stamp. With no stamp this prints nothing, and the Official Copy note at the top marks the document.')}
+                  </span>
+                </div>
+              )}
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f && onUpload) onUpload(f); e.target.value = '' }} />
+          <input
+            value={sec.label ?? ''}
+            onChange={e => update({ ...sec, label: e.target.value })}
+            placeholder={t('caption (optional)')}
+            className="mt-1 w-full text-center bg-transparent border-0 outline-none"
+            style={{ fontSize: 9, color: '#64748b' }}
+          />
+        </div>
+      </div>
+      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap', justifyContent: 'center' }}>
+        {onUpload && (
+          <button onClick={() => fileRef.current?.click()} disabled={uploading}
+            className="text-[10px] border border-border rounded px-1.5 py-0.5 bg-card hover:bg-muted transition disabled:opacity-50">
+            {uploading ? t('Uploading…') : schoolStamp ? t('Change stamp') : t('Upload stamp')}
+          </button>
+        )}
+        <label className="flex items-center gap-1">
+          {t('Size')}
+          <input type="range" min={60} max={220} value={size}
+            onChange={e => update({ ...sec, size: Number(e.target.value) })} style={{ width: 90 }} />
+        </label>
+        <div className="flex rounded border border-border overflow-hidden">
+          {(['left', 'center', 'right'] as const).map(a => (
+            <button key={a} onClick={() => update({ ...sec, align: a })}
+              className={`px-1.5 py-0.5 transition ${(sec.align ?? 'right') === a ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}>
+              {t(a)}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -776,7 +816,7 @@ function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; co
           <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', position: 'relative' }}>
             <button onClick={() => deleteBox(box.id)} style={{ position: 'absolute', top: 2, right: 4, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
             <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-              <ColorableCell sampleText={resolveSummary(box.field, schoolType)} color={sec.valueColor || color}
+              <ColorableCell sampleText={box.field ? `[${box.field}]` : ''} color={sec.valueColor || color}
                 onColorChange={syncBoxValueColor} style={{ fontWeight: 'bold' }} />
             </div>
             <ET value={box.label} onChange={v => updateBox(box.id, { label: v })} onColorApplied={syncBoxLabelColor}
@@ -1166,24 +1206,41 @@ const TEMPLATES = [
   { id: 'official' as TemplateName, label: 'Official',     color: '#92400e' },
 ]
 
-const ADD_OPTIONS = [
+type AddSectionType = LayoutSection['type'] | 'marks_table_sem1' | 'marks_table_sem2' | 'marks_table_sem3'
+
+// `period` marks the transcript-only per-period marks tables. Their labels follow the
+// school type ("First Semester Table" / "First Term Table") and the third slot only
+// exists where the year has three periods — see transcriptPeriodsFor.
+const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true; period?: TranscriptPeriod }[] = [
   { type: 'header'         as const, label: '🏷 Header' },
   { type: 'student_info'   as const, label: '👤 Student Info' },
   { type: 'marks_table'    as const, label: '📋 Marks Table' },
+  { type: 'marks_table_sem1' as const, label: '📋 Period 1 Table', transcriptOnly: true, period: 'sem1' },
+  { type: 'marks_table_sem2' as const, label: '📋 Period 2 Table', transcriptOnly: true, period: 'sem2' },
+  { type: 'marks_table_sem3' as const, label: '📋 Period 3 Table', transcriptOnly: true, period: 'sem3' },
   { type: 'summary'        as const, label: '📊 Summary Boxes' },
   { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
   { type: 'remarks'        as const, label: '💬 Remarks' },
   { type: 'signatures'     as const, label: '✍ Signatures' },
+  { type: 'stamp'          as const, label: '🔏 Stamp / Seal' },
   { type: 'text_block'     as const, label: '📝 Text Block' },
   { type: 'divider'        as const, label: '── Divider' },
 ]
 
-function newSection(type: LayoutSection['type'], color: string, schoolType?: string): LayoutSection {
+function newSection(type: AddSectionType, color: string, schoolType?: string): LayoutSection {
   const id = `sec_${Date.now()}`
+  if (type === 'marks_table_sem1' || type === 'marks_table_sem2' || type === 'marks_table_sem3') {
+    const transcriptSemester = type.replace('marks_table_', '') as TranscriptPeriod
+    const sec: MarksTableSec = { id, type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: schoolType !== 'UNIVERSITY', transcriptSemester }
+    return { ...sec, template: seedTranscriptMarksTable(color, schoolType) }
+  }
   if (type === 'text_block')   return { id, type, content: 'New text block', align: 'left' }
   if (type === 'divider')      return { id, type, style: 'solid' }
   if (type === 'remarks')      return { id, type, label: 'General Remarks' }
   if (type === 'signatures')   return { id, type, lines: [{ id: `s_${Date.now()}`, label: 'Signature' }] }
+  // Defaults to the official copy: a seal is the whole point of the official one, and
+  // putting it on a student copy would be wrong. Admin can still change it.
+  if (type === 'stamp')        return { id, type, size: 110, align: 'right', label: '', showOn: 'official' }
   if (type === 'summary')      return { id, type, boxes: [{ id: `b_${Date.now()}`, label: 'Total Score', field: 'total' }] }
   if (type === 'student_info') return { id, type, columns: 2, rows: [{ id: `r_${Date.now()}`, label: 'Student Name', field: 'student.name' }] }
   if (type === 'marks_table') {
@@ -1203,7 +1260,7 @@ function ensureMarksTables(
     ...cfg,
     sections: cfg.sections.map(sec =>
       sec.type === 'marks_table' && !sec.template
-        ? { ...sec, template: seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
+        ? { ...sec, template: sec.transcriptSemester ? seedTranscriptMarksTable(cfg.primaryColor, schoolType) : seedMarksTableSection(sec, cfg.primaryColor, schoolType) }
         : sec
     ),
   }
@@ -1212,7 +1269,7 @@ function ensureMarksTables(
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ReportCardDesignPage() {
   const router = useRouter()
-  const { isAuthenticated, school } = useAuthStore()
+  const { isAuthenticated, school, updateSchool } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const tr = useT()
   const [config, setConfig] = useState<TemplateConfig & { sections: LayoutSection[] }>(getDefaultLayout('classic'))
@@ -1262,15 +1319,73 @@ export default function ReportCardDesignPage() {
   const schoolName = school?.name || 'Your School Name'
   const schoolType = school?.type || 'SECONDARY'
   const schoolLogo = school?.logo ?? null
-  const isTranscript = schoolType === 'UNIVERSITY' && config.layoutType === 'transcript'
+  // Uploaded once in School Settings and shared by every design; the stamp section only
+  // places it. Null shows a dashed area to stamp by hand.
+  const schoolStamp = school?.stamp ?? null
+  // Every school type has an annual transcript (2 semester tables at a university,
+  // 3 term tables at a primary/secondary school) — see getDefaultTranscriptLayout.
+  const isTranscript = config.layoutType === 'transcript'
   const isLedger = schoolType !== 'UNIVERSITY' && config.layoutType === 'ledger'
-  const tc = config.transcriptConfig ?? {}
-  const setTc = (patch: Partial<NonNullable<typeof config.transcriptConfig>>) =>
-    setConfig(c => ({ ...c, transcriptConfig: { ...c.transcriptConfig, ...patch } }))
-  const watermark = config.watermark ?? { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null, size: 240, rotation: -45 }
+  // The three layouts are mutually exclusive — Standard is "neither of the others".
+  const isStandard = !isLedger && !isTranscript
+  // Every layout gets the official/student split: the ledger is a primary/secondary
+  // report card, so leaving it out meant those schools had no official copy at all.
+  // Harmless where unused, since sections default to printing on both copies.
+  const supportsVariants = true
+  // Design-time preview only: which copy the canvas is showing. Never saved — the real
+  // choice is made when printing, so both copies stay available to everyone at once.
+  const [previewVariant, setPreviewVariant] = useState<DocVariant>('official')
+  // Field-level defaults merged UNDER the saved object — a watermark saved in
+  // Logo mode has no `text`/`color` keys at all (JSON drops undefined), and
+  // feeding undefined into the controlled text/color inputs below flips them
+  // to uncontrolled (React console error). Every field must always be defined.
+  const watermark = { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null as string | null, size: 240, rotation: -45, ...(config.watermark ?? {}) }
   const setWatermark = (patch: Partial<typeof watermark>) =>
     setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
   const wmUploadRef = useRef<HTMLInputElement>(null)
+  const [uploadingStamp, setUploadingStamp] = useState(false)
+  const [showRemoveStamp, setShowRemoveStamp] = useState(false)
+  const stampInputRef = useRef<HTMLInputElement>(null)
+  // The stamp is school-wide (School.stamp), not part of the design, so uploading it from
+  // the designer hits the same endpoint School Settings does and every layout picks it up.
+  const handleStampUpload = async (file: File) => {
+    setUploadingStamp(true)
+    try {
+      const fd = new FormData()
+      fd.append('stamp', file)
+      const res = await api.post('/school/stamp', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      updateSchool(res.data.school)
+      // Put it on the page straight away. Storing the image without placing it printed it
+      // nowhere and looked like the upload had failed ("i do not see the stamp when i
+      // upload it"). Official-only by default; drag, resize or delete it like any section.
+      // Placed just above the signatures, where a seal belongs, rather than appended to
+      // the very bottom of a long transcript where it is easy to miss.
+      setConfig(c => {
+        const secs = c.sections ?? []
+        if (secs.some(x => x.type === 'stamp')) return c
+        const stamp = newSection('stamp', c.primaryColor, schoolType)
+        const sigAt = secs.findIndex(x => x.type === 'signatures')
+        const next = [...secs]
+        next.splice(sigAt < 0 ? next.length : sigAt, 0, stamp)
+        return { ...c, sections: next }
+      })
+      showToast(tr('Official stamp uploaded and placed above the signatures'))
+    } catch {
+      showToast(tr('Upload failed. Make sure the file is an image under 5MB.'), 'error')
+    } finally { setUploadingStamp(false) }
+  }
+
+  const handleStampRemove = async () => {
+    setShowRemoveStamp(false)
+    try {
+      await api.delete('/school/stamp')
+      updateSchool({ ...school!, stamp: null })
+      showToast(tr('Official stamp removed'))
+    } catch {
+      showToast(tr('Failed to remove the stamp'), 'error')
+    }
+  }
+
   const handleWmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -1307,8 +1422,29 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     getTemplateApi().then(({ config: saved }) => {
       savedConfigRef.current = saved ?? null
-      const merged = buildMergedConfig(saved ?? null, lang, sType)
-        ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+      // A saved config with `layoutType: 'transcript'` must NEVER go through
+      // buildMergedConfig — that merges onto a `template`-name base (classic/
+      // bilingual/…), and a transcript config's `template` is just its unrelated
+      // base ('classic') for storage purposes, not a real standard layout. It only
+      // counts as a real, previously-edited transcript design if it has a
+      // transcriptSemester-flagged marks_table — anything else (a pre-refactor
+      // leftover, or never customized) reseeds fresh instead.
+      const hasTranscriptSections = Array.isArray((saved as any)?.sections)
+        && (saved as any).sections.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+      const merged = saved?.layoutType === 'transcript'
+        ? (hasTranscriptSections
+            ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(sType), ...saved } as any, lang), sType)
+            : { ...getDefaultTranscriptLayout(sType), ...(saved?.primaryColor ? { primaryColor: saved.primaryColor } : {}), layoutType: 'transcript' as const })
+        : buildMergedConfig(saved ?? null, lang, sType)
+          ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType)
+      // Backfill Date/Place of Birth into an already-saved university design: defaults
+      // only reach designs built after they changed, so an existing layout would never
+      // show them. Once only, and the admin still has to Save.
+      Object.assign(merged, ensureBirthRows(merged, sType))
+      // "Failing marks in red" is stored school-wide at the top level (see handleSave),
+      // so stamp it onto whichever layout loaded — the checkbox must read the same in
+      // every view, not whatever a layout happened to be saved with.
+      merged.highlightFailingRed = saved?.highlightFailingRed ?? true
       setConfig(merged)
       setColorText(merged.primaryColor)
       setBgText(merged.bgColor || '#ffffff')
@@ -1317,9 +1453,28 @@ export default function ReportCardDesignPage() {
   }, [isAuthenticated])
 
   const sections = config.sections || []
+  // Drives the toolbar's "Place on page" button: a stamp that is uploaded but never
+  // placed prints nowhere, which is the easy mistake to make here.
+  const hasStampSection = sections.some(sec => sec.type === 'stamp')
 
   const updateSection = (index: number, sec: LayoutSection) =>
-    setConfig(c => { const s = [...c.sections]; s[index] = sec; return { ...c, sections: s } })
+    setConfig(c => {
+      const s = [...c.sections]
+      s[index] = sec
+      // The transcript's per-period tables share ONE design — a real transcript never
+      // has differently-shaped First/Second/Third period tables. Any template edit
+      // (add/delete/re-key a column, style a cell) on one is mirrored to all the
+      // others; the period scoping lives on the section's transcriptSemester flag,
+      // not in the table, so a structural copy is safe.
+      if (sec.type === 'marks_table' && sec.transcriptSemester && sec.template) {
+        for (let j = 0; j < s.length; j++) {
+          const other = s[j] as MarksTableSec
+          if (j === index || other.type !== 'marks_table' || !other.transcriptSemester) continue
+          s[j] = { ...other, template: JSON.parse(JSON.stringify(sec.template)) }
+        }
+      }
+      return { ...c, sections: s }
+    })
 
   const deleteSection = (index: number) =>
     setConfig(c => ({ ...c, sections: c.sections.filter((_, i) => i !== index) }))
@@ -1334,7 +1489,7 @@ export default function ReportCardDesignPage() {
     })
   }
 
-  const addSection = (type: LayoutSection['type']) => {
+  const addSection = (type: AddSectionType) => {
     const sec = newSection(type, config.primaryColor, schoolType)
     setConfig(c => ({ ...c, sections: [...c.sections, sec] }))
   }
@@ -1354,12 +1509,33 @@ export default function ReportCardDesignPage() {
     // Re-selecting the template you last saved should bring back that saved
     // design, not wipe it back to blank defaults — only a genuinely different,
     // never-saved-under-this-name template falls back to defaults.
+    // A saved *transcript* config also carries `template: 'classic'` (its base) —
+    // exclude it here, or clicking Standard would silently restore transcript
+    // sections/layoutType instead of actually switching to a standard layout.
     const saved = savedConfigRef.current
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
-    const restored = saved?.template === name ? buildMergedConfig(saved, lang, sType) : null
+    const restored = (saved?.template === name && saved?.layoutType !== 'transcript') ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? getDefaultLayout(name)
-    setConfig(layout)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
+    setColorText(layout.primaryColor)
+    setBgText(layout.bgColor || '#ffffff')
+  }
+
+  // University "Standard" thumbnail. Restore-if-saved uses the same pattern as
+  // loadTemplate/loadLedger, but the fresh-default fallback must be the
+  // university-aware layout (Credits Earned/Semester GPA/Cumulative GPA/
+  // Classification summary boxes, code/credit/GPA marks columns) — NOT
+  // getDefaultLayout('classic'), which is built for secondary/primary schools
+  // and has the wrong summary fields (Total Score/Average/Class Average/Position).
+  const loadStandardLayout = () => {
+    const saved = savedConfigRef.current
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    const sType = school?.type || 'SECONDARY'
+    const restored = (saved?.layoutType !== 'transcript' && (saved as any)?.sections?.length > 0)
+      ? buildMergedConfig(saved, lang, sType) : null
+    const layout = ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1370,7 +1546,28 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = saved?.template === 'ledger' ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? { ...getLedgerLayout(), layoutType: 'ledger' as const }
-    setConfig(layout)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
+    setColorText(layout.primaryColor)
+    setBgText(layout.bgColor || '#ffffff')
+  }
+
+  // Transcript sections aren't tied to a `template` name (it's a separate `layoutType`
+  // axis) — a saved config only counts as a real transcript design if it actually has
+  // a transcriptSemester-flagged marks_table; anything else (never customized, or a
+  // leftover standard-shaped `sections` from before this layout existed) reseeds fresh.
+  const loadTranscriptLayout = () => {
+    const saved = savedConfigRef.current
+    const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+    // The transcript design lives under saved.transcript; legacy rows (from
+    // before the sub-key existed) saved it at the top level instead.
+    const savedT = saved?.transcript ?? (saved?.layoutType === 'transcript' ? saved : null)
+    const hasTranscriptSections = Array.isArray(savedT?.sections)
+      && savedT!.sections!.some((s: any) => s.type === 'marks_table' && s.transcriptSemester)
+    const layout = hasTranscriptSections
+      ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
+      : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
+    const seeded = ensureBirthRows(layout, schoolType)
+    setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed }))
     setColorText(layout.primaryColor)
     setBgText(layout.bgColor || '#ffffff')
   }
@@ -1378,7 +1575,33 @@ export default function ReportCardDesignPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await saveTemplateApi(config as TemplateConfig)
+      // One saved row holds BOTH designs: the standard/ledger design at the
+      // top level and the transcript design under `transcript` — saving one
+      // must never clobber the other. (Legacy rows saved the transcript at
+      // the top level; detect that and migrate it into the sub-key here.)
+      const prev = savedConfigRef.current
+      const legacyTranscript = prev?.layoutType === 'transcript' ? prev : undefined
+      const { transcript: _prevT, ...prevTop } = (prev ?? {}) as Partial<TemplateConfig>
+      const { transcript: _curT, ...configTop } = config as TemplateConfig
+      const base: TemplateConfig = config.layoutType === 'transcript'
+        ? { ...(legacyTranscript ? {} : prevTop), transcript: configTop } as TemplateConfig
+        : { ...configTop, transcript: prev?.transcript ?? legacyTranscript } as TemplateConfig
+      // "Failing marks in red" is a school-wide marking policy, not a per-layout style:
+      // it always lives at the TOP level, whichever layout is being saved, and is kept
+      // out of the transcript sub-key so the two can never disagree.
+      const { highlightFailingRed: _t, ...transcriptDesign } = (base.transcript ?? {}) as Partial<TemplateConfig>
+      const payload: TemplateConfig = {
+        ...base,
+        highlightFailingRed: config.highlightFailingRed ?? true,
+        ...(base.transcript ? { transcript: transcriptDesign } : {}),
+      }
+      await saveTemplateApi(payload)
+      // loadTemplate/loadStandardLayout/loadLedger/loadTranscriptLayout (the
+      // layout-type thumbnails) all restore from this ref, not from the API —
+      // without updating it here, switching thumbnails after a save reverts
+      // to whatever was saved BEFORE this session started, silently discarding
+      // every edit made (and saved) during the current visit.
+      savedConfigRef.current = payload
       showToast(tr('Design saved successfully'))
     } catch {
       showToast(tr('Failed to save'), 'error')
@@ -1456,6 +1679,83 @@ export default function ReportCardDesignPage() {
           )}
         </div>
 
+        {/* Official stamp. Lives in the toolbar, not only inside the stamp section: the
+            section has to be ADDED before it can show an upload, so a design without one
+            gave no hint the stamp existed at all. Uploading here stores it on the school
+            (shared by every layout, same as School Settings); "Place on page" drops in the
+            section that actually prints it. Separate from the school logo in every way.
+            Shown only while previewing the OFFICIAL copy: a stamp never appears on a
+            student copy, so offering it there would just be misleading. A school with no
+            stamp is fine and needs nothing here: the "Official Copy" note under the title
+            already marks the document. */}
+        {supportsVariants && previewVariant === 'official' && (
+          <div className="flex items-center gap-1.5 ml-2 border-l border-border pl-4">
+            <span className="text-xs text-muted-foreground">{tr('Official stamp')}</span>
+            {schoolStamp && (
+              <img src={schoolStamp} alt="" className="w-6 h-6 object-contain rounded border border-border bg-white" />
+            )}
+            <button
+              onClick={() => stampInputRef.current?.click()}
+              disabled={uploadingStamp}
+              title={tr('Used on official copies only. This is not the school logo.')}
+              className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition disabled:opacity-50">
+              {uploadingStamp ? tr('Uploading…') : schoolStamp ? tr('Change') : tr('Upload')}
+            </button>
+            {schoolStamp && (
+              <button
+                onClick={() => setShowRemoveStamp(true)}
+                disabled={uploadingStamp}
+                title={tr('Remove the stamp. Official copies then rely on the Official Copy note alone.')}
+                className="text-xs px-2 py-1 rounded border border-destructive/30 text-destructive hover:bg-destructive/10 transition disabled:opacity-50">
+                {tr('Remove')}
+              </button>
+            )}
+            {schoolStamp && !hasStampSection && (
+              <button
+                onClick={() => addSection('stamp')}
+                title={tr('Add the stamp section so it prints on official copies')}
+                className="text-xs px-2 py-1 rounded border border-primary/40 text-primary hover:bg-primary/10 transition">
+                + {tr('Place on page')}
+              </button>
+            )}
+            <input ref={stampInputRef} type="file" accept="image/*" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleStampUpload(f); e.target.value = '' }} />
+          </div>
+        )}
+
+        {/* Which copy the canvas previews. A design-time view switch only: it is not
+            saved and does not decide what anyone prints, because a school needs the
+            sealed official copy and the student copy available at the same time. The
+            real choice is made when printing. Sections carry "Show on" (see SectionWrap)
+            and everything else appears on both. */}
+        {supportsVariants && (
+          <div className="flex items-center gap-1.5 ml-2 border-l border-border pl-4">
+            <span className="text-xs text-muted-foreground">{tr('Preview')}</span>
+            {(['official', 'student'] as DocVariant[]).map(v => (
+              <button key={v} onClick={() => setPreviewVariant(v)}
+                title={v === 'official'
+                  ? tr('The sealed copy the school sends out itself')
+                  : tr('The copy handed to students at the end of the term')}
+                className={`text-xs px-2 py-1 rounded border transition ${previewVariant === v
+                  ? 'border-primary text-primary bg-primary/10 font-medium'
+                  : 'border-border text-muted-foreground hover:text-foreground'}`}>
+                {v === 'official' ? tr('Official') : tr('Student copy')}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Failing marks colour. School-wide, not per-layout: it's a marking policy, so
+            it applies to the report card and the transcript alike (handleSave always
+            stores it at the top level). A failed subject prints its numbers and grade
+            in red; unchecked, everything stays black. */}
+        <label className="flex items-center gap-2 ml-2 text-xs text-muted-foreground cursor-pointer"
+          title={tr('Applies to every layout: a subject the student failed prints its marks in red')}>
+          <input type="checkbox" checked={config.highlightFailingRed ?? true}
+            onChange={e => setConfig(c => ({ ...c, highlightFailingRed: e.target.checked }))} />
+          {tr('Failing marks in red')}
+        </label>
+
         {/* Watermark */}
         <div className="flex items-center gap-2 ml-2 border-l border-border pl-4 flex-wrap">
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
@@ -1464,6 +1764,19 @@ export default function ReportCardDesignPage() {
           </label>
           {watermark.enabled && (
             <>
+              {/* Scope the watermark to one copy. This is how an UNOFFICIAL stamp goes
+                  across the student copy while the sealed official stays clean. */}
+              {supportsVariants && (
+                <select
+                  value={watermark.showOn ?? 'both'}
+                  onChange={e => setWatermark({ showOn: e.target.value === 'both' ? undefined : e.target.value as DocVariant })}
+                  className="text-xs border border-border rounded bg-card text-muted-foreground px-1.5 py-1 cursor-pointer"
+                  title="Which printed copy the watermark appears on">
+                  <option value="both">{tr('Both copies')}</option>
+                  <option value="official">{tr('Official only')}</option>
+                  <option value="student">{tr('Student copy only')}</option>
+                </select>
+              )}
               {/* Type toggle */}
               <div className="flex rounded border border-border overflow-hidden text-xs">
                 <button
@@ -1590,18 +1903,16 @@ export default function ReportCardDesignPage() {
 
         <div className="flex-1" />
 
-        {/* Add section — hidden in transcript mode */}
-        {!isTranscript && (
-          <button ref={addMenuBtnRef}
-            onClick={() => {
-              if (addMenuCoords) { setAddMenuCoords(null); return }
-              const r = addMenuBtnRef.current?.getBoundingClientRect()
-              if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
-            }}
-            className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
-            <Plus size={14} /> {tr('Add Section')}
-          </button>
-        )}
+        {/* Add section */}
+        <button ref={addMenuBtnRef}
+          onClick={() => {
+            if (addMenuCoords) { setAddMenuCoords(null); return }
+            const r = addMenuBtnRef.current?.getBoundingClientRect()
+            if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
+          }}
+          className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
+          <Plus size={14} /> {tr('Add Section')}
+        </button>
 
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
@@ -1610,71 +1921,7 @@ export default function ReportCardDesignPage() {
         </button>
       </div>{/* end main row */}
 
-      {/* Second row: transcript settings — shown only in transcript mode */}
-      {isTranscript && (
-        <div className="py-2 border-t border-border flex items-start gap-4 flex-wrap">
-          {/* Report title */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-xs text-muted-foreground whitespace-nowrap">Title</label>
-            <input type="text"
-              value={tc.reportTitle ?? ''}
-              onChange={e => setTc({ reportTitle: e.target.value })}
-              placeholder="Annual Transcript"
-              className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-40"
-            />
-          </div>
-
-          {/* Academic year label */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-xs text-muted-foreground whitespace-nowrap">Year label</label>
-            <input type="text"
-              value={tc.academicYearLabel ?? ''}
-              onChange={e => setTc({ academicYearLabel: e.target.value })}
-              placeholder="Academic Year"
-              className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-32"
-            />
-          </div>
-
-          <div className="border-l border-border pl-4 flex items-center gap-3">
-            {([
-              ['showGradeSystem', 'Grade System'],
-              ['showClassification', 'Classification'],
-              ['showLegend', 'Legend'],
-            ] as const).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none whitespace-nowrap">
-                <input type="checkbox"
-                  checked={tc[key] ?? true}
-                  onChange={e => setTc({ [key]: e.target.checked })}
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-
-          <div className="border-l border-border pl-4 flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-muted-foreground whitespace-nowrap">Dean label</label>
-              <input type="text"
-                value={tc.deanLabel ?? ''}
-                onChange={e => setTc({ deanLabel: e.target.value })}
-                placeholder="Dean of Studies' Signature"
-                className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-44"
-              />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-muted-foreground whitespace-nowrap">Registrar label</label>
-              <input type="text"
-                value={tc.registrarLabel ?? ''}
-                onChange={e => setTc({ registrarLabel: e.target.value })}
-                placeholder="Registrar's Signature"
-                className="border border-border rounded px-2 py-1 text-xs text-foreground bg-background w-44"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Third row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
+      {/* Second row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
       <div className="py-1.5 border-t border-border" style={{ color: '#374151', visibility: pageActiveTableId ? 'visible' : 'hidden' }}>
         <SpreadsheetToolbar
           table={pageActiveTableId ? activeTableRef.current : null}
@@ -1699,8 +1946,7 @@ export default function ReportCardDesignPage() {
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
-        {!isTranscript && !isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder</p>}
-        {isTranscript && <p className="text-xs text-muted-foreground text-center mb-4">Customize color and toggle sections on the right · The layout is fixed for the transcript style</p>}
+        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
         {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
         <div ref={canvasRef} className="shadow-sm border border-[#e4e4e7] rounded-xl p-10 pl-14" style={{
@@ -1715,7 +1961,9 @@ export default function ReportCardDesignPage() {
           '--destructive': '#ef4444', '--ring': '#F03E2F',
         } as React.CSSProperties}>
           {/* Watermark */}
-          {watermark.enabled && (() => {
+          {/* Mirrors the print renderer: a watermark scoped to the other copy is not drawn
+              on this preview either. */}
+          {watermark.enabled && (!watermark.showOn || watermark.showOn === previewVariant) && (() => {
             const opacity = watermark.opacity / 100
             const rotation = watermark.rotation ?? -45
             const x = watermark.x ?? 50
@@ -1728,29 +1976,17 @@ export default function ReportCardDesignPage() {
             }
             return <div style={{ ...base, fontSize: watermark.size ?? 72, fontWeight: 'bold', opacity, color: watermark.color, whiteSpace: 'nowrap' }}>{watermark.text || schoolName}</div>
           })()}
-          {/* Transcript canvas preview */}
-          {isTranscript && (
-            <PrintableTranscript
-              data={{ ...MOCK_TRANSCRIPT, school: { ...MOCK_TRANSCRIPT.school, name: schoolName, logo: schoolLogo } }}
-              primaryColor={config.primaryColor}
-              showGradeSystem={tc.showGradeSystem ?? true}
-              showClassification={tc.showClassification ?? true}
-              showLegend={tc.showLegend ?? true}
-              deanLabel={tc.deanLabel}
-              registrarLabel={tc.registrarLabel}
-              reportTitle={tc.reportTitle}
-              academicYearLabel={tc.academicYearLabel}
-            />
-          )}
-
-          {/* Standard section-based canvas */}
-          {!isTranscript && sections.map((sec, i) => (
+          {/* Section-based canvas — same for standard and transcript layouts */}
+          {sections.map((sec, i) => (
             <SectionWrap key={sec.id} index={i} total={sections.length}
               onMove={d => moveSection(i, d)} onDelete={() => deleteSection(i)}
               onDragStart={() => setDragIndex(i)}
               onDragOver={e => { e.preventDefault() }}
               onDrop={() => handleDrop(i)}
-              dragging={dragIndex === i}>
+              dragging={dragIndex === i}
+              showOn={sec.showOn}
+              onShowOn={supportsVariants ? v => updateSection(i, { ...sec, showOn: v }) : undefined}
+              hiddenHere={!sectionShowsOn(sec, previewVariant)}>
               {sec.type === 'header' && (
                 <RenderHeader sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={s => updateSection(i, s)} />
               )}
@@ -1769,6 +2005,9 @@ export default function ReportCardDesignPage() {
               {sec.type === 'signatures' && (
                 <RenderSignatures sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
               )}
+              {sec.type === 'stamp' && (
+                <RenderStamp sec={sec} schoolStamp={schoolStamp} uploading={uploadingStamp} onUpload={handleStampUpload} update={s => updateSection(i, s)} />
+              )}
               {sec.type === 'text_block' && (
                 <RenderTextBlock sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
               )}
@@ -1781,7 +2020,7 @@ export default function ReportCardDesignPage() {
             </SectionWrap>
           ))}
 
-          {!isTranscript && sections.length === 0 && (
+          {sections.length === 0 && (
             <div className="text-center py-16 text-muted-foreground">
               <p className="text-sm">No sections yet.</p>
               <p className="text-xs mt-1">Choose a template above or use "Add Section" to start.</p>
@@ -1799,7 +2038,7 @@ export default function ReportCardDesignPage() {
 
           {/* Standard thumbnail */}
           <button
-            onClick={() => setConfig(c => ({ ...c, layoutType: 'standard' }))}
+            onClick={loadStandardLayout}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
             style={{ borderColor: !isTranscript ? config.primaryColor : '#e5e7eb', background: !isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
           >
@@ -1834,7 +2073,7 @@ export default function ReportCardDesignPage() {
 
           {/* Transcript thumbnail */}
           <button
-            onClick={() => setConfig(c => ({ ...c, layoutType: 'transcript' }))}
+            onClick={loadTranscriptLayout}
             className="w-full rounded-lg border-2 overflow-hidden transition"
             style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
           >
@@ -1884,7 +2123,7 @@ export default function ReportCardDesignPage() {
           <button
             onClick={() => loadTemplate('classic')}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: !isLedger ? config.primaryColor : '#e5e7eb', background: !isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: isStandard ? config.primaryColor : '#e5e7eb', background: isStandard ? `${config.primaryColor}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
               <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1909,7 +2148,7 @@ export default function ReportCardDesignPage() {
                 {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${config.primaryColor}30`, borderRadius: 2 }} />)}
               </div>
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: !isLedger ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isStandard ? config.primaryColor : '#6b7280' }}>
               Standard
             </div>
           </button>
@@ -1917,7 +2156,7 @@ export default function ReportCardDesignPage() {
           {/* Ledger thumbnail — totals folded into the table itself */}
           <button
             onClick={loadLedger}
-            className="w-full rounded-lg border-2 overflow-hidden transition"
+            className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
             style={{ borderColor: isLedger ? config.primaryColor : '#e5e7eb', background: isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
@@ -1950,6 +2189,35 @@ export default function ReportCardDesignPage() {
             </div>
           </button>
 
+          {/* Annual transcript thumbnail — the year's three terms stacked, printed
+              from the third term once every term is published. */}
+          <button
+            onClick={loadTranscriptLayout}
+            className="w-full rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+          >
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: config.primaryColor, height: 12, borderRadius: 2, marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 50, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              {['FIRST TERM', 'SECOND TERM', 'THIRD TERM'].map(label => (
+                <div key={label} style={{ marginBottom: 3 }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', color: '#fff', background: config.primaryColor, padding: '0 2px' }}>{label}</div>
+                  <div style={{ border: '1px solid #e5e7eb' }}>
+                    {[0, 1].map(i => (
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: i ? '1px solid #f0f0f0' : undefined }}>
+                        {[0, 1, 2].map(j => <div key={j} style={{ height: 3, margin: '1px', background: '#e5e7eb', borderRadius: 1 }} />)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? config.primaryColor : '#6b7280' }}>
+              Annual
+            </div>
+          </button>
+
         </div>
       )}
 
@@ -1962,10 +2230,14 @@ export default function ReportCardDesignPage() {
           <div className="fixed inset-0 z-40" onClick={() => setAddMenuCoords(null)} />
           <div className="fixed z-50 bg-card border border-border rounded-xl shadow-lg py-1 w-max"
             style={{ top: addMenuCoords.top, left: addMenuCoords.left }}>
-            {ADD_OPTIONS.map(o => (
+            {ADD_OPTIONS
+              .filter(o => !o.transcriptOnly || isTranscript)
+              // A university year has no third period, so no third table to add.
+              .filter(o => !o.period || transcriptPeriodsFor(schoolType).includes(o.period))
+              .map(o => (
               <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
                 className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition whitespace-nowrap">
-                {tr(o.label)}
+                {o.period ? `📋 ${transcriptPeriodLabel(o.period, schoolType)} Table` : tr(o.label)}
               </button>
             ))}
           </div>
@@ -1973,6 +2245,17 @@ export default function ReportCardDesignPage() {
       )}
 
 
+      {/* The stamp is school-wide, so removing it strips the seal from every official
+          copy this school prints, not just this design. Worth a confirm. */}
+      <ConfirmModal
+        isOpen={showRemoveStamp}
+        title={tr('Remove official stamp?')}
+        message={tr('This deletes the stamp image for the whole school, so no official copy will print a seal. Official copies will still be marked by the Official Copy note under the title. You can upload a new stamp at any time.')}
+        confirmLabel={tr('Remove')}
+        confirmColor="red"
+        onConfirm={handleStampRemove}
+        onCancel={() => setShowRemoveStamp(false)}
+      />
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
       </div>
     </>

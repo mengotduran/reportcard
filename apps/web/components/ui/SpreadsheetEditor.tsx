@@ -210,11 +210,20 @@ export function applyInsertCol(
         }
         if (!done) {
           // Inserting at the very end: a single cell spanning the whole row
-          // (a full-width title banner) grows with the table; anything else
-          // gets a fresh empty cell.
+          // (a full-width title banner) grows with the table. A hero row shaped
+          // [wide label…, value] (e.g. the transcript's "SEMESTER GPA: | 2.90"
+          // or the ledger's TERM AVERAGE) grows its label instead, so the value
+          // stays pinned to the table's outer edge rather than leaving a bare
+          // gap after it. Anything else gets a fresh cell that carries over the
+          // row's trailing style (so a banded TOTAL row's band keeps reaching
+          // the edge) but none of its content.
+          const last = cells[cells.length - 1]
+          const secondLast = cells.length >= 2 ? cells[cells.length - 2] : null
           if (cells.length === 1 && (cells[0].colSpan ?? 1) === table.colCount)
             cells[0] = { ...cells[0], colSpan: table.colCount + 1 }
-          else cells.push({})
+          else if (secondLast && (secondLast.colSpan ?? 1) > 1)
+            cells[cells.length - 2] = { ...secondLast, colSpan: (secondLast.colSpan ?? 1) + 1 }
+          else cells.push({ bgColor: last?.bgColor, textColor: last?.textColor, bold: last?.bold, align: last?.align })
         }
         return { ...row, cells }
       }),

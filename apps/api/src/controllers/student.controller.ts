@@ -2,6 +2,31 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { demoLimitBlock } from '../config/demo'
+
+/** '' / whitespace from an untouched optional form field means "not provided", i.e. NULL,
+ *  never an empty string: one representation of missing keeps the print side simple. */
+const blankToNull = (v: unknown): string | null => {
+  const t = typeof v === 'string' ? v.trim() : ''
+  return t === '' ? null : t
+}
+
+/**
+ * Birth dates are stored as "YYYY-MM-DD" text (see schema.prisma) — no time, no zone.
+ * Anything that is not a plain date is rejected to NULL rather than stored: a half-parsed
+ * birth date on a transcript sent to WES is worse than a blank one.
+ */
+const normalizeBirthDate = (v: unknown): string | null => {
+  const t = blankToNull(v)
+  if (!t) return null
+  // Accept the browser date input's native "YYYY-MM-DD", and an ISO timestamp (some
+  // clients send a full Date), keeping only the calendar part.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t)
+  if (!m) return null
+  const [, y, mo, d] = m
+  const month = Number(mo), day = Number(d)
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  return `${y}-${mo}-${d}`
+}
 import { previewStudentRows, buildImportTemplate, ParsedStudentRow } from '../utils/studentImport'
 import { currentSession } from './fees.controller'
 
@@ -185,7 +210,7 @@ async function generateStudentId(schoolId: string, classLevel?: string): Promise
 export const createStudent = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry, dateOfBirth, placeOfBirth } = req.body
 
     if (gender !== 'Male' && gender !== 'Female') {
       res.status(400).json({ message: 'Gender (Male or Female) is required' })
@@ -198,7 +223,10 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
     const studentId = await generateStudentId(schoolId, classLevel)
 
     const student = await prisma.student.create({
-      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry: !!directLevel2Entry }
+      // Birth details are optional: an empty form field becomes NULL rather than "", so
+      // "not provided" stays a single thing and the row simply prints blank.
+      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry: !!directLevel2Entry,
+        dateOfBirth: normalizeBirthDate(dateOfBirth), placeOfBirth: blankToNull(placeOfBirth) }
     })
     await ensureReportCardForCurrentTerm(schoolId, student.id, req.user!.id)
 
@@ -213,7 +241,7 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry, isRepeatingLevel } = req.body
+    const { name, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry, isRepeatingLevel, dateOfBirth, placeOfBirth } = req.body
 
     const student = await prisma.student.findFirst({ where: { id, schoolId } })
     if (!student) {
@@ -229,6 +257,10 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
         guardianName, guardianPhone, guardianEmail,
         ...(directLevel2Entry !== undefined ? { directLevel2Entry: !!directLevel2Entry } : {}),
         ...(isRepeatingLevel !== undefined ? { isRepeatingLevel: !!isRepeatingLevel } : {}),
+        // Only touched when the client actually sends them, so a caller that knows
+        // nothing about birth details cannot wipe them.
+        ...(dateOfBirth !== undefined ? { dateOfBirth: normalizeBirthDate(dateOfBirth) } : {}),
+        ...(placeOfBirth !== undefined ? { placeOfBirth: blankToNull(placeOfBirth) } : {}),
       }
     })
 

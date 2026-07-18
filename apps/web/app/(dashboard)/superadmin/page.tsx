@@ -61,27 +61,27 @@ function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes }:
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Subdomain</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Subdomain <span className="text-destructive">*</span></label>
           <input value={data.subdomain} onChange={(e) => onChange(idx, 'subdomain', e.target.value)} placeholder="school-primary"
             className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Section Email</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Section Email <span className="text-destructive">*</span></label>
           <input type="email" value={data.schoolEmail} onChange={(e) => onChange(idx, 'schoolEmail', e.target.value)} placeholder="primary@school.com"
             className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Name</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Name <span className="text-destructive">*</span></label>
           <input value={data.adminName} onChange={(e) => onChange(idx, 'adminName', e.target.value)} placeholder="John Doe"
             className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Email</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Email <span className="text-destructive">*</span></label>
           <input type="email" value={data.adminEmail} onChange={(e) => onChange(idx, 'adminEmail', e.target.value)} placeholder="admin@school.com"
             className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Password</label>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Password <span className="text-destructive">*</span></label>
           <div className="relative">
             <input type={showPw ? 'text' : 'password'} value={data.adminPassword} onChange={(e) => onChange(idx, 'adminPassword', e.target.value)} placeholder="••••••••"
               className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground pr-8 focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -551,21 +551,21 @@ export default function SuperAdminPage() {
             <form onSubmit={handleCreateStandalone} className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'School Name', key: 'schoolName', placeholder: 'Springfield Primary' },
+                  { label: 'School Name', key: 'schoolName', placeholder: 'Springfield Primary', required: true },
                   { label: 'City', key: 'city', placeholder: 'Yaounde' },
-                  { label: 'School Email', key: 'schoolEmail', placeholder: 'info@school.com', type: 'email' },
+                  { label: 'School Email', key: 'schoolEmail', placeholder: 'info@school.com', type: 'email', required: true },
                   { label: 'Phone', key: 'phone', placeholder: '+237...' },
-                  { label: 'Subdomain', key: 'subdomain', placeholder: 'springfield' },
-                ].map(({ label, key, placeholder, type }) => (
+                  { label: 'Subdomain', key: 'subdomain', placeholder: 'springfield', required: true },
+                ].map(({ label, key, placeholder, type, required }) => (
                   <div key={key}>
-                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label}</label>
+                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label} {required && <span className="text-destructive">*</span>}</label>
                     <input type={type || 'text'} placeholder={placeholder} value={(standaloneForm as any)[key]}
                       onChange={(e) => setStandaloneForm({ ...standaloneForm, [key]: e.target.value })}
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>
                 ))}
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Type</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Type <span className="text-destructive">*</span></label>
                   <select value={standaloneForm.schoolType} onChange={(e) => setStandaloneForm({ ...standaloneForm, schoolType: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                     {SCHOOL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -588,14 +588,14 @@ export default function SuperAdminPage() {
                     { label: 'Admin Email', key: 'adminEmail', placeholder: 'admin@school.com', type: 'email' },
                   ].map(({ label, key, placeholder, type }) => (
                     <div key={key}>
-                      <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label}</label>
+                      <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label} <span className="text-destructive">*</span></label>
                       <input type={type || 'text'} placeholder={placeholder} value={(standaloneForm as any)[key]}
                         onChange={(e) => setStandaloneForm({ ...standaloneForm, [key]: e.target.value })}
                         className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                     </div>
                   ))}
                   <div className="col-span-2">
-                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Password</label>
+                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Password <span className="text-destructive">*</span></label>
                     <div className="relative">
                       <input type={showPw ? 'text' : 'password'} placeholder="••••••••" value={standaloneForm.adminPassword}
                         onChange={(e) => setStandaloneForm({ ...standaloneForm, adminPassword: e.target.value })}
@@ -633,12 +633,12 @@ export default function SuperAdminPage() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Institution Details</p>
                 <div className="grid grid-cols-3 gap-3">
                   {[
-                    { label: 'Institution Name', key: 'name', placeholder: 'Greenfield Academy', span: 3 },
+                    { label: 'Institution Name', key: 'name', placeholder: 'Greenfield Academy', span: 3, required: true },
                     { label: 'City', key: 'city', placeholder: 'Yaounde' },
                     { label: 'Country', key: 'country', placeholder: 'Cameroon' },
-                  ].map(({ label, key, placeholder, span }) => (
+                  ].map(({ label, key, placeholder, span, required }) => (
                     <div key={key} className={span === 3 ? 'col-span-3' : ''}>
-                      <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label}</label>
+                      <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label} {required && <span className="text-destructive">*</span>}</label>
                       <input placeholder={placeholder} value={(parentForm as any)[key]}
                         onChange={(e) => setParentForm({ ...parentForm, [key]: e.target.value })}
                         className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -721,21 +721,21 @@ export default function SuperAdminPage() {
               <p className="text-xs font-semibold text-muted-foreground uppercase">School Details</p>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'School Name', key: 'name', placeholder: 'Greenfield Academy' },
-                  { label: 'Email', key: 'email', placeholder: 'info@school.com', type: 'email' },
+                  { label: 'School Name', key: 'name', placeholder: 'Greenfield Academy', required: true },
+                  { label: 'Email', key: 'email', placeholder: 'info@school.com', type: 'email', required: true },
                   { label: 'Phone', key: 'phone', placeholder: '+237...' },
                   { label: 'City', key: 'address', placeholder: 'Yaounde' },
-                  { label: 'Subdomain', key: 'subdomain', placeholder: 'greenfield' },
-                ].map(({ label, key, placeholder, type }) => (
+                  { label: 'Subdomain', key: 'subdomain', placeholder: 'greenfield', required: true },
+                ].map(({ label, key, placeholder, type, required }) => (
                   <div key={key}>
-                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label}</label>
+                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{label} {required && <span className="text-destructive">*</span>}</label>
                     <input type={type || 'text'} placeholder={placeholder} value={(editForm as any)[key]}
                       onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>
                 ))}
                 <div>
-                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Type</label>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Type <span className="text-destructive">*</span></label>
                   <select value={editForm.type} onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                     {SCHOOL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -898,10 +898,12 @@ export default function SuperAdminPage() {
               <div className="border-t border-border pt-4 mt-2">
                 <p className="text-xs font-medium text-foreground mb-2">Set new password for <span className="text-primary">{resetAdminTarget.name}</span></p>
                 {resetAdminError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5 mb-2">{resetAdminError}</p>}
+                <label className="block text-xs font-medium text-foreground mb-1">New Password <span className="text-destructive">*</span></label>
                 <div className="relative mb-3">
                   <input
                     type={showResetAdminPw ? 'text' : 'password'}
                     placeholder="New password (min 6 characters)"
+                    required
                     value={resetAdminPw}
                     onChange={e => setResetAdminPw(e.target.value)}
                     className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"

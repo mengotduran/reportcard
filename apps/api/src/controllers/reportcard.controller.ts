@@ -2,6 +2,31 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
+import { parseStoredScale } from '../utils/gradingScale'
+
+// Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
+// the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on.
+const TEACHER_ROLES: string[] = ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'CLASS_MASTER']
+
+/**
+ * A school where the administration records marks appoints no class masters, so the
+ * general remarks are the administration's to write too. Returns a refusal message when
+ * this role must not touch remarks here, or null when it may.
+ *
+ * Enforced server-side rather than only hiding the field: the UI is a courtesy, the
+ * endpoint is the rule.
+ */
+async function remarksBlockedForRole(schoolId: string, role: string): Promise<string | null> {
+  if (role !== 'CLASS_MASTER') return null
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { marksEntryMode: true } })
+  if (school?.marksEntryMode !== 'ADMIN_ONLY') return null
+  return 'General remarks are written by the administration at this school.'
+}
+
+// University marking split: CA out of 30, exam out of 70, course out of 100. The same
+// split the marks grid and the report card print with.
+const UNIVERSITY_EXAM_MAX = 70
+const UNIVERSITY_COURSE_MAX = 100
 
 // A subject scoped to one term (university courses) only counts for that term;
 // a subject with no term (primary/secondary, and any non-term-scoped subject)
@@ -117,6 +142,42 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // Whether each card's student can print an ANNUAL transcript yet — ready once a
+    // PUBLISHED report card exists for EVERY period of that card's session. Keyed
+    // studentId::session because the list can span sessions when filtered that way.
+    // Counted from the session's actual terms, so it covers a university's two
+    // semesters and a primary/secondary school's three terms alike.
+    const transcriptReadyByKey: Record<string, boolean> = {}
+    // Which term CLOSES each session (last by startDate) — the annual transcript action
+    // only shows on that term's rows (it's a year-end document, not a per-period one).
+    // That's the second semester at a university and the third term everywhere else.
+    const finalTermIdBySession = new Map<string, string>()
+    if (reportCards.length > 0) {
+      const sessions = [...new Set(reportCards.map(rc => rc.term.session))]
+      const sIds = [...new Set(reportCards.map(rc => rc.studentId))]
+      const [sessionTerms, publishedCards] = await Promise.all([
+        prisma.term.findMany({ where: { schoolId, session: { in: sessions } }, select: { id: true, session: true }, orderBy: { startDate: 'asc' } }),
+        prisma.reportCard.findMany({
+          where: { schoolId, studentId: { in: sIds }, status: 'PUBLISHED', term: { session: { in: sessions } } },
+          select: { studentId: true, termId: true, term: { select: { session: true } } },
+        }),
+      ])
+      const termCountBySession = new Map<string, number>()
+      for (const t of sessionTerms) termCountBySession.set(t.session, (termCountBySession.get(t.session) ?? 0) + 1)
+      for (const t of sessionTerms) finalTermIdBySession.set(t.session, t.id) // asc — last write = latest startDate
+      const publishedTermsByKey = new Map<string, Set<string>>()
+      for (const c of publishedCards) {
+        const key = `${c.studentId}::${c.term.session}`
+        if (!publishedTermsByKey.has(key)) publishedTermsByKey.set(key, new Set())
+        publishedTermsByKey.get(key)!.add(c.termId)
+      }
+      for (const rc of reportCards) {
+        const key = `${rc.studentId}::${rc.term.session}`
+        const total = termCountBySession.get(rc.term.session) ?? 0
+        transcriptReadyByKey[key] = total > 0 && (publishedTermsByKey.get(key)?.size ?? 0) >= total
+      }
+    }
+
     // Class size per term: how many students in this class + term actually got
     // ranked (non-null average) — the denominator next to "Position". Computed
     // in-memory from the already-fetched set (it always includes every card
@@ -194,6 +255,8 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       return {
         ...rc,
         cgpa: cgpaByStudent[rc.studentId] ?? null,
+        transcriptReady: transcriptReadyByKey[`${rc.studentId}::${rc.term.session}`] ?? false,
+        isFinalTerm: finalTermIdBySession.get(rc.term.session) === rc.termId,
         classSize,
         classAverage: classSize && classAverageSum != null ? classAverageSum / classSize : null,
         annualAverage: annualByCardId[rc.id]?.average ?? null,
@@ -458,22 +521,55 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, marksEntryMode: true } })
     const isUniversity = school?.type === 'UNIVERSITY'
 
     const role = req.user!.role
     const userId = req.user!.id
-    if (reportCard.status === 'PUBLISHED' && (role === 'CLASS_TEACHER' || role === 'CLASS_MASTER')) {
-      if (reportCard.marksEditGrantedTo !== userId) {
-        res.status(403).json({ message: 'This report card has been published. Request permission from your admin to make changes.' })
-        return
-      }
+
+    // School policy: some universities record marks centrally so that the person who
+    // teaches a course is never the person who enters its marks. Enforced here rather
+    // than only in the UI, because a locked grid is a suggestion: the endpoint is what
+    // actually decides. Teachers keep READ access; only saving is refused.
+    //
+    // `marksEditGrantedTo` stays the escape hatch: an admin can hand one class to one
+    // teacher without changing the school's policy (same grant used for published cards).
+    if (school?.marksEntryMode === 'ADMIN_ONLY' && TEACHER_ROLES.includes(role) && reportCard.marksEditGrantedTo !== userId) {
+      res.status(403).json({ message: 'Marks are entered by the administration at this school. Ask an admin to record them, or to grant you access to this class.' })
+      return
+    }
+
+    // A published card is frozen for EVERYONE, the administration included: to change a
+    // mark you unpublish first. Publishing is what fixes a class's averages and positions,
+    // so a mark moving underneath a published card silently invalidates the cards already
+    // handed out. Making the admin unpublish makes that consequence a deliberate act.
+    //
+    // This also closes a hole: the rule used to name CLASS_TEACHER and CLASS_MASTER only,
+    // so a SUBJECT_TEACHER could edit a published card outright.
+    //
+    // The one exception stays the explicit grant, which an admin hands to one teacher for
+    // one card; it is consumed on use, below.
+    if (reportCard.status === 'PUBLISHED' && reportCard.marksEditGrantedTo !== userId) {
+      res.status(403).json({
+        message: TEACHER_ROLES.includes(role)
+          ? 'This report card has been published. Ask your admin to unpublish it, or to grant you access.'
+          : 'This report card is published. Unpublish it before changing its marks.',
+      })
+      return
+    }
+    if (reportCard.status === 'PUBLISHED' && reportCard.marksEditGrantedTo === userId) {
       // Permission granted — revoke after this save
       await prisma.reportCard.update({ where: { id }, data: { marksEditGrantedTo: null } })
     }
 
-    // Delete existing entries and recreate
-    await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
+    // The resit marks already on file, read BEFORE anything is deleted. Saving any tab
+    // re-sends every subject's existing resitScore untouched, so eligibility is enforced
+    // only against marks that are actually being added or changed (see below).
+    const priorEntries = await prisma.reportEntry.findMany({
+      where: { reportCardId: id },
+      select: { subjectId: true, resitScore: true },
+    })
+    const priorResit = new Map(priorEntries.map(e => [e.subjectId, e.resitScore]))
 
     // Fetch subjects for maxScore and coefficient
     const subjectIds = entries.map((e: { subjectId: string }) => e.subjectId)
@@ -483,8 +579,13 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // Fetch grading scale — drives BOTH the letter grade and the auto-remark
     // so report cards reflect the school's grading design.
     const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
-    let gradeRanges: { minScore: number; maxScore: number; grade?: string; remark: string }[] =
-      gradingScale?.ranges ? (gradingScale.ranges as any) : []
+    // Parsed, never read straight off the column: the scale is stored either as a bare
+    // array (legacy) or as { ranges, … } (what saveGradingScale writes today). Reading it
+    // directly meant `.length` was undefined for the object shape, so this silently used
+    // the DEFAULT scale instead of the school's own, and `.some()` below would have thrown
+    // outright for a non-university school. juryDecision, which only the school's real
+    // scale carries, is exactly what resit eligibility turns on.
+    let gradeRanges = parseStoredScale(gradingScale?.ranges).ranges
     // For secondary schools, discard any stale 0–100 percent-scale ranges (boundary > 20).
     // University ranges are intentionally 0–100 and must NOT be stripped.
     if (!isUniversity && gradeRanges.some(r => Number(r?.maxScore) > 20 || Number(r?.minScore) > 20)) gradeRanges = []
@@ -517,16 +618,67 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     const getAutoRemark = (score: number): string => matchRange(score)?.remark ?? ''
     const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade(isUniversity ? score : (score / 20) * 100)
 
+    // ── Resit eligibility (university) ───────────────────────────────────────────
+    // A resit may be recorded for any student who FAILED THE COURSE, whatever their exam
+    // mark was. Re-sitting only replaces the exam (the CA carries over), so a student who
+    // passed the exam but failed the course on a weak CA is exactly who it helps: lifting
+    // the exam is their only route to a pass. A student who PASSED the course is refused:
+    // there is nothing to fix. The marks grid already locks ineligible rows; this is the
+    // rule actually being enforced, rather than trusting whatever the client sends.
+    //
+    // Judged on the school's own scale, so no pass mark is hardcoded. Bands are matched
+    // on their lower bound: real scales use integer bounds (0-44, 45-49) and an exam
+    // normalised out of 100 is fractional (31/70 = 44.29), which falls straight through
+    // the gap between bands under min..max containment and reads a fail as a pass.
+    const isFailingApi = (score: number): boolean => {
+      const sorted = [...effectiveRanges].sort((a, b) => b.minScore - a.minScore)
+      const band = sorted.find(r => score >= r.minScore)
+      if (!band) return false
+      const jury = (band as { juryDecision?: string }).juryDecision
+      if (jury?.trim()) return jury.trim().toUpperCase() === 'FAIL'
+      return band.grade?.trim().toUpperCase() === 'F' || band.remark?.trim().toUpperCase() === 'FAIL'
+    }
+    if (isUniversity) {
+      const ineligible: string[] = []
+      for (const entry of entries as { subjectId: string; seq1Score?: number; seq2Score?: number; resitScore?: number }[]) {
+        const incoming = entry.resitScore ?? null
+        if (incoming == null) continue
+        // Untouched marks pass through: rows predating this rule must not block a teacher
+        // from saving CA or Exam marks for that student (they are re-sent on every save).
+        const prior = priorResit.get(entry.subjectId) ?? null
+        if (prior != null && prior === incoming) continue
+        const ca = entry.seq1Score ?? null
+        const exam = entry.seq2Score ?? null
+        const eligible = ca != null && exam != null && isFailingApi(ca + exam)
+        if (!eligible) ineligible.push(subjectMap[entry.subjectId]?.name ?? entry.subjectId)
+      }
+      if (ineligible.length > 0) {
+        res.status(400).json({
+          message: `A resit mark can only be recorded for a student who failed the course. Not eligible: ${ineligible.join(', ')}.`,
+        })
+        return
+      }
+    }
+
+    // Delete existing entries and recreate. Deliberately after every validation above:
+    // bailing out once these are gone would wipe the card's marks.
+    await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
+
     const createdEntries = await Promise.all(
-      entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; grade?: string; remarks?: string }) => {
+      entries.map((entry: { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; resitScore?: number; grade?: string; remarks?: string }) => {
         const seq1 = entry.seq1Score ?? null
         const seq2 = entry.seq2Score ?? null
+        // University only: a resit re-does the Exam component; CA (seq1) carries over unchanged.
+        // The original seq2Score is preserved for the record — resitScore, when present, is what
+        // actually counts toward the total/grade/GPA.
+        const resit = isUniversity ? (entry.resitScore ?? null) : null
+        const effectiveSeq2 = resit ?? seq2
         // University: TOTAL = CA + EXAM (direct sum, both components on their own scale).
         // Secondary: TOTAL = average of the two sequences.
         const finalScore: number | null = entry.score !== undefined
           ? entry.score
-          : seq1 !== null && seq2 !== null
-            ? isUniversity ? seq1 + seq2 : (seq1 + seq2) / 2
+          : seq1 !== null && effectiveSeq2 !== null
+            ? isUniversity ? seq1 + effectiveSeq2 : (seq1 + effectiveSeq2) / 2
             : null
         const sub = subjectMap[entry.subjectId]
         // University: match raw 0-100 score against 0-100 ranges.
@@ -541,6 +693,7 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
             subjectId: entry.subjectId,
             seq1Score: seq1,
             seq2Score: seq2,
+            resitScore: resit,
             score: finalScore,
             grade: scoreForGrade !== null ? getGradeLetter(scoreForGrade) : null,
             remarks: autoRemark
@@ -718,7 +871,7 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
             select: {
               id: true, status: true, average: true,
               marksEditGrantedTo: true, remarksEditGrantedTo: true,
-              entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
+              entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, resitScore: true } },
             },
           },
         },
@@ -758,6 +911,10 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
           marksEditGrantedTo: rc.marksEditGrantedTo,
           remarksEditGrantedTo: rc.remarksEditGrantedTo,
           marksFilled,
+          // Included so the mobile marks sheet can build its rows from THIS one response.
+          // It used to fetch every student's report card individually — one request per
+          // student — which on a phone's wifi is a timeout waiting to happen.
+          entries: rc.entries,
         } : null,
       }
     })
@@ -803,13 +960,19 @@ export const updateRemarks = async (req: AuthRequest, res: Response) => {
     const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
     if (!reportCard) { res.status(404).json({ message: 'Report card not found' }); return }
 
+    const role = req.user!.role
+    const userId = req.user!.id
+
+    // Authorisation first: "enter all the marks before writing the remark" is misleading
+    // advice for someone who may not write this remark at all.
+    const remarksBlocked = await remarksBlockedForRole(schoolId, role)
+    if (remarksBlocked) { res.status(403).json({ message: remarksBlocked }); return }
+
     if (!(await offeredSubjectsAllMarked(schoolId, id))) {
       res.status(400).json({ message: "Enter marks for all of the student's subjects before writing the general remark." })
       return
     }
 
-    const role = req.user!.role
-    const userId = req.user!.id
     if (reportCard.status === 'PUBLISHED' && role === 'CLASS_MASTER') {
       if (reportCard.remarksEditGrantedTo !== userId) {
         res.status(403).json({ message: 'This report card has been published. Request permission from your admin to edit remarks.' })
@@ -851,6 +1014,11 @@ export const generateRemarks = async (req: AuthRequest, res: Response) => {
 
     const role = req.user!.role
     const userId = req.user!.id
+
+    // Same rule as writing a remark by hand: generating one is still writing it.
+    const remarksBlocked = await remarksBlockedForRole(schoolId, role)
+    if (remarksBlocked) { res.status(403).json({ message: remarksBlocked }); return }
+
     if (reportCard.status === 'PUBLISHED' && role === 'CLASS_MASTER' && reportCard.remarksEditGrantedTo !== userId) {
       res.status(403).json({ message: 'This report card has been published. Request permission from your admin to edit remarks.' })
       return
@@ -1019,7 +1187,7 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
       prisma.subject.findMany({ where: { schoolId, ...subjectTermFilter(term.name) }, select: { id: true, classLevel: true, compulsory: true } }),
       prisma.reportCard.findMany({
         where: { schoolId, termId },
-        select: { id: true, status: true, remarks: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
+        select: { id: true, status: true, remarks: true, remarksFr: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
         }
       }),
     ])
@@ -1056,7 +1224,7 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
           }
         }
 
-        if (requiresRemarks && !rc.remarks?.trim()) missingRemarks++
+        if (requiresRemarks && !rc.remarks?.trim() && !rc.remarksFr?.trim()) missingRemarks++
       }
 
       const unpublished = classStudents.filter(s => {
@@ -1129,7 +1297,7 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
         }
       })
 
-    const remarksOk = !!rc.remarks?.trim()
+    const remarksOk = !!(rc.remarks?.trim() || rc.remarksFr?.trim())
 
     // Other active students in this class + term who are blocking publish
     // (excluding this student — their own gaps are already covered above).
@@ -1181,25 +1349,36 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const [student, reportCards, gradingScale, school, classLevel] = await Promise.all([
+    const [student, reportCards, gradingScale, school, classLevel, termCount] = await Promise.all([
       prisma.student.findFirst({ where: { id: studentId, schoolId } }),
       prisma.reportCard.findMany({
-        where: { studentId, schoolId, term: { session: resolvedSession } },
+        // Published only — an official annual transcript must never reflect
+        // draft marks that can still change (same rule as bulk printing).
+        where: { studentId, schoolId, term: { session: resolvedSession }, status: 'PUBLISHED' },
         include: {
           term: true,
           entries: {
-            include: { subject: { select: { id: true, name: true, code: true, credit: true, term: true, classLevel: true } } },
+            // coefficient drives the term tables + annual average on primary/secondary
+            // transcripts (credit is the university's equivalent).
+            include: { subject: { select: { id: true, name: true, code: true, credit: true, coefficient: true, term: true, classLevel: true } } },
             orderBy: [{ subject: { name: 'asc' } }],
           },
         },
-        orderBy: { term: { name: 'asc' } },
+        // Chronological — the transcript stacks its tables in year order. Ordering by
+        // term NAME only happened to work while terms sorted alphabetically by
+        // coincidence ("First…" < "Second…" < "Third…"); startDate is the real order.
+        orderBy: { term: { startDate: 'asc' } },
       }),
       prisma.gradingScale.findUnique({ where: { schoolId } }),
-      prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, logo: true, language: true, type: true } }),
+      // `stamp` prints on official copies via the designer's stamp section.
+      prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, logo: true, stamp: true, language: true, type: true, email: true, phone: true, address: true, website: true, authorizationNumber: true, officialLeftTextEn: true, officialLeftTextFr: true, officialRightTextEn: true, officialRightTextFr: true } }),
       prisma.student.findFirst({
         where: { id: studentId, schoolId },
         select: { classLevel: true },
       }).then(async (s) => s ? prisma.classLevel.findFirst({ where: { schoolId, name: s.classLevel }, select: { maxScore: true } }) : null),
+      // How many periods this year actually has (2 semesters / 3 terms) — the page
+      // needs it to tell a complete transcript from a partially published one.
+      prisma.term.count({ where: { schoolId, session: resolvedSession } }),
     ])
 
     if (!student) {
@@ -1222,6 +1401,7 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
       school,
       session: resolvedSession,
       reportCards,
+      termCount,
       maxScore: (classLevel as { maxScore: number } | null)?.maxScore ?? 20,
       gradingScale: gradingRanges,
       classificationBands,

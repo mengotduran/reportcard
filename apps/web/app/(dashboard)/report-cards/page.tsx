@@ -17,7 +17,7 @@ import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 import DesktopOnly from '@/components/ui/DesktopOnly'
-import { getTemplateApi, TEMPLATE_DEFAULTS, TemplateName, TemplateConfig, getDefaultLayoutForType } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig, DocVariant } from '@/lib/api/reportCardTemplate'
 import { ClassListDocOptions, classListPrintPortalHtml } from '@/lib/classListDocument'
 import ClassPickerModal, { ClassOption } from '@/components/ui/ClassPickerModal'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
@@ -28,7 +28,7 @@ import { useT } from '@/lib/i18n'
 import { ExcelTemplate, listExcelTemplatesApi, downloadExcelTranscriptApi, fetchExcelPreviewHtmlApi } from '@/lib/api/excelTemplates'
 
 interface RawEntry {
-  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null
+  id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
   grade: string; remarks: string; subject: { id: string; name: string; coefficient?: number; credit?: number }
 }
 interface RawRC {
@@ -41,7 +41,14 @@ interface RawRC {
   entries: RawEntry[]
 }
 
-interface PrintJob { cards: RawRC[]; config: TemplateConfig }
+interface PrintJob {
+  cards: RawRC[]
+  config: TemplateConfig
+  /** Bulk printing a whole class is the end-of-term hand-out, so it produces STUDENT
+   *  copies. An official copy is a deliberate, per-student act (it gets sealed and sent),
+   *  and is printed from that student's own report card or transcript page. */
+  variant: DocVariant
+}
 
 /**
  * Print the .rc-print-portal in place (no popup window) — waits for any
@@ -66,6 +73,13 @@ interface ReportCard {
   totalScore: number | null
   average: number | null
   decision?: string | null
+  // Every period of this card's session has a published report card, so the
+  // annual transcript can be printed (see getReportCards).
+  transcriptReady?: boolean
+  // This card belongs to the session's CLOSING period — the only rows that carry
+  // the annual transcript action (a year-end document). That's the second
+  // semester at a university and the third term at a primary/secondary school.
+  isFinalTerm?: boolean
   student: { id: string; name: string; classLevel: string; studentId: string }
   term: { id: string; name: string; session: string }
   entries: { id: string; score: number; grade: string; subject: { name: string } }[]
@@ -123,10 +137,8 @@ function TeacherClassesView() {
       // time from their own report-card detail page if ever needed.
       const published: RawRC[] = (rcData.reportCards as RawRC[]).filter(rc => rc.status === 'PUBLISHED' && rc.student.isActive !== false)
       if (!published.length) { setPrinting(false); return }
-      const saved = tplData.config as Partial<TemplateConfig> | undefined
-      const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
-      setPrintJob({ cards: published, config })
+      const config = mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, school?.type)
+      setPrintJob({ cards: published, config, variant: 'student' })
     } catch {
       setPrinting(false)
     }
@@ -301,11 +313,11 @@ function TeacherClassesView() {
           {printJob.cards.map((rc, i) => (
             <div key={rc.id} style={i < printJob.cards.length - 1 ? { pageBreakAfter: 'always' } : undefined}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber, officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr, officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
-                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
+                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, resitScore: e.resitScore ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
@@ -316,6 +328,7 @@ function TeacherClassesView() {
                 annualPosition={rc.annualPosition ?? undefined}
                 annualClassSize={rc.annualClassSize ?? undefined}
                 config={printJob.config}
+                variant={printJob.variant}
                 gradeBands={gradeBands}
               />
             </div>
@@ -372,6 +385,8 @@ export default function ReportCardsPage() {
   const tr = useT()
   const router = useRouter()
   const { isAuthenticated, user, school, activeSession } = useAuthStore()
+  // A university teaches courses, not subjects.
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   if (TEACHER_ROLES.includes(user?.role ?? '') || user?.role === 'CLASS_MASTER') return <TeacherClassesView />
   const { toast, showToast, hideToast } = useToast()
@@ -488,14 +503,12 @@ export default function ReportCardsPage() {
     setPickerBusy(true)
     try {
       const tplData = await getTemplateApi().catch(() => ({ config: {} }))
-      const saved = tplData.config as Partial<TemplateConfig> | undefined
-      const base = TEMPLATE_DEFAULTS[((saved?.template as TemplateName) ?? 'classic')]
-      const config = saved && Object.keys(saved).length > 0 ? { ...base, ...saved } as TemplateConfig : getDefaultLayoutForType(school?.type)
+      const config = mergeSavedStandardConfig(tplData.config as Partial<TemplateConfig>, school?.type)
       const lists = await Promise.all(classes.map((cl) => getReportCardsApi({ termId: activeTerm.id, classLevel: cl })))
       // Disabled/Dismissed students are excluded from bulk printing — see Student.status in schema.prisma.
       const cards: RawRC[] = lists.flatMap((d) => (d.reportCards as RawRC[]).filter((rc) => rc.status === 'PUBLISHED' && rc.student.isActive !== false))
       if (!cards.length) { showToast(tr('No published cards for this class'), 'error'); return }
-      setPrintJob({ cards, config })
+      setPrintJob({ cards, config, variant: 'student' })
     } catch {
       showToast(tr('Failed to print'), 'error')
     } finally { setPickerBusy(false); setClassPicker(null) }
@@ -652,7 +665,7 @@ export default function ReportCardsPage() {
           { label: tr('Name'), value: (s: ExportStudent) => s.name },
           { label: tr('Student ID'), value: (s: ExportStudent) => s.studentId },
           { label: tr('Class'), value: (s: ExportStudent) => s.classLevel },
-          { label: tr('Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
+          { label: tr(isUniversity ? 'Courses' : 'Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
           { label: tr('Guardian'), value: (s: ExportStudent) => s.guardianName || '' },
           { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
           { label: tr('Guardian Email'), value: (s: ExportStudent) => s.guardianEmail || '' },
@@ -837,7 +850,7 @@ export default function ReportCardsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Student')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Class')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Term')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Subjects')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr(isUniversity ? 'Courses' : 'Subjects')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Average')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Decision')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Status')}</th>
@@ -887,8 +900,12 @@ export default function ReportCardsPage() {
                         className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('View / Print')}>
                         <Eye size={14} />
                       </button>
-                      {school?.type === 'UNIVERSITY' && (() => {
-                        const matchedTpl = excelTemplates.find(t => t.classLevels.includes(rc.student.classLevel))
+                      {(() => {
+                        // Excel transcript templates are a university-only feature; the
+                        // annual transcript below applies to every school type.
+                        const matchedTpl = school?.type === 'UNIVERSITY'
+                          ? excelTemplates.find(t => t.classLevels.includes(rc.student.classLevel))
+                          : undefined
                         if (matchedTpl) {
                           return (<>
                             <button
@@ -907,11 +924,21 @@ export default function ReportCardsPage() {
                             </button>
                           </>)
                         }
+                        // The annual transcript is a year-end document — its action only
+                        // lives on the rows of the period that CLOSES the year (second
+                        // semester at a university, third term everywhere else).
+                        if (!rc.isFinalTerm) return null
+                        const isUni = school?.type === 'UNIVERSITY'
                         return (
                           <button
                             onClick={() => router.push(`/report-cards/transcript/${rc.student.id}?session=${encodeURIComponent(rc.term.session)}`)}
-                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition"
-                            title={tr('Print Annual Transcript')}>
+                            disabled={!rc.transcriptReady}
+                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-transparent"
+                            title={rc.transcriptReady
+                              ? tr(isUni ? 'Print Annual Transcript' : 'Print Annual Report')
+                              : tr(isUni
+                                  ? 'Annual transcript is available once every semester of the year is published'
+                                  : 'Annual report is available once every term of the year is published')}>
                             <Scroll size={14} />
                           </button>
                         )
@@ -942,7 +969,7 @@ export default function ReportCardsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Student')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Student')} <span className="text-destructive">*</span></label>
                 <select value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="">{tr('Select student...')}</option>
@@ -950,7 +977,7 @@ export default function ReportCardsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Term')}</label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Term')} <span className="text-destructive">*</span></label>
                 <select value={form.termId} onChange={(e) => setForm({ ...form, termId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="">{tr('Select term...')}</option>
@@ -1082,11 +1109,11 @@ export default function ReportCardsPage() {
           {printJob.cards.map((rc, i) => (
             <div key={rc.id} style={i < printJob.cards.length - 1 ? { pageBreakAfter: 'always' } : undefined}>
               <PrintableReportCard
-                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber }}
+                school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber, officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr, officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
                 subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
-                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
+                entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, resitScore: e.resitScore ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
                 average={rc.average ?? 0}
@@ -1097,6 +1124,7 @@ export default function ReportCardsPage() {
                 annualPosition={rc.annualPosition ?? undefined}
                 annualClassSize={rc.annualClassSize ?? undefined}
                 config={printJob.config}
+                variant={printJob.variant}
                 gradeBands={gradeBands}
               />
             </div>

@@ -95,6 +95,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -363,7 +364,7 @@ export default function ClassesScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{tt('Class Name', 'Department Name')}</Text>
+            <Text style={styles.label}>{tt('Class Name', 'Department Name')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
               value={newName}
@@ -373,7 +374,7 @@ export default function ClassesScreen() {
               autoFocus
             />
 
-            <Text style={styles.label}>{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')}</Text>
+            <Text style={styles.label}>{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
               value={maxScore}
@@ -383,7 +384,7 @@ export default function ClassesScreen() {
               keyboardType="numeric"
             />
 
-            <Text style={styles.label}>{t('School Fee (XAF)')} *</Text>
+            <Text style={styles.label}>{t('School Fee (XAF)')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
               value={feeAmount}
@@ -430,7 +431,7 @@ export default function ClassesScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{t('Department Name')}</Text>
+            <Text style={styles.label}>{t('Department Name')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
               value={deptName}

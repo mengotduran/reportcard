@@ -490,7 +490,7 @@ export default function GradingScalePage() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Grade Letter')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Grade Letter')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="e.g. A+, A, B+, B, F" value={editForm.grade}
                   onChange={e => setEditForm(f => ({ ...f, grade: e.target.value }))}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -584,7 +584,7 @@ export default function GradingScalePage() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Classification Label')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Classification Label')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="e.g. Distinction, Upper Credit, Pass" value={bandForm.label}
                   onChange={e => setBandForm(f => ({ ...f, label: e.target.value }))}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -616,7 +616,7 @@ export default function GradingScalePage() {
             </div>
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{t('Abbreviation')}</label>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Abbreviation')} <span className="text-destructive">*</span></label>
                 <input type="text" placeholder="e.g. GP, CGPA, I, *" value={legendForm.abbr}
                   onChange={e => setLegendForm(f => ({ ...f, abbr: e.target.value }))}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring" />

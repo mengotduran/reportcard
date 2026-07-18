@@ -106,6 +106,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   deleteActionText: { fontSize: 14, fontWeight: '600', color: '#ef4444' },
   formLabel: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  required: { color: '#ef4444' },
   formInput: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 10,
     padding: 12, fontSize: 14, color: colors.text, backgroundColor: colors.inputBg, marginBottom: 14,
@@ -226,12 +227,18 @@ function CreateStudentModal({
   const [name, setName] = useState('')
   const [classLevel, setClassLevel] = useState('')
   const [gender, setGender] = useState('')
+  // Optional birth details. Typed as YYYY-MM-DD text, the same pattern the fees ledger
+  // uses, rather than pulling in a native date-picker dependency. The API normalises and
+  // rejects anything that is not a plain date, so a typo lands as blank, never half-saved.
+  const [dateOfBirth, setDateOfBirth] = useState('')
+  const [placeOfBirth, setPlaceOfBirth] = useState('')
   const [guardianName, setGuardianName] = useState('')
   const [creating, setCreating] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
 
   const reset = () => {
     setName(''); setClassLevel(''); setGender(''); setGuardianName('')
+    setDateOfBirth(''); setPlaceOfBirth('')
   }
 
   const handleCreate = async () => {
@@ -245,7 +252,12 @@ function CreateStudentModal({
     }
     setCreating(true)
     try {
-      await createStudent({ name: name.trim(), classLevel, gender, guardianName: guardianName.trim() || undefined })
+      await createStudent({
+        name: name.trim(), classLevel, gender,
+        guardianName: guardianName.trim() || undefined,
+        dateOfBirth: dateOfBirth.trim() || undefined,
+        placeOfBirth: placeOfBirth.trim() || undefined,
+      })
       reset()
       onClose()
       onCreated()
@@ -268,10 +280,10 @@ function CreateStudentModal({
               </TouchableOpacity>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.formLabel}>{t('Full Name')}</Text>
+              <Text style={styles.formLabel}>{t('Full Name')} <Text style={styles.required}>*</Text></Text>
               <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder={t('e.g. John Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
-              <Text style={styles.formLabel}>{t('Class Level')}</Text>
+              <Text style={styles.formLabel}>{t('Class Level')} <Text style={styles.required}>*</Text></Text>
               <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
                 <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>{classLevel || t('Select class level')}</Text>
                 <Ionicons name="chevron-down" size={16} color="#6b7280" />
@@ -286,7 +298,7 @@ function CreateStudentModal({
                 </View>
               )}
 
-              <Text style={styles.formLabel}>{t('Gender')} *</Text>
+              <Text style={styles.formLabel}>{t('Gender')} <Text style={styles.required}>*</Text></Text>
               <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
                 {['Male', 'Female'].map((g) => (
                   <TouchableOpacity key={g} onPress={() => setGender(g)}
@@ -295,6 +307,14 @@ function CreateStudentModal({
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <Text style={styles.formLabel}>{t('Date of Birth (optional)')}</Text>
+              <TextInput style={styles.formInput} value={dateOfBirth} onChangeText={setDateOfBirth}
+                placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" autoCapitalize="none" />
+
+              <Text style={styles.formLabel}>{t('Place of Birth (optional)')}</Text>
+              <TextInput style={styles.formInput} value={placeOfBirth} onChangeText={setPlaceOfBirth}
+                placeholder={t('e.g. Bamenda')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
               <Text style={styles.formLabel}>{t('Guardian Name (optional)')}</Text>
               <TextInput style={styles.formInput} value={guardianName} onChangeText={setGuardianName} placeholder={t('e.g. Mrs. Jane Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
@@ -645,7 +665,7 @@ export default function StudentsScreen() {
         { label: t('Name'), value: (s) => s.name },
         { label: t('Student ID'), value: (s) => s.studentId },
         { label: t('Class'), value: (s) => s.classLevel },
-        { label: t('Subjects'), value: (s) => (subjectsByClass[s.classLevel] || []).join(', ') },
+        { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s) => (subjectsByClass[s.classLevel] || []).join(', ') },
         { label: t('Guardian'), value: (s) => s.guardianName || '' },
         { label: t('Status'), value: (s) => { const st = effectiveStatus(s); return t(st === 'ACTIVE' ? 'Active' : st === 'DISABLED' ? 'Disabled' : 'Dismissed') } },
       ])
