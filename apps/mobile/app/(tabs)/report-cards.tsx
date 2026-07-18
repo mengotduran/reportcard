@@ -25,6 +25,9 @@ interface ClassSummary {
   filled: number
   published: number
   hasSubjects: boolean
+  // How many of this class's subjects the signed-in teacher actually teaches. Drives the
+  // filter below: without it every teacher saw every class in the school.
+  teacherSubjectCount: number
 }
 
 interface AdminReportCard extends ReportCardSummary {
@@ -132,9 +135,14 @@ function TeacherReportCards() {
           filled: students.filter((s) => s.reportCard?.marksFilled === true).length,
           published: students.filter((s) => s.reportCard?.status === 'PUBLISHED').length,
           hasSubjects: subjectCount > 0,
+          teacherSubjectCount: overviews[i].teacherSubjectCount ?? 0,
         }
       })
-      setClasses(summaries)
+      // A teacher only sees classes they teach in (mirrors the web). This view is
+      // teacher-only — admins are routed to AdminReportCards above — so no admin bypass
+      // is needed here. A class master keeps their own class even if they teach nothing
+      // in it, so they can still write its general remarks.
+      setClasses(summaries.filter((c) => c.teacherSubjectCount > 0 || c.classLevel === user?.masterClassLevel))
       if (isSecondary) {
         const [full, deptRes] = await Promise.all([getClassesFull(), getDepartments()])
         setClassDeptMap(Object.fromEntries(full.classLevels.map((c) => [c.name, c.departmentId ?? null])))

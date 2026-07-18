@@ -53,7 +53,13 @@ export interface ClassStudentOverview {
   name: string
   studentId: string
   classLevel: string
-  reportCard: { id: string; status: string; average: number | null; marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean } | null
+  reportCard: {
+    id: string; status: string; average: number | null
+    marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean
+    /** Per-subject marks, returned so the marks sheet needs ONE request instead of one
+     *  per student — a phone on shaky wifi cannot afford an N+1. */
+    entries?: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null }[]
+  } | null
 }
 
 export const getCurrentTerm = async (): Promise<{ term: Term }> => {
@@ -69,7 +75,7 @@ export const getClassLevels = async (): Promise<{ classLevels: string[] }> => {
 export const getClassOverview = async (
   termId: string,
   classLevel: string
-): Promise<{ students: ClassStudentOverview[]; subjectCount: number }> => {
+): Promise<{ students: ClassStudentOverview[]; subjectCount: number; teacherSubjectCount: number }> => {
   const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel } })
   return res.data
 }

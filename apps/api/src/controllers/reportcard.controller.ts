@@ -871,7 +871,7 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
             select: {
               id: true, status: true, average: true,
               marksEditGrantedTo: true, remarksEditGrantedTo: true,
-              entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
+              entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, resitScore: true } },
             },
           },
         },
@@ -911,6 +911,10 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
           marksEditGrantedTo: rc.marksEditGrantedTo,
           remarksEditGrantedTo: rc.remarksEditGrantedTo,
           marksFilled,
+          // Included so the mobile marks sheet can build its rows from THIS one response.
+          // It used to fetch every student's report card individually — one request per
+          // student — which on a phone's wifi is a timeout waiting to happen.
+          entries: rc.entries,
         } : null,
       }
     })

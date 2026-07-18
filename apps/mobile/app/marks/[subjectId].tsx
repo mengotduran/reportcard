@@ -64,6 +64,7 @@ export default function MarksEntryScreen() {
   const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [saving, setSaving] = useState(false)
   const [activeCell, setActiveCell] = useState<string | null>(null)
   const inputRefs = useRef<Record<string, TextInput | null>>({})
@@ -85,15 +86,16 @@ export default function MarksEntryScreen() {
     // Sort alphabetically
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
 
-    const loaded: Row[] = await Promise.all(
-      sorted.map(async (s) => {
+    // Rows come straight off the overview response — ONE request for the whole class.
+    // This used to fetch every student's report card individually (16 students = 16
+    // requests), which on a phone's wifi routinely blew the 15s timeout.
+    const loaded: Row[] = sorted.map((s) => {
         let score = ''
         let otherSeqScore: number | null = null
         let resitEligible = false
         if (s.reportCard) {
-          try {
-            const rc = await getReportCard(s.reportCard.id)
-            const entry = rc.entries.find((e) => e.subject.id === decodedSubjectId) as any
+          {
+            const entry = s.reportCard.entries?.find((e) => e.subjectId === decodedSubjectId)
             if (entry) {
               if (isResit) {
                 score = entry.resitScore != null ? String(entry.resitScore) : ''
@@ -112,7 +114,7 @@ export default function MarksEntryScreen() {
                 otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
               }
             }
-          } catch { /* no entries yet */ }
+          }
         }
         const isPublished = s.reportCard?.status === 'PUBLISHED'
         const grantedToMe = s.reportCard?.marksEditGrantedTo === user?.id
@@ -128,12 +130,16 @@ export default function MarksEntryScreen() {
           resitEligible,
         }
       })
-    )
     setRows(loaded)
   }, [termId, decodedClass, decodedSubjectId, seqIndex])
 
   useFocusEffect(useCallback(() => {
-    fetchData().finally(() => setLoading(false))
+    // Catch here or a timeout surfaces as an unhandled-rejection red box instead of a
+    // screen the user can act on.
+    setLoadError('')
+    fetchData()
+      .catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.')))
+      .finally(() => setLoading(false))
   }, [fetchData]))
 
   const updateScore = (studentId: string, value: string) => {
@@ -247,6 +253,16 @@ export default function MarksEntryScreen() {
       <View style={s.container}>
         {loading ? (
           <View style={s.center}><ActivityIndicator size="large" color="#F03E2F" /></View>
+        ) : loadError ? (
+          <View style={s.center}>
+            <Ionicons name="cloud-offline-outline" size={40} color="#9ca3af" />
+            <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 10, marginBottom: 14 }}>{loadError}</Text>
+            <TouchableOpacity
+              onPress={() => { setLoading(true); setLoadError(''); fetchData().catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.'))).finally(() => setLoading(false)) }}
+              style={{ backgroundColor: '#F03E2F', borderRadius: 10, paddingHorizontal: 22, paddingVertical: 10 }}>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>{t('Retry')}</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
         <>
         {/* Info bar */}
