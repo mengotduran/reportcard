@@ -28,6 +28,7 @@ const normalizeBirthDate = (v: unknown): string | null => {
   return `${y}-${mo}-${d}`
 }
 import { previewStudentRows, buildImportTemplate, ParsedStudentRow } from '../utils/studentImport'
+import { ensureDepartments } from '../utils/departments'
 import { currentSession } from './fees.controller'
 
 // Every active student should have a report card for the current term as soon
@@ -385,9 +386,10 @@ export const downloadStudentImportTemplate = async (req: AuthRequest, res: Respo
     const schoolId = req.user!.schoolId!
     const [school, classes] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
-      prisma.classLevel.findMany({ where: { schoolId }, orderBy: { order: 'asc' }, select: { name: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, orderBy: { order: 'asc' }, select: { name: true, departmentId: true } }),
     ])
-    const buffer = await buildImportTemplate(classes.map((c) => c.name), school?.type === 'UNIVERSITY')
+    const departments = await ensureDepartments(schoolId, school?.type)
+    const buffer = await buildImportTemplate(school?.type ?? 'PRIMARY', classes, departments)
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', 'attachment; filename="student-import-template.xlsx"')
     res.send(buffer)
@@ -410,8 +412,9 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
 
     const [school, classes] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
-      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, departmentId: true } }),
     ])
+    const departments = await ensureDepartments(schoolId, school?.type)
 
     let existingStudents: { name: string; studentId: string }[] | undefined
     if (school?.type === 'UNIVERSITY') {
@@ -421,7 +424,7 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
       })
     }
 
-    const result = await previewStudentRows(file.buffer, file.originalname, classes.map((c) => c.name), existingStudents)
+    const result = await previewStudentRows(file.buffer, file.originalname, school?.type ?? 'PRIMARY', classes, departments, existingStudents)
     res.json(result)
   } catch (error) {
     console.error(error)

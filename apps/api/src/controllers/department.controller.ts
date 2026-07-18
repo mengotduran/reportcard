@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { ensureDepartments } from '../utils/departments'
 
 // Departments group a SECONDARY school's classes into streams (Grammar /
 // Technical / Commercial). Universities have their own department-in-name
@@ -10,26 +11,7 @@ export const getDepartments = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
-
-    let departments = await prisma.department.findMany({
-      where: { schoolId },
-      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
-    })
-
-    // Self-heal: a secondary school should always have at least the default
-    // "Grammar" department, with every existing (untagged) class assigned to it.
-    // Covers schools created after the backfill migration ran.
-    if (school?.type === 'SECONDARY' && departments.length === 0) {
-      const grammar = await prisma.department.create({
-        data: { schoolId, name: 'Grammar', order: 0, isDefault: true },
-      })
-      await prisma.classLevel.updateMany({
-        where: { schoolId, departmentId: null },
-        data: { departmentId: grammar.id },
-      })
-      departments = [grammar]
-    }
-
+    const departments = await ensureDepartments(schoolId, school?.type)
     res.json({ departments })
   } catch (error) {
     console.error(error)
