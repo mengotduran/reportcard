@@ -42,7 +42,7 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   DISMISSED: 'bg-red-100 text-red-700',
 }
 
-const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', dateOfBirth: '', placeOfBirth: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', directLevel2Entry: false }
+const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', dateOfBirth: '', placeOfBirth: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', secDept: '', directLevel2Entry: false }
 
 // Secondary non-default departments store classes with a " (Department)" suffix;
 // strip it for display since the department is shown separately.
@@ -233,6 +233,15 @@ export default function StudentsPage() {
   const selectedClassDef = definedClasses.find((c) => c.name === form.classLevel)
   const needsStream = selectedClassDef?.hasStream ?? false
 
+  // Secondary two-step picker, same shape as the university one below: department
+  // first, then the class dropdown narrows to that department's classes only. A
+  // student's department is never stored directly — it's always derived from which
+  // class they're in — so picking department-first is what guarantees the class they
+  // end up with actually belongs to it.
+  const secDeptClasses = useMemo(() =>
+    isSecondary && form.secDept ? definedClasses.filter((c) => c.departmentId === form.secDept) : [],
+  [isSecondary, form.secDept, definedClasses])
+
   // University two-step picker: unique departments, then available levels per dept
   const uniDepts = useMemo(() =>
     isUniversity ? Array.from(new Set(definedClasses.map((c) => univDept(c.name)))).sort() : [],
@@ -276,6 +285,7 @@ export default function StudentsPage() {
       guardianEmail: s.guardianEmail || '',
       uniDept: isUniversity ? univDept(baseClass) : '',
       uniLevel: isUniversity ? univLevel(baseClass) : '',
+      secDept: isSecondary ? (deptIdOfClass(baseClass) ?? '') : '',
       directLevel2Entry: (s as { directLevel2Entry?: boolean }).directLevel2Entry ?? false,
     })
     setError('')
@@ -296,6 +306,10 @@ export default function StudentsPage() {
       setError('Please select a department and level.')
       return
     }
+    if (isSecondary && (!form.secDept || !form.classLevel)) {
+      setError(t('Please select a department and class.'))
+      return
+    }
     if (needsStream && !form.stream) {
       setError(t('Please select a stream (Arts or Science)'))
       return
@@ -307,7 +321,7 @@ export default function StudentsPage() {
     setSaving(true)
     try {
       const classLevel = needsStream ? `${form.classLevel} ${form.stream}` : form.classLevel
-      const { stream, studentId: _sid, uniDept: _ud, uniLevel: _ul, ...rest } = form
+      const { stream, studentId: _sid, uniDept: _ud, uniLevel: _ul, secDept: _sd, ...rest } = form
       const isLevel2 = / - Level 2$/i.test(classLevel)
       if (editingId) {
         await updateStudentApi(editingId, { ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
@@ -795,6 +809,45 @@ export default function StudentsPage() {
                             </p>
                           </div>
                         </label>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : isSecondary ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-foreground mb-1">{t('Department')} <span className="text-destructive">*</span></label>
+                    {departments.length > 0 ? (
+                      <select
+                        value={form.secDept}
+                        onChange={(e) => setForm({ ...form, secDept: e.target.value, classLevel: '', stream: '' })}
+                        required
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                        <option value="">{t('Select department')}</option>
+                        {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                    ) : (
+                      <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
+                        {t('No departments defined yet — go to the Classes page to add them.')}
+                      </div>
+                    )}
+                  </div>
+                  {form.secDept && (
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">{t('Class')} <span className="text-destructive">*</span></label>
+                      {secDeptClasses.length > 0 ? (
+                        <select
+                          value={form.classLevel}
+                          onChange={(e) => setForm({ ...form, classLevel: e.target.value, stream: '' })}
+                          required
+                          className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                          <option value="">{t('Select class')}</option>
+                          {secDeptClasses.map((c) => <option key={c.id} value={c.name}>{stripDeptSuffix(c.name)}</option>)}
+                        </select>
+                      ) : (
+                        <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
+                          {t('No classes in this department yet — go to the Classes page to add them.')}
+                        </div>
                       )}
                     </div>
                   )}

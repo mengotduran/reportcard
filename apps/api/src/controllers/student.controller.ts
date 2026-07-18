@@ -217,6 +217,15 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    // classLevel used to be taken on faith — a stale or typo'd value silently created a
+    // student belonging to no real class, which for a secondary school also means no
+    // real department (department is derived from ClassLevel, not stored on Student).
+    const targetClass = await prisma.classLevel.findUnique({ where: { schoolId_name: { schoolId, name: classLevel } } })
+    if (!targetClass) {
+      res.status(400).json({ message: 'Select a valid class.' })
+      return
+    }
+
     const limit = await demoLimitBlock(schoolId, 'students')
     if (limit) { res.status(403).json({ message: limit }); return }
 
@@ -247,6 +256,17 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
     if (!student) {
       res.status(404).json({ message: 'Student not found' })
       return
+    }
+
+    // Same rule as create: only touch classLevel when the caller actually sent one, but
+    // when they did, it must be a real class — otherwise a "change department" edit could
+    // silently detach the student from every department.
+    if (classLevel !== undefined) {
+      const targetClass = await prisma.classLevel.findUnique({ where: { schoolId_name: { schoolId, name: classLevel } } })
+      if (!targetClass) {
+        res.status(400).json({ message: 'Select a valid class.' })
+        return
+      }
     }
 
     const updated = await prisma.student.update({

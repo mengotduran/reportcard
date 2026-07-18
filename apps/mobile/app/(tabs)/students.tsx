@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
 import { getStudents, createStudent, updateStudent, setStudentStatus, Student, StudentStatus, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
+import { getDepartments, Department } from '@/lib/api/departments'
 import { getSubjects } from '@/lib/api/reportcards'
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
@@ -18,6 +19,7 @@ import { shareCsv } from '@/lib/csv'
 import StudentFeesModal from '@/components/StudentFeesModal'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
+const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 const STATUS_TABS: StudentStatus[] = ['ACTIVE', 'DISABLED', 'DISMISSED']
 
 // Older cached data may not carry `status` yet — fall back to isActive so a
@@ -215,16 +217,21 @@ function CreateStudentModal({
   onClose,
   onCreated,
   classList,
+  departments,
+  isSecondary,
 }: {
   visible: boolean
   onClose: () => void
   onCreated: () => void
   classList: ClassLevel[]
+  departments: Department[]
+  isSecondary: boolean
 }) {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
   const [name, setName] = useState('')
+  const [secDept, setSecDept] = useState('')
   const [classLevel, setClassLevel] = useState('')
   const [gender, setGender] = useState('')
   // Optional birth details. Typed as YYYY-MM-DD text, the same pattern the fees ledger
@@ -234,16 +241,26 @@ function CreateStudentModal({
   const [placeOfBirth, setPlaceOfBirth] = useState('')
   const [guardianName, setGuardianName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [deptPickerOpen, setDeptPickerOpen] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
 
+  // Department first, then the class list narrows to that department's classes only —
+  // a student's department is never stored directly, it's always derived from which
+  // class they're in, so picking department-first guarantees the two stay consistent.
+  const deptClassList = isSecondary && secDept ? classList.filter((cl) => cl.departmentId === secDept) : []
+
   const reset = () => {
-    setName(''); setClassLevel(''); setGender(''); setGuardianName('')
+    setName(''); setSecDept(''); setClassLevel(''); setGender(''); setGuardianName('')
     setDateOfBirth(''); setPlaceOfBirth('')
   }
 
   const handleCreate = async () => {
     if (!name.trim() || !classLevel) {
       Alert.alert(t('Validation'), t('Name and Class Level are required.'))
+      return
+    }
+    if (isSecondary && !secDept) {
+      Alert.alert(t('Validation'), t('Please select a department.'))
       return
     }
     if (gender !== 'Male' && gender !== 'Female') {
@@ -283,16 +300,42 @@ function CreateStudentModal({
               <Text style={styles.formLabel}>{t('Full Name')} <Text style={styles.required}>*</Text></Text>
               <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder={t('e.g. John Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
 
+              {isSecondary && (
+                <>
+                  <Text style={styles.formLabel}>{t('Department')} <Text style={styles.required}>*</Text></Text>
+                  <TouchableOpacity style={styles.picker} onPress={() => setDeptPickerOpen((v) => !v)}>
+                    <Text style={[styles.pickerText, !secDept && { color: colors.textMuted }]}>
+                      {departments.find((d) => d.id === secDept)?.name || t('Select department')}
+                    </Text>
+                    <Ionicons name="chevron-down" size={16} color="#6b7280" />
+                  </TouchableOpacity>
+                  {deptPickerOpen && (
+                    <View style={styles.dropdownList}>
+                      {departments.map((d) => (
+                        <TouchableOpacity key={d.id} style={styles.dropdownItem}
+                          onPress={() => { setSecDept(d.id); setClassLevel(''); setDeptPickerOpen(false) }}>
+                          <Text style={[styles.dropdownItemText, d.id === secDept && { color: '#F03E2F', fontWeight: '700' }]}>{d.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </>
+              )}
+
               <Text style={styles.formLabel}>{t('Class Level')} <Text style={styles.required}>*</Text></Text>
-              <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)}>
-                <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>{classLevel || t('Select class level')}</Text>
+              <TouchableOpacity style={styles.picker} onPress={() => setClassPickerOpen((v) => !v)} disabled={isSecondary && !secDept}>
+                <Text style={[styles.pickerText, !classLevel && { color: colors.textMuted }]}>
+                  {(classLevel && isSecondary) ? stripDeptSuffix(classLevel) : classLevel || t('Select class level')}
+                </Text>
                 <Ionicons name="chevron-down" size={16} color="#6b7280" />
               </TouchableOpacity>
               {classPickerOpen && (
                 <View style={styles.dropdownList}>
-                  {classList.map((cl) => (
+                  {(isSecondary ? deptClassList : classList).map((cl) => (
                     <TouchableOpacity key={cl.id} style={styles.dropdownItem} onPress={() => { setClassLevel(cl.name); setClassPickerOpen(false) }}>
-                      <Text style={[styles.dropdownItemText, cl.name === classLevel && { color: '#F03E2F', fontWeight: '700' }]}>{cl.name}</Text>
+                      <Text style={[styles.dropdownItemText, cl.name === classLevel && { color: '#F03E2F', fontWeight: '700' }]}>
+                        {isSecondary ? stripDeptSuffix(cl.name) : cl.name}
+                      </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -549,9 +592,11 @@ export default function StudentsScreen() {
   const { user, activeSession, setActiveSession, school } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
 
   const [students, setStudents] = useState<Student[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [liveSession, setLiveSession] = useState<string | undefined>()
   const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
   const [search, setSearch] = useState('')
@@ -574,11 +619,12 @@ export default function StudentsScreen() {
       const studentParams = statusFilter === 'ACTIVE'
         ? (activeSession ? { session: activeSession } : undefined)
         : { status: statusFilter }
-      const [sData, clData, subData, termData] = await Promise.all([
+      const [sData, clData, subData, termData, deptData] = await Promise.all([
         getStudents(studentParams),
         isAdmin ? getClasses() : Promise.resolve({ classLevels: [] }),
         isAdmin ? getSubjects() : Promise.resolve({ subjects: [] }),
         isAdmin ? getTerms() : Promise.resolve({ terms: [] }),
+        isAdmin && isSecondary ? getDepartments() : Promise.resolve({ departments: [] }),
       ])
       setStudents(sData.students)
       if (isAdmin) {
@@ -589,11 +635,12 @@ export default function StudentsScreen() {
         }
         setSubjectsByClass(map)
         setLiveSession(termData.terms.find((tm) => tm.isCurrent)?.session)
+        if (isSecondary) setDepartments(deptData.departments)
       }
     } catch {
       setError(t('Failed to load students'))
     }
-  }, [isAdmin, activeSession, statusFilter])
+  }, [isAdmin, isSecondary, activeSession, statusFilter])
 
   // A newly created student only shows up in this list while viewing the LIVE
   // academic year — a past year's roster is scoped to students who already
@@ -790,6 +837,8 @@ export default function StudentsScreen() {
         onClose={() => setCreateVisible(false)}
         onCreated={handleStudentCreated}
         classList={classList}
+        departments={departments}
+        isSecondary={isSecondary}
       />
 
       <ImportStudentsModal
