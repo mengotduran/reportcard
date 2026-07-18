@@ -3,14 +3,26 @@ import { useEffect, useState, useCallback } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  ActivityIndicator, RefreshControl, Alert,
+  ActivityIndicator, RefreshControl, Alert, ScrollView,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getTeachers, deleteTeacher, Teacher } from '@/lib/api/teachers'
+import { getDepartments, Department } from '@/lib/api/departments'
+import { getClasses } from '@/lib/api/classes'
 import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
+
+// University class-name convention: "HND {Department} - Level 1|2", "Degree
+// {Department}". Universities have no real Department table row — mirrors
+// deptFromClassName in apps/web/app/(dashboard)/classes/page.tsx.
+const univDeptFromClassName = (name: string): string => {
+  if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
+  if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
+  return name
+}
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -82,6 +94,25 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     shadowRadius: 10,
     elevation: 8,
   },
+  deptGrid: { padding: 16, paddingBottom: 100, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  deptCard: {
+    width: '47%',
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  deptIconBox: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: '#FEE2E0', justifyContent: 'center', alignItems: 'center', marginBottom: 10,
+  },
+  deptName: { fontSize: 14, fontWeight: '700', color: colors.text },
+  deptCount: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
+  backText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  headerBar: { paddingHorizontal: 16, paddingTop: 12 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
 }))
 
 export default function TeachersScreen() {
@@ -89,18 +120,38 @@ export default function TeachersScreen() {
   const styles = makeStylesStyles(colors)
   const tr = useT()
   const router = useRouter()
+  const { school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
+  const hasDeptView = isSecondary || isUniversity
   const [teachers, setTeachers] = useState<Teacher[]>([])
+  const [classToDept, setClassToDept] = useState<Record<string, string>>({})
+  const [classLevelNames, setClassLevelNames] = useState<string[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
+  // null = show the department picker (secondary/university only). Primary schools
+  // have no department concept, so they skip straight to the plain list.
+  const [activeDept, setActiveDept] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
 
   const fetchTeachers = useCallback(async () => {
     try {
-      const data = await getTeachers()
-      setTeachers(data.teachers)
+      const [tData, clData, deptData] = await Promise.all([
+        getTeachers(),
+        hasDeptView ? getClasses() : Promise.resolve({ classLevels: [] }),
+        isSecondary ? getDepartments() : Promise.resolve({ departments: [] }),
+      ])
+      setTeachers(tData.teachers)
+      if (hasDeptView) setClassLevelNames(clData.classLevels.map((c) => c.name))
+      if (isSecondary) {
+        setDepartments(deptData.departments)
+        const byId = new Map(deptData.departments.map((d) => [d.id, d.name]))
+        setClassToDept(Object.fromEntries(clData.classLevels.map((c) => [c.name, byId.get(c.departmentId ?? '') ?? 'Grammar'])))
+      }
     } catch {
       Alert.alert(tr('Error'), tr('Failed to load teachers.'))
     }
-  }, [])
+  }, [isSecondary, hasDeptView])
 
   useFocusEffect(useCallback(() => {
     fetchTeachers().finally(() => setLoading(false))
@@ -111,6 +162,30 @@ export default function TeachersScreen() {
     await fetchTeachers()
     setRefreshing(false)
   }
+
+  // Department picker (secondary/university only): a teacher's department(s) are the
+  // union of what they're explicitly placed in (t.departments, set at creation) and
+  // what's derived from the classes they're attached to (classLevels) — so they show
+  // up the moment they're placed, not only once a subject happens to be assigned. A
+  // teacher spanning several departments naturally surfaces under each one.
+  const teacherDeptNames = (t: Teacher): string[] => {
+    const cls = t.classLevels ?? []
+    const derived = isSecondary
+      ? cls.map((c) => classToDept[c]).filter((d): d is string => !!d)
+      : isUniversity
+        ? cls.map((c) => univDeptFromClassName(c))
+        : []
+    return [...new Set([...(t.departments ?? []), ...derived])]
+  }
+  const deptNames = isSecondary
+    ? departments.map((d) => d.name)
+    : isUniversity
+      ? [...new Set(classLevelNames.map((c) => univDeptFromClassName(c)))].sort()
+      : []
+  const deptCards = deptNames.map((name) => ({ name, count: teachers.filter((t) => teacherDeptNames(t).includes(name)).length }))
+  const scopedTeachers = hasDeptView && activeDept
+    ? teachers.filter((t) => teacherDeptNames(t).includes(activeDept))
+    : teachers
 
   const handleResetPassword = (teacher: Teacher) => {
     Alert.prompt(
@@ -162,13 +237,51 @@ export default function TeachersScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Department picker — secondary/university only. The teacher list doesn't
+          show until a department is picked, since the point is to browse teachers
+          grouped by department rather than one long flat list. */}
+      {hasDeptView && activeDept && (
+        <View style={styles.backRow}>
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }} onPress={() => setActiveDept(null)}>
+            <Ionicons name="arrow-back" size={16} color={colors.textSecondary} />
+            <Text style={styles.backText}>{tr('Back to Departments')}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {hasDeptView && activeDept && (
+        <View style={styles.headerBar}>
+          <Text style={styles.headerTitle}>{activeDept}</Text>
+        </View>
+      )}
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#F03E2F" />
         </View>
+      ) : hasDeptView && !activeDept ? (
+        <ScrollView
+          contentContainerStyle={[styles.deptGrid, deptCards.length === 0 && { flex: 1 }]}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+          {deptCards.length === 0 ? (
+            <View style={styles.empty}>
+              <Ionicons name="business-outline" size={48} color="#d1d5db" />
+              <Text style={styles.emptyText}>{tr('No departments yet')}</Text>
+            </View>
+          ) : (
+            deptCards.map((d) => (
+              <TouchableOpacity key={d.name} style={styles.deptCard} onPress={() => setActiveDept(d.name)}>
+                <View style={styles.deptIconBox}>
+                  <Ionicons name="people" size={18} color="#F03E2F" />
+                </View>
+                <Text style={styles.deptName}>{d.name}</Text>
+                <Text style={styles.deptCount}>{d.count} {tr(d.count === 1 ? 'teacher' : 'teachers')}</Text>
+              </TouchableOpacity>
+            ))
+          )}
+        </ScrollView>
       ) : (
       <FlatList
-        data={teachers}
+        data={scopedTeachers}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}

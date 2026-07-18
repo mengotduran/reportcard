@@ -3,12 +3,20 @@ import { useEffect, useState } from 'react'
 import { getTeachersApi, createTeacherApi, updateTeacherApi, deleteTeacherApi, getTeacherSubjectsApi, assignTeacherSubjectsApi } from '@/lib/api/teachers'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getClassLevelsApi } from '@/lib/api/classLevels'
-import { getDepartmentsApi } from '@/lib/api/departments'
+import { getDepartmentsApi, Department } from '@/lib/api/departments'
 
 // Secondary non-default departments store classes with a " (Department)" suffix.
 const stripSection = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+// University class-name convention: "HND {Department} - Level 1|2", "Degree
+// {Department}". Universities have no real Department table row — mirrors
+// deptFromClassName in apps/web/app/(dashboard)/classes/page.tsx.
+const univDeptFromClassName = (name: string): string => {
+  if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
+  if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
+  return name
+}
 import { useAuthStore } from '@/lib/store/auth.store'
-import { School, Plus, Trash2, X, Eye, EyeOff, BookOpen, Info, Pencil, KeyRound } from 'lucide-react'
+import { School, Plus, Trash2, X, Eye, EyeOff, BookOpen, Info, Pencil, KeyRound, ArrowLeft, Users } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
@@ -17,10 +25,10 @@ import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 
-interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string }
+interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[] }
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
-const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '' }
+const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '', departments: [] as string[] }
 
 const roleLabels: Record<string, string> = {
   CLASS_TEACHER: 'Class Teacher',
@@ -42,6 +50,10 @@ export default function TeachersPage() {
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
   const [classToDept, setClassToDept] = useState<Record<string, string>>({})
+  const [departments, setDepartments] = useState<Department[]>([])
+  // null = show the department picker (secondary/university only). Primary schools
+  // have no department concept, so they skip straight to the plain table.
+  const [activeDept, setActiveDept] = useState<string | null>(null)
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [allSubjects, setAllSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<string[]>([])
@@ -55,7 +67,7 @@ export default function TeachersPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
-  const [editForm, setEditForm] = useState({ role: '', masterClassLevel: '' })
+  const [editForm, setEditForm] = useState({ role: '', masterClassLevel: '', departments: [] as string[] })
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState('')
   const [resetTarget, setResetTarget] = useState<Teacher | null>(null)
@@ -87,8 +99,9 @@ export default function TeachersPage() {
       // group subjects by department (a teacher may span several departments).
       if (isSecondary) {
         try {
-          const { departments } = await getDepartmentsApi()
-          const byId = new Map(departments.map((d) => [d.id, d.name]))
+          const { departments: depts } = await getDepartmentsApi()
+          setDepartments(depts)
+          const byId = new Map(depts.map((d) => [d.id, d.name]))
           setClassToDept(Object.fromEntries(clData.classLevels.map((cl: any) => [cl.name, byId.get(cl.departmentId) ?? 'Grammar'])))
         } catch { /* non-fatal */ }
       }
@@ -128,6 +141,7 @@ export default function TeachersPage() {
         password: form.password,
         role: form.role,
         masterClassLevel: form.role === 'CLASS_MASTER' ? form.masterClassLevel : undefined,
+        departments: form.departments,
       })
       setShowModal(false)
       setForm(emptyForm)
@@ -172,7 +186,7 @@ export default function TeachersPage() {
 
   const openEditModal = (teacher: Teacher) => {
     setEditTarget(teacher)
-    setEditForm({ role: teacher.role, masterClassLevel: teacher.masterClassLevel ?? '' })
+    setEditForm({ role: teacher.role, masterClassLevel: teacher.masterClassLevel ?? '', departments: teacher.departments ?? [] })
     setEditError('')
   }
 
@@ -188,6 +202,7 @@ export default function TeachersPage() {
       const result = await updateTeacherApi(editTarget.id, {
         role: editForm.role,
         masterClassLevel: editForm.role === 'CLASS_MASTER' ? editForm.masterClassLevel : null,
+        departments: editForm.departments,
       })
       setEditTarget(null)
       fetchAll()
@@ -237,29 +252,103 @@ export default function TeachersPage() {
   // For university: only show courses from the selected semester in the
   // subject-assignment modal — prevents assigning "First Semester" courses
   // to a "Second Semester" teacher by accident.
-  const modalSubjects = isUniversity && selectedTerm
-    ? allSubjects.filter((s) => s.term === selectedTerm)
-    : allSubjects
+  // For secondary/university: the modal opens from inside a department (the table
+  // itself is only reachable once one is picked), so it only offers that
+  // department's classes/subjects — a Grammar teacher's assign modal has no reason
+  // to show Commercial subjects.
+  const modalSubjects = (() => {
+    let subs = isUniversity && selectedTerm ? allSubjects.filter((s) => s.term === selectedTerm) : allSubjects
+    if (activeDept) {
+      subs = subs.filter((s) => isSecondary ? classToDept[s.classLevel] === activeDept : univDeptFromClassName(s.classLevel) === activeDept)
+    }
+    return subs
+  })()
   const grouped = modalSubjects.reduce<Record<string, Subject[]>>((acc, s) => {
     if (!acc[s.classLevel]) acc[s.classLevel] = []
     acc[s.classLevel].push(s)
     return acc
   }, {})
 
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(teachers, 15)
+  // Department picker (secondary/university only): a teacher's department(s) are the
+  // union of what they're explicitly placed in (t.departments, set at creation/edit)
+  // and what's derived from the classes they're attached to (classLevels, from
+  // assigned subjects + masterClassLevel) — so they show up the moment they're
+  // placed, and stay showing up if later assigned a subject there some other way. A
+  // teacher spanning several departments naturally surfaces under each one.
+  const hasDeptView = isSecondary || isUniversity
+  const teacherDeptNames = (t: Teacher): string[] => {
+    const cls = t.classLevels ?? []
+    const derived = isSecondary
+      ? cls.map((c) => classToDept[c]).filter((d): d is string => !!d)
+      : isUniversity
+        ? cls.map((c) => univDeptFromClassName(c))
+        : []
+    return [...new Set([...(t.departments ?? []), ...derived])]
+  }
+  const deptNames = isSecondary
+    ? departments.map((d) => d.name)
+    : isUniversity
+      ? [...new Set(classLevels.map((c) => univDeptFromClassName(c)))].sort()
+      : []
+  const deptCards = deptNames.map((name) => ({ name, count: teachers.filter((t) => teacherDeptNames(t).includes(name)).length }))
+  const scopedTeachers = hasDeptView && activeDept
+    ? teachers.filter((t) => teacherDeptNames(t).includes(activeDept))
+    : teachers
+
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(scopedTeachers, 15)
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">{tr('Teachers')}</h2>
-          <p className="text-muted-foreground text-sm mt-1">{teachers.length} {tr('total staff members')}</p>
+          <h2 className="text-2xl font-bold text-foreground">
+            {hasDeptView && activeDept ? activeDept : tr('Teachers')}
+          </h2>
+          <p className="text-muted-foreground text-sm mt-1">
+            {hasDeptView && activeDept
+              ? `${scopedTeachers.length} ${tr('in this department')}`
+              : `${teachers.length} ${tr('total staff members')}`}
+          </p>
         </div>
-        <button onClick={() => setShowModal(true)}
+        <button onClick={() => { setForm({ ...emptyForm, departments: activeDept ? [activeDept] : [] }); setShowModal(true) }}
           className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
           <Plus size={16} /> {tr('Add Teacher')}
         </button>
       </div>
+
+      {/* Department picker — secondary/university only. The table doesn't show until
+          a department is picked, since the whole point is to browse teachers grouped
+          by department rather than one long flat list. */}
+      {hasDeptView && !activeDept ? (
+        loading ? (
+          <div className="text-center py-12 text-muted-foreground text-sm">{tr('Loading...')}</div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {deptCards.map((d) => (
+              <button key={d.name} onClick={() => setActiveDept(d.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-sm transition">
+                <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-3">
+                  <Users size={16} />
+                </div>
+                <p className="text-sm font-semibold text-foreground">{d.name}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{d.count} {tr(d.count === 1 ? 'teacher' : 'teachers')}</p>
+              </button>
+            ))}
+            {deptCards.length === 0 && (
+              <div className="col-span-full text-center py-12 text-muted-foreground text-sm">
+                {tr('No departments defined yet — go to the Classes page to add them.')}
+              </div>
+            )}
+          </div>
+        )
+      ) : (
+      <>
+      {hasDeptView && activeDept && (
+        <button onClick={() => setActiveDept(null)}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-4 transition">
+          <ArrowLeft size={14} /> {tr('Back to Departments')}
+        </button>
+      )}
 
       {/* Semester tabs — university only */}
       {isUniversity && availableTerms.length > 0 && (
@@ -280,7 +369,7 @@ export default function TeachersPage() {
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {loading ? (
           <div className="text-center py-12 text-muted-foreground text-sm">{tr('Loading...')}</div>
-        ) : teachers.length === 0 ? (
+        ) : scopedTeachers.length === 0 ? (
           <div className="text-center py-12">
             <School size={32} className="mx-auto mb-2 text-muted-foreground" />
             <p className="text-muted-foreground text-sm">{tr('No teachers yet.')}</p>
@@ -347,6 +436,8 @@ export default function TeachersPage() {
         )}
         <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
       </div>
+      </>
+      )}
 
       {/* Add Teacher Modal */}
       {showModal && (
@@ -386,6 +477,24 @@ export default function TeachersPage() {
                   <option value="CLASS_MASTER">{tr('Class Master')}</option>
                 </select>
               </div>
+              {hasDeptView && deptNames.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1.5">{tr('Departments')}</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {deptNames.map((d) => {
+                      const on = form.departments.includes(d)
+                      return (
+                        <button key={d} type="button"
+                          onClick={() => setForm({ ...form, departments: on ? form.departments.filter((x) => x !== d) : [...form.departments, d] })}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${on ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                          {d}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1.5">{tr('A teacher can belong to more than one department.')}</p>
+                </div>
+              )}
               {form.role === 'CLASS_MASTER' && (
                 <div>
                   <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')} <span className="text-destructive">*</span></label>
@@ -444,17 +553,14 @@ export default function TeachersPage() {
             )}
 
             <div className="flex-1 overflow-y-auto space-y-4">
+              {/* Already scoped to the active department (modalSubjects above), so
+                  every group here is the same department — no badge needed. */}
               {Object.entries(grouped)
-                .sort((a, b) => isSecondary
-                  ? ((classToDept[a[0]] ?? '').localeCompare(classToDept[b[0]] ?? '') || a[0].localeCompare(b[0]))
-                  : 0)
+                .sort((a, b) => a[0].localeCompare(b[0]))
                 .map(([classLevel, subjects]) => (
                 <div key={classLevel}>
                   <p className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-2">
                     {isSecondary ? stripSection(classLevel) : classLevel}
-                    {isSecondary && classToDept[classLevel] && (
-                      <span className="inline-block normal-case bg-primary/10 text-primary px-1.5 py-0.5 rounded-full text-[10px] font-semibold">{classToDept[classLevel]}</span>
-                    )}
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {subjects.map((s) => (
@@ -503,12 +609,30 @@ export default function TeachersPage() {
               <div>
                 <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Role')}</label>
                 <select value={editForm.role}
-                  onChange={(e) => setEditForm({ role: e.target.value, masterClassLevel: '' })}
+                  onChange={(e) => setEditForm({ ...editForm, role: e.target.value, masterClassLevel: '' })}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="CLASS_TEACHER">{tr('Class Teacher')}</option>
                   <option value="CLASS_MASTER">{tr('Class Master')}</option>
                 </select>
               </div>
+              {hasDeptView && deptNames.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1.5">{tr('Departments')}</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {deptNames.map((d) => {
+                      const on = editForm.departments.includes(d)
+                      return (
+                        <button key={d} type="button"
+                          onClick={() => setEditForm({ ...editForm, departments: on ? editForm.departments.filter((x) => x !== d) : [...editForm.departments, d] })}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${on ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                          {d}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1.5">{tr('A teacher can belong to more than one department.')}</p>
+                </div>
+              )}
               {editForm.role === 'CLASS_MASTER' && (
                 <div>
                   <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Class they are Master of')} <span className="text-destructive">*</span></label>
