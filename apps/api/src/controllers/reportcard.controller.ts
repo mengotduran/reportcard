@@ -5,8 +5,11 @@ import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 import { parseStoredScale } from '../utils/gradingScale'
 
 // Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
-// the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on.
+// the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on —
+// but that distinction only exists for universities; a primary/secondary admin never
+// enters marks themselves, full stop.
 const TEACHER_ROLES: string[] = ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'CLASS_MASTER']
+const ADMIN_ROLES: string[] = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
 /**
  * A school where the administration records marks appoints no class masters, so the
@@ -536,6 +539,15 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // teacher without changing the school's policy (same grant used for published cards).
     if (school?.marksEntryMode === 'ADMIN_ONLY' && TEACHER_ROLES.includes(role) && reportCard.marksEditGrantedTo !== userId) {
       res.status(403).json({ message: 'Marks are entered by the administration at this school. Ask an admin to record them, or to grant you access to this class.' })
+      return
+    }
+
+    // Admin-entered marks are a university-only arrangement, and only once the school has
+    // switched it on. A primary/secondary admin, or a university admin who hasn't enabled
+    // ADMIN_ONLY, has the same standing as any other non-teacher here: none, unless
+    // explicitly granted this one card.
+    if (ADMIN_ROLES.includes(role) && !(isUniversity && school?.marksEntryMode === 'ADMIN_ONLY') && reportCard.marksEditGrantedTo !== userId) {
+      res.status(403).json({ message: 'Marks are entered by teachers at this school. Ask the subject teacher to record them, or grant yourself access to this class.' })
       return
     }
 

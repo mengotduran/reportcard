@@ -295,6 +295,12 @@ export const updateSchool = async (req: Request, res: Response) => {
 
     // The provider setting who enters marks IS the permission that lifts the school's
     // two-per-semester cap, so it is deliberately uncapped here and logged as ours.
+    // ADMIN_ONLY is a university-only arrangement — checked against nextType, not
+    // school.type, in case type is also changing in this same request.
+    if (marksEntryMode === 'ADMIN_ONLY' && nextType !== 'UNIVERSITY') {
+      res.status(400).json({ message: 'Only universities can switch marks entry to the administration.' })
+      return
+    }
     const nextMode = marksEntryMode === 'TEACHERS' || marksEntryMode === 'ADMIN_ONLY' ? marksEntryMode : undefined
     const switching = nextMode !== undefined && nextMode !== school.marksEntryMode
 
