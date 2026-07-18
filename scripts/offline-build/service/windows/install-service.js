@@ -44,9 +44,15 @@ svc.on('start', () => {
   console.log('Service started.')
   addFirewallRules()
 })
+// Hit on every UPDATE (this script re-runs post-install every time, and the
+// service is already registered from the previous version) — the
+// installer's [Code] PrepareToInstall step stops the service before files
+// are overwritten, so it needs an explicit start here or the school is left
+// with an updated build on disk but nothing actually running until the
+// machine next reboots.
 svc.on('alreadyinstalled', () => {
-  console.log('Service already installed.')
-  addFirewallRules()
+  console.log('Service already installed — restarting with the updated files.')
+  svc.start()
 })
 
 function addFirewallRules() {

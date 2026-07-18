@@ -13,9 +13,21 @@ async function main() {
       email: 'smoke-test@example.com',
       subdomain: 'sqlite-smoke-test',
       coverImages: ['/uploads/a.png', '/uploads/b.png'],
+      marksEntryMode: 'ADMIN_ONLY',
+      stamp: '/uploads/stamp.png',
+      officialLeftTextEn: 'Republic of Cameroon',
     },
   })
   console.log('created school:', school.id, 'coverImages:', school.coverImages, typeof school.coverImages)
+  console.log('marksEntryMode/stamp/officialLeftTextEn:', school.marksEntryMode, school.stamp, school.officialLeftTextEn)
+
+  const department = await prisma.department.create({
+    data: { schoolId: school.id, name: 'Grammar', isDefault: true },
+  })
+  const marksModeChange = await prisma.marksEntryModeChange.create({
+    data: { schoolId: school.id, mode: 'ADMIN_ONLY', changedByName: 'Smoke Admin' },
+  })
+  console.log('department + marksEntryModeChange created:', department.id, marksModeChange.id)
 
   const updated = await prisma.school.update({
     where: { id: school.id },
@@ -24,16 +36,23 @@ async function main() {
   console.log('after push, coverImages:', updated.coverImages)
 
   const user = await prisma.user.create({
-    data: { name: 'Smoke Admin', email: 'smoke-admin@example.com', password: 'x', role: 'SCHOOL_ADMIN', schoolId: school.id },
+    data: { name: 'Smoke Admin', email: 'smoke-admin@example.com', password: 'x', role: 'SCHOOL_ADMIN', schoolId: school.id, departments: ['Grammar', 'Technical'] },
   })
+  console.log('user.departments (json array):', user.departments, typeof user.departments)
+
+  const classLevel = await prisma.classLevel.create({
+    data: { schoolId: school.id, name: 'Form 1', departmentId: department.id },
+  })
+  console.log('classLevel.departmentId relation:', classLevel.departmentId === department.id)
 
   const term = await prisma.term.create({
     data: { schoolId: school.id, name: 'First Term', session: '2026/2027', startDate: new Date(), endDate: new Date(), isCurrent: true },
   })
 
   const student = await prisma.student.create({
-    data: { schoolId: school.id, name: 'Smoke Student', studentId: '2026-0001', classLevel: 'Form 1' },
+    data: { schoolId: school.id, name: 'Smoke Student', studentId: '2026-0001', classLevel: 'Form 1', dateOfBirth: '2010-05-12', placeOfBirth: 'Bamenda' },
   })
+  console.log('student birth details:', student.dateOfBirth, student.placeOfBirth)
 
   const reportCard = await prisma.reportCard.create({
     data: { studentId: student.id, schoolId: school.id, termId: term.id, createdById: user.id },
@@ -44,9 +63,9 @@ async function main() {
     data: { schoolId: school.id, name: 'Maths', classLevel: 'Form 1' },
   })
   const entry = await prisma.reportEntry.create({
-    data: { reportCardId: reportCard.id, subjectId: subject.id, score: null },
+    data: { reportCardId: reportCard.id, subjectId: subject.id, score: null, resitScore: 12.5 },
   })
-  console.log('entry with null score created fine:', entry.id, entry.score)
+  console.log('entry with null score + resitScore created fine:', entry.id, entry.score, entry.resitScore)
 
   const gradingScale = await prisma.gradingScale.create({
     data: { schoolId: school.id, ranges: [{ minScore: 16, maxScore: 20, grade: 'A' }] },

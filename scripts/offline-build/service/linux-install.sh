@@ -35,7 +35,15 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable reportcard.service
-systemctl --user start reportcard.service
+# restart, not start: this script is also how an UPDATE gets applied — the
+# release files get overwritten in place (Linux allows that even while the
+# old binary is still running, unlike Windows) but `start` on an
+# already-running unit is a no-op, so the old process would keep running
+# old code indefinitely. `restart` correctly starts it whether currently
+# stopped or running, and picks up whatever migrations the new binary adds
+# via the normal startup migration runner. Data (the SQLite file + uploads)
+# lives outside the release dir entirely, untouched by any of this.
+systemctl --user restart reportcard.service
 
 # Without this, a USER service only runs while that user is logged in —
 # enable-linger makes systemd start the user's services at boot regardless.
