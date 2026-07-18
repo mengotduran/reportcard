@@ -3,17 +3,35 @@
     "name": "Bulletin",
     "slug": "reportcard-mobile",
     "version": "1.0.0",
+    "icon": "./assets/images/icon.png",
     "scheme": "reportcard",
-    "platforms": ["ios", "android"],
-    "assetBundlePatterns": ["**/*"],
-    "plugins": ["expo-router"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "plugins": [
+      "expo-router"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.bulletin.app"
     },
     "android": {
+      "package": "com.bulletin.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       }
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "48c56a85-c168-41ab-a2c0-b28039978075"
+      }
+    },
+    "owner": "mengotduran"
   }
 }
