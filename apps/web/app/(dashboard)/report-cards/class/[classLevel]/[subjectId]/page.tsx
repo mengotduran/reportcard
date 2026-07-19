@@ -60,6 +60,11 @@ export default function MarksEntryPage() {
   const adminOnlyMarks = isAdminRole
     ? !(isUniversity && school?.marksEntryMode === 'ADMIN_ONLY')
     : school?.marksEntryMode === 'ADMIN_ONLY'
+  // Under ADMIN_ONLY, a university teacher may still record the CA themselves — only the
+  // Exam and Resit stay the administration's. The CA tab (seqIndex 0) is the one exception
+  // to the lock below; Exam/Resit stay locked exactly as before. Admins are never in this
+  // branch: adminOnlyMarks already means something different for them (see above).
+  const caExemptForTeacher = !isAdminRole && isUniversity && seqIndex === 0 && adminOnlyMarks
   const isResit = isUniversity && seqIndex === 2
   const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
@@ -150,8 +155,9 @@ export default function MarksEntryPage() {
         // School policy: some universities record marks centrally so a teacher never
         // enters marks for a course they teach. The sheet stays READABLE (they can check
         // their subject); only saving is refused, and the API refuses it too. An admin
-        // can still grant one teacher one class without changing the policy.
-        const marksLockedToAdmin = adminOnlyMarks && !grantedToMe
+        // can still grant one teacher one class without changing the policy. The CA tab
+        // is the one exception — see caExemptForTeacher above.
+        const marksLockedToAdmin = adminOnlyMarks && !grantedToMe && !caExemptForTeacher
         return {
           studentId: s.id, name: s.name, studentIdCode: s.studentId,
           reportCardId: s.reportCard?.id ?? null,
@@ -538,7 +544,9 @@ export default function MarksEntryPage() {
         <div className="flex items-center gap-2 bg-sky-50 border-b border-sky-200 px-4 py-2.5 text-sm text-sky-700">
           🔒 {isAdminRole
             ? t('Marks are entered by teachers at this school. You can check the marks here, but not change them.')
-            : t('Marks are entered by the administration at this school. You can check the marks here, but not change them. Ask an admin if something needs correcting.')}
+            : caExemptForTeacher
+              ? t('Exam and Resit marks are entered by the administration at this school. You can record CA marks here.')
+              : t('Marks are entered by the administration at this school. You can check the marks here, but not change them. Ask an admin if something needs correcting.')}
         </div>
       )}
       {publishedCount > 0 && (
