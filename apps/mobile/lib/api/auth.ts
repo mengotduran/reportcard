@@ -14,3 +14,13 @@ export const getMeApi = async () => {
   const res = await api.get('/auth/me')
   return res.data as { id: string; name: string; email: string; role: string; school: { id: string; name: string; type: string; logo: string | null; coverImage: string | null; coverImages: string[] } | null }
 }
+
+export const forgotPasswordApi = async (email: string) => {
+  const res = await api.post('/auth/forgot-password', { email })
+  return res.data as { message: string }
+}
+
+export const changeMyPasswordApi = async (currentPassword: string, newPassword: string) => {
+  const res = await api.put('/auth/me/password', { currentPassword, newPassword })
+  return res.data as { message: string }
+}

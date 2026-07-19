@@ -143,6 +143,14 @@ model User {
   // a name embedded in class names, so a uniform string list works for both types.
   // A teacher can be in more than one at once.
   departments       String[]         @default([])
+  // Self-service "forgot password" flow — cloud only (the offline SQLite build has no
+  // email delivery, so its route is stubbed out entirely; see
+  // scripts/offline-build/stubs/passwordReset.routes.stub.ts). Deliberately NOT mirrored
+  // to prisma/sqlite/schema.prisma: no offline code path ever reads or writes these, so
+  // there is nothing to keep in sync there. Stores a SHA-256 hash of the emailed token,
+  // never the raw token itself.
+  resetTokenHash      String?   @unique
+  resetTokenExpiresAt DateTime?
   reportCards      ReportCard[]
   teacherSubjects  TeacherSubject[]
   school           School?          @relation(fields: [schoolId], references: [id])

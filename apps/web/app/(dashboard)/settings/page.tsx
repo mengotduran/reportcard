@@ -10,6 +10,7 @@ import Toast from '@/components/ui/Toast'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
 import DesktopOnly from '@/components/ui/DesktopOnly'
+import ChangePasswordCard from '@/components/ui/ChangePasswordCard'
 import { useT } from '@/lib/i18n'
 import {
   ExcelTemplate,
@@ -452,6 +453,9 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+
+            {/* Change Password */}
+            <ChangePasswordCard />
 
             {/* Interface Language */}
             <div className={CARD}>

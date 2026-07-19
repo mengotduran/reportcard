@@ -181,6 +181,31 @@ export const updateMyEmail = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// Self-service: a logged-in user changes their own password, proving they
+// already know the current one. No email involved, so unlike forgot-password
+// this works the same in the offline SQLite build as it does in the cloud.
+export const changeMyPassword = async (req: AuthRequest, res: Response) => {
+  try {
+    const currentPassword = String(req.body.currentPassword ?? '')
+    const newPassword = String(req.body.newPassword ?? '')
+    if (!currentPassword) { res.status(400).json({ message: 'Current password is required' }); return }
+    if (newPassword.length < 6) { res.status(400).json({ message: 'New password must be at least 6 characters' }); return }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } })
+    if (!user) { res.status(404).json({ message: 'User not found' }); return }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password)
+    if (!isMatch) { res.status(401).json({ message: 'Current password is incorrect' }); return }
+
+    const hashed = await bcrypt.hash(newPassword, 12)
+    await prisma.user.update({ where: { id: user.id }, data: { password: hashed } })
+    res.json({ message: 'Password changed successfully' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 // Superadmin self-recovery — no auth, uses SUPERADMIN_SECRET
 export const resetSuperAdminPassword = async (req: Request, res: Response) => {
   try {

@@ -17,6 +17,8 @@ const pgConfigPath = path.join(apiRoot, 'src/config/prisma.ts')
 const sqliteConfigPath = path.join(apiRoot, 'src/config/prisma.sqlite.ts')
 const demoRoutesPath = path.join(apiRoot, 'src/routes/demo.routes.ts')
 const demoRoutesStub = path.join(apiRoot, 'scripts/offline-build/stubs/demo.routes.stub.ts')
+const passwordResetRoutesPath = path.join(apiRoot, 'src/routes/passwordReset.routes.ts')
+const passwordResetRoutesStub = path.join(apiRoot, 'scripts/offline-build/stubs/passwordReset.routes.stub.ts')
 const backupRoutesPath = path.join(apiRoot, 'src/routes/backup.routes.ts')
 const backupRoutesOffline = path.join(apiRoot, 'scripts/offline-build/stubs/backup.routes.offline.ts')
 const betterSqlite3Shim = path.join(apiRoot, 'scripts/offline-build/shims/better-sqlite3.shim.js')
@@ -37,6 +39,13 @@ const offlineSwaps = {
       const resolved = path.resolve(args.resolveDir, args.path)
       if (resolved === demoRoutesPath.replace(/\.ts$/, '')) {
         return { path: demoRoutesStub }
+      }
+      return null
+    })
+    buildApi.onResolve({ filter: /routes\/passwordReset\.routes$/ }, async (args) => {
+      const resolved = path.resolve(args.resolveDir, args.path)
+      if (resolved === passwordResetRoutesPath.replace(/\.ts$/, '')) {
+        return { path: passwordResetRoutesStub }
       }
       return null
     })

@@ -5,7 +5,7 @@ import {
 } from 'react-native'
 import AuthBackground from '@/components/AuthBackground'
 import { useThemeStore } from '@/lib/store/theme.store'
-import { Redirect } from 'expo-router'
+import { Redirect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { loginApi } from '@/lib/api/auth'
@@ -111,6 +111,8 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  forgotLink: { alignSelf: 'center', marginTop: 16, padding: 4 },
+  forgotLinkText: { color: '#F03E2F', fontSize: 13, fontWeight: '600' },
 }))
 
 export default function LoginScreen() {
@@ -137,6 +139,7 @@ export default function LoginScreen() {
       )
     ).start()
   }, [errorKey, shake])
+  const router = useRouter()
   const { isAuthenticated, _hasHydrated, login } = useAuthStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -257,6 +260,10 @@ export default function LoginScreen() {
             {loading
               ? <ActivityIndicator color="#fff" />
               : <Text style={styles.buttonText}>Sign In</Text>}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.forgotLink} onPress={() => router.push('/forgot-password')} activeOpacity={0.7}>
+            <Text style={styles.forgotLinkText}>Forgot password?</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
