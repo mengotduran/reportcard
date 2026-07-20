@@ -3,24 +3,29 @@
 // callers (passwordReset.controller.ts) are excluded from that build entirely
 // (see scripts/offline-build/stubs/passwordReset.routes.stub.ts).
 //
-// Free-tier friendly like the AI remarks provider (see utils/aiRemarks.ts): a
-// Gmail account + an app password, via nodemailer's built-in 'gmail' service —
-// no paid email API, no domain to verify. Missing credentials never break the
-// request; the reset link is logged to the server console instead, so local
-// dev works with zero setup.
+// Sent via Resend's SMTP relay against the verified usebulletin.org domain
+// (nodemailer stays the transport, just pointed at Resend instead of Gmail).
+// Missing credentials never break the request; the reset link is logged to
+// the server console instead, so local dev works with zero setup.
 import nodemailer from 'nodemailer'
+
+const FROM_ADDRESS = 'Bulletin <noreply@usebulletin.org>'
 
 let cachedTransporter: nodemailer.Transporter | null | undefined
 
 function getTransporter(): nodemailer.Transporter | null {
   if (cachedTransporter !== undefined) return cachedTransporter
-  const user = process.env.GMAIL_USER
-  const pass = process.env.GMAIL_APP_PASSWORD
-  if (!user || !pass) {
+  const apiKey = process.env.RESEND_API_KEY
+  if (!apiKey) {
     cachedTransporter = null
     return null
   }
-  cachedTransporter = nodemailer.createTransport({ service: 'gmail', auth: { user, pass } })
+  cachedTransporter = nodemailer.createTransport({
+    host: 'smtp.resend.com',
+    port: 465,
+    secure: true,
+    auth: { user: 'resend', pass: apiKey },
+  })
   return cachedTransporter
 }
 
@@ -51,9 +56,9 @@ export async function sendPasswordResetEmail(opts: {
   const transporter = getTransporter()
 
   if (!transporter) {
-    // No GMAIL_USER/GMAIL_APP_PASSWORD configured — dev-friendly fallback so the
-    // flow is still testable locally without any email account.
-    console.log(`[email] GMAIL_USER/GMAIL_APP_PASSWORD not set — password reset link for ${opts.to}:\n  ${opts.resetUrl}`)
+    // No RESEND_API_KEY configured — dev-friendly fallback so the flow is
+    // still testable locally without any email account.
+    console.log(`[email] RESEND_API_KEY not set — password reset link for ${opts.to}:\n  ${opts.resetUrl}`)
     return
   }
 
@@ -70,7 +75,7 @@ export async function sendPasswordResetEmail(opts: {
 
   try {
     await transporter.sendMail({
-      from: `Bulletin <${process.env.GMAIL_USER}>`,
+      from: FROM_ADDRESS,
       to: opts.to,
       subject: c.subject,
       html,
