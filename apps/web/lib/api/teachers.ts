@@ -8,10 +8,13 @@ export const getTeachersApi = async (params?: { term?: string }) => {
 export const createTeacherApi = async (data: {
   name: string
   email: string
-  password: string
+  // Offline installs only — online schools email the teacher a setup link instead.
+  password?: string
   role: string
   masterClassLevel?: string
   departments?: string[]
+  // University only — the semester this teacher was added under.
+  term?: string
 }) => {
   const res = await api.post('/teachers', data)
   return res.data

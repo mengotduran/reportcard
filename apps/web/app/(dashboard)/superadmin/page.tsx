@@ -99,6 +99,10 @@ function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes }:
 export default function SuperAdminPage() {
   const router = useRouter()
   const { toast, showToast, hideToast } = useToast()
+  // Offline installs have no internet-facing mail path, so the superadmin still
+  // sets a school admin's password directly there. Online, the API always emails
+  // the admin a setup link instead (see apps/api auth.controller.ts).
+  const isOfflineInstall = process.env.NEXT_PUBLIC_OFFLINE_BUILD === '1'
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -191,12 +195,13 @@ export default function SuperAdminPage() {
   }
 
   const handleResetAdminPassword = async () => {
-    if (!resetAdminTarget || resetAdminPw.length < 6) { setResetAdminError('Password must be at least 6 characters'); return }
+    if (!resetAdminTarget) return
+    if (isOfflineInstall && resetAdminPw.length < 6) { setResetAdminError('Password must be at least 6 characters'); return }
     setResetAdminSaving(true)
     setResetAdminError('')
     try {
-      await resetUserPasswordApi(resetAdminTarget.id, resetAdminPw)
-      showToast(`Password updated for ${resetAdminTarget.name}`)
+      await resetUserPasswordApi(resetAdminTarget.id, isOfflineInstall ? resetAdminPw : undefined)
+      showToast(isOfflineInstall ? `Password updated for ${resetAdminTarget.name}` : `Setup email sent to ${resetAdminTarget.name}`)
       setResetAdminTarget(null)
       setResetAdminPw('')
     } catch (e: any) {
@@ -912,23 +917,29 @@ export default function SuperAdminPage() {
 
             {resetAdminTarget && (
               <div className="border-t border-border pt-4 mt-2">
-                <p className="text-xs font-medium text-foreground mb-2">Set new password for <span className="text-primary">{resetAdminTarget.name}</span></p>
                 {resetAdminError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5 mb-2">{resetAdminError}</p>}
-                <label className="block text-xs font-medium text-foreground mb-1">New Password <span className="text-destructive">*</span></label>
-                <div className="relative mb-3">
-                  <input
-                    type={showResetAdminPw ? 'text' : 'password'}
-                    placeholder="New password (min 6 characters)"
-                    required
-                    value={resetAdminPw}
-                    onChange={e => setResetAdminPw(e.target.value)}
-                    className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <button type="button" onClick={() => setShowResetAdminPw(v => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                    {showResetAdminPw ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
-                </div>
+                {isOfflineInstall ? (
+                  <>
+                    <p className="text-xs font-medium text-foreground mb-2">Set new password for <span className="text-primary">{resetAdminTarget.name}</span></p>
+                    <label className="block text-xs font-medium text-foreground mb-1">New Password <span className="text-destructive">*</span></label>
+                    <div className="relative mb-3">
+                      <input
+                        type={showResetAdminPw ? 'text' : 'password'}
+                        placeholder="New password (min 6 characters)"
+                        required
+                        value={resetAdminPw}
+                        onChange={e => setResetAdminPw(e.target.value)}
+                        className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <button type="button" onClick={() => setShowResetAdminPw(v => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                        {showResetAdminPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs font-medium text-foreground mb-3">Send <span className="text-primary">{resetAdminTarget.name}</span> a link to set a new password?</p>
+                )}
                 <div className="flex gap-2">
                   <button onClick={() => setResetAdminTarget(null)}
                     className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
@@ -936,7 +947,7 @@ export default function SuperAdminPage() {
                   </button>
                   <button onClick={handleResetAdminPassword} disabled={resetAdminSaving}
                     className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                    {resetAdminSaving ? 'Saving…' : 'Set Password'}
+                    {resetAdminSaving ? 'Saving…' : isOfflineInstall ? 'Set Password' : 'Send'}
                   </button>
                 </div>
               </div>

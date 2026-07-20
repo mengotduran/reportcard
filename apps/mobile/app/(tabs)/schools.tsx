@@ -144,25 +144,23 @@ function SchoolCard({ school, onToggle, onPress }: { school: SchoolSection; onTo
           ...admins.map((admin, i) => ({
             text: `${i + 1}. ${admin.name.split(' ')[0]}`,
             onPress: () => {
-              Alert.prompt(
-                `New Password`,
-                `Set new password for ${admin.name}`,
+              Alert.alert(
+                'Reset Password',
+                `Send ${admin.name} a link to set a new password?`,
                 [
                   { text: 'Cancel', style: 'cancel' },
                   {
-                    text: 'Set',
-                    onPress: async (pw?: string) => {
-                      if (!pw || pw.length < 6) { Alert.alert('Error', 'Min 6 characters.'); return }
+                    text: 'Send',
+                    onPress: async () => {
                       try {
-                        await resetUserPasswordApi(admin.id, pw)
-                        Alert.alert('Done', `Password updated for ${admin.name}.`)
+                        await resetUserPasswordApi(admin.id)
+                        Alert.alert('Done', `Setup email sent to ${admin.name}.`)
                       } catch (e: any) {
                         Alert.alert('Error', e?.response?.data?.message || 'Failed to reset.')
                       }
                     },
                   },
-                ],
-                'secure-text'
+                ]
               )
             },
           })).slice(0, 3), // Alert supports max 3 buttons on iOS

@@ -40,8 +40,10 @@ export const changeMyPasswordApi = async (currentPassword: string, newPassword: 
   return res.data as { message: string }
 }
 
-export const resetUserPasswordApi = async (userId: string, newPassword: string) => {
-  const res = await api.put(`/auth/users/${userId}/reset-password`, { newPassword })
+// Offline installs pass newPassword directly. Online schools omit it entirely —
+// the API emails the target user a setup link instead of taking one here.
+export const resetUserPasswordApi = async (userId: string, newPassword?: string) => {
+  const res = await api.put(`/auth/users/${userId}/reset-password`, newPassword ? { newPassword } : {})
   return res.data
 }
 

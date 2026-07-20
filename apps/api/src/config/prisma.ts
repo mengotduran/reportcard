@@ -12,4 +12,6 @@ const pool = new pg.Pool({
 const adapter = new PrismaPg(pool)
 const prisma = new PrismaClient({ adapter })
 
+export const IS_OFFLINE_BUILD = false
+
 export default prisma

@@ -61,10 +61,12 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   badgePurple: { backgroundColor: '#f3e8ff' },
   badgeBlue: { backgroundColor: '#FEE2E0' },
   badgeGray: { backgroundColor: colors.bgSecondary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+  badgeAmber: { backgroundColor: '#fef3c7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
   badgeText: { fontSize: 11, fontWeight: '600' },
   badgeTextPurple: { color: '#7c3aed' },
   badgeTextBlue: { color: '#F03E2F' },
   badgeTextGray: { fontSize: 11, fontWeight: '600', color: colors.textSecondary },
+  badgeTextAmber: { fontSize: 11, fontWeight: '600', color: '#b45309' },
   deleteBtn: {
     padding: 8,
     backgroundColor: '#fee2e2',
@@ -188,28 +190,23 @@ export default function TeachersScreen() {
     : teachers
 
   const handleResetPassword = (teacher: Teacher) => {
-    Alert.prompt(
+    Alert.alert(
       tr('Reset Password'),
-      `${tr('Set a new password for')} ${teacher.name}`,
+      `${tr('Send')} ${teacher.name} ${tr('a link to set a new password?')}`,
       [
         { text: tr('Cancel'), style: 'cancel' },
         {
-          text: tr('Reset'),
-          onPress: async (newPassword?: string) => {
-            if (!newPassword || newPassword.length < 6) {
-              Alert.alert(tr('Error'), tr('Password must be at least 6 characters.'))
-              return
-            }
+          text: tr('Send'),
+          onPress: async () => {
             try {
-              await resetUserPasswordApi(teacher.id, newPassword)
-              Alert.alert(tr('Done'), `${tr('Password updated for')} ${teacher.name}.`)
+              await resetUserPasswordApi(teacher.id)
+              Alert.alert(tr('Done'), `${tr('Setup email sent to')} ${teacher.name}.`)
             } catch (e: any) {
               Alert.alert(tr('Error'), e?.response?.data?.message || tr('Failed to reset password.'))
             }
           },
         },
-      ],
-      'secure-text'
+      ]
     )
   }
 
@@ -309,6 +306,11 @@ export default function TeachersScreen() {
                 {item.role === 'CLASS_MASTER' && item.masterClassLevel && (
                   <View style={styles.badgeGray}>
                     <Text style={styles.badgeTextGray}>{item.masterClassLevel}</Text>
+                  </View>
+                )}
+                {item.pendingSetup && (
+                  <View style={styles.badgeAmber}>
+                    <Text style={styles.badgeTextAmber}>{tr('Pending Setup')}</Text>
                   </View>
                 )}
               </View>

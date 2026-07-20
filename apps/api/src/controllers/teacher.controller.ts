@@ -1,8 +1,10 @@
 import { Response } from 'express'
-import prisma from '../config/prisma'
+import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import bcrypt from 'bcryptjs'
 import { AuthRequest } from '../middleware/auth'
 import { demoLimitBlock } from '../config/demo'
+import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
+import { sendPasswordSetupEmail } from '../utils/email'
 
 // Trims, drops blanks, and dedupes — a stray empty string or repeated entry from the
 // client shouldn't end up stored.
@@ -16,16 +18,34 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     // Optional ?term= for university semester scoping (filters to teachers who
     // have at least one course assignment in that semester via TeacherSubject).
+    // A teacher with zero course assignments anywhere is included only in the
+    // semester they were created under (createdForTerm) — not every tab, and not
+    // hidden everywhere either (the dead end this replaced: a brand-new teacher
+    // had no course yet, got filtered out of every term tab, and there was no UI
+    // path left to ever assign them one). createdForTerm stops mattering the
+    // moment they have ANY course — assigning one in a different semester IS how
+    // an admin "transfers" a teacher there, no separate action needed. Rows from
+    // before this field existed have createdForTerm: null, so they still show in
+    // every tab until they're assigned a course, matching prior behavior.
     const term = req.query.term ? String(req.query.term) : undefined
     const teachers = await prisma.user.findMany({
       where: {
         schoolId,
         isActive: true,
         role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] },
-        ...(term ? { teacherSubjects: { some: { subject: { term } } } } : {}),
+        ...(term
+          ? {
+              OR: [
+                { teacherSubjects: { some: { subject: { term } } } },
+                { teacherSubjects: { none: {} }, createdForTerm: null },
+                { teacherSubjects: { none: {} }, createdForTerm: term },
+              ],
+            }
+          : {}),
       },
       select: {
         id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true,
+        passwordSetAt: true,
         teacherSubjects: { select: { subject: { select: { classLevel: true } } } },
       },
       orderBy: { name: 'asc' }
@@ -36,8 +56,12 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
     // of this (derived from what they actually teach) and their explicit
     // `departments` placement, so they show up under a department the moment
     // they're placed there, not only once a subject happens to be assigned.
-    const shaped = teachers.map(({ teacherSubjects, ...t }) => ({
+    const shaped = teachers.map(({ teacherSubjects, passwordSetAt, ...t }) => ({
       ...t,
+      // Online-invited teacher who hasn't clicked their setup link yet. Always
+      // false for offline-created teachers (passwordSetAt is stamped immediately
+      // there) and for anyone created before this feature existed (backfilled).
+      pendingSetup: passwordSetAt === null,
       classLevels: [...new Set([
         ...teacherSubjects.map((ts) => ts.subject.classLevel),
         ...(t.masterClassLevel ? [t.masterClassLevel] : []),
@@ -53,7 +77,7 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
 export const createTeacher = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, password, role, masterClassLevel, departments } = req.body
+    const { name, email, password, role, masterClassLevel, departments, term } = req.body
 
     if (role === 'CLASS_MASTER' && !masterClassLevel) {
       res.status(400).json({ message: 'masterClassLevel is required for Class Master' })
@@ -73,13 +97,47 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const hashedPassword = await bcrypt.hash(password, 12)
-    const data = { name, email, password: hashedPassword, role, schoolId, masterClassLevel: masterClassLevel ?? null, departments: sanitizeDepartments(departments) }
+    let hashedPassword: string
+    let inviteToken: string | null = null
+    let passwordSetAt: Date | null = null
+
+    if (IS_OFFLINE_BUILD) {
+      hashedPassword = await bcrypt.hash(password, 12)
+      // The admin hands them a real, working password directly — nothing pending.
+      passwordSetAt = new Date()
+    } else {
+      // Online: the admin never sets or knows a teacher's password — a random
+      // unusable placeholder is stored and the teacher picks their own via the
+      // emailed setup link (see sendPasswordSetupEmail below). passwordSetAt stays
+      // null until they actually complete that flow (passwordReset.controller.ts).
+      hashedPassword = await bcrypt.hash(generateRawToken(), 12)
+      inviteToken = generateRawToken()
+    }
+
+    const data = {
+      name, email, password: hashedPassword, role, schoolId,
+      masterClassLevel: masterClassLevel ?? null,
+      departments: sanitizeDepartments(departments),
+      passwordSetAt,
+      // Only meaningful for a teacher with zero course assignments yet (see
+      // getTeachers) — harmless to store for non-university schools too.
+      createdForTerm: term ? String(term) : null,
+      ...(inviteToken
+        ? { resetTokenHash: hashToken(inviteToken), resetTokenExpiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) }
+        : {}),
+    }
     const select = { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
 
     const teacher = existing
       ? await prisma.user.update({ where: { id: existing.id }, data: { ...data, isActive: true }, select })
       : await prisma.user.create({ data, select })
+
+    if (inviteToken) {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { language: true } })
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')
+      const setupUrl = `${frontendUrl}/reset-password?token=${inviteToken}`
+      await sendPasswordSetupEmail({ to: teacher.email, resetUrl: setupUrl, lang: school?.language === 'FR' ? 'FR' : 'EN' })
+    }
 
     res.status(201).json({ message: 'Teacher created', teacher })
   } catch (error) {

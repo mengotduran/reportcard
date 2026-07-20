@@ -25,7 +25,7 @@ import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 
-interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[] }
+interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean }
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
 const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '', departments: [] as string[] }
@@ -49,6 +49,10 @@ export default function TeachersPage() {
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  // Offline installs have no internet-facing mail path, so admins still set
+  // teacher passwords directly there. Online schools never see/set them —
+  // teachers get an emailed link to set their own (see teacher.controller.ts).
+  const isOfflineInstall = process.env.NEXT_PUBLIC_OFFLINE_BUILD === '1'
   const [classToDept, setClassToDept] = useState<Record<string, string>>({})
   const [departments, setDepartments] = useState<Department[]>([])
   // null = show the department picker (secondary/university only). Primary schools
@@ -138,10 +142,13 @@ export default function TeachersPage() {
       await createTeacherApi({
         name: form.name,
         email: form.email,
-        password: form.password,
+        ...(isOfflineInstall ? { password: form.password } : {}),
         role: form.role,
         masterClassLevel: form.role === 'CLASS_MASTER' ? form.masterClassLevel : undefined,
         departments: form.departments,
+        // University only: keeps a teacher scoped to the semester they were added
+        // under, until they're actually assigned a course (see getTeachers).
+        ...(isUniversity && selectedTerm ? { term: selectedTerm } : {}),
       })
       setShowModal(false)
       setForm(emptyForm)
@@ -169,12 +176,12 @@ export default function TeachersPage() {
 
   const handleResetPassword = async () => {
     if (!resetTarget) return
-    if (resetPassword.length < 6) { setResetError(tr('Password must be at least 6 characters')); return }
+    if (isOfflineInstall && resetPassword.length < 6) { setResetError(tr('Password must be at least 6 characters')); return }
     setResetSaving(true)
     setResetError('')
     try {
-      await resetUserPasswordApi(resetTarget.id, resetPassword)
-      showToast(`${tr('Password updated for')} ${resetTarget.name}`)
+      await resetUserPasswordApi(resetTarget.id, isOfflineInstall ? resetPassword : undefined)
+      showToast(isOfflineInstall ? `${tr('Password updated for')} ${resetTarget.name}` : `${tr('Setup email sent to')} ${resetTarget.name}`)
       setResetTarget(null)
       setResetPassword('')
     } catch (e: any) {
@@ -394,7 +401,14 @@ export default function TeachersPage() {
                       <div className="w-8 h-8 flex-shrink-0 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">
                         {t.name.charAt(0)}
                       </div>
-                      <span className="text-sm font-medium text-foreground">{t.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{t.name}</span>
+                        {!isOfflineInstall && t.pendingSetup && (
+                          <span className="inline-block whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700" title={tr('Has not set a password yet')}>
+                            {tr('Pending Setup')}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{t.email}</td>
@@ -458,17 +472,22 @@ export default function TeachersPage() {
                 <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Email')} <span className="text-destructive">*</span></label>
                 <input type="email" placeholder="jane@school.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                {!isOfflineInstall && (
+                  <p className="text-xs text-muted-foreground mt-1">{tr('A setup email will be sent to this address.')}</p>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')} <span className="text-destructive">*</span></label>
-                <div className="relative">
-                  <input type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required
-                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring pr-10" />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
-                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                  </button>
+              {isOfflineInstall && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')} <span className="text-destructive">*</span></label>
+                  <div className="relative">
+                    <input type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring pr-10" />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
+                      {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Role')}</label>
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, masterClassLevel: '' })}
@@ -674,21 +693,29 @@ export default function TeachersPage() {
               </button>
             </div>
             {resetError && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">{resetError}</p>}
-            <label className="block text-xs font-medium text-foreground mb-1">{tr('New Password')} <span className="text-destructive">*</span></label>
-            <div className="relative mb-4">
-              <input
-                type={showResetPw ? 'text' : 'password'}
-                placeholder={tr('New password (min 6 characters)')}
-                required
-                value={resetPassword}
-                onChange={e => setResetPassword(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-              <button type="button" onClick={() => setShowResetPw(v => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                {showResetPw ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
+            {isOfflineInstall ? (
+              <>
+                <label className="block text-xs font-medium text-foreground mb-1">{tr('New Password')} <span className="text-destructive">*</span></label>
+                <div className="relative mb-4">
+                  <input
+                    type={showResetPw ? 'text' : 'password'}
+                    placeholder={tr('New password (min 6 characters)')}
+                    required
+                    value={resetPassword}
+                    onChange={e => setResetPassword(e.target.value)}
+                    className="w-full border border-border rounded-lg px-3 py-2.5 pr-10 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <button type="button" onClick={() => setShowResetPw(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                    {showResetPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground mb-4">
+                {tr('Send')} {resetTarget.name} {tr('a link to set a new password?')}
+              </p>
+            )}
             <div className="flex gap-3">
               <button onClick={() => setResetTarget(null)}
                 className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
@@ -696,7 +723,7 @@ export default function TeachersPage() {
               </button>
               <button onClick={handleResetPassword} disabled={resetSaving}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                {resetSaving ? tr('Saving…') : tr('Set Password')}
+                {resetSaving ? tr('Saving…') : isOfflineInstall ? tr('Set Password') : tr('Send')}
               </button>
             </div>
           </div>

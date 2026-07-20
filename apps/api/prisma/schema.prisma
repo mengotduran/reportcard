@@ -151,6 +151,23 @@ model User {
   // never the raw token itself.
   resetTokenHash      String?   @unique
   resetTokenExpiresAt DateTime?
+  // University semester a teacher was created under, while they have zero course
+  // assignments — lets getTeachers show a brand-new teacher only in the semester
+  // tab they were added under (not every tab) even before they're assigned a real
+  // course. Ignored the moment they have ANY TeacherSubject; assigning them a
+  // course in a different semester IS how an admin "transfers" them there — no
+  // separate transfer action. Not university-specific in the schema (harmless
+  // null elsewhere), mirrored to prisma/sqlite/schema.prisma since this bug and
+  // fix apply to both builds equally.
+  createdForTerm      String?
+  // Set the first time a teacher actually completes the set-password flow (see
+  // passwordReset.controller.ts resetPassword). Null means an online-invited
+  // teacher has never set a password yet — used to show a "Pending Setup" badge
+  // in getTeachers (shared code, both builds). Offline-created teachers get this
+  // stamped immediately at creation, since the admin hands them a working
+  // password directly there — always non-null offline, so pendingSetup is
+  // always false there. Mirrored to prisma/sqlite/schema.prisma for that reason.
+  passwordSetAt       DateTime?
   reportCards      ReportCard[]
   teacherSubjects  TeacherSubject[]
   school           School?          @relation(fields: [schoolId], references: [id])

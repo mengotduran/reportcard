@@ -52,17 +52,6 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     backgroundColor: colors.card,
     marginBottom: 14,
   },
-  passwordWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    backgroundColor: colors.card,
-    marginBottom: 14,
-  },
-  passwordInput: { flex: 1, padding: 12, fontSize: 14, color: colors.text, backgroundColor: 'transparent' },
-  eyeBtn: { padding: 12 },
   toggle: {
     flexDirection: 'row',
     borderWidth: 1,
@@ -114,10 +103,8 @@ export default function CreateTeacherScreen() {
   const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [role, setRole] = useState<'CLASS_TEACHER' | 'CLASS_MASTER'>('CLASS_TEACHER')
   const [masterClassLevel, setMasterClassLevel] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const { school } = useAuthStore()
@@ -137,8 +124,8 @@ export default function CreateTeacherScreen() {
   }, [hasDeptView, isSecondary])
 
   const handleSubmit = async () => {
-    if (!name.trim() || !email.trim() || !password.trim()) {
-      Alert.alert(t('Validation'), t('Name, email, and password are required.'))
+    if (!name.trim() || !email.trim()) {
+      Alert.alert(t('Validation'), t('Name and email are required.'))
       return
     }
     if (role === 'CLASS_MASTER' && !masterClassLevel.trim()) {
@@ -150,12 +137,11 @@ export default function CreateTeacherScreen() {
       await createTeacher({
         name: name.trim(),
         email: email.trim(),
-        password,
         role,
         masterClassLevel: role === 'CLASS_MASTER' ? masterClassLevel.trim() : undefined,
         departments,
       })
-      Alert.alert(t('Success'), t('Teacher created successfully.'), [
+      Alert.alert(t('Success'), t('An email has been sent for them to set their password.'), [
         { text: t('OK'), onPress: () => router.back() },
       ])
     } catch (err: any) {
@@ -192,22 +178,7 @@ export default function CreateTeacherScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
           />
-
-          <Text style={styles.label}>{t('Password')} <Text style={styles.required}>*</Text></Text>
-          <View style={styles.passwordWrap}>
-            <TextInput
-              style={styles.passwordInput}
-              value={password}
-              onChangeText={setPassword}
-              placeholder={t('Set a password')}
-              placeholderTextColor="#9ca3af"
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity onPress={() => setShowPassword((v) => !v)} style={styles.eyeBtn}>
-              <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.hint}>{t('A setup email will be sent to this address.')}</Text>
         </View>
 
         {hasDeptView && deptNames.length > 0 && (

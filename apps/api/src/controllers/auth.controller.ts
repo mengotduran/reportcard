@@ -1,8 +1,10 @@
 import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
-import prisma from '../config/prisma'
+import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { generateToken } from '../utils/jwt'
 import { AuthRequest } from '../middleware/auth'
+import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
+import { sendPasswordSetupEmail } from '../utils/email'
 
 // Register a new school + admin account
 export const registerSchool = async (req: Request, res: Response) => {
@@ -237,10 +239,6 @@ export const resetSuperAdminPassword = async (req: Request, res: Response) => {
 export const resetUserPassword = async (req: AuthRequest, res: Response) => {
   try {
     const userId = String(req.params.userId)
-    const { newPassword } = req.body
-    if (!newPassword || newPassword.length < 6) {
-      res.status(400).json({ message: 'Password must be at least 6 characters' }); return
-    }
     const requesterRole = req.user!.role
     const requesterSchoolId = req.user!.schoolId
 
@@ -262,9 +260,28 @@ export const resetUserPassword = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const hashed = await bcrypt.hash(newPassword, 12)
-    await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
-    res.json({ message: 'Password reset successfully' })
+    if (IS_OFFLINE_BUILD) {
+      const { newPassword } = req.body
+      if (!newPassword || newPassword.length < 6) {
+        res.status(400).json({ message: 'Password must be at least 6 characters' }); return
+      }
+      const hashed = await bcrypt.hash(newPassword, 12)
+      await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
+      res.json({ message: 'Password reset successfully' })
+      return
+    }
+
+    // Online: no password taken from the requester at all — a fresh setup link
+    // is emailed to the target user, same as a brand-new teacher invite.
+    const inviteToken = generateRawToken()
+    await prisma.user.update({
+      where: { id: userId },
+      data: { resetTokenHash: hashToken(inviteToken), resetTokenExpiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) },
+    })
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')
+    const setupUrl = `${frontendUrl}/reset-password?token=${inviteToken}`
+    await sendPasswordSetupEmail({ to: target.email, resetUrl: setupUrl, lang: target.preferredLanguage === 'FR' ? 'FR' : 'EN' })
+    res.json({ message: 'Password setup email sent' })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
