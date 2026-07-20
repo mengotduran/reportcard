@@ -2,7 +2,6 @@
 
 > Last updated: 2026-07-17 (annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
 > This document is updated every time a new feature or change is made.
-
 ---
 
 ## Table of Contents
