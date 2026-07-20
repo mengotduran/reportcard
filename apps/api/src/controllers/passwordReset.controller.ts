@@ -1,17 +1,14 @@
 import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
-import crypto from 'crypto'
 import prisma from '../config/prisma'
 import { sendPasswordResetEmail } from '../utils/email'
+import { hashToken, generateRawToken, RESET_TOKEN_TTL_MS as TOKEN_TTL_MS } from '../utils/resetToken'
 
-const TOKEN_TTL_MS = 60 * 60 * 1000 // 1 hour
 // A resend within the same short window is almost always a double-click or an
 // impatient refresh, not a genuine second request — skip re-sending (and
 // re-spending a slot of the free Gmail daily cap) rather than invalidating the
 // link the person may already have open in their inbox.
 const RESEND_COOLDOWN_MS = 2 * 60 * 1000
-
-const hashToken = (raw: string) => crypto.createHash('sha256').update(raw).digest('hex')
 
 // Request a reset link by email. Always responds with the same generic message
 // whether or not the address exists — telling the caller otherwise would let
@@ -28,7 +25,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
     const alreadySentRecently = user.resetTokenExpiresAt != null
       && user.resetTokenExpiresAt.getTime() - Date.now() > TOKEN_TTL_MS - RESEND_COOLDOWN_MS
     if (!alreadySentRecently) {
-      const rawToken = crypto.randomBytes(32).toString('hex')
+      const rawToken = generateRawToken()
       await prisma.user.update({
         where: { id: user.id },
         data: { resetTokenHash: hashToken(rawToken), resetTokenExpiresAt: new Date(Date.now() + TOKEN_TTL_MS) },

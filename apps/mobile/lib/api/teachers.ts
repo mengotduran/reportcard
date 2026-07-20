@@ -20,7 +20,7 @@ export const getTeachers = async (): Promise<{ teachers: Teacher[] }> => {
 }
 
 export const createTeacher = async (data: {
-  name: string; email: string; password: string
+  name: string; email: string
   role: string; masterClassLevel?: string; departments?: string[]
 }) => {
   const res = await api.post('/teachers', data)

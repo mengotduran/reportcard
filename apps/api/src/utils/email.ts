@@ -1,17 +1,18 @@
-// Transactional email — currently just the password-reset link. Cloud only: the
-// offline SQLite build has no internet-facing mail path to speak of, and its
-// callers (passwordReset.controller.ts) are excluded from that build entirely
-// (see scripts/offline-build/stubs/passwordReset.routes.stub.ts).
+// Transactional email — password reset/setup links. Cloud only: the offline
+// SQLite build has no internet-facing mail path to speak of. Its callers
+// (passwordReset.controller.ts, and the online branches of teacher.controller.ts /
+// auth.controller.ts gated by IS_OFFLINE_BUILD) never actually invoke these
+// functions in that build, even though the module itself is still bundled.
 //
 // Sent via Resend's HTTPS API against the verified usebulletin.org domain.
 // Deliberately not SMTP: Railway blocks outbound SMTP ports (465/587) by
 // default, so Resend's SMTP relay times out there — the API travels over
 // 443 like any other outbound request. Missing credentials never break the
-// request; the reset link is logged to the server console instead, so local
-// dev works with zero setup.
+// request; the link is logged to the server console instead, so local dev
+// works with zero setup.
 const FROM_ADDRESS = 'Bulletin <noreply@usebulletin.org>'
 
-const COPY = {
+const RESET_COPY = {
   EN: {
     subject: 'Reset your Bulletin password',
     heading: 'Hi,',
@@ -28,18 +29,33 @@ const COPY = {
   },
 }
 
-export async function sendPasswordResetEmail(opts: {
-  to: string
-  resetUrl: string
-  lang?: 'EN' | 'FR'
-}): Promise<void> {
-  const c = COPY[opts.lang === 'FR' ? 'FR' : 'EN']
+const SETUP_COPY = {
+  EN: {
+    subject: 'Set up your Bulletin account',
+    heading: 'Hi,',
+    body: 'An administrator has set up access to your Bulletin account. Click the button below to choose your password and get started. This link expires in 7 days.',
+    button: 'Set Password',
+    ignore: "If you weren't expecting this, you can ignore this email or contact your school administrator.",
+  },
+  FR: {
+    subject: 'Configurez votre compte Bulletin',
+    heading: 'Bonjour,',
+    body: "Un administrateur a configuré l'accès à votre compte Bulletin. Cliquez sur le bouton ci-dessous pour choisir votre mot de passe et commencer. Ce lien expire dans 7 jours.",
+    button: 'Définir le mot de passe',
+    ignore: "Si vous ne vous attendiez pas à cela, vous pouvez ignorer cet e-mail ou contacter l'administrateur de votre école.",
+  },
+}
+
+type Copy = { subject: string; heading: string; body: string; button: string; ignore: string }
+
+async function dispatchEmail(opts: { to: string; resetUrl: string; copy: Copy; logLabel: string }): Promise<void> {
+  const { to, resetUrl, copy: c, logLabel } = opts
   const apiKey = process.env.RESEND_API_KEY
 
   if (!apiKey) {
     // No RESEND_API_KEY configured — dev-friendly fallback so the flow is
     // still testable locally without any email account.
-    console.log(`[email] RESEND_API_KEY not set — password reset link for ${opts.to}:\n  ${opts.resetUrl}`)
+    console.log(`[email] RESEND_API_KEY not set — ${logLabel} link for ${to}:\n  ${resetUrl}`)
     return
   }
 
@@ -48,7 +64,7 @@ export async function sendPasswordResetEmail(opts: {
       <p style="font-size:15px">${c.heading}</p>
       <p style="font-size:14px;line-height:1.6;color:#5f5648">${c.body}</p>
       <p style="text-align:center;margin:28px 0">
-        <a href="${opts.resetUrl}" style="background:#F03E2F;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;display:inline-block">${c.button}</a>
+        <a href="${resetUrl}" style="background:#F03E2F;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;display:inline-block">${c.button}</a>
       </p>
       <p style="font-size:12px;color:#9ca3af;line-height:1.5">${c.ignore}</p>
     </div>
@@ -63,10 +79,10 @@ export async function sendPasswordResetEmail(opts: {
       },
       body: JSON.stringify({
         from: FROM_ADDRESS,
-        to: opts.to,
+        to,
         subject: c.subject,
         html,
-        text: `${c.heading}\n\n${c.body}\n\n${opts.resetUrl}\n\n${c.ignore}`,
+        text: `${c.heading}\n\n${c.body}\n\n${resetUrl}\n\n${c.ignore}`,
       }),
     })
     if (!res.ok) {
@@ -77,6 +93,27 @@ export async function sendPasswordResetEmail(opts: {
     // generic message regardless of delivery outcome, to avoid leaking whether an
     // email address exists. A real delivery failure is a server-side thing to fix,
     // not something the requester should learn about from the response.
-    console.error('[email] Failed to send password reset email:', error)
+    console.error(`[email] Failed to send ${logLabel} email:`, error)
   }
+}
+
+export async function sendPasswordResetEmail(opts: {
+  to: string
+  resetUrl: string
+  lang?: 'EN' | 'FR'
+}): Promise<void> {
+  const copy = RESET_COPY[opts.lang === 'FR' ? 'FR' : 'EN']
+  await dispatchEmail({ to: opts.to, resetUrl: opts.resetUrl, copy, logLabel: 'password reset' })
+}
+
+// Admin-triggered: a new teacher's account creation, or an admin resetting an
+// existing teacher's password. Either way the admin never sees/sets the actual
+// password — the teacher picks their own via this link.
+export async function sendPasswordSetupEmail(opts: {
+  to: string
+  resetUrl: string
+  lang?: 'EN' | 'FR'
+}): Promise<void> {
+  const copy = SETUP_COPY[opts.lang === 'FR' ? 'FR' : 'EN']
+  await dispatchEmail({ to: opts.to, resetUrl: opts.resetUrl, copy, logLabel: 'password setup' })
 }

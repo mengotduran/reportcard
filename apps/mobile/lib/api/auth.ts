@@ -5,8 +5,10 @@ export const loginApi = async (data: { email: string; password: string }) => {
   return res.data as { token: string; user: { id: string; name: string; email: string; role: string; schoolId: string | null; masterClassLevel?: string | null }; school: { id: string; name: string; type: string; logo: string | null; coverImage: string | null; coverImages: string[] } | null }
 }
 
-export const resetUserPasswordApi = async (userId: string, newPassword: string) => {
-  const res = await api.put(`/auth/users/${userId}/reset-password`, { newPassword })
+// The mobile app is cloud-only — the API always emails the target user a
+// setup link rather than taking a password here.
+export const resetUserPasswordApi = async (userId: string) => {
+  const res = await api.put(`/auth/users/${userId}/reset-password`, {})
   return res.data
 }
 

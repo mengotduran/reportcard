@@ -188,28 +188,23 @@ export default function TeachersScreen() {
     : teachers
 
   const handleResetPassword = (teacher: Teacher) => {
-    Alert.prompt(
+    Alert.alert(
       tr('Reset Password'),
-      `${tr('Set a new password for')} ${teacher.name}`,
+      `${tr('Send')} ${teacher.name} ${tr('a link to set a new password?')}`,
       [
         { text: tr('Cancel'), style: 'cancel' },
         {
-          text: tr('Reset'),
-          onPress: async (newPassword?: string) => {
-            if (!newPassword || newPassword.length < 6) {
-              Alert.alert(tr('Error'), tr('Password must be at least 6 characters.'))
-              return
-            }
+          text: tr('Send'),
+          onPress: async () => {
             try {
-              await resetUserPasswordApi(teacher.id, newPassword)
-              Alert.alert(tr('Done'), `${tr('Password updated for')} ${teacher.name}.`)
+              await resetUserPasswordApi(teacher.id)
+              Alert.alert(tr('Done'), `${tr('Setup email sent to')} ${teacher.name}.`)
             } catch (e: any) {
               Alert.alert(tr('Error'), e?.response?.data?.message || tr('Failed to reset password.'))
             }
           },
         },
-      ],
-      'secure-text'
+      ]
     )
   }
 

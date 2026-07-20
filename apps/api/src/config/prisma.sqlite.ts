@@ -15,4 +15,6 @@ runSqliteMigrations(url)
 const adapter = new PrismaBetterSqlite3({ url })
 const prisma = new PrismaClient({ adapter })
 
+export const IS_OFFLINE_BUILD = true
+
 export default prisma

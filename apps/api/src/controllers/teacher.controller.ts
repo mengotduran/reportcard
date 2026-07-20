@@ -1,8 +1,10 @@
 import { Response } from 'express'
-import prisma from '../config/prisma'
+import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import bcrypt from 'bcryptjs'
 import { AuthRequest } from '../middleware/auth'
 import { demoLimitBlock } from '../config/demo'
+import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
+import { sendPasswordSetupEmail } from '../utils/email'
 
 // Trims, drops blanks, and dedupes — a stray empty string or repeated entry from the
 // client shouldn't end up stored.
@@ -16,13 +18,18 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     // Optional ?term= for university semester scoping (filters to teachers who
     // have at least one course assignment in that semester via TeacherSubject).
+    // Teachers with NO course assignments in any term are always included too —
+    // otherwise a freshly created teacher has no course yet, gets filtered out of
+    // every term tab, and the admin has no UI path left to ever assign them one.
     const term = req.query.term ? String(req.query.term) : undefined
     const teachers = await prisma.user.findMany({
       where: {
         schoolId,
         isActive: true,
         role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] },
-        ...(term ? { teacherSubjects: { some: { subject: { term } } } } : {}),
+        ...(term
+          ? { OR: [{ teacherSubjects: { some: { subject: { term } } } }, { teacherSubjects: { none: {} } }] }
+          : {}),
       },
       select: {
         id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true,
@@ -73,13 +80,39 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const hashedPassword = await bcrypt.hash(password, 12)
-    const data = { name, email, password: hashedPassword, role, schoolId, masterClassLevel: masterClassLevel ?? null, departments: sanitizeDepartments(departments) }
+    let hashedPassword: string
+    let inviteToken: string | null = null
+
+    if (IS_OFFLINE_BUILD) {
+      hashedPassword = await bcrypt.hash(password, 12)
+    } else {
+      // Online: the admin never sets or knows a teacher's password — a random
+      // unusable placeholder is stored and the teacher picks their own via the
+      // emailed setup link (see sendPasswordSetupEmail below).
+      hashedPassword = await bcrypt.hash(generateRawToken(), 12)
+      inviteToken = generateRawToken()
+    }
+
+    const data = {
+      name, email, password: hashedPassword, role, schoolId,
+      masterClassLevel: masterClassLevel ?? null,
+      departments: sanitizeDepartments(departments),
+      ...(inviteToken
+        ? { resetTokenHash: hashToken(inviteToken), resetTokenExpiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) }
+        : {}),
+    }
     const select = { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
 
     const teacher = existing
       ? await prisma.user.update({ where: { id: existing.id }, data: { ...data, isActive: true }, select })
       : await prisma.user.create({ data, select })
+
+    if (inviteToken) {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { language: true } })
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')
+      const setupUrl = `${frontendUrl}/reset-password?token=${inviteToken}`
+      await sendPasswordSetupEmail({ to: teacher.email, resetUrl: setupUrl, lang: school?.language === 'FR' ? 'FR' : 'EN' })
+    }
 
     res.status(201).json({ message: 'Teacher created', teacher })
   } catch (error) {
