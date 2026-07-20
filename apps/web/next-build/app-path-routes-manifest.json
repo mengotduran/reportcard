@@ -5,6 +5,7 @@
   "/(dashboard)/class-list-design/page": "/class-list-design",
   "/(dashboard)/class-master/page": "/class-master",
   "/(dashboard)/classes/page": "/classes",
+  "/(dashboard)/courses/page": "/courses",
   "/(dashboard)/dashboard/page": "/dashboard",
   "/(dashboard)/fees/page": "/fees",
   "/(dashboard)/grading-scale/page": "/grading-scale",
@@ -26,5 +27,6 @@
   "/_global-error/page": "/_global-error",
   "/_not-found/page": "/_not-found",
   "/favicon.ico/route": "/favicon.ico",
-  "/page": "/"
+  "/page": "/",
+  "/privacy/page": "/privacy"
 }

@@ -9,6 +9,7 @@ import { getDashboardStats, getWeeklyStats, getTeacherChartStats, WeeklyStats, T
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import { API_BASE } from '@/lib/config'
+import SetupChecklist from '@/components/SetupChecklist'
 
 interface Stats { students: number; teachers: number; reportCards: number; subjects: number }
 
@@ -281,6 +282,8 @@ function AdminHome() {
           </Text>
           <Text style={adm.dateText}>{today}</Text>
         </View>
+
+        <SetupChecklist />
 
         {/* Active academic year */}
         {activeSession ? (

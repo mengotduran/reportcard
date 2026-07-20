@@ -5,6 +5,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getDashboardStatsApi, getWeeklyStatsApi, getTeacherChartStatsApi, getAcademicYearsApi, WeeklyStats, TeacherChartStats, AcademicYear } from '@/lib/api/dashboard'
 import { Users, BookOpen, FileText, School, GraduationCap, ArrowRight, TrendingUp, TrendingDown, Minus, CalendarRange } from 'lucide-react'
 import ImageSlider from '@/components/ui/ImageSlider'
+import SetupChecklist from '@/components/SetupChecklist'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -307,6 +308,8 @@ export default function PrimaryDashboard() {
           </div>
         </div>
       </div>
+
+      <SetupChecklist />
 
       {/* Active academic year — read-only; switch on the Academic Year page */}
       {session && (

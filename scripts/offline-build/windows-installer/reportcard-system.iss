@@ -58,23 +58,47 @@ Filename: "{app}\web\node.exe"; Parameters: """{app}\windows\uninstall-service.j
 [Code]
 // Re-running this installer over an existing install (an UPDATE — same
 // AppId above, so Setup treats it as an upgrade, not a parallel install)
-// needs the service stopped BEFORE [Files] copies anything: Windows locks
-// the executable files a running process holds open, so overwriting
-// reportcard-api.exe/reportcard-launcher.exe/web\node.exe etc. while the
-// service is still running them would fail outright. PrepareToInstall runs
-// right before file extraction — the correct hook for this, as opposed to
-// [Run] entries, which only fire AFTER installation completes.
+// needs every running instance of the app's own executables gone BEFORE
+// [Files] copies anything: Windows locks the executable files a running
+// process holds open, so overwriting reportcard-api.exe/
+// reportcard-launcher.exe/web\node.exe etc. while any of them are still
+// running would fail outright. PrepareToInstall runs right before file
+// extraction — the correct hook for this, as opposed to [Run] entries,
+// which only fire AFTER installation completes.
 //
-// `net stop` exits non-zero on a first-time install (service doesn't exist
-// yet) or if it's already stopped — both fine, deliberately ignored rather
-// than treated as a Result error message, which would abort Setup entirely.
-// install-service.js's `alreadyinstalled` handler starts it again once the
-// new files are in place; %ProgramData% (the database + uploads) is never
-// touched by any of this.
+// Real bug found on actual Windows hardware, not assumed: `net stop`
+// alone (the original version of this function) reliably left
+// reportcard-launcher.exe still holding its own file locked — "DeleteFile
+// failed; code 5. Access is denied" on every single update. `net stop`
+// only guarantees the SCM-registered top-level process is asked to stop;
+// it does not guarantee node-windows' service wrapper actually kills the
+// full process tree it spawned (reportcard-launcher.exe --service, and
+// in turn reportcard-api.exe and web's node.exe as ITS children), and it
+// does nothing at all for a separate instance someone launched via the
+// desktop shortcut rather than the service. Fixed by force-killing the
+// app's own executables by name afterward, with /T (tree-kill, so each
+// process's own children go with it — no need to also target node.exe by
+// name directly, which could over-match unrelated processes on the
+// machine) — a stronger guarantee than trusting `net stop` alone.
+//
+// Non-zero exit codes from any of these are expected and ignored (no
+// service yet on a first-time install, nothing running to kill, etc.) —
+// deliberately never surfaced as a Result error, which would abort Setup
+// entirely over a condition that just means "already in the state we
+// want." install-service.js's `alreadyinstalled` handler starts the
+// service again once the new files are in place; %ProgramData% (the
+// database + uploads) is never touched by any of this.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
 begin
   Result := '';
   Exec('net.exe', 'stop ReportCardSystem', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM reportcard-launcher.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM reportcard-api.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Killing a process doesn't guarantee Windows has fully released its file
+  // handles by the very next instruction — observed lock contention
+  // clearing within a second or two in practice; 2s is a cheap, generous
+  // margin for a one-time update step.
+  Sleep(2000);
 end;

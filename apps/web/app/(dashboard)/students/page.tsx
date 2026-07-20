@@ -11,7 +11,7 @@ import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle } from 'lucide-react'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
@@ -232,6 +232,11 @@ export default function StudentsPage() {
 
   const selectedClassDef = definedClasses.find((c) => c.name === form.classLevel)
   const needsStream = selectedClassDef?.hasStream ?? false
+
+  // Mirrors the API's hard gate in createStudent/commitStudentImport — a student created
+  // before any term is current ends up with no report card and nothing to surface that
+  // later, so blocked here too rather than just letting the add/import forms fail on submit.
+  const hasCurrentTerm = terms.some((tm) => tm.isCurrent)
 
   // Secondary two-step picker, same shape as the university one below: department
   // first, then the class dropdown narrows to that department's classes only. A
@@ -559,16 +564,26 @@ export default function StudentsPage() {
             className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
             <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
           </button>
-          <button onClick={openImportModal}
-            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+          <button onClick={openImportModal} disabled={!hasCurrentTerm}
+            title={hasCurrentTerm ? undefined : t('Set a current academic year/term before adding students.')}
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition">
             <Upload size={16} /> {t('Import Students')}
           </button>
-          <button onClick={openAdd}
-            className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition">
+          <button onClick={openAdd} disabled={!hasCurrentTerm}
+            title={hasCurrentTerm ? undefined : t('Set a current academic year/term before adding students.')}
+            className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 disabled:cursor-not-allowed transition">
             <Plus size={16} /> {t('Add Student')}
           </button>
         </div>
       </div>
+
+      {!hasCurrentTerm && (
+        <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2">
+          <Info size={15} className="flex-shrink-0" />
+          {t('No current academic year/term is set — set one before you can add students.')}{' '}
+          <button onClick={() => router.push('/terms')} className="font-semibold underline hover:no-underline">{t('Go to Terms')}</button>
+        </div>
+      )}
 
       {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
         <div className="flex flex-wrap items-center gap-2 mb-4">

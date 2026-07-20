@@ -1,6 +1,6 @@
 // app/(tabs)/students.tsx
 import { useEffect, useState, useCallback } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import {
   View, Text, FlatList, TextInput, StyleSheet, ActivityIndicator,
   TouchableOpacity, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, ScrollView,
@@ -38,6 +38,13 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   exportBar: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, marginBottom: 4 },
   exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
   exportText: { fontSize: 12, fontWeight: '600', color: '#F03E2F' },
+  noTermBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 16, marginBottom: 10, padding: 12, borderRadius: 10,
+    backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a',
+  },
+  noTermText: { flex: 1, fontSize: 12, color: '#92400e' },
+  noTermLink: { fontSize: 12, fontWeight: '700', color: '#92400e', textDecorationLine: 'underline' },
   list: { paddingHorizontal: 16, paddingBottom: 100 },
   row: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card,
@@ -589,6 +596,7 @@ export default function StudentsScreen() {
   const { colors, isDark } = useTheme()
   const styles = makeStylesStyles(colors)
   const t = useT()
+  const router = useRouter()
   const { user, activeSession, setActiveSession, school } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
   const isUniversity = school?.type === 'UNIVERSITY'
@@ -670,6 +678,11 @@ export default function StudentsScreen() {
     setRefreshing(false)
   }
 
+  // Mirrors the API's hard gate in createStudent/commitStudentImport — a student
+  // created before any term is current ends up with no report card and nothing to
+  // surface that later, so blocked here too rather than letting add/import fail on submit.
+  const hasCurrentTerm = !!liveSession
+
   const filtered = students.filter(
     (s) =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -744,9 +757,27 @@ export default function StudentsScreen() {
         </View>
       )}
 
+      {isAdmin && !hasCurrentTerm && (
+        <View style={styles.noTermBanner}>
+          <Ionicons name="information-circle-outline" size={16} color="#92400e" />
+          <Text style={styles.noTermText}>{t('No current academic year/term is set — set one before you can add students.')}</Text>
+          <TouchableOpacity onPress={() => router.push('/admin/terms' as any)}>
+            <Text style={styles.noTermLink}>{t('Go')}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {isAdmin && (
         <View style={styles.exportBar}>
-          <TouchableOpacity style={styles.exportBtn} onPress={() => setImportVisible(true)}>
+          <TouchableOpacity
+            style={[styles.exportBtn, !hasCurrentTerm && { opacity: 0.5 }]}
+            onPress={() => {
+              if (!hasCurrentTerm) {
+                Alert.alert(t('No current term'), t('Set a current academic year/term before adding students.'))
+                return
+              }
+              setImportVisible(true)
+            }}>
             <Ionicons name="cloud-upload-outline" size={15} color="#F03E2F" />
             <Text style={styles.exportText}>{t('Import')}</Text>
           </TouchableOpacity>
@@ -809,7 +840,16 @@ export default function StudentsScreen() {
       />}
 
       {isAdmin && (
-        <TouchableOpacity style={styles.fab} onPress={() => setCreateVisible(true)} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={[styles.fab, !hasCurrentTerm && { opacity: 0.5 }]}
+          onPress={() => {
+            if (!hasCurrentTerm) {
+              Alert.alert(t('No current term'), t('Set a current academic year/term before adding students.'))
+              return
+            }
+            setCreateVisible(true)
+          }}
+          activeOpacity={0.85}>
           <Ionicons name="add" size={28} color="#fff" />
         </TouchableOpacity>
       )}
