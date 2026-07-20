@@ -1,33 +1,15 @@
 // Transactional email — currently just the password-reset link. Cloud only: the
-// offline SQLite build has no internet-facing SMTP relay to speak of, and its
+// offline SQLite build has no internet-facing mail path to speak of, and its
 // callers (passwordReset.controller.ts) are excluded from that build entirely
 // (see scripts/offline-build/stubs/passwordReset.routes.stub.ts).
 //
-// Sent via Resend's SMTP relay against the verified usebulletin.org domain
-// (nodemailer stays the transport, just pointed at Resend instead of Gmail).
-// Missing credentials never break the request; the reset link is logged to
-// the server console instead, so local dev works with zero setup.
-import nodemailer from 'nodemailer'
-
+// Sent via Resend's HTTPS API against the verified usebulletin.org domain.
+// Deliberately not SMTP: Railway blocks outbound SMTP ports (465/587) by
+// default, so Resend's SMTP relay times out there — the API travels over
+// 443 like any other outbound request. Missing credentials never break the
+// request; the reset link is logged to the server console instead, so local
+// dev works with zero setup.
 const FROM_ADDRESS = 'Bulletin <noreply@usebulletin.org>'
-
-let cachedTransporter: nodemailer.Transporter | null | undefined
-
-function getTransporter(): nodemailer.Transporter | null {
-  if (cachedTransporter !== undefined) return cachedTransporter
-  const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) {
-    cachedTransporter = null
-    return null
-  }
-  cachedTransporter = nodemailer.createTransport({
-    host: 'smtp.resend.com',
-    port: 465,
-    secure: true,
-    auth: { user: 'resend', pass: apiKey },
-  })
-  return cachedTransporter
-}
 
 const COPY = {
   EN: {
@@ -53,9 +35,9 @@ export async function sendPasswordResetEmail(opts: {
   lang?: 'EN' | 'FR'
 }): Promise<void> {
   const c = COPY[opts.lang === 'FR' ? 'FR' : 'EN']
-  const transporter = getTransporter()
+  const apiKey = process.env.RESEND_API_KEY
 
-  if (!transporter) {
+  if (!apiKey) {
     // No RESEND_API_KEY configured — dev-friendly fallback so the flow is
     // still testable locally without any email account.
     console.log(`[email] RESEND_API_KEY not set — password reset link for ${opts.to}:\n  ${opts.resetUrl}`)
@@ -74,13 +56,23 @@ export async function sendPasswordResetEmail(opts: {
   `.trim()
 
   try {
-    await transporter.sendMail({
-      from: FROM_ADDRESS,
-      to: opts.to,
-      subject: c.subject,
-      html,
-      text: `${c.heading(opts.name)}\n\n${c.body}\n\n${opts.resetUrl}\n\n${c.ignore}`,
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: FROM_ADDRESS,
+        to: opts.to,
+        subject: c.subject,
+        html,
+        text: `${c.heading(opts.name)}\n\n${c.body}\n\n${opts.resetUrl}\n\n${c.ignore}`,
+      }),
     })
+    if (!res.ok) {
+      console.error(`[email] Resend API returned ${res.status}:`, await res.text())
+    }
   } catch (error) {
     // Never throw into the caller: forgot-password always responds with the same
     // generic message regardless of delivery outcome, to avoid leaking whether an
