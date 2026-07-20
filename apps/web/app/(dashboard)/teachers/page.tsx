@@ -25,7 +25,7 @@ import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 
-interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[] }
+interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean }
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
 const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '', departments: [] as string[] }
@@ -146,6 +146,9 @@ export default function TeachersPage() {
         role: form.role,
         masterClassLevel: form.role === 'CLASS_MASTER' ? form.masterClassLevel : undefined,
         departments: form.departments,
+        // University only: keeps a teacher scoped to the semester they were added
+        // under, until they're actually assigned a course (see getTeachers).
+        ...(isUniversity && selectedTerm ? { term: selectedTerm } : {}),
       })
       setShowModal(false)
       setForm(emptyForm)
@@ -398,7 +401,14 @@ export default function TeachersPage() {
                       <div className="w-8 h-8 flex-shrink-0 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">
                         {t.name.charAt(0)}
                       </div>
-                      <span className="text-sm font-medium text-foreground">{t.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{t.name}</span>
+                        {!isOfflineInstall && t.pendingSetup && (
+                          <span className="inline-block whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700" title={tr('Has not set a password yet')}>
+                            {tr('Pending Setup')}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{t.email}</td>

@@ -12,6 +12,8 @@ export interface Teacher {
   // Departments (secondary) / programmes (university) this teacher is explicitly
   // placed in, independent of classLevels — a teacher can be in more than one.
   departments?: string[]
+  // True until this (online-invited) teacher completes their set-password link.
+  pendingSetup?: boolean
 }
 
 export const getTeachers = async (): Promise<{ teachers: Teacher[] }> => {

@@ -59,7 +59,10 @@ export const resetPassword = async (req: Request, res: Response) => {
     const hashed = await bcrypt.hash(newPassword, 12)
     await prisma.user.update({
       where: { id: user.id },
-      data: { password: hashed, resetTokenHash: null, resetTokenExpiresAt: null },
+      // passwordSetAt: marks a teacher who was invited online (see teacher.controller.ts
+      // createTeacher) as having actually completed setup — clears the "Pending Setup"
+      // badge on the teachers list. Harmless to re-stamp on a later, ordinary reset.
+      data: { password: hashed, resetTokenHash: null, resetTokenExpiresAt: null, passwordSetAt: new Date() },
     })
     res.json({ message: 'Password reset successfully' })
   } catch (error) {

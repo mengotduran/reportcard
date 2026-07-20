@@ -13,6 +13,8 @@ export const createTeacherApi = async (data: {
   role: string
   masterClassLevel?: string
   departments?: string[]
+  // University only — the semester this teacher was added under.
+  term?: string
 }) => {
   const res = await api.post('/teachers', data)
   return res.data

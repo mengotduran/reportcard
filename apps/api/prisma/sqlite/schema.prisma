@@ -187,6 +187,11 @@ model User {
   // placed in — independent of subject assignment. String[] on Postgres — SQLite
   // has no scalar-list column type.
   departments       Json     @default("[]")
+  // Mirrors schema.prisma — see the comments there. getTeachers (shared code)
+  // reads both, even though offline always has createdForTerm relevant only for
+  // university term-scoping and passwordSetAt always non-null (set at creation).
+  createdForTerm    String?
+  passwordSetAt     DateTime?
 
   school          School?          @relation(fields: [schoolId], references: [id])
   reportCards     ReportCard[]
