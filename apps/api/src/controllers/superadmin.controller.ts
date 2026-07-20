@@ -295,6 +295,12 @@ export const updateSchool = async (req: Request, res: Response) => {
 
     // The provider setting who enters marks IS the permission that lifts the school's
     // two-per-semester cap, so it is deliberately uncapped here and logged as ours.
+    // ADMIN_ONLY is a university-only arrangement — checked against nextType, not
+    // school.type, in case type is also changing in this same request.
+    if (marksEntryMode === 'ADMIN_ONLY' && nextType !== 'UNIVERSITY') {
+      res.status(400).json({ message: 'Only universities can switch marks entry to the administration.' })
+      return
+    }
     const nextMode = marksEntryMode === 'TEACHERS' || marksEntryMode === 'ADMIN_ONLY' ? marksEntryMode : undefined
     const switching = nextMode !== undefined && nextMode !== school.marksEntryMode
 
@@ -336,20 +342,51 @@ export const deleteSchool = async (req: Request, res: Response) => {
     })
     if (!school) { res.status(404).json({ message: 'School not found' }); return }
 
-    // Delete in order: entries → report cards → teacher subjects → users → school
+    // Every model with a schoolId FK has to go before the school itself, or the delete
+    // fails on a foreign-key violation — this used to only clear the tables a brand-new
+    // school would have, so anything past initial setup (a grading scale saved, a
+    // report-card template edited, a department created, an Excel template uploaded, a
+    // marks-entry-mode switch logged) left an orphaned row blocking deletion outright.
+    // The API swallowed that FK error into a generic 500 with no detail — see the fix
+    // to the message below too. Order: children before parents.
     const reportCardIds = (await prisma.reportCard.findMany({ where: { schoolId: id }, select: { id: true } })).map((r) => r.id)
     await prisma.reportEntry.deleteMany({ where: { reportCardId: { in: reportCardIds } } })
     await prisma.reportCard.deleteMany({ where: { schoolId: id } })
     await prisma.teacherSubject.deleteMany({ where: { user: { schoolId: id } } })
+    await prisma.feePayment.deleteMany({ where: { schoolId: id } })
+    await prisma.hndRegistrationPayment.deleteMany({ where: { schoolId: id } })
+    await prisma.excelTemplate.deleteMany({ where: { schoolId: id } })
+    await prisma.marksEntryModeChange.deleteMany({ where: { schoolId: id } })
     await prisma.student.deleteMany({ where: { schoolId: id } })
     await prisma.subject.deleteMany({ where: { schoolId: id } })
     await prisma.term.deleteMany({ where: { schoolId: id } })
+    await prisma.classLevel.deleteMany({ where: { schoolId: id } })
+    await prisma.department.deleteMany({ where: { schoolId: id } })
+    await prisma.gradingScale.deleteMany({ where: { schoolId: id } })
+    await prisma.reportCardTemplate.deleteMany({ where: { schoolId: id } })
+    await prisma.classListTemplate.deleteMany({ where: { schoolId: id } })
     await prisma.user.deleteMany({ where: { schoolId: id } })
     await prisma.school.delete({ where: { id } })
 
     res.json({ message: 'School deleted' })
-  } catch (error) {
+  } catch (error: any) {
     console.error(error)
+    // A foreign-key violation here means some relation still isn't cleared above —
+    // surfaced specifically rather than a bare "Server error" so a future gap like this
+    // one is diagnosable from the toast alone, not just from server logs.
+    if (error?.code === 'P2003') {
+      res.status(409).json({ message: 'Could not delete: this school still has related data blocking deletion. Contact support.' })
+      return
+    }
+    // The row was already gone by the time `school.delete` ran — a second concurrent
+    // delete of the same section, or a stale click after the first request already
+    // finished. Report it the same as the not-found check above rather than a bare
+    // "Server error": everything up to this point already succeeded, so the school
+    // IS deleted, just not by this particular request.
+    if (error?.code === 'P2025') {
+      res.status(404).json({ message: 'School not found' })
+      return
+    }
     res.status(500).json({ message: 'Server error' })
   }
 }

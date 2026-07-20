@@ -324,12 +324,17 @@ export default function ReportCardDetailPage() {
   // has wording for "no class master" — this simply makes that the case.
   const noClassMaster = adminOnlyMarks || (readiness ? !readiness.classMaster : false)
   const canAdminEditRemarks = isAdmin && allSeqsFilled && reportCard.status === 'DRAFT'
-  // Who is offered the way through to the marks sheet. An admin always: they may edit even
-  // a published card (the API allows it, and they can unpublish anyway), which is the whole
-  // point of being able to correct a mark. A teacher only where the school lets teachers
-  // record marks at all. The sheet itself still locks whatever the rules say; this only
-  // decides whether the door is shown.
-  const canEditMarks = isAdmin || (!adminOnlyMarks && (isClassMaster || user?.role === 'CLASS_TEACHER' || user?.role === 'SUBJECT_TEACHER'))
+  // Who is offered the way through to the marks sheet. Admin-entered marks are a
+  // university-only arrangement, and only once the school has switched it on — a
+  // primary/secondary admin, or a university admin who hasn't enabled ADMIN_ONLY, has no
+  // standing to enter marks themselves. Where an admin IS the entry point, they may edit
+  // even a published card (the API allows it, and they can unpublish anyway), which is the
+  // whole point of being able to correct a mark. A teacher may reach the sheet whenever
+  // teachers record marks at all, OR — university under ADMIN_ONLY — because the CA is
+  // still theirs to enter even though Exam/Resit are not. The sheet itself still locks
+  // whatever the rules say per column; this only decides whether the door is shown.
+  const canEditMarks = (isAdmin && isUniversity && adminOnlyMarks) ||
+    ((isClassMaster || user?.role === 'CLASS_TEACHER' || user?.role === 'SUBJECT_TEACHER') && (!adminOnlyMarks || isUniversity))
 
   return (
     <div>

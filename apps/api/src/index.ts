@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import path from 'path'
 import authRoutes from './routes/auth.routes'
+import passwordResetRoutes from './routes/passwordReset.routes'
 import studentRoutes from './routes/student.routes'
 import subjectRoutes from './routes/subject.routes'
 import termRoutes from './routes/term.routes'
@@ -37,6 +38,7 @@ app.get('/health', (req, res) => {
 })
 
 app.use('/api/auth', authRoutes)
+app.use('/api/auth', passwordResetRoutes)
 app.use('/api/students', studentRoutes)
 app.use('/api/subjects', subjectRoutes)
 app.use('/api/terms', termRoutes)

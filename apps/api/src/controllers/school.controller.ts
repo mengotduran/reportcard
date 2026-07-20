@@ -45,7 +45,18 @@ export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
     // Who records marks. Validated against the enum rather than passed through: an
     // unrecognised value would otherwise 500 at the database, and silently accepting a
     // typo here would leave a school believing marks were locked when they were not.
-    if (marksEntryMode !== undefined && (marksEntryMode === 'TEACHERS' || marksEntryMode === 'ADMIN_ONLY')) data.marksEntryMode = marksEntryMode
+    // ADMIN_ONLY is a university-only arrangement — a primary/secondary admin never
+    // enters marks themselves, so the setting must not exist to be misread there either.
+    if (marksEntryMode !== undefined && (marksEntryMode === 'TEACHERS' || marksEntryMode === 'ADMIN_ONLY')) {
+      if (marksEntryMode === 'ADMIN_ONLY') {
+        const currentSchool = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+        if (currentSchool?.type !== 'UNIVERSITY') {
+          res.status(400).json({ message: 'Only universities can switch marks entry to the administration.' })
+          return
+        }
+      }
+      data.marksEntryMode = marksEntryMode
+    }
     if (authorizationNumber !== undefined) data.authorizationNumber = String(authorizationNumber).trim() || null
     if (officialLeftTextEn  !== undefined) data.officialLeftTextEn  = String(officialLeftTextEn).trim() || null
     if (officialLeftTextFr  !== undefined) data.officialLeftTextFr  = String(officialLeftTextFr).trim() || null

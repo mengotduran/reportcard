@@ -53,6 +53,9 @@ export default function MarksEntryScreen() {
   // Same rule as the web grid; the API is the real gate either way.
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY' && !isAdminRole
+  // Under ADMIN_ONLY, a university teacher may still record the CA themselves — only the
+  // Exam and Resit stay the administration's. Same rule as the web grid.
+  const caExemptForTeacher = adminOnlyMarks && isUniversity && seqIndex === 0
   const isResit = isUniversity && seqIndex === 2
   const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
@@ -124,8 +127,9 @@ export default function MarksEntryScreen() {
         return {
           studentId: s.id, name: s.name, studentIdCode: s.studentId, reportCardId: s.reportCard?.id ?? null,
           score, otherSeqScore,
-          // Marks recorded centrally: readable, not editable (see the web grid).
-          isLocked: frozenByPublish || (isResit && !resitEligible) || (adminOnlyMarks && !grantedToMe),
+          // Marks recorded centrally: readable, not editable (see the web grid) — except
+          // the CA tab, which a university teacher may still fill under this policy.
+          isLocked: frozenByPublish || (isResit && !resitEligible) || (adminOnlyMarks && !grantedToMe && !caExemptForTeacher),
           isPublished: frozenByPublish,
           resitEligible,
         }
@@ -313,7 +317,9 @@ export default function MarksEntryScreen() {
         {adminOnlyMarks && (
           <View style={s.resitBar}>
             <Text style={s.resitBarText}>
-              {t('Marks are entered by the administration at this school. You can check the marks here, but not change them.')}
+              {caExemptForTeacher
+                ? t('Exam and Resit marks are entered by the administration at this school. You can record CA marks here.')
+                : t('Marks are entered by the administration at this school. You can check the marks here, but not change them.')}
             </Text>
           </View>
         )}

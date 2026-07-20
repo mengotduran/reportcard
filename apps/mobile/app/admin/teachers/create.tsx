@@ -1,5 +1,5 @@
 // app/admin/teachers/create.tsx
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
@@ -7,8 +7,20 @@ import {
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { createTeacher } from '@/lib/api/teachers'
+import { getDepartments } from '@/lib/api/departments'
+import { getClasses } from '@/lib/api/classes'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
+
+// University class-name convention: "HND {Department} - Level 1|2", "Degree
+// {Department}". Universities have no real Department table row — mirrors
+// deptFromClassName in apps/web/app/(dashboard)/classes/page.tsx.
+const univDeptFromClassName = (name: string): string => {
+  if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
+  if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
+  return name
+}
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -84,6 +96,15 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   },
   submitText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   disabled: { opacity: 0.5 },
+  deptRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  deptChip: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+    borderWidth: 1, borderColor: '#d1d5db', backgroundColor: colors.bgSecondary,
+  },
+  deptChipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  deptChipText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  deptChipTextActive: { color: '#fff' },
+  hint: { fontSize: 12, color: colors.textMuted, marginTop: 10 },
 }))
 
 export default function CreateTeacherScreen() {
@@ -98,6 +119,22 @@ export default function CreateTeacherScreen() {
   const [masterClassLevel, setMasterClassLevel] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  const { school } = useAuthStore()
+  const isUniversity = school?.type === 'UNIVERSITY'
+  const isSecondary = school?.type === 'SECONDARY'
+  const hasDeptView = isSecondary || isUniversity
+  const [deptNames, setDeptNames] = useState<string[]>([])
+  const [departments, setDepartments] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!hasDeptView) return
+    if (isSecondary) {
+      getDepartments().then((d) => setDeptNames(d.departments.map((dep) => dep.name))).catch(() => {})
+    } else {
+      getClasses().then((c) => setDeptNames([...new Set(c.classLevels.map((cl) => univDeptFromClassName(cl.name)))].sort())).catch(() => {})
+    }
+  }, [hasDeptView, isSecondary])
 
   const handleSubmit = async () => {
     if (!name.trim() || !email.trim() || !password.trim()) {
@@ -116,6 +153,7 @@ export default function CreateTeacherScreen() {
         password,
         role,
         masterClassLevel: role === 'CLASS_MASTER' ? masterClassLevel.trim() : undefined,
+        departments,
       })
       Alert.alert(t('Success'), t('Teacher created successfully.'), [
         { text: t('OK'), onPress: () => router.back() },
@@ -171,6 +209,25 @@ export default function CreateTeacherScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {hasDeptView && deptNames.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>{t('DEPARTMENTS')}</Text>
+            <View style={styles.deptRow}>
+              {deptNames.map((d) => {
+                const on = departments.includes(d)
+                return (
+                  <TouchableOpacity key={d}
+                    style={[styles.deptChip, on && styles.deptChipActive]}
+                    onPress={() => setDepartments((prev) => prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d])}>
+                    <Text style={[styles.deptChipText, on && styles.deptChipTextActive]}>{d}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+            <Text style={styles.hint}>{t('A teacher can belong to more than one department.')}</Text>
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>{t('ROLE')}</Text>

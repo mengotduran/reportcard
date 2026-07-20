@@ -42,6 +42,11 @@ enum StudentStatus {
   DISMISSED
 }
 
+enum MarksEntryMode {
+  TEACHERS
+  ADMIN_ONLY
+}
+
 model ParentSchool {
   id        String   @id @default(uuid())
   name      String
@@ -64,6 +69,13 @@ model School {
   address        String?
   website        String?
   logo           String?
+  // Defaults to TEACHERS, so existing schools keep behaving exactly as they did.
+  marksEntryMode MarksEntryMode @default(TEACHERS)
+  marksEntryChanges MarksEntryModeChange[]
+  // Official stamp/seal image. Prints on OFFICIAL copies only, via a `stamp` section
+  // the admin places on the report card or transcript. Separate from `logo`: the logo
+  // is the letterhead mark on every copy, the stamp is what makes a copy official.
+  stamp          String?
   coverImage     String?
   coverImages    Json       @default("[]") // String[] on Postgres — SQLite has no scalar-list column type
   subdomain      String     @unique
@@ -74,6 +86,13 @@ model School {
   batch          Int?
   repeatThreshold Float?
   authorizationNumber String?
+  // Official-header letterhead text (left/right blocks in the "Official"
+  // report-card header style). One EN and one FR variant per side; the
+  // header auto-picks the one matching `language`.
+  officialLeftTextEn  String?
+  officialLeftTextFr  String?
+  officialRightTextEn String?
+  officialRightTextFr String?
 
   parentSchool   ParentSchool? @relation(fields: [parentSchoolId], references: [id])
 
@@ -164,6 +183,10 @@ model User {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   preferredLanguage String   @default("EN")
+  // Departments (secondary) / programmes (university) this teacher is explicitly
+  // placed in — independent of subject assignment. String[] on Postgres — SQLite
+  // has no scalar-list column type.
+  departments       Json     @default("[]")
 
   school          School?          @relation(fields: [schoolId], references: [id])
   reportCards     ReportCard[]
@@ -187,6 +210,11 @@ model Student {
   directLevel2Entry Boolean       @default(false)
   isRepeatingLevel  Boolean       @default(false)
   status            StudentStatus @default(ACTIVE)
+  // Birth details. Optional everywhere. Stored as "YYYY-MM-DD" TEXT rather than a
+  // DateTime on purpose — a birth date is a calendar date with no time or zone, and
+  // round-tripping it through a timestamp shifts it by a day for anyone west of UTC.
+  dateOfBirth       String?
+  placeOfBirth      String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -329,6 +357,8 @@ model ReportEntry {
   subjectId    String
   seq1Score    Float?
   seq2Score    Float?
+  // university only: exam mark re-obtained after resitting a failed course;
+  // seq2Score is kept as the original attempt
   resitScore   Float?
   score        Float?
   grade        String?
@@ -336,4 +366,21 @@ model ReportEntry {
 
   reportCard ReportCard @relation(fields: [reportCardId], references: [id])
   subject    Subject    @relation(fields: [subjectId], references: [id])
+}
+
+/// Every switch of who records marks, kept forever. Mirrors the Postgres model
+/// (see prisma/schema.prisma for the full design rationale).
+model MarksEntryModeChange {
+  id            String         @id @default(uuid())
+  schoolId      String
+  mode          MarksEntryMode
+  changedById   String?
+  changedByName String
+  changedAt     DateTime       @default(now())
+  termId        String?
+  byProvider    Boolean        @default(false)
+  school        School         @relation(fields: [schoolId], references: [id])
+
+  @@index([schoolId, changedAt])
+  @@index([schoolId, termId])
 }

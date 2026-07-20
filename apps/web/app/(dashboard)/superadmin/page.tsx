@@ -104,7 +104,9 @@ export default function SuperAdminPage() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [toggleTarget, setToggleTarget] = useState<{ id: string; name: string; isActive: boolean; kind: 'school' | 'parent' } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; students: number; reportCards: number } | null>(null)
+  const [deletingSection, setDeletingSection] = useState(false)
   const [deleteParentTarget, setDeleteParentTarget] = useState<{ id: string; name: string } | null>(null)
+  const [deletingParent, setDeletingParent] = useState(false)
   const [editTarget, setEditTarget] = useState<SchoolSection | null>(null)
   const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', address: '', subdomain: '', type: '', language: 'EN' })
   const [showAddSectionInEdit, setShowAddSectionInEdit] = useState(false)
@@ -249,19 +251,23 @@ export default function SuperAdminPage() {
   }
 
   const handleDeleteSchool = async () => {
-    if (!deleteTarget) return
+    if (!deleteTarget || deletingSection) return
+    setDeletingSection(true)
     try {
       await deleteSchoolApi(deleteTarget.id)
       showToast('Section deleted successfully')
       setDeleteTarget(null)
       fetchData()
-    } catch {
-      showToast('Failed to delete section', 'error')
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to delete section', 'error')
+    } finally {
+      setDeletingSection(false)
     }
   }
 
   const handleDeleteParentSchool = async () => {
-    if (!deleteParentTarget) return
+    if (!deleteParentTarget || deletingParent) return
+    setDeletingParent(true)
     try {
       await deleteParentSchoolApi(deleteParentTarget.id)
       showToast('Parent school deleted successfully')
@@ -270,6 +276,8 @@ export default function SuperAdminPage() {
     } catch (err: any) {
       showToast(err.response?.data?.message || 'Failed to delete parent school', 'error')
       setDeleteParentTarget(null)
+    } finally {
+      setDeletingParent(false)
     }
   }
 
@@ -445,7 +453,13 @@ export default function SuperAdminPage() {
                     {/* Add section — always visible if < 3 sections */}
                     {parent.sections.length < 3 && (
                       <div className="px-4 py-3 border-t border-dashed border-border bg-muted/50">
-                        <button onClick={() => { setAddSectionParent(parent); setAddSectionForm({ ...emptySectionForm }); setFormError('') }}
+                        <button onClick={() => {
+                          const usedTypes = parent.sections.map((s) => s.type)
+                          const nextType = SCHOOL_TYPES.find((t) => !usedTypes.includes(t)) ?? 'PRIMARY'
+                          setAddSectionParent(parent)
+                          setAddSectionForm({ ...emptySectionForm, type: nextType })
+                          setFormError('')
+                        }}
                           className="flex items-center gap-2 text-sm text-primary hover:text-primary font-medium">
                           <Plus size={14} /> Add{' '}
                           {SCHOOL_TYPES.filter((t) => !parent.sections.map((s) => s.type).includes(t)).join(' or ')}{' '}
@@ -832,6 +846,7 @@ export default function SuperAdminPage() {
         }
         confirmLabel="Delete Permanently"
         confirmColor="red"
+        confirming={deletingSection}
         onConfirm={handleDeleteSchool}
         onCancel={() => setDeleteTarget(null)}
       />
@@ -842,6 +857,7 @@ export default function SuperAdminPage() {
         message={deleteParentTarget ? `Permanently delete "${deleteParentTarget.name}"? This cannot be undone.` : ''}
         confirmLabel="Delete Permanently"
         confirmColor="red"
+        confirming={deletingParent}
         onConfirm={handleDeleteParentSchool}
         onCancel={() => setDeleteParentTarget(null)}
       />

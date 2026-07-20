@@ -47,6 +47,20 @@ export default function TabsLayout() {
     </View>
   )
 
+  // Teachers/class masters have no "More" tab (admin-only menu), so this is
+  // their only way to reach Account — change password, mainly.
+  const teacherHeaderButtons = (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 14 }}>
+      <ThemeToggle size="sm" />
+      <TouchableOpacity onPress={() => router.push('/account')} style={{ padding: 4 }}>
+        <Ionicons name="person-circle-outline" size={22} color={colors.textSecondary} />
+      </TouchableOpacity>
+      <TouchableOpacity onPress={handleLogout} style={{ padding: 4 }}>
+        <Ionicons name="log-out-outline" size={22} color="#ef4444" />
+      </TouchableOpacity>
+    </View>
+  )
+
   const logoutButtonWhite = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 14 }}>
       <ThemeToggle size="sm" />
@@ -94,7 +108,7 @@ export default function TabsLayout() {
   if (isTeacher || isClassMaster) {
     return (
       <Tabs screenOptions={{ ...tabStyle, tabBarActiveTintColor: isClassMaster ? '#F03E2F' : colors.primary }}>
-        <Tabs.Screen name="index" options={{ title: t('Home'), headerRight: () => logoutButton, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
+        <Tabs.Screen name="index" options={{ title: t('Home'), headerRight: () => teacherHeaderButtons, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="report-cards" options={{ title: isClassMaster ? t(isUniversity ? 'My Departments' : 'My Classes') : t(isUniversity ? 'Departments' : 'Classes'), tabBarIcon: ({ color, size }) => <Ionicons name={isClassMaster ? 'chatbubble-ellipses-outline' : 'school-outline'} size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ href: null }} />
         <Tabs.Screen name="schools" options={{ href: null }} />

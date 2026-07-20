@@ -4,6 +4,13 @@ import bcrypt from 'bcryptjs'
 import { AuthRequest } from '../middleware/auth'
 import { demoLimitBlock } from '../config/demo'
 
+// Trims, drops blanks, and dedupes — a stray empty string or repeated entry from the
+// client shouldn't end up stored.
+function sanitizeDepartments(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return [...new Set(raw.map((d) => String(d).trim()).filter(Boolean))]
+}
+
 export const getTeachers = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -17,10 +24,26 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
         role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] },
         ...(term ? { teacherSubjects: { some: { subject: { term } } } } : {}),
       },
-      select: { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true },
+      select: {
+        id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true,
+        teacherSubjects: { select: { subject: { select: { classLevel: true } } } },
+      },
       orderBy: { name: 'asc' }
     })
-    res.json({ teachers, total: teachers.length })
+    // classLevels: every class this teacher is attached to, whether by an assigned
+    // subject or by being class master — the department picker (secondary/university)
+    // groups teachers by department. A teacher's department membership is the union
+    // of this (derived from what they actually teach) and their explicit
+    // `departments` placement, so they show up under a department the moment
+    // they're placed there, not only once a subject happens to be assigned.
+    const shaped = teachers.map(({ teacherSubjects, ...t }) => ({
+      ...t,
+      classLevels: [...new Set([
+        ...teacherSubjects.map((ts) => ts.subject.classLevel),
+        ...(t.masterClassLevel ? [t.masterClassLevel] : []),
+      ])],
+    }))
+    res.json({ teachers: shaped, total: shaped.length })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -30,7 +53,7 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
 export const createTeacher = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, password, role, masterClassLevel } = req.body
+    const { name, email, password, role, masterClassLevel, departments } = req.body
 
     if (role === 'CLASS_MASTER' && !masterClassLevel) {
       res.status(400).json({ message: 'masterClassLevel is required for Class Master' })
@@ -51,8 +74,8 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 12)
-    const data = { name, email, password: hashedPassword, role, schoolId, masterClassLevel: masterClassLevel ?? null }
-    const select = { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true }
+    const data = { name, email, password: hashedPassword, role, schoolId, masterClassLevel: masterClassLevel ?? null, departments: sanitizeDepartments(departments) }
+    const select = { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
 
     const teacher = existing
       ? await prisma.user.update({ where: { id: existing.id }, data: { ...data, isActive: true }, select })
@@ -69,7 +92,7 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { role, masterClassLevel } = req.body
+    const { role, masterClassLevel, departments } = req.body
 
     const teacher = await prisma.user.findFirst({ where: { id, schoolId } })
     if (!teacher) { res.status(404).json({ message: 'Teacher not found' }); return }
@@ -94,9 +117,12 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
       where: { id },
       data: {
         role,
-        masterClassLevel: role === 'CLASS_MASTER' ? (masterClassLevel ?? null) : null
+        masterClassLevel: role === 'CLASS_MASTER' ? (masterClassLevel ?? null) : null,
+        // Only touched when the client actually sent it, same as birth details on
+        // Student — a caller that knows nothing about departments shouldn't wipe them.
+        ...(departments !== undefined ? { departments: sanitizeDepartments(departments) } : {}),
       },
-      select: { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true }
+      select: { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
     })
 
     res.json({

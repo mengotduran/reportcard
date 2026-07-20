@@ -106,8 +106,11 @@ export default function ClassesPage() {
   const [deleteDeptTarget, setDeleteDeptTarget] = useState<Department | null>(null)
   const activeDept = departments.find(d => d.id === activeDeptId)
 
-  // ── Secondary class sections (A/B/C…) ──
-  const [sections, setSections] = useState<string[]>(['A'])
+  // ── Secondary class sections (A/B/C…) ── Optional: a school with one stream per
+  // class just leaves none selected and gets a single bare class ("Form 1"). Only a
+  // school that actually splits a class into streams picks letters, per class — one
+  // class at a school can have sections while another at the same school has none.
+  const [sections, setSections] = useState<string[]>([])
   const [copyFrom, setCopyFrom] = useState<string>('')  // source class to copy subjects from
 
   useEffect(() => {
@@ -161,7 +164,7 @@ export default function ClassesPage() {
     setForm(isUniversity
       ? { ...UNI_EMPTY, uniLevel: activeLevel, feeAmount: activeLevel === 'Level 2' ? '' : UNI_EMPTY.feeAmount, hndRegistrationFee: '' }
       : { ...STD_EMPTY, hndRegistrationFee: '' })
-    setSections(['A'])
+    setSections([])
     setCopyFrom('')
     setError('')
     setShowModal(true)
@@ -219,7 +222,11 @@ export default function ClassesPage() {
       if (!secBase) { setError(t('Class name is required.')); return }
       finalNames = editing
         ? [composeClassName(secBase)]
-        : (sections.length ? sections : ['A']).map((l) => composeClassName(`${secBase} ${l}`))
+        // No section letters selected → one bare class, e.g. "Form 1". A school with
+        // enough students to split a class picks letters instead, one class per letter.
+        : sections.length
+          ? sections.map((l) => composeClassName(`${secBase} ${l}`))
+          : [composeClassName(secBase)]
     } else {
       if (!form.name.trim()) { setError(t('Class name is required.')); return }
       finalNames = [form.name.trim()]
@@ -634,10 +641,13 @@ export default function ClassesPage() {
                     required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
 
-                  {/* Section letters — secondary, create only. Each becomes its own class. */}
+                  {/* Section letters — secondary, create only, optional. Each selected letter
+                      becomes its own class; leaving none selected creates a single bare class. */}
                   {isSecondary && !editing && (
                     <div className="mt-3">
-                      <label className="block text-xs font-medium text-foreground mb-1.5">{t('Sections')}</label>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">
+                        {t('Sections')} <span className="text-muted-foreground font-normal">({t('optional')})</span>
+                      </label>
                       <div className="flex flex-wrap gap-1.5">
                         {SECTION_LETTERS.map((l) => {
                           const on = sections.includes(l)
@@ -652,8 +662,8 @@ export default function ClassesPage() {
                       </div>
                       <p className="text-xs text-muted-foreground mt-1.5">
                         {form.name.trim()
-                          ? <>{t('Creates')}: <span className="font-medium text-foreground">{(sections.length ? sections : ['A']).map((l) => `${stripDeptSuffix(form.name)} ${l}`).join(', ')}</span></>
-                          : t('Each section is its own class. Most schools just use A.')}
+                          ? <>{t('Creates')}: <span className="font-medium text-foreground">{(sections.length ? sections.map((l) => `${stripDeptSuffix(form.name)} ${l}`) : [stripDeptSuffix(form.name)]).join(', ')}</span></>
+                          : t('Only pick letters if this class is split into streams — most classes need none.')}
                       </p>
                     </div>
                   )}

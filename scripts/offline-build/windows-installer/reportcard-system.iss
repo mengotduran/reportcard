@@ -54,3 +54,27 @@ Filename: "{app}\reportcard-launcher.exe"; Description: "Launch {#MyAppName} now
 ; this) — stops the service and removes the firewall rule cleanly rather
 ; than leaving an orphaned service pointing at deleted files.
 Filename: "{app}\web\node.exe"; Parameters: """{app}\windows\uninstall-service.js"""; WorkingDir: "{app}\windows"; Flags: waituntilterminated; RunOnceId: "UninstallService"
+
+[Code]
+// Re-running this installer over an existing install (an UPDATE — same
+// AppId above, so Setup treats it as an upgrade, not a parallel install)
+// needs the service stopped BEFORE [Files] copies anything: Windows locks
+// the executable files a running process holds open, so overwriting
+// reportcard-api.exe/reportcard-launcher.exe/web\node.exe etc. while the
+// service is still running them would fail outright. PrepareToInstall runs
+// right before file extraction — the correct hook for this, as opposed to
+// [Run] entries, which only fire AFTER installation completes.
+//
+// `net stop` exits non-zero on a first-time install (service doesn't exist
+// yet) or if it's already stopped — both fine, deliberately ignored rather
+// than treated as a Result error message, which would abort Setup entirely.
+// install-service.js's `alreadyinstalled` handler starts it again once the
+// new files are in place; %ProgramData% (the database + uploads) is never
+// touched by any of this.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  Exec('net.exe', 'stop ReportCardSystem', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;

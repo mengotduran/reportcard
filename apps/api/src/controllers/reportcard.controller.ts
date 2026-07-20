@@ -5,8 +5,11 @@ import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 import { parseStoredScale } from '../utils/gradingScale'
 
 // Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
-// the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on.
+// the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on —
+// but that distinction only exists for universities; a primary/secondary admin never
+// enters marks themselves, full stop.
 const TEACHER_ROLES: string[] = ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'CLASS_MASTER']
+const ADMIN_ROLES: string[] = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 
 /**
  * A school where the administration records marks appoints no class masters, so the
@@ -530,12 +533,26 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // School policy: some universities record marks centrally so that the person who
     // teaches a course is never the person who enters its marks. Enforced here rather
     // than only in the UI, because a locked grid is a suggestion: the endpoint is what
-    // actually decides. Teachers keep READ access; only saving is refused.
+    // actually decides. Teachers keep READ access always, and — university only — may
+    // still record the CA (seq1Score) themselves under this policy: only the Exam and
+    // Resit are the administration's alone. Checked in full once seq1/seq2/resit are
+    // parsed below (`teacherUnderAdminOnly`); a non-university teacher is refused outright
+    // here, since the split does not apply to them.
     //
     // `marksEditGrantedTo` stays the escape hatch: an admin can hand one class to one
     // teacher without changing the school's policy (same grant used for published cards).
-    if (school?.marksEntryMode === 'ADMIN_ONLY' && TEACHER_ROLES.includes(role) && reportCard.marksEditGrantedTo !== userId) {
+    const teacherUnderAdminOnly = school?.marksEntryMode === 'ADMIN_ONLY' && TEACHER_ROLES.includes(role) && reportCard.marksEditGrantedTo !== userId
+    if (teacherUnderAdminOnly && !isUniversity) {
       res.status(403).json({ message: 'Marks are entered by the administration at this school. Ask an admin to record them, or to grant you access to this class.' })
+      return
+    }
+
+    // Admin-entered marks are a university-only arrangement, and only once the school has
+    // switched it on. A primary/secondary admin, or a university admin who hasn't enabled
+    // ADMIN_ONLY, has the same standing as any other non-teacher here: none, unless
+    // explicitly granted this one card.
+    if (ADMIN_ROLES.includes(role) && !(isUniversity && school?.marksEntryMode === 'ADMIN_ONLY') && reportCard.marksEditGrantedTo !== userId) {
+      res.status(403).json({ message: 'Marks are entered by teachers at this school. Ask the subject teacher to record them, or grant yourself access to this class.' })
       return
     }
 
@@ -567,14 +584,36 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // only against marks that are actually being added or changed (see below).
     const priorEntries = await prisma.reportEntry.findMany({
       where: { reportCardId: id },
-      select: { subjectId: true, resitScore: true },
+      select: { subjectId: true, seq2Score: true, resitScore: true },
     })
     const priorResit = new Map(priorEntries.map(e => [e.subjectId, e.resitScore]))
+    const priorSeq2 = new Map(priorEntries.map(e => [e.subjectId, e.seq2Score]))
 
     // Fetch subjects for maxScore and coefficient
     const subjectIds = entries.map((e: { subjectId: string }) => e.subjectId)
     const subjects = await prisma.subject.findMany({ where: { id: { in: subjectIds } } })
     const subjectMap = Object.fromEntries(subjects.map(s => [s.id, s]))
+
+    // A university teacher under ADMIN_ONLY may still record the CA (seq1Score); the
+    // Exam and Resit stay the administration's. The grid already locks those columns for
+    // them, but a locked grid is a suggestion — this is what actually decides. Every
+    // subject on the card is re-sent on every save (see the resit comment below), so only
+    // a genuine change to seq2Score/resitScore is refused, not the untouched value passed
+    // straight through from the existing entry.
+    if (teacherUnderAdminOnly && isUniversity) {
+      const blocked: string[] = []
+      for (const entry of entries as { subjectId: string; seq2Score?: number; resitScore?: number }[]) {
+        const seq2Changed = (entry.seq2Score ?? null) !== (priorSeq2.get(entry.subjectId) ?? null)
+        const resitChanged = (entry.resitScore ?? null) !== (priorResit.get(entry.subjectId) ?? null)
+        if (seq2Changed || resitChanged) blocked.push(subjectMap[entry.subjectId]?.name ?? entry.subjectId)
+      }
+      if (blocked.length > 0) {
+        res.status(403).json({
+          message: `Exam marks are entered by the administration at this school. You can record CA marks. Not allowed for: ${blocked.join(', ')}.`,
+        })
+        return
+      }
+    }
 
     // Fetch grading scale — drives BOTH the letter grade and the auto-remark
     // so report cards reflect the school's grading design.

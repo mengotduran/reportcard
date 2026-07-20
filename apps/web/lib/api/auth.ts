@@ -25,6 +25,21 @@ export const resetSuperAdminApi = async (secretKey: string, newPassword: string)
   return res.data
 }
 
+export const forgotPasswordApi = async (email: string) => {
+  const res = await api.post('/auth/forgot-password', { email })
+  return res.data as { message: string }
+}
+
+export const resetPasswordApi = async (token: string, newPassword: string) => {
+  const res = await api.post('/auth/reset-password', { token, newPassword })
+  return res.data as { message: string }
+}
+
+export const changeMyPasswordApi = async (currentPassword: string, newPassword: string) => {
+  const res = await api.put('/auth/me/password', { currentPassword, newPassword })
+  return res.data as { message: string }
+}
+
 export const resetUserPasswordApi = async (userId: string, newPassword: string) => {
   const res = await api.put(`/auth/users/${userId}/reset-password`, { newPassword })
   return res.data

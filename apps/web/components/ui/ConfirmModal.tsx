@@ -8,11 +8,18 @@ interface ConfirmModalProps {
   confirmColor?: 'red' | 'green' | 'blue'
   onConfirm: () => void
   onCancel: () => void
+  /** True while onConfirm's request is in flight. Disables the confirm button and
+   *  swaps its label, so a second click can't fire a second request — a double
+   *  DELETE, say, whose second leg 404s on an already-gone row and overwrites the
+   *  first leg's success toast with a spurious error. */
+  confirming?: boolean
+  /** Label shown while `confirming` is true. */
+  confirmingLabel?: string
 }
 
 export default function ConfirmModal({
   isOpen, title, message, confirmLabel = 'Confirm',
-  confirmColor = 'blue', onConfirm, onCancel
+  confirmColor = 'blue', onConfirm, onCancel, confirming = false, confirmingLabel = 'Working...'
 }: ConfirmModalProps) {
   if (!isOpen) return null
 
@@ -30,15 +37,17 @@ export default function ConfirmModal({
         <div className="flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-muted transition-colors"
+            disabled={confirming}
+            className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${colorMap[confirmColor]}`}
+            disabled={confirming}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${colorMap[confirmColor]}`}
           >
-            {confirmLabel}
+            {confirming ? confirmingLabel : confirmLabel}
           </button>
         </div>
       </div>

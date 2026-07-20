@@ -51,7 +51,11 @@ export interface ImportPreviewResult {
 // "guardian_phone", and "GuardianPhone" all match the same alias.
 const HEADER_ALIASES: Record<string, string[]> = {
   name: ['name', 'fullname', 'studentname', 'pupilname'],
-  classLevel: ['class', 'classlevel', 'department', 'classdepartment'],
+  // "department" used to be an alias meaning THIS field (there was no separate
+  // Department column) — now Department is its own column, so this only takes
+  // Class (secondary) / Level (university) header spellings.
+  classLevel: ['class', 'classlevel', 'level'],
+  department: ['department', 'dept'],
   gender: ['gender', 'sex'],
   guardianName: ['guardianname', 'parentname', 'guardian', 'parent'],
   guardianPhone: ['guardianphone', 'parentphone', 'phone', 'guardiancontact', 'contact', 'phonenumber'],
@@ -63,6 +67,86 @@ const HEADER_ALIASES: Record<string, string[]> = {
 
 const normalize = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '')
 const normalizeName = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim()
+
+export type ImportSchoolType = 'PRIMARY' | 'SECONDARY' | 'UNIVERSITY'
+export interface ImportClassInfo { name: string; departmentId: string | null }
+export interface ImportDepartmentInfo { id: string; name: string; isDefault: boolean }
+
+// Secondary class-name convention: bare ("Form 1") for the default department,
+// suffixed ("Form 1 (Technical)") for any other. Mirrors stripDeptSuffix, duplicated
+// the same way across the web app's classes/students/teachers pages — no shared
+// module between the API and web app to hold this instead.
+function stripDeptSuffix(name: string): string {
+  return name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+}
+
+// University class-name convention: "HND {Department} - Level 1|2", "Degree
+// {Department}" (Level 3). Mirrors deptFromClassName/levelFromClassName in
+// apps/web/app/(dashboard)/classes/page.tsx — universities have no real Department
+// table row, the department (programme) lives only in the class name string.
+function univDeptFromClassName(name: string): string {
+  if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
+  if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
+  return name
+}
+function univLevelFromClassName(name: string): 'Level 1' | 'Level 2' | 'Level 3' | '' {
+  if (/ - Level 1$/i.test(name)) return 'Level 1'
+  if (/ - Level 2$/i.test(name)) return 'Level 2'
+  if (name.startsWith('Degree ') || / - Level 3$/i.test(name)) return 'Level 3'
+  return ''
+}
+function normalizeLevelInput(raw: string): 'Level 1' | 'Level 2' | 'Level 3' | null {
+  const n = normalize(raw)
+  if (n === 'level1' || n === '1' || n === 'l1') return 'Level 1'
+  if (n === 'level2' || n === '2' || n === 'l2') return 'Level 2'
+  if (n === 'level3' || n === '3' || n === 'l3') return 'Level 3'
+  return null
+}
+
+// Resolves a row's Department + Class/Level cells to a real ClassLevel.name, or a
+// row-error reason. School-type-specific because secondary departments are real
+// Department rows while university departments are a name-string convention only.
+function makeClassResolver(
+  schoolType: ImportSchoolType,
+  classes: ImportClassInfo[],
+  departments: ImportDepartmentInfo[],
+): (deptRaw: string, classOrLevelRaw: string) => { name: string } | { error: string } {
+  if (schoolType === 'SECONDARY') {
+    const deptByNorm = new Map(departments.map((d) => [normalize(d.name), d]))
+    const classByDeptAndBase = new Map(
+      classes.map((c) => [`${c.departmentId ?? ''}|${normalize(stripDeptSuffix(c.name))}`, c.name])
+    )
+    return (deptRaw, classRaw) => {
+      const dept = deptByNorm.get(normalize(deptRaw))
+      if (!dept) return { error: `Department "${deptRaw}" not found` }
+      const full = classByDeptAndBase.get(`${dept.id}|${normalize(classRaw)}`)
+      if (!full) return { error: `Class "${classRaw}" not found in department "${dept.name}"` }
+      return { name: full }
+    }
+  }
+  if (schoolType === 'UNIVERSITY') {
+    const classByDeptAndLevel = new Map<string, string>()
+    for (const c of classes) {
+      const level = univLevelFromClassName(c.name)
+      if (!level) continue
+      classByDeptAndLevel.set(`${normalize(univDeptFromClassName(c.name))}|${level}`, c.name)
+    }
+    return (deptRaw, levelRaw) => {
+      const level = normalizeLevelInput(levelRaw)
+      if (!level) return { error: `Level must be Level 1, Level 2, or Level 3 (got "${levelRaw}")` }
+      const full = classByDeptAndLevel.get(`${normalize(deptRaw)}|${level}`)
+      if (!full) return { error: `No ${level} class found for department "${deptRaw}"` }
+      return { name: full }
+    }
+  }
+  // PRIMARY — unchanged single-column matching, no department concept.
+  const classByNorm = new Map(classes.map((c) => [normalize(c.name), c.name]))
+  return (_deptRaw, classRaw) => {
+    const full = classByNorm.get(normalize(classRaw))
+    if (!full) return { error: `Class "${classRaw}" does not match any defined class` }
+    return { name: full }
+  }
+}
 
 function fieldForHeader(header: string): string | null {
   const norm = normalize(header)
@@ -172,7 +256,9 @@ async function parseXlsx(buffer: Buffer): Promise<RawRow[]> {
 export async function previewStudentRows(
   buffer: Buffer,
   filename: string,
-  validClassNames: string[],
+  schoolType: ImportSchoolType,
+  classes: ImportClassInfo[],
+  departments: ImportDepartmentInfo[],
   existingStudents?: { name: string; studentId: string }[],
 ): Promise<ImportPreviewResult> {
   const ext = filename.toLowerCase().split('.').pop()
@@ -187,10 +273,13 @@ export async function previewStudentRows(
   }
   const mappedFields = new Set(fieldByHeader.values())
   if (!mappedFields.has('name') || !mappedFields.has('classLevel') || !mappedFields.has('gender')) {
-    return { valid: [], errors: [], headerError: 'Could not find Name, Class, and Gender columns in this file. Download the template and use the same column headers.' }
+    return { valid: [], errors: [], headerError: `Could not find Name, ${schoolType === 'UNIVERSITY' ? 'Level' : 'Class'}, and Gender columns in this file. Download the template and use the same column headers.` }
+  }
+  if (schoolType !== 'PRIMARY' && !mappedFields.has('department')) {
+    return { valid: [], errors: [], headerError: 'Could not find a Department column in this file. Download the template and use the same column headers.' }
   }
 
-  const classByNorm = new Map(validClassNames.map((c) => [normalize(c), c]))
+  const resolveClass = makeClassResolver(schoolType, classes, departments)
 
   const valid: ParsedStudentRow[] = []
   const errors: ImportRowError[] = []
@@ -204,13 +293,16 @@ export async function previewStudentRows(
     }
 
     const name = (mapped.name || '').trim()
+    const deptRaw = (mapped.department || '').trim()
     const classRaw = (mapped.classLevel || '').trim()
     const genderRaw = (mapped.gender || '').trim().toLowerCase()
 
     if (!name) { errors.push({ row: rowNumber, reason: 'Missing name' }); continue }
-    if (!classRaw) { errors.push({ row: rowNumber, reason: 'Missing class' }); continue }
-    const matchedClass = classByNorm.get(normalize(classRaw))
-    if (!matchedClass) { errors.push({ row: rowNumber, reason: `Class "${classRaw}" does not match any defined class` }); continue }
+    if (schoolType !== 'PRIMARY' && !deptRaw) { errors.push({ row: rowNumber, reason: 'Missing department' }); continue }
+    if (!classRaw) { errors.push({ row: rowNumber, reason: schoolType === 'UNIVERSITY' ? 'Missing level' : 'Missing class' }); continue }
+    const resolved = resolveClass(deptRaw, classRaw)
+    if ('error' in resolved) { errors.push({ row: rowNumber, reason: resolved.error }); continue }
+    const matchedClass = resolved.name
 
     let gender: 'Male' | 'Female' | null = null
     if (genderRaw === 'male' || genderRaw === 'm') gender = 'Male'
@@ -290,10 +382,17 @@ export async function previewStudentRows(
   return { valid, errors, carryOvers: carryOvers.length > 0 ? carryOvers : undefined }
 }
 
-// Builds the downloadable .xlsx template — headers + one example row + a
-// reference sheet listing the school's actual class names (so whoever fills
-// it in knows the exact accepted spelling).
-export async function buildImportTemplate(validClassNames: string[], isUniversity = false): Promise<Buffer> {
+// Builds the downloadable .xlsx template — headers + one example row + a reference
+// sheet listing every real Department + Class/Level combination the school actually
+// has (secondary/university), or every real class name (primary), so whoever fills
+// it in knows exactly what's accepted rather than guessing a spelling.
+export async function buildImportTemplate(
+  schoolType: ImportSchoolType,
+  classes: ImportClassInfo[],
+  departments: ImportDepartmentInfo[],
+): Promise<Buffer> {
+  const isUniversity = schoolType === 'UNIVERSITY'
+  const isSecondary = schoolType === 'SECONDARY'
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('Students')
 
@@ -301,9 +400,21 @@ export async function buildImportTemplate(validClassNames: string[], isUniversit
   if (isUniversity) {
     columns.push({ header: 'Matricule (optional)', key: 'matricule', width: 22 })
   }
+  columns.push({ header: 'Name', key: 'name', width: 28 })
+  if (isSecondary) {
+    columns.push(
+      { header: 'Department', key: 'department', width: 20 },
+      { header: 'Class', key: 'classLevel', width: 20 },
+    )
+  } else if (isUniversity) {
+    columns.push(
+      { header: 'Department', key: 'department', width: 24 },
+      { header: 'Level', key: 'classLevel', width: 14 },
+    )
+  } else {
+    columns.push({ header: 'Class', key: 'classLevel', width: 28 })
+  }
   columns.push(
-    { header: 'Name', key: 'name', width: 28 },
-    { header: 'Class', key: 'classLevel', width: 28 },
     { header: 'Gender', key: 'gender', width: 12 },
     { header: 'Guardian Name', key: 'guardianName', width: 24 },
     { header: 'Guardian Phone', key: 'guardianPhone', width: 18 },
@@ -313,15 +424,25 @@ export async function buildImportTemplate(validClassNames: string[], isUniversit
   )
   sheet.columns = columns
 
+  const firstClass = classes[0]
   const exampleRow: Record<string, any> = {
     name: 'Nguemo Alice',
-    classLevel: validClassNames[0] ?? 'Form 1',
     gender: 'Female',
     guardianName: 'Nguemo Jean',
     guardianPhone: '677000000',
     guardianEmail: 'guardian@email.com',
     feePaid: 50000,
     paymentDate: '2026-01-15',
+  }
+  if (isSecondary) {
+    const deptOfFirst = departments.find((d) => d.id === firstClass?.departmentId)
+    exampleRow.department = deptOfFirst?.name ?? departments[0]?.name ?? 'Grammar'
+    exampleRow.classLevel = firstClass ? stripDeptSuffix(firstClass.name) : 'Form 1'
+  } else if (isUniversity) {
+    exampleRow.department = firstClass ? univDeptFromClassName(firstClass.name) : 'Computer Science'
+    exampleRow.classLevel = (firstClass && univLevelFromClassName(firstClass.name)) || 'Level 1'
+  } else {
+    exampleRow.classLevel = firstClass?.name ?? 'Form 1'
   }
   if (isUniversity) exampleRow.matricule = ''
   sheet.addRow(exampleRow)
@@ -336,11 +457,37 @@ export async function buildImportTemplate(validClassNames: string[], isUniversit
     noteSheet.addRow({ note: 'Students with no match are treated as new direct Level 2 entrants and are charged the Level 2 class fee only.' })
   }
 
-  if (validClassNames.length > 0) {
+  if (isSecondary) {
+    const rows = classes
+      .map((c) => ({ department: departments.find((d) => d.id === c.departmentId)?.name ?? '', classLevel: stripDeptSuffix(c.name) }))
+      .filter((r) => r.department)
+    if (rows.length > 0) {
+      const refSheet = workbook.addWorksheet('Valid Departments & Classes')
+      refSheet.columns = [
+        { header: 'Department', key: 'department', width: 20 },
+        { header: 'Class', key: 'classLevel', width: 20 },
+      ]
+      refSheet.getRow(1).font = { bold: true }
+      for (const r of rows) refSheet.addRow(r)
+    }
+  } else if (isUniversity) {
+    const rows = classes
+      .map((c) => ({ department: univDeptFromClassName(c.name), classLevel: univLevelFromClassName(c.name) }))
+      .filter((r) => r.classLevel)
+    if (rows.length > 0) {
+      const refSheet = workbook.addWorksheet('Valid Departments & Levels')
+      refSheet.columns = [
+        { header: 'Department', key: 'department', width: 24 },
+        { header: 'Level', key: 'classLevel', width: 14 },
+      ]
+      refSheet.getRow(1).font = { bold: true }
+      for (const r of rows) refSheet.addRow(r)
+    }
+  } else if (classes.length > 0) {
     const classSheet = workbook.addWorksheet('Valid Classes')
     classSheet.columns = [{ header: 'Use exactly this spelling in the Class column', key: 'name', width: 40 }]
     classSheet.getRow(1).font = { bold: true }
-    for (const name of validClassNames) classSheet.addRow({ name })
+    for (const c of classes) classSheet.addRow({ name: c.name })
   }
 
   const buf = await workbook.xlsx.writeBuffer()

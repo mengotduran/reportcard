@@ -16,6 +16,7 @@ import { formatXAF } from '@/lib/api/fees'
 
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 const DEPT_SUGGESTIONS = ['Grammar', 'Technical', 'Commercial']
+const SECTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
 
 const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -136,6 +137,14 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   suggestRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   suggestChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: colors.border },
   suggestChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  sectionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4, marginBottom: 6 },
+  sectionBtn: {
+    width: 40, height: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  sectionBtnActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  sectionBtnText: { fontSize: 15, fontWeight: '700', color: colors.textSecondary },
+  sectionBtnTextActive: { color: '#fff' },
 }))
 
 export default function ClassesScreen() {
@@ -164,6 +173,19 @@ export default function ClassesScreen() {
   const [deptName, setDeptName] = useState('')
   const [savingDept, setSavingDept] = useState(false)
   const activeDept = departments.find((d) => d.id === activeDeptId)
+
+  // Secondary class sections (A/B/C…) — optional. A school with one stream per class
+  // leaves none selected and gets a single bare class ("Form 1"). Only a school that
+  // actually splits a class into streams picks letters, one class per letter.
+  const [sections, setSections] = useState<string[]>([])
+
+  // Non-default departments store their classes with a " (Department)" suffix so the
+  // globally-unique class name can repeat the same form across departments (Grammar
+  // Form 1 vs Technical Form 1). Mirrors apps/web/.../classes/page.tsx.
+  const composeClassName = (base: string): string => {
+    if (!isSecondary || !activeDept || activeDept.isDefault) return base
+    return `${base} (${activeDept.name})`
+  }
 
   const fetchClasses = useCallback(async () => {
     try {
@@ -235,17 +257,33 @@ export default function ClassesScreen() {
       Alert.alert(t('Validation'), tt('Enter the class fee (use 0 if there is none).', 'Enter the department fee (use 0 if there is none).'))
       return
     }
+    // No section letters selected → one bare class, e.g. "Form 1". A school with
+    // enough students to split a class picks letters instead, one class per letter.
+    const secBase = stripDeptSuffix(newName.trim())
+    const finalNames = isSecondary
+      ? (sections.length ? sections.map((l) => composeClassName(`${secBase} ${l}`)) : [composeClassName(secBase)])
+      : [newName.trim()]
+    // Skip any sections that already exist so a duplicate doesn't abort the batch.
+    const existingNames = new Set(classes.map((c) => c.name))
+    const toCreate = finalNames.filter((n) => !existingNames.has(n))
+    if (toCreate.length === 0) {
+      Alert.alert(t('Error'), t('Those classes already exist.'))
+      return
+    }
     setCreating(true)
     try {
-      await createClass({
-        name: newName.trim(), hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0,
-        ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
-      })
+      for (const name of toCreate) {
+        await createClass({
+          name, hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0,
+          ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
+        })
+      }
       setModalVisible(false)
       setNewName('')
       setHasStream(false)
       setMaxScore('20')
       setFeeAmount('150000')
+      setSections([])
       await fetchClasses()
     } catch (err: any) {
       Alert.alert(t('Error'), err?.response?.data?.message ?? tt('Failed to create class.', 'Failed to create department.'))
@@ -364,7 +402,9 @@ export default function ClassesScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{tt('Class Name', 'Department Name')} <Text style={styles.required}>*</Text></Text>
+            <Text style={styles.label}>{tt('Class Name', 'Department Name')} <Text style={styles.required}>*</Text>
+              {isSecondary && <Text style={styles.switchHint}> ({t('without section')})</Text>}
+            </Text>
             <TextInput
               style={styles.input}
               value={newName}
@@ -373,6 +413,29 @@ export default function ClassesScreen() {
               placeholderTextColor="#9ca3af"
               autoFocus
             />
+
+            {isSecondary && (
+              <View style={{ marginTop: -10, marginBottom: 16 }}>
+                <Text style={styles.label}>{t('Sections')} <Text style={styles.switchHint}>({t('optional')})</Text></Text>
+                <View style={styles.sectionRow}>
+                  {SECTION_LETTERS.map((l) => {
+                    const on = sections.includes(l)
+                    return (
+                      <TouchableOpacity key={l}
+                        onPress={() => setSections((prev) => prev.includes(l) ? prev.filter((x) => x !== l) : [...prev, l].sort())}
+                        style={[styles.sectionBtn, on && styles.sectionBtnActive]}>
+                        <Text style={[styles.sectionBtnText, on && styles.sectionBtnTextActive]}>{l}</Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+                <Text style={styles.switchHint}>
+                  {newName.trim()
+                    ? `${t('Creates')}: ${(sections.length ? sections.map((l) => `${stripDeptSuffix(newName)} ${l}`) : [stripDeptSuffix(newName)]).join(', ')}`
+                    : t('Only pick letters if this class is split into streams — most classes need none.')}
+                </Text>
+              </View>
+            )}
 
             <Text style={styles.label}>{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <Text style={styles.required}>*</Text></Text>
             <TextInput

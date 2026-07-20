@@ -28,6 +28,7 @@ const normalizeBirthDate = (v: unknown): string | null => {
   return `${y}-${mo}-${d}`
 }
 import { previewStudentRows, buildImportTemplate, ParsedStudentRow } from '../utils/studentImport'
+import { ensureDepartments } from '../utils/departments'
 import { currentSession } from './fees.controller'
 
 // Every active student should have a report card for the current term as soon
@@ -217,6 +218,15 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    // classLevel used to be taken on faith — a stale or typo'd value silently created a
+    // student belonging to no real class, which for a secondary school also means no
+    // real department (department is derived from ClassLevel, not stored on Student).
+    const targetClass = await prisma.classLevel.findUnique({ where: { schoolId_name: { schoolId, name: classLevel } } })
+    if (!targetClass) {
+      res.status(400).json({ message: 'Select a valid class.' })
+      return
+    }
+
     const limit = await demoLimitBlock(schoolId, 'students')
     if (limit) { res.status(403).json({ message: limit }); return }
 
@@ -247,6 +257,17 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
     if (!student) {
       res.status(404).json({ message: 'Student not found' })
       return
+    }
+
+    // Same rule as create: only touch classLevel when the caller actually sent one, but
+    // when they did, it must be a real class — otherwise a "change department" edit could
+    // silently detach the student from every department.
+    if (classLevel !== undefined) {
+      const targetClass = await prisma.classLevel.findUnique({ where: { schoolId_name: { schoolId, name: classLevel } } })
+      if (!targetClass) {
+        res.status(400).json({ message: 'Select a valid class.' })
+        return
+      }
     }
 
     const updated = await prisma.student.update({
@@ -365,9 +386,10 @@ export const downloadStudentImportTemplate = async (req: AuthRequest, res: Respo
     const schoolId = req.user!.schoolId!
     const [school, classes] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
-      prisma.classLevel.findMany({ where: { schoolId }, orderBy: { order: 'asc' }, select: { name: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, orderBy: { order: 'asc' }, select: { name: true, departmentId: true } }),
     ])
-    const buffer = await buildImportTemplate(classes.map((c) => c.name), school?.type === 'UNIVERSITY')
+    const departments = await ensureDepartments(schoolId, school?.type)
+    const buffer = await buildImportTemplate(school?.type ?? 'PRIMARY', classes, departments)
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', 'attachment; filename="student-import-template.xlsx"')
     res.send(buffer)
@@ -390,8 +412,9 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
 
     const [school, classes] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
-      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, departmentId: true } }),
     ])
+    const departments = await ensureDepartments(schoolId, school?.type)
 
     let existingStudents: { name: string; studentId: string }[] | undefined
     if (school?.type === 'UNIVERSITY') {
@@ -401,7 +424,7 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
       })
     }
 
-    const result = await previewStudentRows(file.buffer, file.originalname, classes.map((c) => c.name), existingStudents)
+    const result = await previewStudentRows(file.buffer, file.originalname, school?.type ?? 'PRIMARY', classes, departments, existingStudents)
     res.json(result)
   } catch (error) {
     console.error(error)

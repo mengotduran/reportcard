@@ -2,7 +2,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked, UserCircle } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -30,12 +30,14 @@ const ADMIN_NAV = [
 const TEACHER_NAV = [
   { icon: LayoutDashboard, label: 'Home',    href: '/dashboard' },
   { icon: FileText,        label: 'Classes', href: '/report-cards' },
+  { icon: UserCircle,      label: 'Account', href: '/account' },
 ]
 
 const CLASS_MASTER_NAV = [
   { icon: LayoutDashboard, label: 'Home',     href: '/dashboard' },
   { icon: FileText,        label: 'Classes',  href: '/report-cards' },
   { icon: MessageSquare,   label: 'My Class', href: '/class-master' },
+  { icon: UserCircle,      label: 'Account',  href: '/account' },
 ]
 
 const SUPERADMIN_NAV = [

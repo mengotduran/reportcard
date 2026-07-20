@@ -23,7 +23,9 @@ export default function RootLayout() {
       }}
     >
       <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
+      <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
+      <Stack.Screen name="account/index" options={{ title: t('My Account'), headerBackTitle: '' }} />
       <Stack.Screen name="class/[classLevel]" options={{ headerBackTitle: '' }} />
       <Stack.Screen name="marks/[subjectId]" options={{ headerBackTitle: '' }} />
       <Stack.Screen name="report-card/[id]" options={{ title: t('Report Card'), headerBackTitle: '' }} />

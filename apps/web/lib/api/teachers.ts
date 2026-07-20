@@ -11,12 +11,13 @@ export const createTeacherApi = async (data: {
   password: string
   role: string
   masterClassLevel?: string
+  departments?: string[]
 }) => {
   const res = await api.post('/teachers', data)
   return res.data
 }
 
-export const updateTeacherApi = async (id: string, data: { role: string; masterClassLevel?: string | null }) => {
+export const updateTeacherApi = async (id: string, data: { role: string; masterClassLevel?: string | null; departments?: string[] }) => {
   const res = await api.put(`/teachers/${id}`, data)
   return res.data as { message: string; teacher: any; displaced?: string }
 }
