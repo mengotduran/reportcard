@@ -6,6 +6,7 @@
 
 ---
 
+
 ## 1. The three deployment modes
 
 | Mode | Database | Who it's for | Status |
