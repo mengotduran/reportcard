@@ -218,6 +218,17 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    // Every downstream thing a student touches (report cards, fees) is scoped to the
+    // current term/session — fee recording already refused to work without one
+    // (currentSession, used by fees.controller.ts). Creating a student before one exists
+    // used to be silently allowed: ensureReportCardForCurrentTerm below just no-ops with
+    // no current term, leaving the student with no report card and nothing to surface
+    // that gap later. Blocked at the source instead.
+    if (!(await currentSession(schoolId))) {
+      res.status(400).json({ message: 'Set a current academic year/term before adding students.' })
+      return
+    }
+
     // classLevel used to be taken on faith — a stale or typo'd value silently created a
     // student belonging to no real class, which for a secondary school also means no
     // real department (department is derived from ClassLevel, not stored on Student).
@@ -454,6 +465,14 @@ export const commitStudentImport = async (req: AuthRequest, res: Response) => {
     const session = canRecordFees && hasFeeRows ? await currentSession(schoolId) : null
     // Looked up once for the whole batch (not per row) — same current term for every import.
     const currentTerm = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { id: true } })
+    // Same rule as createStudent: no current term, no new students — this used to only
+    // affect whether a report card got auto-created (ensureReportCardForCurrentTerm below
+    // silently no-ops without one), letting a whole import silently produce students with
+    // no report card and nothing to surface that later.
+    if (!currentTerm) {
+      res.status(400).json({ message: 'Set a current academic year/term before importing students.' })
+      return
+    }
 
     let created = 0
     let feesRecorded = 0

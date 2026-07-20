@@ -163,7 +163,11 @@ export default function ClassesScreen() {
   const [newName, setNewName] = useState('')
   const [hasStream, setHasStream] = useState(false)
   const [maxScore, setMaxScore] = useState('20')
-  const [feeAmount, setFeeAmount] = useState('150000')
+  // Starts empty, not a real number: it used to default to a stock 150000 that looked
+  // like a deliberately entered value, so a distracted admin could save every class with
+  // a fee that has nothing to do with their school's actual tuition. The input's
+  // placeholder shows the same number as a hint instead.
+  const [feeAmount, setFeeAmount] = useState('')
   const [creating, setCreating] = useState(false)
 
   // Secondary departments (streams)
@@ -282,7 +286,7 @@ export default function ClassesScreen() {
       setNewName('')
       setHasStream(false)
       setMaxScore('20')
-      setFeeAmount('150000')
+      setFeeAmount('')
       setSections([])
       await fetchClasses()
     } catch (err: any) {

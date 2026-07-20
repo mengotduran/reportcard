@@ -73,8 +73,13 @@ type FormState = {
   hndRegistrationFee: string
 }
 
-const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '150000', hndRegistrationFee: GCE_DEFAULT_FEE }
-const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '650000', hndRegistrationFee: '65000' }
+// feeAmount deliberately starts empty, not a real number: it used to default to a stock
+// 150000/650000 that LOOKED like a deliberately entered value (not greyed-out placeholder
+// text), so a distracted admin could save every class with a fee that has nothing to do
+// with their school's actual tuition. The input's placeholder already shows the same
+// number as a hint — this just stops it from also being the submitted value.
+const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE }
+const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '', hndRegistrationFee: '65000' }
 
 export default function ClassesPage() {
   const router = useRouter()
