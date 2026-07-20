@@ -14,14 +14,14 @@ const FROM_ADDRESS = 'Bulletin <noreply@usebulletin.org>'
 const COPY = {
   EN: {
     subject: 'Reset your Bulletin password',
-    heading: (name: string) => `Hi ${name},`,
+    heading: 'Hi,',
     body: 'We received a request to reset the password on your Bulletin account. Click the button below to choose a new one. This link expires in 1 hour.',
     button: 'Reset Password',
     ignore: "If you didn't request this, you can safely ignore this email — your password will stay the same.",
   },
   FR: {
     subject: 'Réinitialisez votre mot de passe Bulletin',
-    heading: (name: string) => `Bonjour ${name},`,
+    heading: 'Bonjour,',
     body: 'Nous avons reçu une demande de réinitialisation du mot de passe de votre compte Bulletin. Cliquez sur le bouton ci-dessous pour en choisir un nouveau. Ce lien expire dans 1 heure.',
     button: 'Réinitialiser le mot de passe',
     ignore: "Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer cet e-mail en toute sécurité — votre mot de passe restera inchangé.",
@@ -30,7 +30,6 @@ const COPY = {
 
 export async function sendPasswordResetEmail(opts: {
   to: string
-  name: string
   resetUrl: string
   lang?: 'EN' | 'FR'
 }): Promise<void> {
@@ -46,7 +45,7 @@ export async function sendPasswordResetEmail(opts: {
 
   const html = `
     <div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;color:#262016">
-      <p style="font-size:15px">${c.heading(opts.name)}</p>
+      <p style="font-size:15px">${c.heading}</p>
       <p style="font-size:14px;line-height:1.6;color:#5f5648">${c.body}</p>
       <p style="text-align:center;margin:28px 0">
         <a href="${opts.resetUrl}" style="background:#F03E2F;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;display:inline-block">${c.button}</a>
@@ -67,7 +66,7 @@ export async function sendPasswordResetEmail(opts: {
         to: opts.to,
         subject: c.subject,
         html,
-        text: `${c.heading(opts.name)}\n\n${c.body}\n\n${opts.resetUrl}\n\n${c.ignore}`,
+        text: `${c.heading}\n\n${c.body}\n\n${opts.resetUrl}\n\n${c.ignore}`,
       }),
     })
     if (!res.ok) {

@@ -35,7 +35,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
       })
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')
       const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`
-      await sendPasswordResetEmail({ to: user.email, name: user.name, resetUrl, lang: user.preferredLanguage === 'FR' ? 'FR' : 'EN' })
+      await sendPasswordResetEmail({ to: user.email, resetUrl, lang: user.preferredLanguage === 'FR' ? 'FR' : 'EN' })
     }
 
     res.json(genericResponse)
