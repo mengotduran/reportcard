@@ -9,6 +9,7 @@ import ThemeToggle from '@/components/ui/ThemeToggle'
 import { useT } from '@/lib/i18n'
 import { getMeApi, updateLanguagePreferenceApi } from '@/lib/api/auth'
 import { getAcademicYearsApi } from '@/lib/api/dashboard'
+import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
@@ -112,6 +113,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     })
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  useBodyScrollLock(mobileNavOpen)
   const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'
 
   const handleLangToggle = async (lang: 'EN' | 'FR') => {
@@ -137,12 +139,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Menu size={22} />
           </button>
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-5 h-5 bg-primary rounded-[4px] flex items-center justify-center flex-shrink-0">
-              <GraduationCap size={12} className="text-white" strokeWidth={2.5} />
+            <div className="w-7 h-7 bg-primary rounded-[6px] flex items-center justify-center flex-shrink-0">
+              <GraduationCap size={16} className="text-white" strokeWidth={2.5} />
             </div>
-            <span className="font-bold text-[13px] text-foreground tracking-tight flex-shrink-0">Bulletin</span>
+            <span className="font-bold text-[16px] text-foreground tracking-tight flex-shrink-0">Bulletin</span>
             {!isSuperAdmin && school?.name && (
-              <span className="text-[12px] text-muted-foreground truncate border-l border-border pl-2">{school.name}</span>
+              <span className="text-[13px] text-muted-foreground truncate border-l border-border pl-2">{school.name}</span>
             )}
           </div>
         </header>

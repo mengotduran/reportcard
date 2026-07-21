@@ -67,24 +67,26 @@ export default function ClassSubjectsPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
+      <div className="mb-6">
         <button onClick={() => router.back()}
-          className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition">
+          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition inline-flex">
           <ArrowLeft size={20} />
         </button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-xl font-bold text-foreground">{classLevel}</h2>
-            {isUniversity && termName && (
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">{termName}</span>
-            )}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-xl font-bold text-foreground">{classLevel}</h2>
+              {isUniversity && termName && (
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">{termName}</span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
           </div>
-          <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
+          <button onClick={handleExportMarks} disabled={exporting}
+            className="flex items-center justify-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition flex-shrink-0 sm:ml-auto">
+            <Download size={16} /> {exporting ? t('Exporting...') : t('Export marks')}
+          </button>
         </div>
-        <button onClick={handleExportMarks} disabled={exporting}
-          className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
-          <Download size={16} /> {exporting ? t('Exporting...') : t('Export marks')}
-        </button>
       </div>
 
       {/* Sequence selector */}

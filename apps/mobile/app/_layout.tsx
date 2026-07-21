@@ -27,7 +27,19 @@ export default function RootLayout() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="account/index" options={{ title: t('My Account'), headerBackTitle: '' }} />
       <Stack.Screen name="class/[classLevel]" options={{ headerBackTitle: '' }} />
-      <Stack.Screen name="marks/[subjectId]" options={{ headerBackTitle: '' }} />
+      <Stack.Screen
+        name="marks/[subjectId]"
+        options={{
+          headerBackTitle: '',
+          // This screen's title is a compound "Subject · Sequence" string, often long
+          // enough to butt right up against the back chevron under the default
+          // left-aligned Android title placement. Centering it (already the iOS
+          // default) and trimming the font size keeps it clear of the arrow on both
+          // platforms without truncating.
+          headerTitleAlign: 'center',
+          headerTitleStyle: { fontSize: 16, fontWeight: '700' },
+        }}
+      />
       <Stack.Screen name="report-card/[id]" options={{ title: t('Report Card'), headerBackTitle: '' }} />
       <Stack.Screen name="class-master/[classLevel]" options={{ headerBackTitle: '' }} />
       <Stack.Screen name="admin/report-card/[id]" options={{ title: t('Report Card'), headerBackTitle: '' }} />

@@ -5,6 +5,27 @@ export const getTermsApi = async () => {
   return res.data
 }
 
+export interface CurrentTerm {
+  id: string
+  name: string
+  session: string
+  startDate: string
+  endDate: string
+  isCurrent: boolean
+}
+
+// 404 just means the school hasn't set a current term yet — not an error the
+// caller needs to handle, so it resolves to null instead of throwing.
+export const getCurrentTermApi = async (): Promise<CurrentTerm | null> => {
+  try {
+    const res = await api.get('/terms/current')
+    return res.data.term
+  } catch (error: any) {
+    if (error?.response?.status === 404) return null
+    throw error
+  }
+}
+
 export const createTermApi = async (data: {
   name: string
   session: string
