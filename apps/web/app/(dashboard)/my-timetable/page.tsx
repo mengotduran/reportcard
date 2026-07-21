@@ -3,7 +3,11 @@ import { useEffect, useState } from 'react'
 import { getMyTimetableApi, getPeriodsApi, TimetableSlot, TimetablePeriod } from '@/lib/api/timetable'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
+import { X } from 'lucide-react'
 import WeekGrid, { WeekGridSlot } from '@/components/ui/WeekGrid'
+import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
+
+const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 
 export default function MyTimetablePage() {
   const tr = useT()
@@ -12,6 +16,9 @@ export default function MyTimetablePage() {
   const [loading, setLoading] = useState(true)
   const [slots, setSlots] = useState<TimetableSlot[]>([])
   const [periods, setPeriods] = useState<TimetablePeriod[]>([])
+  const [selectedSlot, setSelectedSlot] = useState<TimetableSlot | null>(null)
+
+  useBodyScrollLock(!!selectedSlot)
 
   useEffect(() => {
     Promise.all([getMyTimetableApi(), getPeriodsApi()])
@@ -46,13 +53,59 @@ export default function MyTimetablePage() {
             <div className="mb-3 flex items-center gap-4 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-primary/20 border border-primary/30 inline-block" /> {tr(isUniversity ? 'Course' : 'Subject')}</span>
               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-amber-100 border border-amber-300 inline-block" /> {tr('Private class')}</span>
+              <span>{tr('Click a slot for details')}</span>
             </div>
           )}
           {slots.length === 0 && (
             <p className="text-sm text-muted-foreground mb-3">{tr("Your timetable hasn't been set up yet — check back once your admin has built it.")}</p>
           )}
-          <WeekGrid slots={gridSlots} breaks={breakPeriods} />
+          <WeekGrid
+            slots={gridSlots}
+            breaks={breakPeriods}
+            onSlotClick={(s) => setSelectedSlot(slots.find((x) => x.id === s.id) ?? null)}
+          />
         </>
+      )}
+
+      {selectedSlot && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setSelectedSlot(null)}>
+          <div className="bg-card rounded-2xl border border-border w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-foreground text-lg">
+                {selectedSlot.subjectId ? (selectedSlot.subjectName ?? tr('Unknown subject')) : (selectedSlot.label ?? tr('Private class'))}
+              </h3>
+              <button onClick={() => setSelectedSlot(null)} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{tr('Day')}</span>
+                <span className="text-foreground font-medium">{tr(dayLabel(selectedSlot.dayOfWeek))}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{tr('Time')}</span>
+                <span className="text-foreground font-medium">{selectedSlot.startTime} – {selectedSlot.endTime}</span>
+              </div>
+              {selectedSlot.subjectId && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{tr(isUniversity ? 'Course' : 'Subject')}</span>
+                  <span className="text-foreground font-medium">{selectedSlot.subjectName ?? tr('Unknown subject')}</span>
+                </div>
+              )}
+              {selectedSlot.subjectId && selectedSlot.classLevel && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{tr('Class')}</span>
+                  <span className="text-foreground font-medium">{selectedSlot.classLevel}</span>
+                </div>
+              )}
+              {selectedSlot.room && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{tr('Room')}</span>
+                  <span className="text-foreground font-medium">{selectedSlot.room}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -1,9 +1,13 @@
 'use client'
 import { Sun, Moon } from 'lucide-react'
 import { useThemeStore } from '@/lib/store/theme.store'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, memo } from 'react'
 
-export default function ThemeToggle({ compact }: { compact?: boolean }) {
+// Memoized: `compact` is static at every call site, so a parent re-rendering
+// for an unrelated reason (e.g. the login page on every keystroke) shouldn't
+// force this to re-render too — it still updates fine on its own when the
+// theme store itself changes, since that's a separate subscription, not a prop.
+function ThemeToggle({ compact }: { compact?: boolean }) {
   const { theme, setTheme } = useThemeStore()
   const [isDark, setIsDark] = useState(false)
 
@@ -57,3 +61,5 @@ export default function ThemeToggle({ compact }: { compact?: boolean }) {
     </button>
   )
 }
+
+export default memo(ThemeToggle)
