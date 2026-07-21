@@ -1,11 +1,52 @@
 import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
-import prisma from '../config/prisma'
+import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { logMarksEntryModeChange, currentTermIdFor } from '../utils/marksEntryMode'
+import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
+import { sendPasswordSetupEmail } from '../utils/email'
 
 const schoolInclude = {
   _count: { select: { students: true, users: true, reportCards: true } },
+}
+
+// A newly created SCHOOL_ADMIN goes through the exact same invite pattern as a
+// brand-new teacher (see createTeacher in teacher.controller.ts): offline
+// installs get a real, working password immediately; online schools instead
+// get an emailed setup link and stay "pending" (passwordSetAt null) until they
+// use it. resetPassword (passwordReset.controller.ts) stamps passwordSetAt
+// whichever flow — initial setup or a later forgot-password reset — redeems
+// the token, so "pending" always clears itself once a real password is set.
+async function buildAdminAccount(adminPassword: string | undefined) {
+  if (IS_OFFLINE_BUILD) {
+    return {
+      password: await bcrypt.hash(adminPassword!, 12),
+      passwordSetAt: new Date() as Date | null,
+      inviteToken: null as string | null,
+      resetTokenHash: null as string | null,
+      resetTokenExpiresAt: null as Date | null,
+    }
+  }
+  const inviteToken = generateRawToken()
+  return {
+    password: await bcrypt.hash(generateRawToken(), 12),
+    passwordSetAt: null as Date | null,
+    inviteToken,
+    resetTokenHash: hashToken(inviteToken),
+    resetTokenExpiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS),
+  }
+}
+
+async function sendAdminSetupEmail(email: string, inviteToken: string, language?: string) {
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')
+  const setupUrl = `${frontendUrl}/reset-password?token=${inviteToken}`
+  await sendPasswordSetupEmail({ to: email, resetUrl: setupUrl, lang: language === 'FR' ? 'FR' : 'EN' })
+}
+
+function offlinePasswordError(adminPassword: string | undefined): string | null {
+  if (!IS_OFFLINE_BUILD) return null
+  if (!adminPassword || adminPassword.length < 6) return 'Password must be at least 6 characters'
+  return null
 }
 
 // ─── Overview ────────────────────────────────────────────────────────────────
@@ -45,23 +86,33 @@ export const createStandaloneSchool = async (req: Request, res: Response) => {
     const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } })
     if (existingUser) { res.status(400).json({ message: 'Admin email already exists' }); return }
 
-    const hashed = await bcrypt.hash(adminPassword, 12)
+    const pwError = offlinePasswordError(adminPassword)
+    if (pwError) { res.status(400).json({ message: pwError }); return }
+
+    const lang = language === 'FR' ? 'FR' : 'EN'
+    const account = await buildAdminAccount(adminPassword)
     const school = await prisma.school.create({
       data: {
         name: schoolName,
         type: schoolType,
-        language: language === 'FR' ? 'FR' : 'EN',
+        language: lang,
         email: schoolEmail,
         phone,
         address: city,
         subdomain: subdomain.toLowerCase(),
         coverImages: [],
         users: {
-          create: { name: adminName, email: adminEmail, password: hashed, role: 'SCHOOL_ADMIN' },
+          create: {
+            name: adminName, email: adminEmail, role: 'SCHOOL_ADMIN',
+            password: account.password, passwordSetAt: account.passwordSetAt,
+            resetTokenHash: account.resetTokenHash, resetTokenExpiresAt: account.resetTokenExpiresAt,
+          },
         },
       },
       include: { ...schoolInclude, users: true },
     })
+
+    if (account.inviteToken) await sendAdminSetupEmail(adminEmail, account.inviteToken, lang)
 
     res.status(201).json({ message: 'School created', school })
   } catch (error) {
@@ -106,7 +157,12 @@ export const createParentSchool = async (req: Request, res: Response) => {
       if (dupUser) { res.status(400).json({ message: `Admin email ${s.adminEmail} already exists` }); return }
     }
 
-    const hashed = await Promise.all(sections.map((s) => bcrypt.hash(s.adminPassword, 12)))
+    for (const s of sections) {
+      const pwError = offlinePasswordError(s.adminPassword)
+      if (pwError) { res.status(400).json({ message: `${pwError} (${s.type} section)` }); return }
+    }
+
+    const accounts = await Promise.all(sections.map((s) => buildAdminAccount(s.adminPassword)))
 
     const { parent, created } = await prisma.$transaction(async (tx) => {
       const parent = await tx.parentSchool.create({ data: { name, city, country } })
@@ -123,7 +179,11 @@ export const createParentSchool = async (req: Request, res: Response) => {
               subdomain: s.subdomain.toLowerCase(),
               coverImages: [],
               users: {
-                create: { name: s.adminName, email: s.adminEmail, password: hashed[i], role: 'SCHOOL_ADMIN' },
+                create: {
+                  name: s.adminName, email: s.adminEmail, role: 'SCHOOL_ADMIN',
+                  password: accounts[i].password, passwordSetAt: accounts[i].passwordSetAt,
+                  resetTokenHash: accounts[i].resetTokenHash, resetTokenExpiresAt: accounts[i].resetTokenExpiresAt,
+                },
               },
             },
             include: { ...schoolInclude },
@@ -132,6 +192,10 @@ export const createParentSchool = async (req: Request, res: Response) => {
       )
       return { parent, created }
     })
+
+    await Promise.all(sections.map((s, i) =>
+      accounts[i].inviteToken ? sendAdminSetupEmail(s.adminEmail, accounts[i].inviteToken!, s.language) : Promise.resolve()
+    ))
 
     res.status(201).json({ message: 'Parent school and sections created', parent, sections: created })
   } catch (error) {
@@ -157,7 +221,10 @@ export const addSectionToParent = async (req: Request, res: Response) => {
     const dupUser = await prisma.user.findUnique({ where: { email: adminEmail } })
     if (dupUser) { res.status(400).json({ message: 'Admin email already exists' }); return }
 
-    const hashed = await bcrypt.hash(adminPassword, 12)
+    const pwError = offlinePasswordError(adminPassword)
+    if (pwError) { res.status(400).json({ message: pwError }); return }
+
+    const account = await buildAdminAccount(adminPassword)
     const section = await prisma.school.create({
       data: {
         parentSchoolId: parentId,
@@ -169,11 +236,17 @@ export const addSectionToParent = async (req: Request, res: Response) => {
         subdomain: subdomain.toLowerCase(),
         coverImages: [],
         users: {
-          create: { name: adminName, email: adminEmail, password: hashed, role: 'SCHOOL_ADMIN' },
+          create: {
+            name: adminName, email: adminEmail, role: 'SCHOOL_ADMIN',
+            password: account.password, passwordSetAt: account.passwordSetAt,
+            resetTokenHash: account.resetTokenHash, resetTokenExpiresAt: account.resetTokenExpiresAt,
+          },
         },
       },
       include: schoolInclude,
     })
+
+    if (account.inviteToken) await sendAdminSetupEmail(adminEmail, account.inviteToken, lang)
 
     res.status(201).json({ message: 'Section added', section })
   } catch (error) {
@@ -233,6 +306,9 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
     const dupUser = await prisma.user.findUnique({ where: { email: adminEmail } })
     if (dupUser) { res.status(400).json({ message: 'Admin email already exists' }); return }
 
+    const pwError = offlinePasswordError(adminPassword)
+    if (pwError) { res.status(400).json({ message: pwError }); return }
+
     // If standalone, promote to multi-section by creating a parent
     let parentId = existing.parentSchoolId
     if (!parentId) {
@@ -243,7 +319,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
       parentId = parent.id
     }
 
-    const hashed = await bcrypt.hash(adminPassword, 12)
+    const account = await buildAdminAccount(adminPassword)
     const parent = await prisma.parentSchool.findUnique({ where: { id: parentId! } })
     const section = await prisma.school.create({
       data: {
@@ -254,11 +330,17 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
         email: schoolEmail,
         subdomain: subdomain.toLowerCase(),
         users: {
-          create: { name: adminName, email: adminEmail, password: hashed, role: 'SCHOOL_ADMIN' },
+          create: {
+            name: adminName, email: adminEmail, role: 'SCHOOL_ADMIN',
+            password: account.password, passwordSetAt: account.passwordSetAt,
+            resetTokenHash: account.resetTokenHash, resetTokenExpiresAt: account.resetTokenExpiresAt,
+          },
         },
       },
       include: schoolInclude,
     })
+
+    if (account.inviteToken) await sendAdminSetupEmail(adminEmail, account.inviteToken, lang)
 
     res.status(201).json({ message: 'Section added', section })
   } catch (error) {
@@ -416,10 +498,12 @@ export const getSchoolAdmins = async (req: Request, res: Response) => {
     const schoolId = String(req.params.schoolId)
     const admins = await prisma.user.findMany({
       where: { schoolId, role: { in: ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'] } },
-      select: { id: true, name: true, email: true, role: true, isActive: true },
+      select: { id: true, name: true, email: true, role: true, isActive: true, passwordSetAt: true },
       orderBy: { name: 'asc' },
     })
-    res.json({ admins })
+    res.json({
+      admins: admins.map(({ passwordSetAt, ...a }) => ({ ...a, pendingSetup: passwordSetAt === null })),
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

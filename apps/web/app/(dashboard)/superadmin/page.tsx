@@ -29,10 +29,10 @@ const emptyStandaloneForm = { schoolName: '', schoolType: 'PRIMARY', language: '
 const emptyParentForm = { name: '', city: '', country: '' }
 
 // ─── Section form row ───────────────────────────────────────────────────────
-function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes }: {
+function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes, isOfflineInstall }: {
   idx: number; data: typeof emptySectionForm
   onChange: (idx: number, field: string, val: string) => void
-  onRemove: (idx: number) => void; canRemove: boolean; usedTypes: string[]
+  onRemove: (idx: number) => void; canRemove: boolean; usedTypes: string[]; isOfflineInstall: boolean
 }) {
   const [showPw, setShowPw] = useState(false)
   // All types selectable — a type may repeat as long as the language differs.
@@ -80,16 +80,22 @@ function SectionFormRow({ idx, data, onChange, onRemove, canRemove, usedTypes }:
           <input type="email" value={data.adminEmail} onChange={(e) => onChange(idx, 'adminEmail', e.target.value)} placeholder="admin@school.com"
             className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Password <span className="text-destructive">*</span></label>
-          <div className="relative">
-            <input type={showPw ? 'text' : 'password'} value={data.adminPassword} onChange={(e) => onChange(idx, 'adminPassword', e.target.value)} placeholder="••••••••"
-              className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground pr-8 focus:outline-none focus:ring-2 focus:ring-ring" />
-            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground">
-              {showPw ? <EyeOff size={13} /> : <Eye size={13} />}
-            </button>
+        {isOfflineInstall ? (
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Admin Password <span className="text-destructive">*</span></label>
+            <div className="relative">
+              <input type={showPw ? 'text' : 'password'} value={data.adminPassword} onChange={(e) => onChange(idx, 'adminPassword', e.target.value)} placeholder="••••••••"
+                className="w-full border border-border rounded-lg px-3 py-1.5 text-sm text-foreground pr-8 focus:outline-none focus:ring-2 focus:ring-ring" />
+              <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground">
+                {showPw ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="col-span-2">
+            <p className="text-xs text-muted-foreground">A setup email will be sent to this address so the admin can choose their own password.</p>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -133,7 +139,7 @@ export default function SuperAdminPage() {
   const [formError, setFormError] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [adminsSchool, setAdminsSchool] = useState<SchoolSection | null>(null)
-  const [admins, setAdmins] = useState<{ id: string; name: string; email: string; role: string }[]>([])
+  const [admins, setAdmins] = useState<{ id: string; name: string; email: string; role: string; pendingSetup?: boolean }[]>([])
   const [adminsLoading, setAdminsLoading] = useState(false)
   const [resetAdminTarget, setResetAdminTarget] = useState<{ id: string; name: string } | null>(null)
   const [resetAdminPw, setResetAdminPw] = useState('')
@@ -613,17 +619,23 @@ export default function SuperAdminPage() {
                         className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                     </div>
                   ))}
-                  <div className="col-span-2">
-                    <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Password <span className="text-destructive">*</span></label>
-                    <div className="relative">
-                      <input type={showPw ? 'text' : 'password'} placeholder="••••••••" value={standaloneForm.adminPassword}
-                        onChange={(e) => setStandaloneForm({ ...standaloneForm, adminPassword: e.target.value })}
-                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground pr-9 focus:outline-none focus:ring-2 focus:ring-ring" />
-                      <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                        {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
-                      </button>
+                  {isOfflineInstall ? (
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">Password <span className="text-destructive">*</span></label>
+                      <div className="relative">
+                        <input type={showPw ? 'text' : 'password'} placeholder="••••••••" value={standaloneForm.adminPassword}
+                          onChange={(e) => setStandaloneForm({ ...standaloneForm, adminPassword: e.target.value })}
+                          className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground pr-9 focus:outline-none focus:ring-2 focus:ring-ring" />
+                        <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                          {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="col-span-2">
+                      <p className="text-xs text-muted-foreground">A setup email will be sent to this address so the admin can choose their own password.</p>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex gap-3 pt-2">
@@ -680,7 +692,8 @@ export default function SuperAdminPage() {
                     <SectionFormRow key={i} idx={i} data={s}
                       onChange={updateSection} onRemove={removeSection}
                       canRemove={sections.length > 1}
-                      usedTypes={sections.filter((_, j) => j !== i).map((x) => x.type)} />
+                      usedTypes={sections.filter((_, j) => j !== i).map((x) => x.type)}
+                      isOfflineInstall={isOfflineInstall} />
                   ))}
                 </div>
               </div>
@@ -710,7 +723,8 @@ export default function SuperAdminPage() {
               <SectionFormRow idx={0} data={addSectionForm}
                 onChange={(_, field, val) => setAddSectionForm({ ...addSectionForm, [field]: val })}
                 onRemove={() => {}} canRemove={false}
-                usedTypes={addSectionParent.sections.map((s) => s.type)} />
+                usedTypes={addSectionParent.sections.map((s) => s.type)}
+                isOfflineInstall={isOfflineInstall} />
               <div className="flex gap-3 mt-4">
                 <button type="button" onClick={() => setAddSectionParent(null)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50">
@@ -823,7 +837,8 @@ export default function SuperAdminPage() {
                         <SectionFormRow idx={0} data={editSectionForm}
                           onChange={(_, field, val) => setEditSectionForm({ ...editSectionForm, [field]: val })}
                           onRemove={() => {}} canRemove={false}
-                          usedTypes={[editTarget!.type, ...siblings.map((s) => s.type)]} />
+                          usedTypes={[editTarget!.type, ...siblings.map((s) => s.type)]}
+                          isOfflineInstall={isOfflineInstall} />
                         <button type="submit" disabled={savingSection}
                           className="w-full bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50">
                           {savingSection ? 'Adding...' : 'Add Section'}
@@ -901,7 +916,14 @@ export default function SuperAdminPage() {
                 {admins.map(admin => (
                   <div key={admin.id} className="flex items-center justify-between bg-muted rounded-lg px-3 py-2.5">
                     <div>
-                      <p className="text-sm font-medium text-foreground">{admin.name}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-medium text-foreground">{admin.name}</p>
+                        {!isOfflineInstall && admin.pendingSetup && (
+                          <span className="inline-block whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700" title="Has not set a password yet">
+                            Pending Setup
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground">{admin.email} · {admin.role.replace('_', ' ')}</p>
                     </div>
                     <button
