@@ -38,3 +38,17 @@ export const getTeacherChartStatsApi = async (): Promise<TeacherChartStats> => {
   const res = await api.get('/dashboard/teacher-chart-stats')
   return res.data
 }
+
+export interface TeacherClassRow {
+  id: string
+  subjectId: string | null
+  subjectName: string | null
+  classLevelName: string
+  departmentName: string | null
+  isMasterClass: boolean
+}
+
+export const getTeacherClassesApi = async (): Promise<{ classes: TeacherClassRow[] }> => {
+  const res = await api.get('/dashboard/teacher-classes')
+  return res.data
+}

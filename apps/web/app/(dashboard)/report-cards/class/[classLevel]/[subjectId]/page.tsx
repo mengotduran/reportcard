@@ -476,29 +476,31 @@ export default function MarksEntryPage() {
     <div className="flex flex-col h-full" style={{ minHeight: 'calc(100vh - 120px)' }}>
 
       {/* Header */}
-      <div className="flex items-center gap-3 mb-0 pb-4">
+      <div className="mb-0 pb-4">
         <button onClick={() => router.back()}
-          className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition">
+          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition inline-flex">
           <ArrowLeft size={20} />
         </button>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-xl font-bold text-foreground">{subjectName} · {seqLabel}</h2>
-          <p className="text-sm text-muted-foreground">{classLevel}</p>
-        </div>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="min-w-0">
+            <h2 className="text-xl font-bold text-foreground">{subjectName} · {seqLabel}</h2>
+            <p className="text-sm text-muted-foreground">{classLevel}</p>
+          </div>
 
-        {/* Switch assessment without leaving the sheet. The sequence has always come from
-            the url, so moving from CA to Exam meant navigating back to the class sheet and
-            starting again, once per course. Same marks, same students, one click. */}
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
-            <button key={i}
-              onClick={() => router.replace(`/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subjectId)}?termId=${termId}&termName=${encodeURIComponent(termName)}&subjectName=${encodeURIComponent(subjectName)}&sequence=${i}`)}
-              className={`text-xs px-2.5 py-1.5 rounded-lg border transition ${seqIndex === i
-                ? 'border-primary bg-primary/10 text-primary font-semibold'
-                : 'border-border text-muted-foreground hover:text-foreground'}`}>
-              {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqShort(termName, i, lang)}
-            </button>
-          ))}
+          {/* Switch assessment without leaving the sheet. The sequence has always come from
+              the url, so moving from CA to Exam meant navigating back to the class sheet and
+              starting again, once per course. Same marks, same students, one click. */}
+          <div className="flex items-center gap-1 flex-shrink-0 sm:ml-auto">
+            {(isUniversity ? [0, 1, 2] : [0, 1]).map((i) => (
+              <button key={i}
+                onClick={() => router.replace(`/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subjectId)}?termId=${termId}&termName=${encodeURIComponent(termName)}&subjectName=${encodeURIComponent(subjectName)}&sequence=${i}`)}
+                className={`text-xs px-2.5 py-1.5 rounded-lg border transition ${seqIndex === i
+                  ? 'border-primary bg-primary/10 text-primary font-semibold'
+                  : 'border-border text-muted-foreground hover:text-foreground'}`}>
+                {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqShort(termName, i, lang)}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

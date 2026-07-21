@@ -105,6 +105,74 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// A teacher's assigned classes, tagged with department where one applies —
+// secondary classes have a real Department (Grammar/Technical/Commercial),
+// university classes have a program-as-department (NURSING/MIDWIFERY/...),
+// primary classes never do. Subject.classLevel is a plain name, not a FK, so
+// this resolves it against ClassLevel to pick up the department relation.
+export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id
+    const schoolId = req.user!.schoolId
+    const masterClassLevel = (req.user as any).masterClassLevel as string | null
+
+    if (!schoolId) { res.status(400).json({ message: 'No school' }); return }
+
+    const teacherSubjects = await prisma.teacherSubject.findMany({
+      where: { userId },
+      include: { subject: { select: { id: true, name: true, classLevel: true } } },
+    })
+
+    const classLevelNames = [...new Set([
+      ...teacherSubjects.map(ts => ts.subject.classLevel),
+      ...(masterClassLevel ? [masterClassLevel] : []),
+    ])]
+
+    const classLevels = classLevelNames.length > 0
+      ? await prisma.classLevel.findMany({
+          where: { schoolId, name: { in: classLevelNames } },
+          include: { department: { select: { name: true } } },
+        })
+      : []
+    const classLevelByName = new Map(classLevels.map(cl => [cl.name, cl]))
+
+    interface ClassRow {
+      id: string
+      subjectId: string | null
+      subjectName: string | null
+      classLevelName: string
+      departmentName: string | null
+      isMasterClass: boolean
+    }
+
+    const classes: ClassRow[] = teacherSubjects.map(ts => ({
+      id: ts.id,
+      subjectId: ts.subject.id,
+      subjectName: ts.subject.name,
+      classLevelName: ts.subject.classLevel,
+      departmentName: classLevelByName.get(ts.subject.classLevel)?.department?.name ?? null,
+      isMasterClass: ts.subject.classLevel === masterClassLevel,
+    }))
+
+    // A class master's own class stays visible even if they teach no subject there.
+    if (masterClassLevel && !classes.some(c => c.classLevelName === masterClassLevel)) {
+      classes.push({
+        id: `master-${masterClassLevel}`,
+        subjectId: null,
+        subjectName: null,
+        classLevelName: masterClassLevel,
+        departmentName: classLevelByName.get(masterClassLevel)?.department?.name ?? null,
+        isMasterClass: true,
+      })
+    }
+
+    res.json({ classes })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 /** Distinct academic years (term sessions) for the school, newest first. */
 export const getAcademicYears = async (req: AuthRequest, res: Response) => {
   try {
