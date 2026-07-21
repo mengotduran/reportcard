@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import {
   GraduationCap, BookOpen, Pencil, Ruler, Calculator, Globe, School,
   FlaskConical, Award, Library, PenTool, Notebook, Microscope, Music,
@@ -32,8 +33,11 @@ const FADE_OUT = 'transition-opacity duration-500 ease-out opacity-0 dark:opacit
 
 /** School-themed auth backdrop, theme-aware:
  *  light = warm ruled-notebook paper with a red margin line,
- *  dark  = deep-navy chalkboard with faint chalk lines. */
-export default function AuthBackground() {
+ *  dark  = deep-navy chalkboard with faint chalk lines.
+ *  Memoized: takes no props, so a parent re-rendering (e.g. the login page on
+ *  every keystroke) must not force this ~30-node decorative tree to redo its
+ *  work too — that was real, visible jank on mobile while typing. */
+function AuthBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden">
       {/* Base — warm paper (light) / navy chalkboard (dark) */}
@@ -75,3 +79,5 @@ export default function AuthBackground() {
     </div>
   )
 }
+
+export default memo(AuthBackground)

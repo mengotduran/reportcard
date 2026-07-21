@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getTeachersApi, createTeacherApi, updateTeacherApi, deleteTeacherApi, getTeacherSubjectsApi, assignTeacherSubjectsApi } from '@/lib/api/teachers'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getClassLevelsApi } from '@/lib/api/classLevels'
@@ -81,8 +81,15 @@ export default function TeachersPage() {
   const [showResetPw, setShowResetPw] = useState(false)
   const [assignTarget, setAssignTarget] = useState<Teacher | null>(null)
   const [assignedIds, setAssignedIds] = useState<string[]>([])
+  const [assignedLoading, setAssignedLoading] = useState(false)
   const [assigning, setAssigning] = useState(false)
   const [reassignedInfo, setReassignedInfo] = useState<string[]>([])
+  // Guards against a slower, earlier fetch (e.g. for a previously-opened teacher)
+  // resolving AFTER a newer one and overwriting the modal with the wrong
+  // teacher's courses — out-of-order network responses are real, not just a
+  // theoretical race, and silently showing (and worse, letting an admin save)
+  // someone else's course list is a real data-integrity bug, not a cosmetic one.
+  const assignRequestRef = useRef(0)
 
   useEffect(() => { fetchAll() }, [])
   // Re-fetch teachers when the semester tab changes (but not on the initial
@@ -225,13 +232,22 @@ export default function TeachersPage() {
   }
 
   const openAssignModal = async (teacher: Teacher) => {
+    const requestId = ++assignRequestRef.current
     setAssignTarget(teacher)
     setReassignedInfo([])
+    // Clear immediately rather than leaving the previous teacher's checkboxes
+    // ticked while this loads — otherwise it visibly shows the WRONG teacher's
+    // courses for a moment even when nothing races.
+    setAssignedIds([])
+    setAssignedLoading(true)
     try {
       const data = await getTeacherSubjectsApi(teacher.id)
+      if (assignRequestRef.current !== requestId) return // superseded by a newer open — discard
       setAssignedIds(data.subjects.map((s: Subject) => s.id))
     } catch {
-      setAssignedIds([])
+      if (assignRequestRef.current === requestId) setAssignedIds([])
+    } finally {
+      if (assignRequestRef.current === requestId) setAssignedLoading(false)
     }
   }
 
@@ -575,7 +591,8 @@ export default function TeachersPage() {
             <div className="flex-1 overflow-y-auto space-y-4">
               {/* Already scoped to the active department (modalSubjects above), so
                   every group here is the same department — no badge needed. */}
-              {Object.entries(grouped)
+              {assignedLoading && <p className="text-sm text-muted-foreground text-center py-4">{tr('Loading...')}</p>}
+              {!assignedLoading && Object.entries(grouped)
                 .sort((a, b) => a[0].localeCompare(b[0]))
                 .map(([classLevel, subjects]) => (
                 <div key={classLevel}>
@@ -599,12 +616,12 @@ export default function TeachersPage() {
                   </div>
                 </div>
               ))}
-              {allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr(isUniversity ? 'No courses found. Add courses first.' : 'No subjects found. Add subjects first.')}</p>}
+              {!assignedLoading && allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr(isUniversity ? 'No courses found. Add courses first.' : 'No subjects found. Add subjects first.')}</p>}
             </div>
             <div className="flex gap-3 pt-4 border-t border-gray-100 mt-4">
               <button onClick={() => setAssignTarget(null)}
                 className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{tr('Cancel')}</button>
-              <button onClick={handleAssignSave} disabled={assigning || reassignedInfo.length > 0}
+              <button onClick={handleAssignSave} disabled={assigning || assignedLoading || reassignedInfo.length > 0}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                 {assigning ? tr('Saving...') : `${tr('Save (')}${assignedIds.length} ${tr(isUniversity ? 'courses' : 'subjects')})`}
               </button>

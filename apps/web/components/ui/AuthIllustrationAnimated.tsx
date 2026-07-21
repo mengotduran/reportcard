@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 /** Animated version of AuthIllustration (which stays available as the static
  *  fallback — swap the import in login/page.tsx to revert).
  *
@@ -12,8 +14,14 @@
  *              put — and the loop restarts
  *
  *  Pure CSS/SVG — no video, theme-aware via currentColor. Reduced-motion
- *  users get the finished static scene. */
-export default function AuthIllustrationAnimated({ className }: { className?: string }) {
+ *  users get the finished static scene.
+ *
+ *  Memoized: `className` is a static string literal at the login page's call
+ *  site, so without this every keystroke in the email/password fields (which
+ *  re-renders the whole login page) was rebuilding this ~100-node SVG plus its
+ *  embedded animation stylesheet from scratch — real, visible jank on mobile
+ *  while typing, for zero visual benefit since nothing here ever changes. */
+function AuthIllustrationAnimated({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 560 440" fill="none" className={className} aria-hidden="true">
       <style>{`
@@ -303,3 +311,5 @@ export default function AuthIllustrationAnimated({ className }: { className?: st
     </svg>
   )
 }
+
+export default memo(AuthIllustrationAnimated)
