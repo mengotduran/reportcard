@@ -2,16 +2,16 @@ import prisma from '../config/prisma'
 import type { MarksEntryMode } from '@prisma/client'
 
 /**
- * Switching who records marks is capped: a school may do it twice per semester, and after
- * that the provider (superadmin) does it for them.
+ * Switching who records marks was capped at twice per semester, after which the provider
+ * (superadmin) would do it instead — see logMarksEntryModeChange and its call site for the
+ * reasoning (a school that could flip the setting freely could switch to TEACHERS, have
+ * marks changed, and switch back unnoticed).
  *
- * Why a cap at all: the setting exists to keep marks out of teachers' hands, and a school
- * that can flip it freely could switch to TEACHERS, have marks changed, and switch back.
- * The cap plus the log turn that into something that cannot be done quietly or often.
- *
- * What it does NOT do, and cannot: stop a dishonest admin. They can already enter and
- * change any mark themselves. This narrows delegation and leaves a trail; it is not a
- * guarantee, and should not be sold as one.
+ * DISABLED for now (2026-07-21): got in the way of active testing, where switching back
+ * and forth is routine rather than suspicious. marksEntrySwitchAllowance below always
+ * returns allowed: true; used/limit/termId still compute normally so the settings page's
+ * "X of Y used" counter and the change log keep working, so re-enabling later is just
+ * restoring the `allowed` line.
  */
 export const MARKS_ENTRY_SWITCHES_PER_TERM = 2
 
@@ -42,7 +42,8 @@ export async function marksEntrySwitchAllowance(schoolId: string): Promise<Switc
   const used = await prisma.marksEntryModeChange.count({
     where: { schoolId, termId, byProvider: false },
   })
-  return { used, limit: MARKS_ENTRY_SWITCHES_PER_TERM, termId, allowed: used < MARKS_ENTRY_SWITCHES_PER_TERM }
+  // Cap disabled — see the docstring above. Was: `used < MARKS_ENTRY_SWITCHES_PER_TERM`.
+  return { used, limit: MARKS_ENTRY_SWITCHES_PER_TERM, termId, allowed: true }
 }
 
 /**

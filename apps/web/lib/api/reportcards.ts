@@ -10,16 +10,25 @@ export const getClassLevelsApi = async () => {
   return res.data as { classLevels: string[] }
 }
 
-export const getClassOverviewApi = async (termId: string, classLevel: string): Promise<{ students: any[]; subjectCount: number; teacherSubjectCount: number }> => {
+export interface ClassOverviewStudent {
+  id: string; name: string; studentId: string; classLevel: string
+  reportCard: {
+    id: string; status: string; average: number | null
+    marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean
+    // Every entry's marks, straight off this one response — lets a marks-entry screen
+    // build its rows without a per-student getReportCardApi round trip (see the mobile
+    // marks screen's fetchData comment for why that used to matter on a phone network).
+    entries: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null }[]
+  } | null
+}
+
+export const getClassOverviewApi = async (termId: string, classLevel: string): Promise<{
+  students: ClassOverviewStudent[]
+  subjectCount: number
+  teacherSubjectCount: number
+}> => {
   const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel } })
-  return res.data as {
-    students: {
-      id: string; name: string; studentId: string; classLevel: string
-      reportCard: { id: string; status: string; average: number | null; marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean } | null
-    }[]
-    subjectCount: number
-    teacherSubjectCount: number
-  }
+  return res.data
 }
 
 export const saveEntriesWithSeqApi = async (id: string, data: {

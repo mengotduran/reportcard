@@ -791,12 +791,12 @@ export default function SettingsPage() {
                 <CardHead
                   icon={UserCircle}
                   title={t('Who enters marks')}
-                  desc={t('Some universities record all marks centrally, so that the person who teaches a course is never the person who enters its marks. Teachers can still open the marks sheet and check their subject, they just cannot change it.')}
+                  desc={t('Some universities record Exam and Resit marks centrally, so that the person who teaches a course is never the person who enters its final marks. Teachers can still record CA marks for their own subjects either way.')}
                 />
                 <div className="mt-5 space-y-3">
                   {([
                     { value: 'TEACHERS' as const, label: t('Teachers'), hint: t('Teachers enter marks for the subjects they teach. Administrators can enter marks too.') },
-                    { value: 'ADMIN_ONLY' as const, label: t('Administration only'), hint: t('Only administrators enter marks (CA, Exam and Resit). Teachers see the marks sheet read-only. You can still grant one teacher access to one class when you need to.') },
+                    { value: 'ADMIN_ONLY' as const, label: t('Administration only'), hint: t('Teachers can enter CA marks only. Exam and Resit marks are the administration\'s. Administrators can enter all three. You can still grant one teacher full access to one class when you need to.') },
                   ]).map(opt => (
                     <label key={opt.value}
                       className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>

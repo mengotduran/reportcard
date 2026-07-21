@@ -13,6 +13,7 @@ import { ArrowLeft, Save, Copy, AlertTriangle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { getMeApi } from '@/lib/api/auth'
 import { useT, useLang } from '@/lib/i18n'
 
 // University marking split: CA is out of 30, the exam out of 70, the course out of 100.
@@ -39,7 +40,7 @@ interface Row {
 export default function MarksEntryPage() {
   const router = useRouter()
   const params = useParams()
-  const { user, school } = useAuthStore()
+  const { user, school, updateSchool } = useAuthStore()
   const searchParams = useSearchParams()
   const classLevel = decodeURIComponent(String(params.classLevel))
   const subjectId = decodeURIComponent(String(params.subjectId))
@@ -99,7 +100,22 @@ export default function MarksEntryPage() {
   useEffect(() => { rowsRef.current = rows }, [rows])
 
   // ── Data loading ────────────────────────────────────────────────────────────
+  // Ignore a fetch that finishes after a newer one already started — switching CA →
+  // Exam → Resit quickly used to fire overlapping requests, and whichever happened to
+  // resolve last "won", occasionally leaving a stale sequence's marks on screen.
+  const fetchGenerationRef = useRef(0)
+
   const fetchData = useCallback(async () => {
+    const myGeneration = ++fetchGenerationRef.current
+
+    // Refresh school (marksEntryMode in particular) on every load of this screen, not
+    // just once per login — a school-wide policy switch made in another session used to
+    // never reach an already-open marks sheet, so a teacher kept editing Exam/Resit marks
+    // an admin had just locked to ADMIN_ONLY. adminOnlyMarks/caExemptForTeacher below are
+    // recomputed from `school` on the next render once this lands (see the dependency
+    // array), which is what makes a stale grid self-correct without a re-login.
+    getMeApi().then((me) => { if (me.school) updateSchool(me.school) }).catch(() => {})
+
     const [subjectData, scaleData] = await Promise.all([
       getSubjectsApi(),
       getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES })),
@@ -108,71 +124,71 @@ export default function MarksEntryPage() {
     if (subject?.maxScore) setMaxScore(subject.maxScore)
     if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
 
+    // One request for the whole class — entries come straight off the overview response
+    // (it already loads them server-side). This used to fetch every student's report
+    // card individually, one request per student, which is what made switching sequence
+    // tabs slow, especially on mobile networks (the mobile app's own marks screen was
+    // fixed the same way previously; the web grid never was).
     const overview = await getClassOverviewApi(termId, classLevel)
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
-    const loaded: Row[] = await Promise.all(
-      sorted.map(async (s) => {
-        let score = ''
-        let otherSeqScore: number | null = null
-        let resitEligible = false
-        if (s.reportCard) {
-          try {
-            const rc = await getReportCardApi(s.reportCard.id)
-            const entry = rc.entries.find((e: any) => e.subject.id === subjectId) as any
-            if (entry) {
-              if (isResit) {
-                score = entry.resitScore != null ? String(entry.resitScore) : ''
-                // A resit is offered to anyone who FAILED THE COURSE, whatever their exam
-                // mark was. Re-sitting only replaces the exam (the CA carries over), so a
-                // student who passed the exam but failed the course on a weak CA is exactly
-                // who a resit helps: a better exam mark is their only way to lift the total.
-                // Requiring a failed exam too locked those students out of their own remedy.
-                //
-                // Someone who PASSED the course is not offered one: there is nothing to fix.
-                //
-                // Judged against the ORIGINAL CA+Exam (ignoring any resit already recorded),
-                // so a row stays editable after its resit mark is entered. Via the school's
-                // own scale, never a hardcoded 'F' or pass mark: CITEC juries grade D as FAIL.
-                const ca = entry.seq1Score, exam = entry.seq2Score
-                resitEligible = ca != null && exam != null
-                  && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
-              } else {
-                score = seqIndex === 0
-                  ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
-                  : (entry.seq2Score != null ? String(entry.seq2Score) : '')
-                otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
-              }
-            }
-          } catch { /* no entries yet */ }
+    const loaded: Row[] = sorted.map((s) => {
+      let score = ''
+      let otherSeqScore: number | null = null
+      let resitEligible = false
+      const entry = s.reportCard?.entries.find((e) => e.subjectId === subjectId)
+      if (entry) {
+        if (isResit) {
+          score = entry.resitScore != null ? String(entry.resitScore) : ''
+          // A resit is offered to anyone who FAILED THE COURSE, whatever their exam
+          // mark was. Re-sitting only replaces the exam (the CA carries over), so a
+          // student who passed the exam but failed the course on a weak CA is exactly
+          // who a resit helps: a better exam mark is their only way to lift the total.
+          // Requiring a failed exam too locked those students out of their own remedy.
+          //
+          // Someone who PASSED the course is not offered one: there is nothing to fix.
+          //
+          // Judged against the ORIGINAL CA+Exam (ignoring any resit already recorded),
+          // so a row stays editable after its resit mark is entered. Via the school's
+          // own scale, never a hardcoded 'F' or pass mark: CITEC juries grade D as FAIL.
+          const ca = entry.seq1Score, exam = entry.seq2Score
+          resitEligible = ca != null && exam != null
+            && isFailingMark(ca + exam, COURSE_MAX, scaleData.ranges)
+        } else {
+          score = seqIndex === 0
+            ? (entry.seq1Score != null ? String(entry.seq1Score) : '')
+            : (entry.seq2Score != null ? String(entry.seq2Score) : '')
+          otherSeqScore = seqIndex === 0 ? entry.seq2Score : entry.seq1Score
         }
-        const isPublished  = s.reportCard?.status === 'PUBLISHED'
-        const grantedToMe  = s.reportCard?.marksEditGrantedTo === user?.id
-        // Publishing freezes a card for EVERYONE, the administration included: to change a
-        // mark you unpublish it first, which the API enforces too. Publishing is what fixes
-        // the class's averages and positions, so a mark moving underneath a published card
-        // would silently invalidate the cards already handed out.
-        const frozenByPublish = isPublished && !grantedToMe
-        // School policy: some universities record marks centrally so a teacher never
-        // enters marks for a course they teach. The sheet stays READABLE (they can check
-        // their subject); only saving is refused, and the API refuses it too. An admin
-        // can still grant one teacher one class without changing the policy. The CA tab
-        // is the one exception — see caExemptForTeacher above.
-        const marksLockedToAdmin = adminOnlyMarks && !grantedToMe && !caExemptForTeacher
-        return {
-          studentId: s.id, name: s.name, studentIdCode: s.studentId,
-          reportCardId: s.reportCard?.id ?? null,
-          score, otherSeqScore,
-          isLocked: frozenByPublish || (isResit && !resitEligible) || marksLockedToAdmin,
-          isPublished: frozenByPublish,
-          resitEligible,
-        }
-      })
-    )
+      }
+      const isPublished  = s.reportCard?.status === 'PUBLISHED'
+      const grantedToMe  = s.reportCard?.marksEditGrantedTo === user?.id
+      // Publishing freezes a card for EVERYONE, the administration included: to change a
+      // mark you unpublish it first, which the API enforces too. Publishing is what fixes
+      // the class's averages and positions, so a mark moving underneath a published card
+      // would silently invalidate the cards already handed out.
+      const frozenByPublish = isPublished && !grantedToMe
+      // School policy: some universities record marks centrally so a teacher never
+      // enters marks for a course they teach. The sheet stays READABLE (they can check
+      // their subject); only saving is refused, and the API refuses it too. An admin
+      // can still grant one teacher one class without changing the policy. The CA tab
+      // is the one exception — see caExemptForTeacher above.
+      const marksLockedToAdmin = adminOnlyMarks && !grantedToMe && !caExemptForTeacher
+      return {
+        studentId: s.id, name: s.name, studentIdCode: s.studentId,
+        reportCardId: s.reportCard?.id ?? null,
+        score, otherSeqScore,
+        isLocked: frozenByPublish || (isResit && !resitEligible) || marksLockedToAdmin,
+        isPublished: frozenByPublish,
+        resitEligible,
+      }
+    })
+
+    if (fetchGenerationRef.current !== myGeneration) return // a newer fetch has since started
     setRows(loaded)
     setInvalidRows({})
     setSelectedIndices(new Set())
     setEditingIndex(null)
-  }, [termId, classLevel, subjectId, seqIndex])
+  }, [termId, classLevel, subjectId, seqIndex, adminOnlyMarks, caExemptForTeacher, isResit, user?.id, updateSchool])
 
   useEffect(() => { fetchData().finally(() => setLoading(false)) }, [fetchData])
 

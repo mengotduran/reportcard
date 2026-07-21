@@ -40,7 +40,10 @@ export function gradeFromScore(score: number, maxScore: number, ranges: GradeRan
   // (0-44 = F) band, so every university grade on mobile printed as F, 95/100 included.
   const normalized = maxScore > 0 ? (score / maxScore) * scaleOf(list) : 0
   const sorted = [...list].sort((a, b) => b.minScore - a.minScore)
-  const match = sorted.find(r => normalized >= r.minScore && normalized <= r.maxScore)
+  // Matched on the band's LOWER bound alone (highest first), same as isFailingScore
+  // below, not min..max containment — see that function's comment for why: an exam of
+  // 31/70 normalises to 44.29 and matched no integer-bounded band, printing N/A.
+  const match = sorted.find(r => normalized >= r.minScore)
   return match
     ? { grade: match.grade, remark: match.remark, color: match.color }
     : { grade: 'N/A', remark: '—', color: '#6b7280' }
