@@ -66,6 +66,8 @@ model School {
   subjects           Subject[]
   terms              Term[]
   users              User[]
+  timetableSlots     TimetableSlot[]
+  timetablePeriods   TimetablePeriod[]
 }
 
 model GradingScale {
@@ -170,6 +172,7 @@ model User {
   passwordSetAt       DateTime?
   reportCards      ReportCard[]
   teacherSubjects  TeacherSubject[]
+  timetableSlots   TimetableSlot[]
   school           School?          @relation(fields: [schoolId], references: [id])
 }
 
@@ -250,6 +253,54 @@ model Subject {
   reportEntries   ReportEntry[]
   school          School           @relation(fields: [schoolId], references: [id])
   teacherSubjects TeacherSubject[]
+  timetableSlots  TimetableSlot[]
+}
+
+// A teacher's own weekly schedule — one row per period, owned directly by the
+// teacher (not derived through class/subject assignment). Deliberately no
+// session/year scoping field: like ClassLevel/Subject, slots persist across
+// academic sessions rather than resetting each year. Two kinds of slot:
+//  - A school period: subjectId is set, which implies the class (subject.classLevel)
+//    — admin can only pick from subjects this teacher is actually assigned to
+//    (validated in saveTimetable), so it can't drift from real assignments.
+//  - A private/personal slot (extra tutoring, etc.): subjectId is null, label is
+//    free text. Not tied to any school class — this is why the slot belongs to
+//    the teacher directly rather than being derived via a class's subjects, and
+//    why it can extend beyond normal school hours.
+model TimetableSlot {
+  id        String   @id @default(uuid())
+  schoolId  String
+  teacherId String
+  dayOfWeek String   // 'MONDAY'..'SUNDAY'
+  startTime String   // "08:00", 24h zero-padded — sortable as plain strings
+  endTime   String   // "08:55"
+  subjectId String?  // set for a school period; null for a private/personal slot
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  label     String?  // free text, used when subjectId is null (e.g. "Private tutoring")
+  room      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  school    School   @relation(fields: [schoolId], references: [id])
+  teacher   User     @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId, teacherId])
+}
+
+// One school-wide bell schedule (Period 1, Break, Period 2, ...), defined once
+// by the admin. School-period slots on a teacher's timetable pick their time
+// from here rather than free text, so the whole school shares one consistent
+// schedule and two teachers can be reliably checked for a class-period clash.
+// No `order` field — periods are always sorted by startTime, so admins never
+// have to manually reorder rows after adding one out of sequence.
+model TimetablePeriod {
+  id        String  @id @default(uuid())
+  schoolId  String
+  startTime String
+  endTime   String
+  isBreak   Boolean @default(false)
+  school    School  @relation(fields: [schoolId], references: [id])
+
+  @@index([schoolId])
 }
 
 model TeacherSubject {

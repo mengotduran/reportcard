@@ -1,4 +1,5 @@
 'use client'
+import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 
 interface ConfirmModalProps {
   isOpen: boolean
@@ -21,6 +22,7 @@ export default function ConfirmModal({
   isOpen, title, message, confirmLabel = 'Confirm',
   confirmColor = 'blue', onConfirm, onCancel, confirming = false, confirmingLabel = 'Working...'
 }: ConfirmModalProps) {
+  useBodyScrollLock(isOpen)
   if (!isOpen) return null
 
   const colorMap = {

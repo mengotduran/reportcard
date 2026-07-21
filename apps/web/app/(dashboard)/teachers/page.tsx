@@ -169,8 +169,9 @@ export default function TeachersPage() {
       setDeleteTarget(null)
       fetchAll()
       showToast(tr('Teacher removed'))
-    } catch {
-      showToast(tr('Failed to remove teacher'), 'error')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || tr('Failed to remove teacher'), 'error')
     }
   }
 

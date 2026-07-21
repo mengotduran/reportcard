@@ -88,6 +88,7 @@ export default function TabsLayout() {
         <Tabs.Screen name="schools" options={{ title: 'Schools', headerRight: () => logoutButtonWhite, tabBarIcon: ({ color, size }) => <Ionicons name="business-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ href: null }} />
         <Tabs.Screen name="report-cards" options={{ href: null }} />
+        <Tabs.Screen name="timetable" options={{ href: null }} />
         <Tabs.Screen name="more" options={{ href: null }} />
       </Tabs>
     )
@@ -101,6 +102,8 @@ export default function TabsLayout() {
         <Tabs.Screen name="students" options={{ title: t('Students'), tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="more" options={{ title: t('More'), tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="schools" options={{ href: null }} />
+        {/* Admin editor is web-only — no timetable-building screen on mobile. */}
+        <Tabs.Screen name="timetable" options={{ href: null }} />
       </Tabs>
     )
   }
@@ -110,6 +113,7 @@ export default function TabsLayout() {
       <Tabs screenOptions={{ ...tabStyle, tabBarActiveTintColor: isClassMaster ? '#F03E2F' : colors.primary }}>
         <Tabs.Screen name="index" options={{ title: t('Home'), headerRight: () => teacherHeaderButtons, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="report-cards" options={{ title: isClassMaster ? t(isUniversity ? 'My Departments' : 'My Classes') : t(isUniversity ? 'Departments' : 'Classes'), tabBarIcon: ({ color, size }) => <Ionicons name={isClassMaster ? 'chatbubble-ellipses-outline' : 'school-outline'} size={size} color={color} /> }} />
+        <Tabs.Screen name="timetable" options={{ title: t('Timetable'), tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ href: null }} />
         <Tabs.Screen name="schools" options={{ href: null }} />
         <Tabs.Screen name="more" options={{ href: null }} />
@@ -124,6 +128,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="report-cards" options={{ title: t('Report Cards'), tabBarIcon: ({ color, size }) => <Ionicons name="document-text-outline" size={size} color={color} /> }} />
       <Tabs.Screen name="schools" options={{ href: null }} />
       <Tabs.Screen name="more" options={{ href: null }} />
+      <Tabs.Screen name="timetable" options={{ href: null }} />
     </Tabs>
   )
 }
