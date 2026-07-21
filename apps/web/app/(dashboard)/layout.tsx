@@ -56,10 +56,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { user, school, logout, updateSchool, updateUser, activeSession, setActiveSession } = useAuthStore()
   const t = useT()
 
-  // Refresh user+school once so persisted sessions pick up preferredLanguage and school language.
+  // Refresh user+school once per session (login / hard reload) so a persisted session
+  // — which can sit in localStorage for days — doesn't keep acting on a stale School
+  // record. This used to skip the refetch entirely once preferredLanguage/school.language
+  // were already cached, which meant policy fields like marksEntryMode never updated for
+  // the rest of an already-open session: an admin could switch a school to ADMIN_ONLY and
+  // a teacher's already-open tab would keep treating it as unrestricted until they logged
+  // out and back in.
   useEffect(() => {
     if (!user) return
-    if (school?.language && user.preferredLanguage != null) return
     getMeApi().then((me) => {
       if (me.school) updateSchool(me.school)
       if (me.preferredLanguage != null) updateUser({ preferredLanguage: me.preferredLanguage })

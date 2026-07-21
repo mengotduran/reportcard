@@ -22,17 +22,19 @@ export interface LegendRow {
   meaning: string // e.g. "Incomplete", "Grade Point"
 }
 
-/** GPA (/4.0) for a /20 mark using ranges that carry a gradePoint; else null. */
+/** GPA (/4.0) for a /20 mark using ranges that carry a gradePoint; else null. Matched on
+ *  the band's lower bound alone — see isFailingScore below for why. */
 export function gradePointForScore20(score20: number, ranges: GradeRange[]): number | null {
   const sorted = [...ranges].sort((a, b) => b.minScore - a.minScore)
-  const m = sorted.find(r => score20 >= r.minScore && score20 <= r.maxScore)
+  const m = sorted.find(r => score20 >= r.minScore)
   return m?.gradePoint ?? null
 }
 
-/** Jury decision for a given score — uses per-range `juryDecision` field, falls back to grade-letter heuristic. */
+/** Jury decision for a given score — uses per-range `juryDecision` field, falls back to
+ *  grade-letter heuristic. Matched on the band's lower bound alone — see isFailingScore. */
 export function juryDecisionForScore(score: number, ranges: GradeRange[]): string {
   const sorted = [...ranges].sort((a, b) => b.minScore - a.minScore)
-  const m = sorted.find(r => score >= r.minScore && score <= r.maxScore)
+  const m = sorted.find(r => score >= r.minScore)
   if (m?.juryDecision) return m.juryDecision
   return m?.grade === 'F' ? 'FAIL' : 'VALIDATED'
 }

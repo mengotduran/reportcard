@@ -34,10 +34,19 @@ export function isFailingMark(score: number, maxScore: number, ranges: GradeRang
   return isFailingScore(normalized, list)
 }
 
-/** Grade for a mark already on the /20 scale (e.g. a term average out of 20). */
+/**
+ * Grade for a mark already on the /20 (or /100, for a university) scale, e.g. a term
+ * average or a single CA/Exam component.
+ *
+ * Matched on the band's LOWER bound alone (highest first), same as isFailingScore, not
+ * min..max containment — real scales are written with integer bounds (CITEC: 0-44,
+ * 45-49, 50-54), which leaves gaps a fractional mark falls straight through: a
+ * university exam of 31/70 normalises to 44.29, lands between the 0-44 and 45-49 bands,
+ * matches nothing under containment, and printed as N/A despite a clean 44%.
+ */
 export function gradeForScore20(score20: number, ranges: GradeRange[]): GradeResult {
   const sorted = [...(ranges.length > 0 ? ranges : DEFAULT_RANGES)].sort((a, b) => b.minScore - a.minScore)
-  const match = sorted.find(r => score20 >= r.minScore && score20 <= r.maxScore)
+  const match = sorted.find(r => score20 >= r.minScore)
   if (!match) return { grade: 'N/A', remark: '', color: '#6b7280', bgColor: '#f3f4f6' }
   return { grade: match.grade, remark: match.remark, color: match.color, bgColor: hexToLight(match.color) }
 }
