@@ -57,7 +57,14 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
   const formatHour = (h: number) => `${String(h % 24).padStart(2, '0')}:00`
 
   return (
-    <div className="relative border border-border rounded-xl overflow-hidden bg-card">
+    // Wrapped in its own horizontal scroller — 7 day columns plus the hour
+    // gutter don't fit a phone width, so this scrolls internally instead of
+    // overflowing the page, same pattern used for wide tables elsewhere. The
+    // min-width lives on the inner (relative) div, not this wrapper, so the
+    // break bands below — absolutely positioned against that inner div —
+    // scroll together with the columns as one unit instead of staying put.
+    <div className="overflow-x-auto">
+      <div className="relative border border-border rounded-xl overflow-hidden bg-card" style={{ minWidth: GUTTER_WIDTH + DAY_ORDER.length * 92 }}>
       <div className="flex">
         {/* Hour gutter */}
         <div className="w-12 flex-shrink-0 border-r border-border">
@@ -124,6 +131,7 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
           </div>
         )
       })}
+      </div>
     </div>
   )
 }
