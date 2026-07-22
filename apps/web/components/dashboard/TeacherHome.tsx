@@ -144,7 +144,7 @@ export default function TeacherHome() {
         {/* Your Classes */}
         <div className="bg-card rounded-2xl border border-border p-5">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-bold text-foreground">{t('Your Classes')}</h3>
+            <h3 className="text-sm font-bold text-foreground">{t(isUniversity ? 'Your Courses' : 'Your Classes')}</h3>
             <button onClick={() => router.push('/report-cards')} className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
               {t('View All')} <ArrowRight size={12} />
             </button>
@@ -160,10 +160,23 @@ export default function TeacherHome() {
               {classes.map((c) => {
                 const color = deptColor(c.departmentName ?? c.classLevelName)
                 const subtitle = [c.departmentName, c.classLevelName].filter(Boolean).join(' · ')
+                // Straight to the marks-entry table for this subject when there is one —
+                // landing on the class's course list first meant an extra click every time.
+                // The CA/Exam/Resit (or term-sequence) tab itself still defaults to the
+                // first one; switching from there is one click, same as the marks page.
+                const goTo = () => {
+                  if (c.subjectId && term) {
+                    router.push(`/report-cards/class/${encodeURIComponent(c.classLevelName)}/${encodeURIComponent(c.subjectId)}?termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0`)
+                  } else if (isClassMaster) {
+                    router.push('/class-master')
+                  } else {
+                    router.push('/report-cards')
+                  }
+                }
                 return (
                   <button
                     key={c.id}
-                    onClick={() => router.push('/report-cards')}
+                    onClick={goTo}
                     className="w-full flex items-center gap-3 rounded-lg pl-3 pr-2 py-2.5 border-l-4 bg-muted/40 hover:bg-muted transition text-left"
                     style={{ borderColor: color }}
                   >

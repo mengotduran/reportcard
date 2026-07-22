@@ -156,6 +156,7 @@ function TeacherHome() {
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
   const sliderImages = (school?.coverImages?.length ? school.coverImages : school?.coverImage ? [school.coverImage] : []).map(u => `${API_BASE}${u}`)
   const isClassMaster = user?.role === 'CLASS_MASTER'
+  const isUniversity = school?.type === 'UNIVERSITY'
 
   const fetchAll = useCallback(() => {
     getTeacherChartStats().then(setChartStats).catch(() => {}).finally(() => setChartLoading(false))
@@ -230,7 +231,7 @@ function TeacherHome() {
         {/* Your Classes */}
         <View style={ts.sectionCard}>
           <View style={ts.sectionHeaderRow}>
-            <Text style={ts.sectionTitle}>{t('Your Classes')}</Text>
+            <Text style={ts.sectionTitle}>{t(isUniversity ? 'Your Courses' : 'Your Classes')}</Text>
             <TouchableOpacity onPress={() => router.push('/(tabs)/report-cards')}>
               <Text style={ts.sectionLink}>{t('View All')}</Text>
             </TouchableOpacity>
@@ -245,11 +246,22 @@ function TeacherHome() {
             classes.map((c) => {
               const color = deptColor(c.departmentName ?? c.classLevelName)
               const subtitle = [c.departmentName, c.classLevelName].filter(Boolean).join(' · ')
+              // Straight to the marks-entry table for this subject when there is one —
+              // landing on the class's course list first meant an extra tap every time.
+              const goTo = () => {
+                if (c.subjectId && term) {
+                  router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
+                } else if (isClassMaster) {
+                  router.push(`/class-master/${encodeURIComponent(c.classLevelName)}?termId=${term?.id ?? ''}` as any)
+                } else {
+                  router.push('/(tabs)/report-cards')
+                }
+              }
               return (
                 <TouchableOpacity
                   key={c.id}
                   style={[ts.classRow, { borderLeftColor: color }]}
-                  onPress={() => router.push('/(tabs)/report-cards')}
+                  onPress={goTo}
                   activeOpacity={0.7}
                 >
                   <View style={{ flex: 1 }}>
