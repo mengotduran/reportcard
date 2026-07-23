@@ -24,7 +24,7 @@ import {
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import api from '@/lib/api/client'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getGradingScale, gradeFromScore, isFailingScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { getGradingScale, gradeFromScore, isFailingScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -250,6 +250,7 @@ export default function AdminReportCardDetail() {
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
   const [loading, setLoading] = useState(true)
   const [publishing, setPublishing] = useState(false)
   const [unpublishing, setUnpublishing] = useState(false)
@@ -267,13 +268,14 @@ export default function AdminReportCardDetail() {
       const [rc, teacherData, scaleData, subjectData] = await Promise.all([
         getReportCard(id),
         getTeachers(),
-        getGradingScale().catch(() => ({ ranges: DEFAULT_RANGES })),
+        getGradingScale().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: DEFAULT_CLASSIFICATION_BANDS })),
         getSubjects(),
       ])
       setReportCard(rc)
       setRemarksDraft(((rc.school?.language === 'FR' ? (rc as any).remarksFr : rc.remarks) as string) || '')
       setTeachers(teacherData.teachers)
       if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
+      if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
       // Compulsory subjects + optional ones the student actually took (has an entry).
       // A course scoped to one semester (university) only counts for that
       // semester; a subject with no term (primary/secondary) always counts.
@@ -442,6 +444,25 @@ export default function AdminReportCardDetail() {
   // Admin can write the general remarks once every offered subject is marked.
   const canAdminEditRemarks = isDraft && allSeqsFilled
 
+  // University only. Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors web +
+  // PrintableReportCard logic. "Terms Average"/"Overall Grade"/"Position"/"Class Average"
+  // are primary/secondary concepts (a raw 0-100 score average and a class rank) and don't
+  // apply to a university report card, which is graded and classified by GPA instead.
+  const semGpaInfo = (() => {
+    let pts = 0, cr = 0
+    for (const subj of subjects) {
+      const e = reportCard.entries.find((x: any) => x.subject.id === subj.id)
+      if (e?.score == null) continue
+      const gp = gradePointForScore20(e.score, gradingRanges)
+      if (gp == null) continue
+      const c = (subj as any).credit ?? 0
+      pts += gp * c; cr += c
+    }
+    return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
+  })()
+  const cgpa = reportCard.cgpa ?? semGpaInfo.gpa
+  const classification = classificationForGpa(cgpa, classificationBands)
+
   const handleSaveRemarks = async () => {
     setSavingRemarks(true)
     try {
@@ -488,17 +509,25 @@ export default function AdminReportCardDetail() {
       </View>
 
       <View style={styles.statsGrid}>
-        {[
-          { label: tr(isUniversity ? 'Courses' : 'Subjects'), value: String(subjects.length || reportCard.entries.length) },
-          { label: tr('Terms Average'), value: average.toFixed(1) },
-          { label: tr('Overall Grade'), value: gradeResult.remark || gradeResult.grade },
-          { label: tr('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
-          ...(reportCard.classAverage != null ? [{ label: tr('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
-          ...(reportCard.annualAverage != null ? [{ label: tr('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
-          ...(reportCard.annualPosition != null ? [{ label: tr('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
-        ].map((item) => (
+        {(isUniversity
+          ? [
+              { label: tr('Courses'), value: String(subjects.length || reportCard.entries.length) },
+              { label: tr('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
+              { label: tr('Cumulative GPA'), value: cgpa.toFixed(2) },
+              { label: tr('Classification'), value: classification, color: classification === 'Fail' ? '#dc2626' : undefined },
+            ]
+          : [
+              { label: tr('Subjects'), value: String(subjects.length || reportCard.entries.length) },
+              { label: tr('Terms Average'), value: average.toFixed(1) },
+              { label: tr('Overall Grade'), value: gradeResult.remark || gradeResult.grade },
+              { label: tr('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
+              ...(reportCard.classAverage != null ? [{ label: tr('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
+              ...(reportCard.annualAverage != null ? [{ label: tr('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
+              ...(reportCard.annualPosition != null ? [{ label: tr('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
+            ]
+        ).map((item) => (
           <View key={item.label} style={styles.statCard}>
-            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{item.value}</Text>
+            <Text style={[styles.statValue, item.color ? { color: item.color } : null]} numberOfLines={1} adjustsFontSizeToFit>{item.value}</Text>
             <Text style={styles.statLabel}>{item.label}</Text>
           </View>
         ))}

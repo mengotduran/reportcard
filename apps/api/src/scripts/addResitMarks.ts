@@ -58,7 +58,10 @@ async function main() {
       resatCount++
     }
 
-    // Recompute each affected card's credit-weighted average (GPA), same formula as seedUniversity.
+    // Recompute each affected card's credit-weighted average — on the RAW 0-100 score
+    // scale, matching what saveEntries stores for real teacher-entered marks. (This used
+    // to store GPA here instead, which broke the report card's "Overall Grade" display:
+    // a GPA like 3.5 read as 3.5/100 and always printed as a fail.)
     for (const cardId of affectedCardIds) {
       const entries = await prisma.reportEntry.findMany({
         where: { reportCardId: cardId, score: { not: null } },
@@ -67,11 +70,11 @@ async function main() {
       let wp = 0, cr = 0
       for (const e of entries) {
         const credit = e.subject.credit ?? 0
-        wp += gpForMark(e.score!).gradePoint * credit
+        wp += e.score! * credit
         cr += credit
       }
-      const gpa = cr > 0 ? wp / cr : 0
-      await prisma.reportCard.update({ where: { id: cardId }, data: { average: gpa, totalScore: wp } })
+      const average = cr > 0 ? wp / cr : 0
+      await prisma.reportCard.update({ where: { id: cardId }, data: { average, totalScore: wp } })
     }
 
     console.log(`"${school.name}": ${failing.length} failing entries found, resat ${resatCount} across ${affectedCardIds.size} report cards (${failing.length - resatCount} left un-resat for manual testing).`)
