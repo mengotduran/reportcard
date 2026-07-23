@@ -23,6 +23,7 @@ interface Subject {
   coefficient: number
   credit?: number | null
   term?: string | null
+  requiredHours?: number | null
 }
 
 interface TermOption { id: string; name: string; session: string; startDate: string; isCurrent?: boolean }
@@ -58,13 +59,13 @@ export default function SubjectsPage() {
 
   // Create modal
   const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState({ name: '', code: '', coefficient: '1', credit: '' })
+  const [form, setForm] = useState({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '' })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
 
   // Inline edit
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', code: '', coefficient: '1', credit: '' })
+  const [editForm, setEditForm] = useState({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '' })
 
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null)
@@ -136,7 +137,7 @@ export default function SubjectsPage() {
   }, {} as Record<string, number>)
 
   const openModal = () => {
-    setForm({ name: '', code: '', coefficient: '1', credit: '' })
+    setForm({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '' })
     setFormError('')
     setShowModal(true)
   }
@@ -155,6 +156,7 @@ export default function SubjectsPage() {
         // the weight in the average, same value the seed already uses for this.
         coefficient: isUniversity ? (Number(form.credit) || 1) : Number(form.coefficient),
         ...(isUniversity ? { credit: form.credit === '' ? null : Number(form.credit), term: selectedTerm } : {}),
+        requiredHours: form.requiredHours === '' ? null : Number(form.requiredHours),
       })
       setShowModal(false)
       fetchSubjects()
@@ -167,7 +169,7 @@ export default function SubjectsPage() {
 
   const openEdit = (s: Subject) => {
     setEditingId(s.id)
-    setEditForm({ name: s.name, code: s.code ?? '', coefficient: String(s.coefficient ?? 1), credit: s.credit != null ? String(s.credit) : '' })
+    setEditForm({ name: s.name, code: s.code ?? '', coefficient: String(s.coefficient ?? 1), credit: s.credit != null ? String(s.credit) : '', requiredHours: s.requiredHours != null ? String(s.requiredHours) : '' })
   }
 
   const handleEdit = async (id: string) => {
@@ -177,6 +179,7 @@ export default function SubjectsPage() {
         ...(isUniversity ? { code: editForm.code.trim().toUpperCase() || null } : {}),
         coefficient: isUniversity ? (Number(editForm.credit) || 1) : Number(editForm.coefficient),
         ...(isUniversity ? { credit: editForm.credit === '' ? null : Number(editForm.credit) } : {}),
+        requiredHours: editForm.requiredHours === '' ? null : Number(editForm.requiredHours),
       })
       setEditingId(null)
       fetchSubjects()
@@ -472,6 +475,9 @@ export default function SubjectsPage() {
                 {!isUniversity && <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28">{t('Coefficient')}</th>}
                 {isUniversity && <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-24">{t('Credit')}</th>}
                 {isUniversity && <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28">{t('Code')}</th>}
+                <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32">
+                  {isUniversity ? t('Hours/Semester') : t('Hours/Year')}
+                </th>
                 <th className="px-4 py-3 w-24"></th>
               </tr>
             </thead>
@@ -552,6 +558,20 @@ export default function SubjectsPage() {
                       )}
                     </td>
                   )}
+
+                  {/* Required teaching hours — per semester (university) / per academic year */}
+                  <td className="px-4 py-3 text-center">
+                    {editingId === s.id ? (
+                      <input
+                        type="number" min="0" step="1" placeholder="—"
+                        value={editForm.requiredHours}
+                        onChange={(e) => setEditForm({ ...editForm, requiredHours: e.target.value })}
+                        className="border border-border rounded-lg px-2 py-1.5 text-sm w-16 text-center focus:outline-none focus:ring-2 focus:ring-ring bg-background text-foreground"
+                      />
+                    ) : (
+                      <span className="text-sm text-muted-foreground">{s.requiredHours ?? '—'}</span>
+                    )}
+                  </td>
 
                   {/* Actions */}
                   <td className="px-4 py-3">
@@ -672,6 +692,19 @@ export default function SubjectsPage() {
                   <p className="text-xs text-muted-foreground mt-1">{t('Credit value of this course — drives the GPA on the transcript and its weight in the average.')}</p>
                 </div>
               )}
+
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">
+                  {isUniversity ? t('Required hours (this semester)') : t('Required hours (this academic year)')}
+                </label>
+                <input
+                  type="number" min="0" step="1" placeholder="e.g. 45"
+                  value={form.requiredHours}
+                  onChange={(e) => setForm({ ...form, requiredHours: e.target.value })}
+                  className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('Optional. Used by Teaching Hours Coverage to check the assigned teacher covers this much. Leave blank to skip tracking it.')}</p>
+              </div>
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowModal(false)}

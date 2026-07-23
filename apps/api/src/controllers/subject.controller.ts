@@ -35,7 +35,7 @@ export const getSubjects = async (req: AuthRequest, res: Response) => {
 export const createSubject = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, code, coefficient, credit, term } = req.body
+    const { name, classLevel, code, coefficient, credit, term, requiredHours } = req.body
     const termValue = term != null && term !== '' ? String(term) : null
 
     const limit = await demoLimitBlock(schoolId, 'subjects')
@@ -58,7 +58,8 @@ export const createSubject = async (req: AuthRequest, res: Response) => {
     const subject = await prisma.subject.create({
       data: { schoolId, name, classLevel, maxScore, coefficient: coefficient ? Number(coefficient) : 1,
         code: code?.trim() || null,
-        credit: credit != null && credit !== '' ? Number(credit) : null, term: termValue }
+        credit: credit != null && credit !== '' ? Number(credit) : null, term: termValue,
+        requiredHours: requiredHours != null && requiredHours !== '' ? Number(requiredHours) : null }
     })
     res.status(201).json({ message: 'Subject created', subject })
   } catch (error) {
@@ -71,7 +72,7 @@ export const updateSubject = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, classLevel, code, coefficient, credit, term } = req.body
+    const { name, classLevel, code, coefficient, credit, term, requiredHours } = req.body
 
     const subject = await prisma.subject.findFirst({ where: { id, schoolId } })
     if (!subject) {
@@ -87,6 +88,7 @@ export const updateSubject = async (req: AuthRequest, res: Response) => {
         ...(coefficient !== undefined ? { coefficient: Number(coefficient) } : {}),
         ...(credit !== undefined ? { credit: credit != null && credit !== '' ? Number(credit) : null } : {}),
         ...(term !== undefined ? { term: term != null && term !== '' ? String(term) : null } : {}),
+        ...(requiredHours !== undefined ? { requiredHours: requiredHours != null && requiredHours !== '' ? Number(requiredHours) : null } : {}),
       }
     })
     res.json({ message: 'Subject updated', subject: updated })
@@ -140,7 +142,7 @@ export const copySubjects = async (req: AuthRequest, res: Response) => {
         data: toCreate.map((s) => ({
           schoolId, name: s.name, code: s.code, classLevel: toClassLevel,
           maxScore: s.maxScore, coefficient: s.coefficient, compulsory: s.compulsory,
-          credit: s.credit, term: s.term,
+          credit: s.credit, term: s.term, requiredHours: s.requiredHours,
         })),
       })
     }

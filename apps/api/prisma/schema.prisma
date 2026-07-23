@@ -68,6 +68,7 @@ model School {
   users              User[]
   timetableSlots     TimetableSlot[]
   timetablePeriods   TimetablePeriod[]
+  teacherAbsences    TeacherAbsence[]
 }
 
 model GradingScale {
@@ -173,6 +174,8 @@ model User {
   reportCards      ReportCard[]
   teacherSubjects  TeacherSubject[]
   timetableSlots   TimetableSlot[]
+  absences         TeacherAbsence[] @relation("TeacherAbsences")
+  absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
   school           School?          @relation(fields: [schoolId], references: [id])
 }
 
@@ -250,6 +253,11 @@ model Subject {
   compulsory      Boolean          @default(true)
   credit          Int?
   term            String?
+  // Target teaching hours for this subject/course row — per semester for university
+  // (the row is already semester-scoped via `term`), per academic year for primary/
+  // secondary (the row spans all three terms). Null means no target set: excluded
+  // from the teaching-hours coverage report rather than treated as a 0-hour target.
+  requiredHours   Int?
   reportEntries   ReportEntry[]
   school          School           @relation(fields: [schoolId], references: [id])
   teacherSubjects TeacherSubject[]
@@ -282,7 +290,32 @@ model TimetableSlot {
   updatedAt DateTime @updatedAt
   school    School   @relation(fields: [schoolId], references: [id])
   teacher   User     @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  absences  TeacherAbsence[]
 
+  @@index([schoolId, teacherId])
+}
+
+// A teacher missing one scheduled period. One row per missed period — a "whole day
+// absent" report is simply one of these per slot the teacher has that weekday, not a
+// distinct kind of record, which keeps the teaching-hours math (see
+// apps/api/src/utils/teachingHours.ts) a single sum over this table with no branching.
+// `date` is "YYYY-MM-DD" plain text, same reasoning as Student.dateOfBirth: a calendar
+// date has no timezone and must not round-trip through one. `recordedById` can differ
+// from `teacherId` — an admin can log an absence on a teacher's behalf.
+model TeacherAbsence {
+  id              String   @id @default(uuid())
+  schoolId        String
+  teacherId       String
+  timetableSlotId String
+  date            String
+  recordedById    String
+  createdAt       DateTime @default(now())
+  school          School         @relation(fields: [schoolId], references: [id])
+  teacher         User           @relation("TeacherAbsences", fields: [teacherId], references: [id], onDelete: Cascade)
+  slot            TimetableSlot  @relation(fields: [timetableSlotId], references: [id], onDelete: Cascade)
+  recordedBy      User           @relation("AbsencesRecorded", fields: [recordedById], references: [id])
+
+  @@unique([teacherId, timetableSlotId, date])
   @@index([schoolId, teacherId])
 }
 

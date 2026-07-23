@@ -89,6 +89,7 @@ export default function TabsLayout() {
         <Tabs.Screen name="students" options={{ href: null }} />
         <Tabs.Screen name="report-cards" options={{ href: null }} />
         <Tabs.Screen name="timetable" options={{ href: null }} />
+        <Tabs.Screen name="teaching-hours" options={{ href: null }} />
         <Tabs.Screen name="more" options={{ href: null }} />
       </Tabs>
     )
@@ -104,6 +105,8 @@ export default function TabsLayout() {
         <Tabs.Screen name="schools" options={{ href: null }} />
         {/* Admin editor is web-only — no timetable-building screen on mobile. */}
         <Tabs.Screen name="timetable" options={{ href: null }} />
+        {/* Admin's coverage report is web-only (a filterable table), same reasoning as timetable above. */}
+        <Tabs.Screen name="teaching-hours" options={{ href: null }} />
       </Tabs>
     )
   }
@@ -114,6 +117,7 @@ export default function TabsLayout() {
         <Tabs.Screen name="index" options={{ title: t('Home'), headerRight: () => teacherHeaderButtons, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="report-cards" options={{ title: isClassMaster ? t(isUniversity ? 'My Departments' : 'My Classes') : t(isUniversity ? 'Departments' : 'Classes'), tabBarIcon: ({ color, size }) => <Ionicons name={isClassMaster ? 'chatbubble-ellipses-outline' : 'school-outline'} size={size} color={color} /> }} />
         <Tabs.Screen name="timetable" options={{ title: t('Timetable'), tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} /> }} />
+        <Tabs.Screen name="teaching-hours" options={{ title: t('Attendance'), tabBarIcon: ({ color, size }) => <Ionicons name="checkmark-done-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ href: null }} />
         <Tabs.Screen name="schools" options={{ href: null }} />
         <Tabs.Screen name="more" options={{ href: null }} />
@@ -129,6 +133,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="schools" options={{ href: null }} />
       <Tabs.Screen name="more" options={{ href: null }} />
       <Tabs.Screen name="timetable" options={{ href: null }} />
+      <Tabs.Screen name="teaching-hours" options={{ href: null }} />
     </Tabs>
   )
 }

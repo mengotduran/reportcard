@@ -172,6 +172,7 @@ export default function SubjectsScreen() {
   const [term, setTerm] = useState('')
   const [coefficient, setCoefficient] = useState('1')
   const [credit, setCredit] = useState('')
+  const [requiredHours, setRequiredHours] = useState('')
   const [creating, setCreating] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
   const [termPickerOpen, setTermPickerOpen] = useState(false)
@@ -241,6 +242,7 @@ export default function SubjectsScreen() {
         // the weight in the average, same value the seed already uses for this.
         coefficient: isUniversity ? (Number(credit) || 1) : (Number(coefficient) || 1),
         ...(isUniversity ? { term, credit: Number(credit) } : {}),
+        requiredHours: requiredHours === '' ? null : Number(requiredHours),
       })
       setModalVisible(false)
       setSubjectName('')
@@ -248,6 +250,7 @@ export default function SubjectsScreen() {
       setTerm('')
       setCoefficient('1')
       setCredit('')
+      setRequiredHours('')
       await fetchData()
     } catch (err: any) {
       Alert.alert(t('Error'), err?.response?.data?.message ?? tt('Failed to create subject.', 'Failed to create course.'))
@@ -330,7 +333,10 @@ export default function SubjectsScreen() {
             </View>
             <View style={styles.info}>
               <Text style={styles.subjectName}>{item.name}</Text>
-              <Text style={styles.meta}>{t('Max:')} {item.maxScore} · {isUniversity ? `${t('Credit:')} ${item.credit ?? '—'}` : `${t('Coeff:')} ${item.coefficient}`}</Text>
+              <Text style={styles.meta}>
+                {t('Max:')} {item.maxScore} · {isUniversity ? `${t('Credit:')} ${item.credit ?? '—'}` : `${t('Coeff:')} ${item.coefficient}`}
+                {item.requiredHours != null ? ` · ${t('Hours:')} ${item.requiredHours}` : ''}
+              </Text>
             </View>
             {canEnterMarksHere && item.term && termList.some(tm => tm.name === item.term) && (
               <TouchableOpacity
@@ -450,6 +456,16 @@ export default function SubjectsScreen() {
                 />
               </View>
             )}
+
+            <Text style={styles.label}>{isUniversity ? t('Required hours (this semester)') : t('Required hours (this academic year)')}</Text>
+            <TextInput
+              style={styles.input}
+              value={requiredHours}
+              onChangeText={setRequiredHours}
+              placeholder={t('Optional, e.g. 45')}
+              keyboardType="numeric"
+              placeholderTextColor="#9ca3af"
+            />
 
             <TouchableOpacity
               style={[styles.createBtn, creating && styles.disabled]}

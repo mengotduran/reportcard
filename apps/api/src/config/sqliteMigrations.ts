@@ -14,6 +14,7 @@ import syncDepartmentsMarksModeBirthDetails from '../../prisma/sqlite/migrations
 import addTeacherCreatedForTerm from '../../prisma/sqlite/migrations/20260720160000_add_teacher_created_for_term/migration.sql'
 import addTimetableSlot from '../../prisma/sqlite/migrations/20260720174500_add_timetable_slot/migration.sql'
 import addTimetablePeriod from '../../prisma/sqlite/migrations/20260720183000_add_timetable_period/migration.sql'
+import addTeachingHoursCoverage from '../../prisma/sqlite/migrations/20260721183500_add_teaching_hours_coverage/migration.sql'
 
 export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260624111054_init', sql: init },
@@ -24,4 +25,5 @@ export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260720160000_add_teacher_created_for_term', sql: addTeacherCreatedForTerm },
   { name: '20260720174500_add_timetable_slot', sql: addTimetableSlot },
   { name: '20260720183000_add_timetable_period', sql: addTimetablePeriod },
+  { name: '20260721183500_add_teaching_hours_coverage', sql: addTeachingHoursCoverage },
 ]
