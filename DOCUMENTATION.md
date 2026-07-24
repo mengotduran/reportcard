@@ -1,6 +1,6 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-07-17 (annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
+> Last updated: 2026-07-21 (teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
 > This document is updated every time a new feature or change is made.
 ---
 
@@ -25,6 +25,7 @@
 17. [Mobile App Screens](#17-mobile-app-screens)
 18. [Known Behaviours & Rules](#18-known-behaviours--rules)
 19. [Demo Tenant](#19-demo-tenant)
+20. [Teaching Hours Coverage](#20-teaching-hours-coverage)
 
 ---
 
@@ -181,9 +182,25 @@ Base URL: `http://localhost:5000/api`
 | Method | Route | Description |
 |--------|-------|-------------|
 | GET | `/subjects` | List subjects (teachers/class masters see only assigned ones) |
-| POST | `/subjects` | Create subject (name, classLevel, maxScore, coefficient) |
+| POST | `/subjects` | Create subject (name, classLevel, maxScore, coefficient, optional `requiredHours`) |
 | PUT | `/subjects/:id` | Edit subject |
 | DELETE | `/subjects/:id` | Delete subject + all related report entries |
+
+### Teacher Absences
+| Method | Route | Roles | Description |
+|--------|-------|-------|-------------|
+| GET | `/teacher-absences/me` | Any teacher | Own logged absences (optional `from`/`to`) |
+| GET | `/teacher-absences` | Admin, VP | A given `teacherId`'s absences |
+| POST | `/teacher-absences` | Any teacher (self), Admin/VP (on a teacher's behalf via `teacherId`) | Log an absence for a `date` — `wholeDay: true` (every real slot that weekday) or specific `timetableSlotIds` |
+| DELETE | `/teacher-absences/:id` | Own (teacher) or Admin/VP | Remove a logged absence |
+
+### Teaching Hours Coverage
+| Method | Route | Roles | Description |
+|--------|-------|-------|-------------|
+| GET | `/coverage/me` | Any teacher | Own coverage rows (per subject/course with a `requiredHours` target) for the active (or given `?session=`) academic session |
+| GET | `/coverage` | Admin, VP | School-wide coverage rows, optionally filtered by `?teacherId=` |
+
+See §20 Teaching Hours Coverage for how the numbers are computed.
 
 ### Class Levels
 | Method | Route | Description |
@@ -443,6 +460,7 @@ Each subject has:
 - **Class Level** — selected from existing classes (dropdown)
 - **Max Score** — what marks are entered out of (default 20)
 - **Coefficient** — weight in the final average (default 1)
+- **Required Hours** (optional) — target teaching hours: per semester for universities (the row is already semester-scoped via `term`), per academic year for primary/secondary. Drives §20 Teaching Hours Coverage; leave blank to skip tracking a subject entirely.
 
 **Subject exclusivity**: each subject in a class belongs to exactly one teacher. Assigning it to a new teacher automatically removes it from the previous one. Admin sees a yellow notice listing what was reassigned.
 
@@ -703,6 +721,8 @@ The university transcript is a **two-page document by design** (content ≈1370p
 | Grading Scale | `/grading-scale` | Admin |
 | Class Master | `/class-master` | CLASS_MASTER |
 | Teachers | `/teachers` | Admin |
+| Teaching Hours | `/teaching-hours` | Admin |
+| My Teaching Hours | `/my-teaching-hours` | Teachers, Class Master |
 | Settings | `/settings` | Admin |
 | SuperAdmin | `/superadmin` | SUPERADMIN only |
 
@@ -726,6 +746,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 | Admin report card | `admin/report-card/[id].tsx` | Admin/VP | Score list shows **failing marks in red** (honours the school toggle); **Edit marks** button (drafts only) to the class sheet; grant buttons hidden under `ADMIN_ONLY`; readiness panel names no teacher when marks are the administration's job |
 | Courses/Subjects admin | `admin/subjects/index.tsx` | Admin/VP | Sections grouped "class — semester" with an **ACTIVE** badge on the running semester; per-course **Enter marks** pencil (university + `ADMIN_ONLY`) straight to that course's CA sheet |
 | Settings | `admin/settings/index.tsx` | Admin/VP | Read-only school info **plus the one editable setting: Who enters marks** (university only), with the "used X of 2 switches" counter and cap messaging |
+| Teaching Hours | `(tabs)/teaching-hours.tsx` | Teachers, Class Master | Own coverage per subject/course (required/taught/projected/status) + FAB to report an absence (whole day or specific periods from that day's timetable). Admin's school-wide coverage report is **web-only** (a filterable table, same reasoning as the Timetable builder) |
 
 ### Mobile tab layout per role
 
@@ -795,3 +816,25 @@ Enforced server-side in `apps/api/src/config/demo.ts` (`demoLimitBlock`) — ret
 
 ### Config
 - Env var `DEMO_RESET_SECRET` guards the reset endpoint (returns 503 if unset — a safe default).
+
+---
+
+## 20. Teaching Hours Coverage
+
+Tracks whether a teacher actually covers the hours a Subject/Course is supposed to take — per **semester** for universities, per **academic year** for primary/secondary — computed from the existing weekly timetable rather than a separate day-by-day attendance register.
+
+### How the numbers are computed
+- `Subject.requiredHours` (optional Int) is the target. A university course row is already scoped to one semester via `Subject.term`, so the target naturally means "this semester"; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
+- A teacher's `TimetableSlot` rows recur every week, so **scheduled hours** = for each matching term, how many times that slot's weekday occurs between the term's start/end dates × the slot's duration. This is available the moment a timetable exists, even before the term starts.
+- **Taught hours** = scheduled hours elapsed so far, minus any `TeacherAbsence` hours in that span.
+- **Projected/final hours** = full-period scheduled hours minus all logged absences (past + future planned ones). While the scope (term/year) is still open this is a live **projection**; once every scope term has ended it becomes the **final** total.
+- Status is `NO_TARGET` (no `requiredHours` set — excluded from the report), `UNDER`, `EXACT`, or `OVER`, compared against the projected/final total (0.5h tolerance for "exact").
+- All arithmetic lives in one place: `apps/api/src/utils/teachingHours.ts` (`computeCoverage`, `resolveScopeTerms`, `countWeekdayOccurrences`), shared by both the admin and teacher-facing endpoints so the numbers can never drift apart between the two views.
+
+### Absences
+- `TeacherAbsence` — one row per missed period (`schoolId`, `teacherId`, `timetableSlotId`, `date` as `"YYYY-MM-DD"` text, `recordedById`). "Whole day absent" simply creates one of these for every slot the teacher has that weekday — not a separate kind of record.
+- A teacher can report their own absence; an admin/VP can log one on any teacher's behalf (e.g. informed some other way). Only real subject/course slots count — a private/personal timetable slot can't be marked absent since it isn't tied to any `requiredHours` target.
+- A teacher can plan ahead (a future date) as well as report after the fact — the projection accounts for both.
+
+### Known simplification
+`TimetableSlot` isn't session-scoped or versioned (same as the rest of the timetable feature) — if the timetable changes mid-term, the projection is computed off the *current* schedule applied across the whole period, not what was actually true before the change.

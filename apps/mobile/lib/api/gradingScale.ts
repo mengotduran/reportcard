@@ -28,6 +28,36 @@ export interface GradeResult {
   color: string
 }
 
+export interface ClassificationBand {
+  min: number  // lower CGPA bound
+  max: number  // upper CGPA bound
+  label: string // e.g. "Distinction"
+}
+
+export const DEFAULT_CLASSIFICATION_BANDS: ClassificationBand[] = [
+  { min: 3.60, max: 4.00, label: 'Distinction' },
+  { min: 2.80, max: 3.59, label: 'Upper Credit' },
+  { min: 2.40, max: 2.79, label: 'Lower Credit' },
+  { min: 2.00, max: 2.39, label: 'Pass' },
+  { min: 0.00, max: 1.99, label: 'Fail' },
+]
+
+/** GPA (/4.0) for a mark, using ranges that carry a gradePoint; else null. Matched on
+ *  the band's lower bound alone — see isFailingScore below for why. Mirrors the web
+ *  helper of the same name. */
+export function gradePointForScore20(score: number, ranges: GradeRange[]): number | null {
+  const sorted = [...ranges].sort((a, b) => b.minScore - a.minScore)
+  const m = sorted.find(r => score >= r.minScore)
+  return m?.gradePoint ?? null
+}
+
+/** Overall GPA/CGPA classification from a list of editable bands. Mirrors the web
+ *  helper of the same name. */
+export function classificationForGpa(gpa: number, bands: ClassificationBand[] = DEFAULT_CLASSIFICATION_BANDS): string {
+  const sorted = [...bands].sort((a, b) => b.min - a.min)
+  return sorted.find(b => gpa >= b.min && gpa <= b.max)?.label ?? 'Fail'
+}
+
 /** The units a scale is written in: a university scale runs to 100, others to 20. */
 function scaleOf(ranges: GradeRange[]): number {
   return ranges.some(r => r.maxScore > 20) ? 100 : 20
@@ -74,9 +104,9 @@ export function isFailingMark(score: number, maxScore: number, ranges: GradeRang
   return isFailingScore(normalized, list)
 }
 
-export const getGradingScale = async (): Promise<{ ranges: GradeRange[] }> => {
+export const getGradingScale = async (): Promise<{ ranges: GradeRange[]; classificationBands: ClassificationBand[] }> => {
   const res = await api.get('/grading-scale')
-  return res.data
+  return { ...res.data, classificationBands: res.data.classificationBands ?? DEFAULT_CLASSIFICATION_BANDS }
 }
 
 export const saveGradingScale = async (ranges: GradeRange[]): Promise<void> => {

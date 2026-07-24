@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useFocusEffect } from 'expo-router'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions } from 'react-native'
 import AutoSlider from '@/components/AutoSlider'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getDashboardStats, getWeeklyStats, getTeacherChartStats, getTeacherClasses, WeeklyStats, TeacherChartStats, TeacherClassRow } from '@/lib/api/dashboard'
+import { getDashboardStats, getWeeklyStats, getTeacherClasses, WeeklyStats, TeacherClassRow } from '@/lib/api/dashboard'
 import { getCurrentTerm, CurrentTerm } from '@/lib/api/terms'
 import { getMyTimetable, MyTimetableSlot } from '@/lib/api/timetable'
 import { useTheme, Colors } from '@/lib/useTheme'
@@ -20,18 +20,32 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'CLASS_MASTER']
 const DAY_ORDER = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']
 const DEPT_PALETTE = ['#F03E2F', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#db2777']
 
+// colors.card is an opaque theme hex — this lets the header band/image show faintly
+// through the school card instead of hard-cutting it off.
+const hexToRgba = (hex: string, alpha: number) => {
+  const n = parseInt(hex.replace('#', ''), 16)
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`
+}
+
 const makeTsStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
   band: { height: 140, backgroundColor: '#1a0605' },
   bandOverlay: { flex: 1, backgroundColor: 'rgba(30,58,95,0.55)' },
+  // A solid white backing (not a border/ring) behind the logo — without it, a
+  // transparent-background logo all but disappeared against the dark band/card.
+  logoFrame: {
+    width: 104, height: 104, borderRadius: 24,
+    backgroundColor: '#fff',
+    marginTop: -52, marginBottom: 14,
+    padding: 8,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
+  },
   logoImg: {
-    width: 84, height: 84, borderRadius: 19,
-    borderWidth: 4, borderColor: '#fff',
-    marginTop: -42, marginBottom: 14,
+    width: '100%', height: '100%', borderRadius: 16,
   },
   content: { flex: 1, paddingHorizontal: 24, marginTop: -60 },
   schoolCard: {
-    backgroundColor: colors.card, borderRadius: 20, padding: 24,
+    backgroundColor: hexToRgba(colors.card, 0.82), borderRadius: 20, padding: 24,
     alignItems: 'center', marginBottom: 20,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1, shadowRadius: 16, elevation: 6,
@@ -45,15 +59,15 @@ const makeTsStyles = (colors: Colors) => StyleSheet.create(({
   },
   crestInner: { alignItems: 'center', justifyContent: 'center' },
   crestText: { color: '#fff', fontWeight: '900', letterSpacing: 1 },
-  schoolName: { fontSize: 20, fontWeight: '800', color: '#0f172a', textAlign: 'center' },
+  schoolName: { fontSize: 20, fontWeight: '800', color: colors.text, textAlign: 'center' },
   typeBadge: {
     marginTop: 6, backgroundColor: '#FEF2F1',
     paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20,
   },
   typeText: { fontSize: 12, fontWeight: '700', color: '#F03E2F', letterSpacing: 1 },
-  divider: { width: 40, height: 2, backgroundColor: '#e2e8f0', borderRadius: 1, marginVertical: 16 },
+  divider: { width: 40, height: 2, backgroundColor: colors.border, borderRadius: 1, marginVertical: 16 },
   greeting: { fontSize: 14, color: colors.textMuted },
-  teacherName: { fontSize: 22, fontWeight: '800', color: '#0f172a', marginTop: 2, textAlign: 'center' },
+  teacherName: { fontSize: 22, fontWeight: '800', color: colors.text, marginTop: 2, textAlign: 'center' },
   roleLabel: { fontSize: 13, color: colors.textSecondary, marginTop: 4, fontWeight: '500' },
   dateText: { fontSize: 13, color: colors.textMuted, marginTop: 8 },
   classesBtn: {
@@ -103,6 +117,12 @@ const makeTsStyles = (colors: Colors) => StyleSheet.create(({
   lessonTitle: { fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 },
 }))
 
+// Narrower than the full available width so the next card visibly peeks in from the
+// right edge — a full-width card gave zero visual hint that there was a second one.
+const SIDE_CARD_GAP = 14
+const SIDE_CARD_WIDTH = Dimensions.get('window').width - 48 - 28
+const SIDE_CARD_STEP = SIDE_CARD_WIDTH + SIDE_CARD_GAP
+
 function getGreeting() {
   const h = new Date().getHours()
   if (h < 12) return 'Good morning'
@@ -113,7 +133,7 @@ function getGreeting() {
 function SchoolCrest({ name, size = 80 }: { name: string; size?: number }) {
   const initials = name.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
   return (
-    <View style={{ width: size, height: size, borderRadius: size * 0.22, backgroundColor: '#1a0605', justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#fff' }}>
+    <View style={{ width: size, height: size, borderRadius: size * 0.22, backgroundColor: '#1a0605', justifyContent: 'center', alignItems: 'center' }}>
       <Text style={{ color: '#fff', fontWeight: '900', letterSpacing: 1, fontSize: size * 0.32 }}>{initials}</Text>
     </View>
   )
@@ -142,10 +162,9 @@ function TeacherHome() {
   const ts = makeTsStyles(colors)
   const { user, school, activeSession } = useAuthStore()
   const router = useRouter()
-  const [chartStats, setChartStats] = useState<TeacherChartStats | null>(null)
-  const [chartLoading, setChartLoading] = useState(true)
   const [classes, setClasses] = useState<TeacherClassRow[]>([])
   const [classesLoading, setClassesLoading] = useState(true)
+  const [heroCardIndex, setHeroCardIndex] = useState(0)
   const [term, setTerm] = useState<CurrentTerm | null>(null)
   const [todaySlots, setTodaySlots] = useState<MyTimetableSlot[]>([])
   const [timetableLoading, setTimetableLoading] = useState(true)
@@ -159,7 +178,6 @@ function TeacherHome() {
   const isUniversity = school?.type === 'UNIVERSITY'
 
   const fetchAll = useCallback(() => {
-    getTeacherChartStats().then(setChartStats).catch(() => {}).finally(() => setChartLoading(false))
     getTeacherClasses().then((r) => setClasses(r.classes)).catch(() => {}).finally(() => setClassesLoading(false))
     getCurrentTerm().then(setTerm).catch(() => {})
     getMyTimetable().then((r) => {
@@ -190,9 +208,11 @@ function TeacherHome() {
       <View style={ts.content}>
         <View style={ts.schoolCard}>
           {logoUrl ? (
-            <Image source={{ uri: logoUrl }} style={ts.logoImg} />
+            <View style={ts.logoFrame}>
+              <Image source={{ uri: logoUrl }} style={ts.logoImg} resizeMode="contain" />
+            </View>
           ) : (
-            <SchoolCrest name={school?.name ?? 'SC'} size={84} />
+            <SchoolCrest name={school?.name ?? 'SC'} size={104} />
           )}
           <Text style={ts.schoolName}>{school?.name}</Text>
           <View style={ts.typeBadge}>
@@ -228,110 +248,109 @@ function TeacherHome() {
           </View>
         </View>
 
-        {/* Your Classes */}
-        <View style={ts.sectionCard}>
-          <View style={ts.sectionHeaderRow}>
-            <Text style={ts.sectionTitle}>{t(isUniversity ? 'Your Courses' : 'Your Classes')}</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/report-cards')}>
-              <Text style={ts.sectionLink}>{t('View All')}</Text>
-            </TouchableOpacity>
-          </View>
-          {classesLoading ? (
-            <View style={{ height: 40, backgroundColor: colors.bgSecondary, borderRadius: 10 }} />
-          ) : classes.length === 0 ? (
-            <Text style={{ fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 12 }}>
-              {t("You haven't been assigned any classes yet.")}
-            </Text>
-          ) : (
-            classes.map((c) => {
-              const color = deptColor(c.departmentName ?? c.classLevelName)
-              const subtitle = [c.departmentName, c.classLevelName].filter(Boolean).join(' · ')
-              // Straight to the marks-entry table for this subject when there is one —
-              // landing on the class's course list first meant an extra tap every time.
-              const goTo = () => {
-                if (c.subjectId && term) {
-                  router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
-                } else if (isClassMaster) {
-                  router.push(`/class-master/${encodeURIComponent(c.classLevelName)}?termId=${term?.id ?? ''}` as any)
-                } else {
-                  router.push('/(tabs)/report-cards')
-                }
-              }
-              return (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[ts.classRow, { borderLeftColor: color }]}
-                  onPress={goTo}
-                  activeOpacity={0.7}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={ts.classRowTitle} numberOfLines={1}>{c.subjectName ?? t('Class Oversight')}</Text>
-                    <Text style={ts.classRowSubtitle} numberOfLines={1}>{subtitle}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+        {/* Your Classes + Calendar/Timetable — side by side, swipe between them,
+            instead of stacked one above the other. Narrower cards + a peek of the next
+            one, plus dots below, so it visibly reads as swipeable rather than a
+            one-off card that happens to be full width. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          snapToInterval={SIDE_CARD_STEP}
+          decelerationRate="fast"
+          onScroll={(e) => setHeroCardIndex(Math.round(e.nativeEvent.contentOffset.x / SIDE_CARD_STEP))}
+          scrollEventThrottle={32}
+        >
+          {/* Your Classes — capped to 5 here; the full list (this teacher's own courses
+              for the whole session, not department-wide) lives at /my-courses. */}
+          <View style={[ts.sectionCard, { width: SIDE_CARD_WIDTH, marginRight: SIDE_CARD_GAP, marginBottom: 0 }]}>
+            <View style={ts.sectionHeaderRow}>
+              <Text style={ts.sectionTitle}>{t(isUniversity ? 'Your Courses' : 'Your Classes')}</Text>
+              {classes.length > 5 && (
+                <TouchableOpacity onPress={() => router.push('/my-courses' as any)}>
+                  <Text style={ts.sectionLink}>{t('View all my courses')}</Text>
                 </TouchableOpacity>
-              )
-            })
-          )}
-        </View>
-
-        {/* Calendar + Today's Lessons */}
-        <View style={ts.sectionCard}>
-          <View style={ts.sectionHeaderRow}>
-            <Text style={ts.sectionTitle}>{monthLabel}</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/timetable')}>
-              <Text style={ts.sectionLink}>{t('View Timetable')}</Text>
-            </TouchableOpacity>
-          </View>
-          <MonthCalendar today={now} colors={colors} />
-          <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.border }}>
-            <Text style={{ fontSize: 10, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.5, marginBottom: 8 }}>
-              {t("Today's Lessons").toUpperCase()}
-            </Text>
-            {timetableLoading ? (
-              <View style={{ height: 30, backgroundColor: colors.bgSecondary, borderRadius: 8 }} />
-            ) : todaySlots.length === 0 ? (
-              <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                <Ionicons name="calendar-outline" size={20} color={colors.textMuted} />
-                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>{t('No lessons scheduled for today')}</Text>
-              </View>
+              )}
+            </View>
+            {classesLoading ? (
+              <View style={{ height: 40, backgroundColor: colors.bgSecondary, borderRadius: 10 }} />
+            ) : classes.length === 0 ? (
+              <Text style={{ fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 12 }}>
+                {t("You haven't been assigned any classes yet.")}
+              </Text>
             ) : (
-              todaySlots.map((s) => (
-                <View key={s.id} style={ts.lessonRow}>
-                  <Text style={ts.lessonTime}>{s.startTime}</Text>
-                  <Text style={ts.lessonTitle} numberOfLines={1}>
-                    {s.subjectId ? (s.subjectName ?? t('Unknown subject')) : (s.label ?? t('Private class'))}
-                  </Text>
-                </View>
-              ))
+              classes.slice(0, 5).map((c) => {
+                const color = deptColor(c.departmentName ?? c.classLevelName)
+                const subtitle = [c.departmentName, c.classLevelName].filter(Boolean).join(' · ')
+                // Straight to the marks-entry table for this subject when there is one —
+                // landing on the class's course list first meant an extra tap every time.
+                const goTo = () => {
+                  if (c.subjectId && term) {
+                    router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
+                  } else if (isClassMaster) {
+                    router.push(`/class-master/${encodeURIComponent(c.classLevelName)}?termId=${term?.id ?? ''}` as any)
+                  } else {
+                    router.push('/(tabs)/report-cards')
+                  }
+                }
+                return (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={[ts.classRow, { borderLeftColor: color }]}
+                    onPress={goTo}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={ts.classRowTitle} numberOfLines={1}>{c.subjectName ?? t('Class Oversight')}</Text>
+                      <Text style={ts.classRowSubtitle} numberOfLines={1}>{subtitle}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                  </TouchableOpacity>
+                )
+              })
             )}
           </View>
-        </View>
 
-        {/* Same WeeklyChartCard as admin — students & subjects */}
-        {(() => {
-          const studentTotal = chartStats?.studentCounts.reduce((s, c) => s + c.count, 0) ?? 0
-          const subjectTotal = chartStats?.subjectCounts.reduce((s, c) => s + c.count, 0) ?? 0
-          const studentData = chartStats?.weeklyStudents ?? new Array(8).fill(0)
-          const subjectValues = chartStats?.subjectCounts.map(c => c.count) ?? []
-          const subjectData = [...new Array(Math.max(0, 8 - subjectValues.length)).fill(0), ...subjectValues].slice(-8)
-          return (
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-              <WeeklyChartCard
-                meta={{ key: 'students' as const, label: 'My Students', icon: 'people', color: '#F03E2F', bg: '#FEF2F1' }}
-                weekData={studentData}
-                total={studentTotal}
-                statsLoading={chartLoading}
-              />
-              <WeeklyChartCard
-                meta={{ key: 'subjects' as const, label: 'My Subjects', icon: 'book', color: '#ea580c', bg: '#fff7ed' }}
-                weekData={subjectData}
-                total={subjectTotal}
-                statsLoading={chartLoading}
-              />
+          {/* Calendar + Today's Lessons */}
+          <View style={[ts.sectionCard, { width: SIDE_CARD_WIDTH, marginBottom: 0 }]}>
+            <View style={ts.sectionHeaderRow}>
+              <Text style={ts.sectionTitle}>{monthLabel}</Text>
+              <TouchableOpacity onPress={() => router.push('/(tabs)/timetable')}>
+                <Text style={ts.sectionLink}>{t('View Timetable')}</Text>
+              </TouchableOpacity>
             </View>
-          )
-        })()}
+            <MonthCalendar today={now} colors={colors} />
+            <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.border }}>
+              <Text style={{ fontSize: 10, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.5, marginBottom: 8 }}>
+                {t("Today's Lessons").toUpperCase()}
+              </Text>
+              {timetableLoading ? (
+                <View style={{ height: 30, backgroundColor: colors.bgSecondary, borderRadius: 8 }} />
+              ) : todaySlots.length === 0 ? (
+                <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+                  <Ionicons name="calendar-outline" size={20} color={colors.textMuted} />
+                  <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>{t('No lessons scheduled for today')}</Text>
+                </View>
+              ) : (
+                todaySlots.map((s) => (
+                  <View key={s.id} style={ts.lessonRow}>
+                    <Text style={ts.lessonTime}>{s.startTime}</Text>
+                    <Text style={ts.lessonTitle} numberOfLines={1}>
+                      {s.subjectId ? (s.subjectName ?? t('Unknown subject')) : (s.label ?? t('Private class'))}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+          </View>
+        </ScrollView>
+        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginBottom: 14 }}>
+          {[0, 1].map((i) => (
+            <View key={i} style={{
+              width: heroCardIndex === i ? 16 : 6, height: 6, borderRadius: 3,
+              backgroundColor: heroCardIndex === i ? colors.primary : colors.border,
+            }} />
+          ))}
+        </View>
 
         <TouchableOpacity style={[ts.classesBtn, user?.role === 'CLASS_MASTER' && ts.classesBtnMaster]} onPress={() => router.push('/(tabs)/report-cards')} activeOpacity={0.85}>
           <Ionicons name={user?.role === 'CLASS_MASTER' ? 'chatbubble-ellipses-outline' : 'school-outline'} size={20} color="#fff" />

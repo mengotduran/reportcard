@@ -32,8 +32,11 @@ interface AuthState {
   isAuthenticated: boolean
   /** The academic year (session, e.g. "2025/2026") the whole app is currently viewing. */
   activeSession: string | null
+  /** Whether the session survives a full app restart. False = in-memory only for this
+   *  run; the next cold start reads nothing back and the user must sign in again. */
+  rememberMe: boolean
   _hasHydrated: boolean
-  login: (token: string, user: User, school: School | null) => void
+  login: (token: string, user: User, school: School | null, rememberMe?: boolean) => void
   logout: () => void
   setHasHydrated: (v: boolean) => void
   setSchool: (school: School) => void
@@ -48,9 +51,10 @@ export const useAuthStore = create<AuthState>()(
       school: null,
       isAuthenticated: false,
       activeSession: null,
+      rememberMe: true,
       _hasHydrated: false,
-      login: (token, user, school) => set({ token, user, school, isAuthenticated: true }),
-      logout: () => set({ token: null, user: null, school: null, isAuthenticated: false, activeSession: null }),
+      login: (token, user, school, rememberMe = true) => set({ token, user, school, isAuthenticated: true, rememberMe }),
+      logout: () => set({ token: null, user: null, school: null, isAuthenticated: false, activeSession: null, rememberMe: true }),
       setHasHydrated: (v) => set({ _hasHydrated: v }),
       setSchool: (school) => set({ school }),
       setActiveSession: (session) => set({ activeSession: session }),
@@ -58,6 +62,9 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'auth-storage',
       storage: createJSONStorage(() => AsyncStorage),
+      // rememberMe=false: only that flag survives to disk, so a full restart hydrates
+      // back to the logged-out defaults instead of restoring token/user/school.
+      partialize: (state) => (state.rememberMe ? state : { rememberMe: false }),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true)
       },

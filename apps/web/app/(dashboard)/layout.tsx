@@ -2,14 +2,18 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked, CalendarClock } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked, CalendarClock, CalendarCheck, Bell } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import { useT } from '@/lib/i18n'
 import { getMeApi, updateLanguagePreferenceApi } from '@/lib/api/auth'
 import { getAcademicYearsApi } from '@/lib/api/dashboard'
+import { getMyNotificationsApi } from '@/lib/api/notifications'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
+
+const NOTIFICATION_ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
+const NOTIFICATION_POLL_MS = 30000
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
@@ -26,6 +30,7 @@ const ADMIN_NAV = [
   { icon: Star,            label: 'Grading',      href: '/grading-scale' },
   { icon: School,          label: 'Teachers',     href: '/teachers' },
   { icon: CalendarClock,   label: 'Timetable',    href: '/timetable' },
+  { icon: CalendarCheck,   label: 'Attendance',   href: '/teaching-hours' },
   { icon: Settings,        label: 'Settings',     href: '/settings' },
 ]
 
@@ -33,6 +38,7 @@ const TEACHER_NAV = [
   { icon: LayoutDashboard, label: 'Home',    href: '/dashboard' },
   { icon: FileText,        label: 'Classes', href: '/report-cards' },
   { icon: CalendarClock,   label: 'My Timetable', href: '/my-timetable' },
+  { icon: CalendarCheck,   label: 'My Attendance', href: '/my-teaching-hours' },
   { icon: Settings,        label: 'Settings', href: '/account' },
 ]
 
@@ -41,6 +47,7 @@ const CLASS_MASTER_NAV = [
   { icon: FileText,        label: 'Classes',  href: '/report-cards' },
   { icon: MessageSquare,   label: 'My Class', href: '/class-master' },
   { icon: CalendarClock,   label: 'My Timetable', href: '/my-timetable' },
+  { icon: CalendarCheck,   label: 'My Attendance', href: '/my-teaching-hours' },
   { icon: Settings,        label: 'Settings', href: '/account' },
 ]
 
@@ -84,6 +91,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
   const isClassMaster = user?.role === 'CLASS_MASTER'
+  const isAdminRole = NOTIFICATION_ADMIN_ROLES.includes(user?.role ?? '')
   const baseNavItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
   // Universities use different wording for the same routes/data — just relabel the nav.
   // Keyed by label (not href) since "Classes" appears on multiple hrefs across the
@@ -121,6 +129,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useBodyScrollLock(mobileNavOpen)
   const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'
 
+  // Only admins receive notifications (teacher-absence reports) for now — polled, not
+  // true push (see the mobile TabsLayout for the same pattern/reasoning).
+  const [unreadCount, setUnreadCount] = useState(0)
+  useEffect(() => {
+    if (!user || !isAdminRole) return
+    let cancelled = false
+    const poll = () => getMyNotificationsApi().then((r) => { if (!cancelled) setUnreadCount(r.unreadCount) }).catch(() => {})
+    poll()
+    const interval = setInterval(poll, NOTIFICATION_POLL_MS)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [user, isAdminRole])
+
   const handleLangToggle = async (lang: 'EN' | 'FR') => {
     updateUser({ preferredLanguage: lang })
     updateLanguagePreferenceApi(lang).catch(() => {})
@@ -152,6 +172,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span className="text-[13px] text-muted-foreground truncate border-l border-border pl-2">{school.name}</span>
             )}
           </div>
+          {isAdminRole && (
+            <button
+              onClick={() => router.push('/notifications')}
+              aria-label="Notifications"
+              className="relative ml-auto text-muted-foreground hover:text-foreground p-1"
+            >
+              <Bell size={20} />
+              {unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-destructive text-white text-[9px] font-bold flex items-center justify-center">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </button>
+          )}
         </header>
 
         {/* ── Backdrop (mobile, when drawer open) ─────────────────────────── */}
@@ -219,6 +253,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <p className="text-[11px] text-muted-foreground truncate">{user?.role ? t(user.role.replace(/_/g, ' ')) : ''}</p>
               </div>
             </div>
+
+            {isAdminRole && (
+              <button
+                onClick={() => { router.push('/notifications'); setMobileNavOpen(false) }}
+                className={`w-full flex items-center justify-between px-3 py-[7px] rounded-md text-[13px] transition-colors ${
+                  pathname === '/notifications'
+                    ? 'bg-muted text-foreground font-medium'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <Bell size={14} className={pathname === '/notifications' ? 'text-primary' : ''} />
+                  {t('Notifications')}
+                </span>
+                {unreadCount > 0 && (
+                  <span className="min-w-[16px] h-4 px-1 rounded-full bg-destructive text-white text-[9px] font-bold flex items-center justify-center">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+            )}
 
             <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
               <span className="text-[13px] text-muted-foreground">{t('Appearance')}</span>

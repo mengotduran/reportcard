@@ -46,6 +46,7 @@ export interface TeacherClassRow {
   classLevelName: string
   departmentName: string | null
   isMasterClass: boolean
+  term: string | null
 }
 
 export const getTeacherClasses = async (): Promise<{ classes: TeacherClassRow[] }> => {

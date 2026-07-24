@@ -26,6 +26,8 @@ export default function RootLayout() {
       <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="account/index" options={{ title: t('My Account'), headerBackTitle: '' }} />
+      <Stack.Screen name="notifications" options={{ title: t('Notifications'), headerBackTitle: '' }} />
+      <Stack.Screen name="my-courses" options={{ headerBackTitle: '' }} />
       <Stack.Screen name="class/[classLevel]" options={{ headerBackTitle: '' }} />
       <Stack.Screen
         name="marks/[subjectId]"

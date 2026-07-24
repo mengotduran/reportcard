@@ -111,6 +111,8 @@ model School {
   excelTemplates           ExcelTemplate[]
   timetableSlots           TimetableSlot[]
   timetablePeriods         TimetablePeriod[]
+  teacherAbsences          TeacherAbsence[]
+  notifications            Notification[]
 }
 
 model GradingScale {
@@ -199,6 +201,9 @@ model User {
   reportCards     ReportCard[]
   teacherSubjects TeacherSubject[]
   timetableSlots  TimetableSlot[]
+  absences         TeacherAbsence[] @relation("TeacherAbsences")
+  absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
+  notifications    Notification[]
 }
 
 model Student {
@@ -295,6 +300,10 @@ model Subject {
   // Semester" recurs every academic session without being recreated. Null means
   // the subject applies to every term of the class (primary/secondary today).
   term        String?
+  // Target teaching hours for this subject/course row — per semester for university,
+  // per academic year for primary/secondary. Null means no target set. Mirrors
+  // schema.prisma — see the comment there.
+  requiredHours Int?
   createdAt   DateTime @default(now())
 
   school          School           @relation(fields: [schoolId], references: [id])
@@ -319,8 +328,43 @@ model TimetableSlot {
   updatedAt DateTime @updatedAt
   school    School   @relation(fields: [schoolId], references: [id])
   teacher   User     @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  absences  TeacherAbsence[]
 
   @@index([schoolId, teacherId])
+}
+
+// Mirrors schema.prisma — see the comment there.
+model TeacherAbsence {
+  id              String   @id @default(uuid())
+  schoolId        String
+  teacherId       String
+  timetableSlotId String
+  date            String
+  recordedById    String
+  createdAt       DateTime @default(now())
+  school          School         @relation(fields: [schoolId], references: [id])
+  teacher         User           @relation("TeacherAbsences", fields: [teacherId], references: [id], onDelete: Cascade)
+  slot            TimetableSlot  @relation(fields: [timetableSlotId], references: [id], onDelete: Cascade)
+  recordedBy      User           @relation("AbsencesRecorded", fields: [recordedById], references: [id])
+
+  @@unique([teacherId, timetableSlotId, date])
+  @@index([schoolId, teacherId])
+}
+
+// Mirrors schema.prisma — see the comment there.
+model Notification {
+  id          String    @id @default(uuid())
+  schoolId    String
+  recipientId String
+  type        String
+  title       String
+  body        String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  school      School    @relation(fields: [schoolId], references: [id])
+  recipient   User      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, readAt])
 }
 
 // Mirrors schema.prisma — see the comment there.

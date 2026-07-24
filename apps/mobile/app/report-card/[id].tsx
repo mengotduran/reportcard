@@ -11,7 +11,7 @@ import {
   getReportCard, getSubjects, saveEntries, publishReportCard,
   getReadinessDetail, ReportCardDetail, Subject, ReadinessDetail,
 } from '@/lib/api/reportcards'
-import { getGradingScale, gradeFromScore, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { getGradingScale, gradeFromScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
@@ -158,6 +158,7 @@ export default function ReportCardDetailScreen() {
   const [entries, setEntries] = useState<Entry[]>([])
   const [remarks, setRemarks] = useState('')
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
   const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -167,9 +168,10 @@ export default function ReportCardDetailScreen() {
     const [rc, subjectData, scaleData] = await Promise.all([
       getReportCard(id),
       getSubjects(),
-      getGradingScale().catch(() => ({ ranges: DEFAULT_RANGES })),
+      getGradingScale().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: DEFAULT_CLASSIFICATION_BANDS })),
     ])
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
+    if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
     setReportCard(rc)
     setRemarks(rc.remarks || '')
     if (user?.role !== 'CLASS_MASTER') getReadinessDetail(id).then(setReadiness).catch(() => {})
@@ -297,6 +299,25 @@ export default function ReportCardDetailScreen() {
     return totalCoeff > 0 ? totalWeighted / totalCoeff : 0
   })()
 
+  // University only. Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors web +
+  // PrintableReportCard logic. "Terms Average"/"Overall Grade"/"Position"/"Class Average"
+  // are primary/secondary concepts (a raw 0-100 score average and a class rank) and don't
+  // apply to a university report card, which is graded and classified by GPA instead.
+  const semGpaInfo = (() => {
+    let pts = 0, cr = 0
+    for (const s of subjects) {
+      const entry = entries.find((e) => e.subjectId === s.id)
+      if (!entry || entry.score === '') continue
+      const gp = gradePointForScore20(Number(entry.score), gradingRanges)
+      if (gp == null) continue
+      const c = (s as any).credit ?? 0
+      pts += gp * c; cr += c
+    }
+    return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
+  })()
+  const cgpa = reportCard.cgpa ?? semGpaInfo.gpa
+  const classification = classificationForGpa(cgpa, classificationBands)
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -325,16 +346,23 @@ export default function ReportCardDetailScreen() {
 
       {/* Summary */}
       <View style={styles.summaryRow}>
-        {[
-          { label: t('Terms Average'), value: average.toFixed(1) },
-          { label: t('Overall Grade'), value: gradeFromScore(average, avgMaxScore, gradingRanges).remark || gradeFromScore(average, avgMaxScore, gradingRanges).grade },
-          { label: t('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
-          ...(reportCard.classAverage != null ? [{ label: t('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
-          ...(reportCard.annualAverage != null ? [{ label: t('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
-          ...(reportCard.annualPosition != null ? [{ label: t('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
-        ].map((item) => (
+        {(isUniversity
+          ? [
+              { label: t('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
+              { label: t('Cumulative GPA'), value: cgpa.toFixed(2) },
+              { label: t('Classification'), value: classification, color: classification === 'Fail' ? '#dc2626' : undefined },
+            ]
+          : [
+              { label: t('Terms Average'), value: average.toFixed(1) },
+              { label: t('Overall Grade'), value: gradeFromScore(average, avgMaxScore, gradingRanges).remark || gradeFromScore(average, avgMaxScore, gradingRanges).grade },
+              { label: t('Position'), value: reportCard.position != null ? `${ordinal(reportCard.position)}${reportCard.classSize ? `/${reportCard.classSize}` : ''}` : '—' },
+              ...(reportCard.classAverage != null ? [{ label: t('Class Average'), value: reportCard.classAverage.toFixed(1) }] : []),
+              ...(reportCard.annualAverage != null ? [{ label: t('Annual Average'), value: reportCard.annualAverage.toFixed(1) }] : []),
+              ...(reportCard.annualPosition != null ? [{ label: t('Annual Position'), value: `${ordinal(reportCard.annualPosition)}${reportCard.annualClassSize ? `/${reportCard.annualClassSize}` : ''}` }] : []),
+            ]
+        ).map((item) => (
           <View key={item.label} style={styles.summaryCard}>
-            <Text style={styles.summaryValue}>{item.value}</Text>
+            <Text style={[styles.summaryValue, item.color ? { color: item.color } : null]}>{item.value}</Text>
             <Text style={styles.summaryLabel}>{item.label}</Text>
           </View>
         ))}

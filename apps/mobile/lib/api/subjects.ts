@@ -8,6 +8,7 @@ export interface Subject {
   coefficient: number
   credit?: number | null
   term?: string | null
+  requiredHours?: number | null
 }
 
 export const getSubjects = async (): Promise<{ subjects: Subject[] }> => {
@@ -15,7 +16,7 @@ export const getSubjects = async (): Promise<{ subjects: Subject[] }> => {
   return res.data
 }
 
-export const createSubject = async (data: { name: string; classLevel: string; maxScore?: number; coefficient?: number; credit?: number | null; term?: string | null }) => {
+export const createSubject = async (data: { name: string; classLevel: string; maxScore?: number; coefficient?: number; credit?: number | null; term?: string | null; requiredHours?: number | null }) => {
   const res = await api.post('/subjects', data)
   return res.data
 }

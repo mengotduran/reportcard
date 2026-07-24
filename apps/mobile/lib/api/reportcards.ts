@@ -15,6 +15,7 @@ export interface ReportCardDetail {
   status: string
   totalScore: number | null
   average: number | null
+  cgpa?: number | null
   position: number | null
   classSize?: number | null
   classAverage?: number | null

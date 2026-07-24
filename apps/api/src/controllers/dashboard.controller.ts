@@ -1,4 +1,5 @@
 import { Response } from 'express'
+import { UserRole } from '@prisma/client'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 
@@ -24,6 +25,23 @@ function bucketByWeek(dates: Date[]): number[] {
   return counts
 }
 
+// Running total as of the end of each week, not "how many were newly created that
+// week" — bulk seeding/import creates hundreds of rows on a single day, which turns
+// a per-week-new-count chart into one giant spike against seven flat zero weeks. Recharts
+// renders that near-degenerate series as nothing at all for line/bar charts. A cumulative
+// total is always a smooth non-decreasing curve regardless of how the data was created,
+// which is also what a "trend" chart should show in the first place.
+function cumulativeByWeek(baseCount: number, recentDates: Date[]): number[] {
+  const weeklyNew = bucketByWeek(recentDates)
+  const cumulative = new Array(WEEKS).fill(0)
+  let running = baseCount
+  for (let i = 0; i < WEEKS; i++) {
+    running += weeklyNew[i]
+    cumulative[i] = running
+  }
+  return cumulative
+}
+
 export const getWeeklyStats = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId
@@ -32,22 +50,28 @@ export const getWeeklyStats = async (req: AuthRequest, res: Response) => {
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - WEEKS * 7)
 
-    const [students, reportCards, teachers, subjects] = await Promise.all([
+    const teacherRoleFilter = { role: { in: [UserRole.CLASS_TEACHER, UserRole.CLASS_MASTER, UserRole.SUBJECT_TEACHER] } }
+
+    const [
+      students, reportCards, teachers, subjects,
+      studentsBase, reportCardsBase, teachersBase, subjectsBase,
+    ] = await Promise.all([
       prisma.student.findMany({ where: { schoolId, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
       prisma.reportCard.findMany({ where: { schoolId, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
-      prisma.user.findMany({
-        where: { schoolId, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER'] }, createdAt: { gte: cutoff } },
-        select: { createdAt: true },
-      }),
+      prisma.user.findMany({ where: { schoolId, ...teacherRoleFilter, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
       prisma.subject.findMany({ where: { schoolId, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
+      prisma.student.count({ where: { schoolId, createdAt: { lt: cutoff } } }),
+      prisma.reportCard.count({ where: { schoolId, createdAt: { lt: cutoff } } }),
+      prisma.user.count({ where: { schoolId, ...teacherRoleFilter, createdAt: { lt: cutoff } } }),
+      prisma.subject.count({ where: { schoolId, createdAt: { lt: cutoff } } }),
     ])
 
     res.json({
       labels: getWeekLabels(),
-      students: bucketByWeek(students.map(s => s.createdAt)),
-      reportCards: bucketByWeek(reportCards.map(r => r.createdAt)),
-      teachers: bucketByWeek(teachers.map(t => t.createdAt)),
-      subjects: bucketByWeek(subjects.map(s => s.createdAt)),
+      students: cumulativeByWeek(studentsBase, students.map(s => s.createdAt)),
+      reportCards: cumulativeByWeek(reportCardsBase, reportCards.map(r => r.createdAt)),
+      teachers: cumulativeByWeek(teachersBase, teachers.map(t => t.createdAt)),
+      subjects: cumulativeByWeek(subjectsBase, subjects.map(s => s.createdAt)),
     })
   } catch (error) {
     console.error(error)
@@ -77,7 +101,7 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
         : teacherSubjects.map(ts => ts.subject.classLevel)
     )]
 
-    const [studentCountRows, recentStudents] = await Promise.all([
+    const [studentCountRows, recentStudents, studentsBase] = await Promise.all([
       Promise.all(classLevels.map(cl =>
         prisma.student.count({ where: { schoolId, classLevel: cl } })
           .then(count => ({ classLevel: cl, count }))
@@ -86,6 +110,7 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
         where: { schoolId, classLevel: { in: classLevels }, createdAt: { gte: cutoff } },
         select: { createdAt: true },
       }),
+      prisma.student.count({ where: { schoolId, classLevel: { in: classLevels }, createdAt: { lt: cutoff } } }),
     ])
 
     const subjectCounts = classLevels.map(cl => ({
@@ -97,7 +122,7 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
       labels: getWeekLabels(),
       studentCounts: studentCountRows,
       subjectCounts,
-      weeklyStudents: bucketByWeek(recentStudents.map(s => s.createdAt)),
+      weeklyStudents: cumulativeByWeek(studentsBase, recentStudents.map(s => s.createdAt)),
     })
   } catch (error) {
     console.error(error)
@@ -120,11 +145,29 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
 
     const teacherSubjects = await prisma.teacherSubject.findMany({
       where: { userId },
-      include: { subject: { select: { id: true, name: true, classLevel: true } } },
+      include: { subject: { select: { id: true, name: true, classLevel: true, term: true } } },
     })
 
+    // A course row names a specific semester via `subject.term` for universities
+    // (primary/secondary leave it null — one row spans the whole academic year, so it
+    // always counts). This lists everything taught across the WHOLE current session
+    // (both semesters / all terms) — "what am I currently teaching right now" is a
+    // separate, narrower question already answered by "Enter My Classes".
+    const currentTerm = await prisma.term.findFirst({ where: { schoolId, isCurrent: true } })
+    let sessionTermNames: Set<string> | null = null
+    if (currentTerm) {
+      const sessionTerms = await prisma.term.findMany({
+        where: { schoolId, session: currentTerm.session },
+        select: { name: true },
+      })
+      sessionTermNames = new Set(sessionTerms.map((t) => t.name))
+    }
+    const relevantTeacherSubjects = sessionTermNames
+      ? teacherSubjects.filter((ts) => !ts.subject.term || sessionTermNames!.has(ts.subject.term))
+      : teacherSubjects
+
     const classLevelNames = [...new Set([
-      ...teacherSubjects.map(ts => ts.subject.classLevel),
+      ...relevantTeacherSubjects.map(ts => ts.subject.classLevel),
       ...(masterClassLevel ? [masterClassLevel] : []),
     ])]
 
@@ -143,15 +186,17 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
       classLevelName: string
       departmentName: string | null
       isMasterClass: boolean
+      term: string | null
     }
 
-    const classes: ClassRow[] = teacherSubjects.map(ts => ({
+    const classes: ClassRow[] = relevantTeacherSubjects.map(ts => ({
       id: ts.id,
       subjectId: ts.subject.id,
       subjectName: ts.subject.name,
       classLevelName: ts.subject.classLevel,
       departmentName: classLevelByName.get(ts.subject.classLevel)?.department?.name ?? null,
       isMasterClass: ts.subject.classLevel === masterClassLevel,
+      term: ts.subject.term,
     }))
 
     // A class master's own class stays visible even if they teach no subject there.
@@ -163,6 +208,7 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
         classLevelName: masterClassLevel,
         departmentName: classLevelByName.get(masterClassLevel)?.department?.name ?? null,
         isMasterClass: true,
+        term: null,
       })
     }
 

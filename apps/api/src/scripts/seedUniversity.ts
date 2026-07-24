@@ -321,11 +321,18 @@ async function main() {
             }
             entryRows.push({ id: randomUUID(), reportCardId: cardId, subjectId: co.id, seq1Score: seq1, seq2Score: seq2, score, grade, remarks: remark })
           }
+          // `gpa` is only for this seed script's own ranking below (position within a
+          // term). `average`/`totalScore` on the card itself must stay on the RAW 0-100
+          // score scale — that's what saveEntries stores for real teacher-entered marks,
+          // and what the report card's "Overall Grade" display normalises against. Storing
+          // GPA there instead made a perfectly good 3.5 GPA read as 3.5/100 and print as F.
           const gpa = marked.length > 0 ? marked.reduce((s, m) => s + gpForMark100(m.score100).gradePoint * m.credit, 0) / marked.reduce((s, m) => s + m.credit, 0) : 0
-          const totalWeighted = marked.reduce((s, m) => s + gpForMark100(m.score100).gradePoint * m.credit, 0)
+          const totalCredit = marked.reduce((s, m) => s + m.credit, 0)
+          const rawTotal = marked.reduce((s, m) => s + m.score100 * m.credit, 0)
+          const rawAvg = totalCredit > 0 ? rawTotal / totalCredit : 0
           const card = {
             id: cardId, studentId: sid, schoolId, termId: term.id, createdById: admin.id,
-            status: currentTerm ? 'DRAFT' : 'PUBLISHED', totalScore: totalWeighted, average: gpa, position: null as number | null,
+            status: currentTerm ? 'DRAFT' : 'PUBLISHED', totalScore: rawTotal, average: rawAvg, position: null as number | null,
             remarks: null,
           }
           cardRows.push(card)

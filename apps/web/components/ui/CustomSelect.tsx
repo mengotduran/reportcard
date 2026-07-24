@@ -53,15 +53,25 @@ export default function CustomSelect({
   // from the trigger's own position — this is what lets the panel escape a
   // scrollable modal instead of being clipped by its overflow, and lets it
   // flip above the trigger when there isn't room below.
+  // A trigger that's only as wide as its own selected value (e.g. a compact "All"
+  // filter) is often too narrow to comfortably fit the longest option's label plus
+  // the checkmark — MIN_PANEL_WIDTH gives the panel some breathing room beyond the
+  // trigger's own width instead of matching it exactly.
+  const MIN_PANEL_WIDTH = 220
+
   const openDropdown = () => {
     const rect = btnRef.current?.getBoundingClientRect()
     if (rect) {
       const spaceBelow = window.innerHeight - rect.bottom
       const spaceAbove = rect.top
       const direction: 'down' | 'up' = spaceBelow < PANEL_ESTIMATE && spaceAbove > spaceBelow ? 'up' : 'down'
+      const width = Math.max(rect.width, MIN_PANEL_WIDTH)
+      // Grow rightward from the trigger's left edge, but pull back if that would
+      // run the panel past the right edge of the viewport.
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))
       setPos({
-        left: rect.left,
-        width: rect.width,
+        left,
+        width,
         top: direction === 'down' ? rect.bottom + 6 : rect.top - 6,
         direction,
       })
@@ -130,9 +140,10 @@ export default function CustomSelect({
             position: 'fixed',
             left: pos.left,
             width: pos.width,
+            backgroundColor: 'var(--card)',
             ...(pos.direction === 'down' ? { top: pos.top } : { bottom: window.innerHeight - pos.top }),
           }}
-          className="z-[100] bg-card border border-border rounded-xl shadow-xl overflow-hidden"
+          className="z-[100] border border-border rounded-xl shadow-xl overflow-hidden"
         >
           {searchable && options.length > 4 && (
             <div className="p-2 border-b border-border">
@@ -148,7 +159,7 @@ export default function CustomSelect({
               </div>
             </div>
           )}
-          <div className="max-h-56 overflow-y-auto py-1">
+          <div className="max-h-56 overflow-y-auto py-1" style={{ backgroundColor: 'var(--card)' }}>
             {filtered.length === 0 ? (
               <p className="text-center text-sm text-muted-foreground py-5">No results found</p>
             ) : (
@@ -161,11 +172,11 @@ export default function CustomSelect({
                   className={`w-full flex items-center justify-between px-3 py-2.5 text-left transition
                     ${opt.disabled ? 'opacity-50 cursor-not-allowed' : opt.value === value ? 'bg-primary/10' : 'hover:bg-muted'}`}
                 >
-                  <div>
-                    <p className={`text-sm font-medium leading-tight ${opt.disabled ? 'text-muted-foreground' : opt.value === value ? 'text-primary' : 'text-foreground'}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-sm font-medium leading-tight truncate ${opt.disabled ? 'text-muted-foreground' : opt.value === value ? 'text-primary' : 'text-foreground'}`}>
                       {opt.label}
                     </p>
-                    {opt.sub && <p className="text-xs text-muted-foreground mt-0.5">{opt.sub}</p>}
+                    {opt.sub && <p className="text-xs text-muted-foreground mt-0.5 truncate">{opt.sub}</p>}
                   </div>
                   {opt.value === value && !opt.disabled && <Check size={14} className="text-primary flex-shrink-0 ml-2" />}
                 </button>
