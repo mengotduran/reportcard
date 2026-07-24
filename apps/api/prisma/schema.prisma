@@ -69,6 +69,7 @@ model School {
   timetableSlots     TimetableSlot[]
   timetablePeriods   TimetablePeriod[]
   teacherAbsences    TeacherAbsence[]
+  notifications      Notification[]
 }
 
 model GradingScale {
@@ -176,6 +177,7 @@ model User {
   timetableSlots   TimetableSlot[]
   absences         TeacherAbsence[] @relation("TeacherAbsences")
   absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
+  notifications    Notification[]
   school           School?          @relation(fields: [schoolId], references: [id])
 }
 
@@ -317,6 +319,25 @@ model TeacherAbsence {
 
   @@unique([teacherId, timetableSlotId, date])
   @@index([schoolId, teacherId])
+}
+
+// In-app notification for a specific user (e.g. an admin, when a teacher reports an
+// absence). Deliberately no push/email delivery here — this is the in-app inbox only;
+// `type` is a free-form tag ("TEACHER_ABSENCE") for any future filtering, not an enum,
+// since the set of notification kinds will likely grow.
+model Notification {
+  id          String    @id @default(uuid())
+  schoolId    String
+  recipientId String
+  type        String
+  title       String
+  body        String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  school      School    @relation(fields: [schoolId], references: [id])
+  recipient   User      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, readAt])
 }
 
 // One school-wide bell schedule (Period 1, Break, Period 2, ...), defined once

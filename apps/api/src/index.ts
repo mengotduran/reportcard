@@ -25,6 +25,7 @@ import excelTemplateRoutes from './routes/excelTemplate.routes'
 import timetableRoutes from './routes/timetable.routes'
 import teacherAbsenceRoutes from './routes/teacherAbsence.routes'
 import coverageRoutes from './routes/coverage.routes'
+import notificationRoutes from './routes/notification.routes'
 import { UPLOAD_DIR } from './config/uploads'
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') })
@@ -63,6 +64,7 @@ app.use('/api/excel-templates', excelTemplateRoutes)
 app.use('/api/timetable', timetableRoutes)
 app.use('/api/teacher-absences', teacherAbsenceRoutes)
 app.use('/api/coverage', coverageRoutes)
+app.use('/api/notifications', notificationRoutes)
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)

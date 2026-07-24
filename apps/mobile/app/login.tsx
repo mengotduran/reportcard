@@ -20,99 +20,97 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   inner: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
+    paddingTop: 24,
+    paddingBottom: 100,
   },
   card: {
-    backgroundColor: colors.card,
-    borderRadius: 16,
+    backgroundColor: 'transparent',
     padding: 28,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  logoBox: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  logoIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 13,
     backgroundColor: '#F03E2F',
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 12,
+    marginRight: 10,
   },
-  title: {
-    fontSize: 26,
+  logoWordmark: {
+    fontSize: 28,
     fontWeight: 'bold',
     color: colors.text,
-    textAlign: 'center',
-    marginBottom: 4,
   },
-  subtitle: {
-    fontSize: 14,
+  tagline: {
+    fontSize: 13.5,
+    lineHeight: 19,
     color: colors.textSecondary,
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 24,
   },
   // Fixed height — card never shifts when error appears/disappears
   errorRow: {
     height: 36,
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   errorText: {
     color: '#ef4444',
     fontSize: 13,
     textAlign: 'center',
   },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 15,
-    color: colors.text,
-    backgroundColor: colors.inputBg,
-    marginBottom: 12,
-  },
-  passwordWrap: {
-    position: 'relative',
-    marginBottom: 12,
-  },
-  passwordInput: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    paddingRight: 46,
-    fontSize: 15,
-    color: colors.text,
-    backgroundColor: colors.inputBg,
-  },
-  eyeBtn: {
-    position: 'absolute',
-    right: 14,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
+  inputWrap: {
+    flexDirection: 'row',
     alignItems: 'center',
-    width: 32,
+    borderWidth: 1,
+    borderColor: 'rgba(140,140,140,0.35)',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    height: 54,
+    // A neutral, semi-transparent fill instead of the theme's solid inputBg — that
+    // opaque grey sat as a visible box against the animated backdrop in dark mode.
+    backgroundColor: 'rgba(140,140,140,0.14)',
+    marginBottom: 14,
   },
+  inputIcon: { marginRight: 10 },
+  inputField: {
+    flex: 1,
+    height: '100%',
+    fontSize: 15,
+    color: colors.text,
+  },
+  eyeBtn: { padding: 4, marginLeft: 6 },
+  optionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 22,
+  },
+  rememberRow: { flexDirection: 'row', alignItems: 'center' },
+  rememberLabel: { marginLeft: 8, fontSize: 13, color: colors.textSecondary },
+  forgotLinkText: { color: '#F03E2F', fontSize: 13, fontWeight: '600' },
   button: {
     backgroundColor: '#F03E2F',
-    borderRadius: 10,
-    height: 52,
+    borderRadius: 14,
+    height: 54,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 4,
   },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  forgotLink: { alignSelf: 'center', marginTop: 16, padding: 4 },
-  forgotLinkText: { color: '#F03E2F', fontSize: 13, fontWeight: '600' },
+  secureRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 22,
+  },
+  secureText: { marginLeft: 6, fontSize: 12, color: colors.textMuted },
 }))
 
 export default function LoginScreen() {
@@ -144,6 +142,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const passwordRef = useRef<TextInput>(null)
@@ -157,7 +156,7 @@ export default function LoginScreen() {
     setError('')
     try {
       const data = await loginApi({ email, password })
-      login(data.token, data.user, data.school)
+      login(data.token, data.user, data.school, rememberMe)
     } catch (err: any) {
       // Fields kept — user can correct without retyping.
       // Only a real server REJECTION means bad credentials. A timeout or refused
@@ -192,40 +191,44 @@ export default function LoginScreen() {
         bounces={false}
         automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       >
-        {/* Light mode: warm parchment, not stark white — the card sat too bright on the
-            paper backdrop. Dark mode keeps the theme card colour. */}
-        <View style={[styles.card, !isDark && { backgroundColor: '#f6f0e2', borderWidth: 1, borderColor: 'rgba(140,120,85,0.28)' }]}>
-          <View style={styles.logoBox}>
-            <Ionicons name="school" size={26} color="#fff" />
+        <View style={styles.card}>
+          <View style={styles.logoRow}>
+            <View style={styles.logoIconBox}>
+              <Ionicons name="school" size={26} color="#fff" />
+            </View>
+            <Text style={styles.logoWordmark}>Bulletin</Text>
           </View>
-          <Text style={styles.title}>Bulletin</Text>
-          <Text style={styles.subtitle}>Sign in to your school account</Text>
+          <Text style={styles.tagline}>Marks, attendance, and report cards{'\n'}for your school, all in one place.</Text>
 
           {/* Fixed-height error row — card height never shifts; shakes on each failure */}
           <Animated.View style={[styles.errorRow, { transform: [{ translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-6, 6] }) }] }]}>
             {!!error && <Text style={styles.errorText}>{error}</Text>}
           </Animated.View>
 
-          <TextInput
-            style={styles.input}
-            placeholder="Email"
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            keyboardType="email-address"
-            textContentType="emailAddress"
-            returnKeyType="next"
-            onSubmitEditing={() => passwordRef.current?.focus()}
-            placeholderTextColor="#9ca3af"
-            selectionColor="#F03E2F"
-          />
+          <View style={styles.inputWrap}>
+            <Ionicons name="mail-outline" size={18} color="#9ca3af" style={styles.inputIcon} />
+            <TextInput
+              style={styles.inputField}
+              placeholder="Email"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              returnKeyType="next"
+              onSubmitEditing={() => passwordRef.current?.focus()}
+              placeholderTextColor="#9ca3af"
+              selectionColor="#F03E2F"
+            />
+          </View>
 
-          <View style={styles.passwordWrap}>
+          <View style={styles.inputWrap}>
+            <Ionicons name="lock-closed-outline" size={18} color="#9ca3af" style={styles.inputIcon} />
             <TextInput
               ref={passwordRef}
-              style={styles.passwordInput}
+              style={styles.inputField}
               placeholder="Password"
               value={password}
               onChangeText={setPassword}
@@ -251,6 +254,24 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
+          <View style={styles.optionsRow}>
+            <TouchableOpacity
+              style={styles.rememberRow}
+              onPress={() => setRememberMe(v => !v)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={rememberMe ? 'checkbox' : 'square-outline'}
+                size={19}
+                color={rememberMe ? '#F03E2F' : '#9ca3af'}
+              />
+              <Text style={styles.rememberLabel}>Remember me</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/forgot-password')} activeOpacity={0.7}>
+              <Text style={styles.forgotLinkText}>Forgot password?</Text>
+            </TouchableOpacity>
+          </View>
+
           <TouchableOpacity
             style={[styles.button, loading && styles.buttonDisabled]}
             onPress={handleLogin}
@@ -262,9 +283,10 @@ export default function LoginScreen() {
               : <Text style={styles.buttonText}>Sign In</Text>}
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.forgotLink} onPress={() => router.push('/forgot-password')} activeOpacity={0.7}>
-            <Text style={styles.forgotLinkText}>Forgot password?</Text>
-          </TouchableOpacity>
+          <View style={styles.secureRow}>
+            <Ionicons name="lock-closed-outline" size={12} color={colors.textMuted} />
+            <Text style={styles.secureText}>Secure sign-in</Text>
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

@@ -145,11 +145,29 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
 
     const teacherSubjects = await prisma.teacherSubject.findMany({
       where: { userId },
-      include: { subject: { select: { id: true, name: true, classLevel: true } } },
+      include: { subject: { select: { id: true, name: true, classLevel: true, term: true } } },
     })
 
+    // A course row names a specific semester via `subject.term` for universities
+    // (primary/secondary leave it null — one row spans the whole academic year, so it
+    // always counts). This lists everything taught across the WHOLE current session
+    // (both semesters / all terms) — "what am I currently teaching right now" is a
+    // separate, narrower question already answered by "Enter My Classes".
+    const currentTerm = await prisma.term.findFirst({ where: { schoolId, isCurrent: true } })
+    let sessionTermNames: Set<string> | null = null
+    if (currentTerm) {
+      const sessionTerms = await prisma.term.findMany({
+        where: { schoolId, session: currentTerm.session },
+        select: { name: true },
+      })
+      sessionTermNames = new Set(sessionTerms.map((t) => t.name))
+    }
+    const relevantTeacherSubjects = sessionTermNames
+      ? teacherSubjects.filter((ts) => !ts.subject.term || sessionTermNames!.has(ts.subject.term))
+      : teacherSubjects
+
     const classLevelNames = [...new Set([
-      ...teacherSubjects.map(ts => ts.subject.classLevel),
+      ...relevantTeacherSubjects.map(ts => ts.subject.classLevel),
       ...(masterClassLevel ? [masterClassLevel] : []),
     ])]
 
@@ -168,15 +186,17 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
       classLevelName: string
       departmentName: string | null
       isMasterClass: boolean
+      term: string | null
     }
 
-    const classes: ClassRow[] = teacherSubjects.map(ts => ({
+    const classes: ClassRow[] = relevantTeacherSubjects.map(ts => ({
       id: ts.id,
       subjectId: ts.subject.id,
       subjectName: ts.subject.name,
       classLevelName: ts.subject.classLevel,
       departmentName: classLevelByName.get(ts.subject.classLevel)?.department?.name ?? null,
       isMasterClass: ts.subject.classLevel === masterClassLevel,
+      term: ts.subject.term,
     }))
 
     // A class master's own class stays visible even if they teach no subject there.
@@ -188,6 +208,7 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
         classLevelName: masterClassLevel,
         departmentName: classLevelByName.get(masterClassLevel)?.department?.name ?? null,
         isMasterClass: true,
+        term: null,
       })
     }
 

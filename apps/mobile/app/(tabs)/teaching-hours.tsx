@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-  RefreshControl, Modal, TextInput, Alert,
+  RefreshControl, Modal, Alert,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getMyCoverage, CoverageRow, CoverageStatus } from '@/lib/api/coverage'
@@ -20,6 +20,24 @@ function dayOfWeekFor(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
   return ['SUNDAY', ...DAY_ORDER.slice(0, 6)][jsDay]
+}
+
+const toDateStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const todayStr = () => toDateStr(new Date())
+const dayShort = (d: string) => d.charAt(0) + d.slice(1, 3).toLowerCase()
+
+/** This calendar week (Monday–Sunday, local time) as concrete dates, in DAY_ORDER. */
+function thisWeekDates(): { date: string; dayOfWeek: string }[] {
+  const now = new Date()
+  const jsDay = now.getDay() // 0=Sun..6=Sat
+  const mondayOffset = jsDay === 0 ? -6 : 1 - jsDay
+  const monday = new Date(now)
+  monday.setDate(now.getDate() + mondayOffset)
+  return DAY_ORDER.map((dayOfWeek, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return { date: toDateStr(d), dayOfWeek }
+  })
 }
 
 const STATUS_COLOR: Record<CoverageStatus, string> = {
@@ -57,6 +75,16 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
   required: { color: '#ef4444' },
   input: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 10, padding: 12, fontSize: 14, color: colors.text, marginBottom: 14 },
+  dateChipRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  dateChip: {
+    alignItems: 'center', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary, minWidth: 58,
+  },
+  dateChipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  dateChipDay: { fontSize: 11, fontWeight: '600', color: colors.textSecondary },
+  dateChipDayActive: { color: 'rgba(255,255,255,0.85)' },
+  dateChipNum: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: 1 },
+  dateChipNumActive: { color: '#fff' },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
   checkBox: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' },
   checkBoxChecked: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
@@ -109,8 +137,14 @@ export default function TeachingHoursScreen() {
 
   const onRefresh = () => { setRefreshing(true); load() }
 
+  // Only this week's days you actually teach on — no free-text date entry, so you can
+  // never file an absence against a day with no class in the first place.
+  const weekChoices = thisWeekDates().filter((w) => slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+
   const openModal = () => {
-    setDate(''); setWholeDay(true); setSelectedSlotIds([])
+    const today = todayStr()
+    const initial = weekChoices.find((c) => c.date === today)?.date ?? weekChoices[0]?.date ?? ''
+    setDate(initial); setWholeDay(true); setSelectedSlotIds([])
     setModalVisible(true)
   }
 
@@ -118,7 +152,7 @@ export default function TeachingHoursScreen() {
 
   const handleSubmit = async () => {
     if (!DATE_RE.test(date)) {
-      Alert.alert(t('Validation'), t('Enter the date as YYYY-MM-DD'))
+      Alert.alert(t('Validation'), t('Select a day'))
       return
     }
     if (!wholeDay && selectedSlotIds.length === 0) {
@@ -207,10 +241,29 @@ export default function TeachingHoursScreen() {
             </View>
 
             <Text style={styles.label}>{t('Date')} <Text style={styles.required}>*</Text></Text>
-            <TextInput
-              style={styles.input} value={date} onChangeText={(v) => { setDate(v); setSelectedSlotIds([]) }}
-              placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" autoCapitalize="none"
-            />
+            {weekChoices.length === 0 ? (
+              <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t('No periods on your timetable this week.')}</Text>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dateChipRow}>
+                {weekChoices.map((c) => {
+                  const active = c.date === date
+                  const isToday = c.date === todayStr()
+                  const dayNum = Number(c.date.slice(8, 10))
+                  return (
+                    <TouchableOpacity
+                      key={c.date}
+                      style={[styles.dateChip, active && styles.dateChipActive]}
+                      onPress={() => { setDate(c.date); setSelectedSlotIds([]) }}
+                    >
+                      <Text style={[styles.dateChipDay, active && styles.dateChipDayActive]}>
+                        {isToday ? t('Today') : t(dayShort(c.dayOfWeek))}
+                      </Text>
+                      <Text style={[styles.dateChipNum, active && styles.dateChipNumActive]}>{dayNum}</Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </ScrollView>
+            )}
 
             {DATE_RE.test(date) && (
               daySlots.length === 0 ? (

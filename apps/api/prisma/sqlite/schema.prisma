@@ -112,6 +112,7 @@ model School {
   timetableSlots           TimetableSlot[]
   timetablePeriods         TimetablePeriod[]
   teacherAbsences          TeacherAbsence[]
+  notifications            Notification[]
 }
 
 model GradingScale {
@@ -202,6 +203,7 @@ model User {
   timetableSlots  TimetableSlot[]
   absences         TeacherAbsence[] @relation("TeacherAbsences")
   absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
+  notifications    Notification[]
 }
 
 model Student {
@@ -347,6 +349,22 @@ model TeacherAbsence {
 
   @@unique([teacherId, timetableSlotId, date])
   @@index([schoolId, teacherId])
+}
+
+// Mirrors schema.prisma — see the comment there.
+model Notification {
+  id          String    @id @default(uuid())
+  schoolId    String
+  recipientId String
+  type        String
+  title       String
+  body        String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  school      School    @relation(fields: [schoolId], references: [id])
+  recipient   User      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, readAt])
 }
 
 // Mirrors schema.prisma — see the comment there.

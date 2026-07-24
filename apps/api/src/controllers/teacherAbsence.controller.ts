@@ -47,6 +47,7 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
     const dayOfWeek = dateStringToDayOfWeek(date)
     const daySlots = await prisma.timetableSlot.findMany({
       where: { schoolId, teacherId, dayOfWeek, subjectId: { not: null } },
+      include: { subject: { select: { name: true } } },
     })
 
     const slotsToMark = wholeDay
@@ -65,6 +66,28 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
       skipDuplicates: true,
     })
 
+    // Admins get an in-app notification when a teacher reports their OWN absence —
+    // not when an admin logs it on someone's behalf, since they'd already know.
+    if (!isAdmin) {
+      const admins = await prisma.user.findMany({
+        where: { schoolId, isActive: true, role: { in: ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'] } },
+        select: { id: true },
+      })
+      if (admins.length > 0) {
+        const subjectNames = [...new Set(slotsToMark.map((s) => s.subject?.name).filter((n): n is string => !!n))]
+        const periodWord = slotsToMark.length === 1 ? 'period' : 'periods'
+        const body = wholeDay
+          ? `${teacher.name} reported absent for the whole day on ${date}.`
+          : `${teacher.name} reported absent for ${slotsToMark.length} ${periodWord} on ${date}${subjectNames.length ? ` (${subjectNames.join(', ')})` : ''}.`
+        await prisma.notification.createMany({
+          data: admins.map((a) => ({
+            schoolId, recipientId: a.id, type: 'TEACHER_ABSENCE',
+            title: 'Teacher absence reported', body,
+          })),
+        })
+      }
+    }
+
     res.status(201).json({ message: 'Absence recorded', count: slotsToMark.length })
   } catch (error) {
     console.error(error)
@@ -78,7 +101,10 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const isAdmin = ADMIN_ROLES.includes(req.user!.role)
 
-    const absence = await prisma.teacherAbsence.findFirst({ where: { id, schoolId } })
+    const absence = await prisma.teacherAbsence.findFirst({
+      where: { id, schoolId },
+      include: { teacher: { select: { name: true } }, slot: { include: { subject: { select: { name: true } } } } },
+    })
     if (!absence) { res.status(404).json({ message: 'Absence not found' }); return }
     if (!isAdmin && absence.teacherId !== req.user!.id) {
       res.status(403).json({ message: 'You do not have permission to perform this action' })
@@ -86,6 +112,27 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
     }
 
     await prisma.teacherAbsence.delete({ where: { id } })
+
+    // Mirrors createAbsence's notification — only when the TEACHER retracts their own
+    // report (not an admin tidying up a record), so admins see the reversal, not just
+    // the original "reported absent" that's no longer true.
+    if (!isAdmin) {
+      const admins = await prisma.user.findMany({
+        where: { schoolId, isActive: true, role: { in: ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'] } },
+        select: { id: true },
+      })
+      if (admins.length > 0) {
+        const subjectName = absence.slot.subject?.name
+        const body = `${absence.teacher.name} is no longer absent — retracted their report for ${absence.date}${subjectName ? ` (${subjectName})` : ''}.`
+        await prisma.notification.createMany({
+          data: admins.map((a) => ({
+            schoolId, recipientId: a.id, type: 'TEACHER_ABSENCE_RETRACTED',
+            title: 'Absence report retracted', body,
+          })),
+        })
+      }
+    }
+
     res.json({ message: 'Absence removed' })
   } catch (error) {
     console.error(error)
