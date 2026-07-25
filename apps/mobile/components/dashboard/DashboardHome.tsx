@@ -1,127 +1,57 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import AutoSlider from '@/components/AutoSlider'
+import ThemeToggle from '@/components/ThemeToggle'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getDashboardStats, getWeeklyStats, getTeacherClasses, WeeklyStats, TeacherClassRow } from '@/lib/api/dashboard'
 import { getCurrentTerm, CurrentTerm } from '@/lib/api/terms'
 import { getMyTimetable, MyTimetableSlot } from '@/lib/api/timetable'
-import { useTheme, Colors } from '@/lib/useTheme'
+import { useTheme, Colors, type, space, radius, font, hairlineWidth } from '@/lib/useTheme'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import { API_BASE } from '@/lib/config'
 import SetupChecklist from '@/components/SetupChecklist'
-import MonthCalendar from './MonthCalendar'
 
 interface Stats { students: number; teachers: number; reportCards: number; subjects: number }
 
 const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'CLASS_MASTER']
 const DAY_ORDER = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']
-const DEPT_PALETTE = ['#F03E2F', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#db2777']
 
-// colors.card is an opaque theme hex — this lets the header band/image show faintly
-// through the school card instead of hard-cutting it off.
-const hexToRgba = (hex: string, alpha: number) => {
-  const n = parseInt(hex.replace('#', ''), 16)
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`
+// ── Teacher home pager geometry (spec §3.5) ──
+// A fixed peek of the next panel telegraphs the swipe; do NOT use pagingEnabled
+// (it snaps to full screen width and fights the peek).
+const SCREEN_W = Dimensions.get('window').width
+const GUTTER = space.gutter
+const GAP = space.md
+const PEEK = 48
+const CARD_W = SCREEN_W - GUTTER * 2 - PEEK
+const SNAP = CARD_W + GAP
+const PANEL_MIN_H = 264
+
+// "Level 1" → "L1", "HND 2" → "H2", else first letter. Short code shown right-aligned.
+function shortCode(name: string): string {
+  const digit = name.match(/\d+/)?.[0]
+  const letter = name.trim()[0]?.toUpperCase() ?? ''
+  return digit ? `${/university|level/i.test(name) ? 'L' : letter}${digit}` : letter
 }
 
-const makeTsStyles = (colors: Colors) => StyleSheet.create(({
-  container: { flex: 1, backgroundColor: colors.bgSecondary },
-  band: { height: 140, backgroundColor: '#1a0605' },
-  bandOverlay: { flex: 1, backgroundColor: 'rgba(30,58,95,0.55)' },
-  // A solid white backing (not a border/ring) behind the logo — without it, a
-  // transparent-background logo all but disappeared against the dark band/card.
-  logoFrame: {
-    width: 104, height: 104, borderRadius: 24,
-    backgroundColor: '#fff',
-    marginTop: -52, marginBottom: 14,
-    padding: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
-  },
-  logoImg: {
-    width: '100%', height: '100%', borderRadius: 16,
-  },
-  content: { flex: 1, paddingHorizontal: 24, marginTop: -60 },
-  schoolCard: {
-    backgroundColor: hexToRgba(colors.card, 0.82), borderRadius: 20, padding: 24,
-    alignItems: 'center', marginBottom: 20,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1, shadowRadius: 16, elevation: 6,
-  },
-  crest: {
-    backgroundColor: '#1a0605', justifyContent: 'center', alignItems: 'center',
-    marginTop: -42, marginBottom: 14,
-    shadowColor: '#1a0605', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35, shadowRadius: 8, elevation: 8,
-    borderWidth: 4, borderColor: '#fff',
-  },
-  crestInner: { alignItems: 'center', justifyContent: 'center' },
-  crestText: { color: '#fff', fontWeight: '900', letterSpacing: 1 },
-  schoolName: { fontSize: 20, fontWeight: '800', color: colors.text, textAlign: 'center' },
-  typeBadge: {
-    marginTop: 6, backgroundColor: '#FEF2F1',
-    paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20,
-  },
-  typeText: { fontSize: 12, fontWeight: '700', color: '#F03E2F', letterSpacing: 1 },
-  divider: { width: 40, height: 2, backgroundColor: colors.border, borderRadius: 1, marginVertical: 16 },
-  greeting: { fontSize: 14, color: colors.textMuted },
-  teacherName: { fontSize: 22, fontWeight: '800', color: colors.text, marginTop: 2, textAlign: 'center' },
-  roleLabel: { fontSize: 13, color: colors.textSecondary, marginTop: 4, fontWeight: '500' },
-  dateText: { fontSize: 13, color: colors.textMuted, marginTop: 8 },
-  classesBtn: {
-    backgroundColor: '#F03E2F', borderRadius: 14, paddingVertical: 16, paddingHorizontal: 24,
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    shadowColor: '#F03E2F', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35, shadowRadius: 12, elevation: 6,
-  },
-  classesBtnText: { color: '#fff', fontWeight: '700', fontSize: 16, flex: 1, textAlign: 'center' },
-  classesBtnMaster: {
-    backgroundColor: '#7c3aed',
-    shadowColor: '#7c3aed',
-  },
-  hint: { fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: 14 },
-  chartCard: {
-    backgroundColor: colors.card, borderRadius: 14, padding: 12,
-    borderWidth: 1, borderColor: colors.border,
-  },
-  chartCardTitle: { fontSize: 12, fontWeight: '700', color: colors.text },
-  chartBarLabel: { fontSize: 10, color: colors.textSecondary },
-  chartBarBg: { height: 5, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' },
-  chartBarFill: { height: '100%', borderRadius: 3 },
-  infoCard: {
-    backgroundColor: colors.card, borderRadius: 16, padding: 16,
-    borderWidth: 1, borderColor: colors.border, marginBottom: 10,
-  },
-  infoCardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  infoIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#FEF2F1', alignItems: 'center', justifyContent: 'center' },
-  infoLabel: { fontSize: 12, color: colors.textMuted },
-  infoValue: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 1 },
-  sectionCard: {
-    backgroundColor: colors.card, borderRadius: 16, padding: 16,
-    borderWidth: 1, borderColor: colors.border, marginBottom: 14,
-  },
-  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sectionTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
-  sectionLink: { fontSize: 13, fontWeight: '600', color: '#F03E2F' },
-  classRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderLeftWidth: 4, borderRadius: 10, backgroundColor: colors.bgSecondary,
-    paddingVertical: 10, paddingHorizontal: 10, marginBottom: 8,
-  },
-  classRowTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
-  classRowSubtitle: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
-  lessonRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  lessonTime: { fontSize: 12, color: colors.textMuted, width: 46 },
-  lessonTitle: { fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 },
-}))
+// The full current week (Mon–Sun) for the Today panel's day strip, so the current
+// day is ALWAYS shown and highlighted — even on a weekend or a day with no periods.
+function weekdayStrip(now: Date) {
+  const day = now.getDay() // 0 Sun … 6 Sat
+  const monday = new Date(now)
+  monday.setDate(now.getDate() - ((day + 6) % 7))
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return d
+  })
+}
 
-// Narrower than the full available width so the next card visibly peeks in from the
-// right edge — a full-width card gave zero visual hint that there was a second one.
-const SIDE_CARD_GAP = 14
-const SIDE_CARD_WIDTH = Dimensions.get('window').width - 48 - 28
-const SIDE_CARD_STEP = SIDE_CARD_WIDTH + SIDE_CARD_GAP
+const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
 function getGreeting() {
   const h = new Date().getHours()
@@ -159,23 +89,23 @@ function TeacherHome() {
   const { colors } = useTheme()
   const t = useT()
   const locale = useLocaleCode()
-  const ts = makeTsStyles(colors)
-  const { user, school, activeSession } = useAuthStore()
+  const insets = useSafeAreaInsets()
+  const { user, school, activeSession, logout } = useAuthStore()
   const router = useRouter()
+  const handleLogout = () => { logout(); router.replace('/login') }
+  const pagerRef = useRef<ScrollView>(null)
   const [classes, setClasses] = useState<TeacherClassRow[]>([])
   const [classesLoading, setClassesLoading] = useState(true)
-  const [heroCardIndex, setHeroCardIndex] = useState(0)
+  const [panel, setPanel] = useState(0)
   const [term, setTerm] = useState<CurrentTerm | null>(null)
   const [todaySlots, setTodaySlots] = useState<MyTimetableSlot[]>([])
   const [timetableLoading, setTimetableLoading] = useState(true)
   const now = new Date()
-  const today = now.toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
-  const monthLabel = now.toLocaleDateString(locale, { month: 'long', year: 'numeric' })
-  const roleLabel = user?.role?.replace('_', ' ') ?? ''
+  const roleLabel = (user?.role?.replace(/_/g, ' ') ?? '').toLowerCase()
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
-  const sliderImages = (school?.coverImages?.length ? school.coverImages : school?.coverImage ? [school.coverImage] : []).map(u => `${API_BASE}${u}`)
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isUniversity = school?.type === 'UNIVERSITY'
+  const levelWord = isUniversity ? 'university school' : `${(school?.type ?? '').toLowerCase()} school`
 
   const fetchAll = useCallback(() => {
     getTeacherClasses().then((r) => setClasses(r.classes)).catch(() => {}).finally(() => setClassesLoading(false))
@@ -189,176 +119,209 @@ function TeacherHome() {
   useEffect(() => { fetchAll() }, [fetchAll])
   useFocusEffect(useCallback(() => { fetchAll() }, [fetchAll]))
 
-  const daysLeft = term ? Math.max(0, Math.ceil((new Date(term.endDate).getTime() - now.getTime()) / 86400000)) : null
+  // Ends-in copy fix (spec §3.3): "ends today" at 0, "ends in N days" ahead, "ended" past.
+  const daysLeft = term ? Math.ceil((new Date(term.endDate).getTime() - now.getTime()) / 86400000) : null
+  const endsLabel = daysLeft === null ? '' : daysLeft < 0 ? t('ended') : daysLeft === 0 ? t('ends today') : `${t('ends in')} ${daysLeft} ${t(daysLeft === 1 ? 'day' : 'days')}`
+  const yearLabel = (activeSession || '').replace(/\s*[/-]\s*/, ' / ') || '—'
 
-  const deptColor = useMemo(() => {
-    const seen = new Map<string, string>()
-    return (key: string) => {
-      if (!seen.has(key)) seen.set(key, DEPT_PALETTE[seen.size % DEPT_PALETTE.length])
-      return seen.get(key)!
+  // Default to Today while a class still lies ahead today, else Your courses (spec §3.5).
+  const nowHM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  const hasUpcoming = todaySlots.some((s) => (s.endTime ?? s.startTime) >= nowHM)
+  const nextSlotId = todaySlots.find((s) => (s.endTime ?? s.startTime) >= nowHM)?.id
+  const defaultPanel = hasUpcoming && todaySlots.length > 0 ? 1 : 0
+
+  // Apply the default panel once data lands (don't yank the pager if the user already swiped).
+  const appliedDefault = useRef(false)
+  useEffect(() => {
+    if (appliedDefault.current || timetableLoading) return
+    appliedDefault.current = true
+    if (defaultPanel === 1) {
+      setPanel(1)
+      requestAnimationFrame(() => pagerRef.current?.scrollTo({ x: SNAP, animated: false }))
     }
-  }, [classes])
+  }, [timetableLoading, defaultPanel])
+
+  const goToPanel = (i: number) => {
+    setPanel(i)
+    pagerRef.current?.scrollTo({ x: i * SNAP, animated: true })
+  }
+
+  const week = weekdayStrip(now)
+  const todayKey = now.toDateString()
+
+  const goToClass = (c: TeacherClassRow) => {
+    if (c.subjectId && term) {
+      router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
+    } else if (isClassMaster) {
+      router.push(`/class-master/${encodeURIComponent(c.classLevelName)}?termId=${term?.id ?? ''}` as any)
+    } else {
+      router.push('/(tabs)/report-cards')
+    }
+  }
+
+  const initials = (school?.name ?? 'S').split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
+  const shown = classes.slice(0, 4)
 
   return (
-    <ScrollView style={ts.container} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-      {sliderImages.length > 0
-        ? <AutoSlider images={sliderImages} style={ts.band} interval={6500} />
-        : <View style={ts.band} />}
+    <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ paddingBottom: space.xl }} showsVerticalScrollIndicator={false}>
+      {/* ── Header row (§3.1) — pad below the status bar so the crest/name clear it ── */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: insets.top + space.sm, paddingBottom: 18 }}>
+        <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.brassInk, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+          {logoUrl
+            ? <Image source={{ uri: logoUrl }} style={{ width: 34, height: 34, borderRadius: 17 }} resizeMode="contain" />
+            : <Text style={[type.itemTitle, { color: colors.brassInk }]}>{initials}</Text>}
+        </View>
+        <View style={{ flex: 1, marginLeft: space.md }}>
+          <Text style={[type.schoolName, { color: colors.text }]} numberOfLines={1}>{school?.name}</Text>
+          <Text style={[type.microLabel, { color: colors.textFaint }]}>{levelWord}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}>
+          <ThemeToggle size="sm" />
+          <TouchableOpacity onPress={() => router.push('/account')} hitSlop={8}>
+            <Ionicons name="person-circle-outline" size={22} color={colors.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleLogout} hitSlop={8}>
+            <Ionicons name="log-out-outline" size={22} color={colors.danger} />
+          </TouchableOpacity>
+        </View>
+      </View>
 
-      <View style={ts.content}>
-        <View style={ts.schoolCard}>
-          {logoUrl ? (
-            <View style={ts.logoFrame}>
-              <Image source={{ uri: logoUrl }} style={ts.logoImg} resizeMode="contain" />
+      {/* ── Greeting block (§3.2) ── */}
+      <View style={{ paddingHorizontal: GUTTER, marginBottom: space.lg }}>
+        <Text style={[type.bodySmall, { color: colors.textDim }]}>{t(getGreeting())},</Text>
+        <Text style={[type.greetingName, { color: colors.text, marginTop: 2 }]}>{user?.name}</Text>
+        <Text style={[type.microAccent, { color: colors.brassInk, marginTop: 6 }]}>{roleLabel}</Text>
+      </View>
+
+      {/* ── Ledger strip (§3.3) ── */}
+      <View style={{ marginHorizontal: GUTTER, borderTopWidth: hairlineWidth, borderBottomWidth: hairlineWidth, borderColor: colors.line, flexDirection: 'row', paddingVertical: space.md, marginBottom: space.xl }}>
+        <View style={{ flex: 1, paddingRight: space.md }}>
+          <Text style={[type.microLabel, { color: colors.textFaint }]}>{t('school year')}</Text>
+          <Text style={[type.dataLarge, { color: colors.text, marginTop: 4 }]}>{yearLabel}</Text>
+        </View>
+        <View style={{ flex: 1.15, paddingLeft: space.lg, borderLeftWidth: hairlineWidth, borderColor: colors.line }}>
+          <Text style={[type.microLabel, { color: colors.textFaint }]}>{t('current period')}</Text>
+          <Text style={[type.body, { color: colors.text, marginTop: 4 }]} numberOfLines={1}>{term?.name ?? t('Not set')}</Text>
+          {daysLeft !== null && <Text style={[type.microLabel, { color: colors.brassInk, marginTop: 2 }]}>{endsLabel}</Text>}
+        </View>
+      </View>
+
+      {/* ── Panel labels + progress rail (§3.4) ── */}
+      <View style={{ paddingHorizontal: GUTTER, flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity onPress={() => goToPanel(0)} activeOpacity={0.7}>
+          <Text style={[type.sectionTitle, { color: panel === 0 ? colors.text : colors.textOff }]}>{t(isUniversity ? 'Your courses' : 'Your classes')}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => goToPanel(1)} activeOpacity={0.7} style={{ marginLeft: space.lg }}>
+          <Text style={[type.sectionTitle, { color: panel === 1 ? colors.text : colors.textOff }]}>{t('Today')}</Text>
+        </TouchableOpacity>
+        <View style={{ flex: 1 }} />
+        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+      </View>
+      <View style={{ flexDirection: 'row', paddingHorizontal: GUTTER, gap: 5, marginTop: space.sm, marginBottom: space.md }}>
+        {[0, 1].map((i) => (
+          <View key={i} style={{ width: 26, height: 2, borderRadius: 2, backgroundColor: panel === i ? colors.brassInk : colors.line }} />
+        ))}
+      </View>
+
+      {/* ── Pager: Your courses / Today (§3.5) ── */}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        snapToInterval={SNAP}
+        snapToAlignment="start"
+        decelerationRate="fast"
+        contentContainerStyle={{ paddingHorizontal: GUTTER, gap: GAP }}
+        onMomentumScrollEnd={(e) => setPanel(Math.round(e.nativeEvent.contentOffset.x / SNAP))}
+      >
+        {/* Panel 1 — Your courses (ledger rows, §3.5) */}
+        <View style={{ width: CARD_W, minHeight: PANEL_MIN_H, backgroundColor: colors.surface, borderRadius: radius.card, paddingVertical: space.xs, paddingHorizontal: space.lg }}>
+          {classesLoading ? (
+            <View style={{ height: 40, marginVertical: space.md, backgroundColor: colors.line, borderRadius: radius.chip }} />
+          ) : shown.length === 0 ? (
+            <Text style={[type.bodySmall, { color: colors.textDim, textAlign: 'center', paddingVertical: space.xl }]}>
+              {t("You haven't been assigned any classes yet.")}
+            </Text>
+          ) : (
+            shown.map((c, i) => (
+              <TouchableOpacity
+                key={c.id}
+                onPress={() => goToClass(c)}
+                activeOpacity={0.7}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, borderTopWidth: i === 0 ? 0 : hairlineWidth, borderColor: colors.hairline }}
+              >
+                <Text style={[type.microLabel, { color: colors.textFaint, width: 16 }]}>{String(i + 1).padStart(2, '0')}</Text>
+                <View style={{ flex: 1, marginLeft: space.md }}>
+                  <Text style={[type.itemTitle, { color: colors.text }]} numberOfLines={1}>{c.subjectName ?? t('Class oversight')}</Text>
+                  {!!c.departmentName && <Text style={[type.microLabel, { color: colors.textFaint, marginTop: 2 }]} numberOfLines={1}>{c.departmentName.toLowerCase()}</Text>}
+                </View>
+                <Text style={[type.microLabel, { color: colors.brassInk, marginLeft: space.sm }]}>{shortCode(c.classLevelName)}</Text>
+              </TouchableOpacity>
+            ))
+          )}
+          {classes.length > 0 && (
+            <TouchableOpacity onPress={() => router.push('/my-courses' as any)} style={{ paddingTop: space.md, paddingBottom: space.sm }}>
+              <Text style={[type.microAccent, { color: colors.brassInk }]}>{t('view all')} {classes.length} {t(isUniversity ? 'courses' : 'classes')}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Panel 2 — Today (day strip + session rows, §3.5) */}
+        <View style={{ width: CARD_W, minHeight: PANEL_MIN_H, backgroundColor: colors.surface, borderRadius: radius.card, paddingVertical: space.md, paddingHorizontal: space.lg }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingBottom: space.md, borderBottomWidth: hairlineWidth, borderColor: colors.hairline }}>
+            {week.map((d) => {
+              const isToday = d.toDateString() === todayKey
+              return (
+                <View key={d.toISOString()} style={{ alignItems: 'center', borderRadius: radius.chip, paddingHorizontal: space.xs, paddingVertical: 4, minWidth: 30, backgroundColor: isToday ? colors.brassFill : 'transparent' }}>
+                  <Text style={[type.microLabel, { color: isToday ? colors.onBrass : colors.textFaint }]}>{WD[d.getDay()]}</Text>
+                  <Text style={[type.dataMedium, { color: isToday ? colors.onBrass : colors.textDim, marginTop: 2 }]}>{d.getDate()}</Text>
+                </View>
+              )
+            })}
+          </View>
+          {timetableLoading ? (
+            <View style={{ height: 30, marginTop: space.md, backgroundColor: colors.line, borderRadius: radius.chip }} />
+          ) : todaySlots.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: space.xl }}>
+              <Ionicons name="calendar-outline" size={20} color={colors.textFaint} />
+              <Text style={[type.bodySmall, { color: colors.textDim, marginTop: space.sm }]}>{t('No lessons scheduled for today')}</Text>
             </View>
           ) : (
-            <SchoolCrest name={school?.name ?? 'SC'} size={104} />
-          )}
-          <Text style={ts.schoolName}>{school?.name}</Text>
-          <View style={ts.typeBadge}>
-            <Text style={ts.typeText}>{school?.type} SCHOOL</Text>
-          </View>
-          <View style={ts.divider} />
-          <Text style={ts.greeting}>{getGreeting()},</Text>
-          <Text style={ts.teacherName}>{user?.name}</Text>
-          <Text style={ts.roleLabel}>{roleLabel}</Text>
-          <Text style={ts.dateText}>{today}</Text>
-        </View>
-
-        {/* School Year + Current Period */}
-        <View style={ts.infoCard}>
-          <View style={ts.infoCardRow}>
-            <View style={ts.infoIcon}><Ionicons name="school-outline" size={18} color="#F03E2F" /></View>
-            <View>
-              <Text style={ts.infoLabel}>{t('School Year')}</Text>
-              <Text style={ts.infoValue}>{activeSession || t('Not set')}</Text>
-            </View>
-          </View>
-        </View>
-        <View style={ts.infoCard}>
-          <View style={ts.infoCardRow}>
-            <View style={ts.infoIcon}><Ionicons name="time-outline" size={18} color="#F03E2F" /></View>
-            <View>
-              <Text style={ts.infoLabel}>{t('Current Period')}</Text>
-              <Text style={ts.infoValue}>{term?.name ?? t('Not set')}</Text>
-              {daysLeft !== null && (
-                <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>{t('Ends in')}: {daysLeft} {t(daysLeft === 1 ? 'day' : 'days')}</Text>
-              )}
-            </View>
-          </View>
-        </View>
-
-        {/* Your Classes + Calendar/Timetable — side by side, swipe between them,
-            instead of stacked one above the other. Narrower cards + a peek of the next
-            one, plus dots below, so it visibly reads as swipeable rather than a
-            one-off card that happens to be full width. */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          snapToInterval={SIDE_CARD_STEP}
-          decelerationRate="fast"
-          onScroll={(e) => setHeroCardIndex(Math.round(e.nativeEvent.contentOffset.x / SIDE_CARD_STEP))}
-          scrollEventThrottle={32}
-        >
-          {/* Your Classes — capped to 5 here; the full list (this teacher's own courses
-              for the whole session, not department-wide) lives at /my-courses. */}
-          <View style={[ts.sectionCard, { width: SIDE_CARD_WIDTH, marginRight: SIDE_CARD_GAP, marginBottom: 0 }]}>
-            <View style={ts.sectionHeaderRow}>
-              <Text style={ts.sectionTitle}>{t(isUniversity ? 'Your Courses' : 'Your Classes')}</Text>
-              {classes.length > 5 && (
-                <TouchableOpacity onPress={() => router.push('/my-courses' as any)}>
-                  <Text style={ts.sectionLink}>{t('View all my courses')}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            {classesLoading ? (
-              <View style={{ height: 40, backgroundColor: colors.bgSecondary, borderRadius: 10 }} />
-            ) : classes.length === 0 ? (
-              <Text style={{ fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 12 }}>
-                {t("You haven't been assigned any classes yet.")}
-              </Text>
-            ) : (
-              classes.slice(0, 5).map((c) => {
-                const color = deptColor(c.departmentName ?? c.classLevelName)
-                const subtitle = [c.departmentName, c.classLevelName].filter(Boolean).join(' · ')
-                // Straight to the marks-entry table for this subject when there is one —
-                // landing on the class's course list first meant an extra tap every time.
-                const goTo = () => {
-                  if (c.subjectId && term) {
-                    router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
-                  } else if (isClassMaster) {
-                    router.push(`/class-master/${encodeURIComponent(c.classLevelName)}?termId=${term?.id ?? ''}` as any)
-                  } else {
-                    router.push('/(tabs)/report-cards')
-                  }
-                }
-                return (
-                  <TouchableOpacity
-                    key={c.id}
-                    style={[ts.classRow, { borderLeftColor: color }]}
-                    onPress={goTo}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={ts.classRowTitle} numberOfLines={1}>{c.subjectName ?? t('Class Oversight')}</Text>
-                      <Text style={ts.classRowSubtitle} numberOfLines={1}>{subtitle}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-                  </TouchableOpacity>
-                )
-              })
-            )}
-          </View>
-
-          {/* Calendar + Today's Lessons */}
-          <View style={[ts.sectionCard, { width: SIDE_CARD_WIDTH, marginBottom: 0 }]}>
-            <View style={ts.sectionHeaderRow}>
-              <Text style={ts.sectionTitle}>{monthLabel}</Text>
-              <TouchableOpacity onPress={() => router.push('/(tabs)/timetable')}>
-                <Text style={ts.sectionLink}>{t('View Timetable')}</Text>
-              </TouchableOpacity>
-            </View>
-            <MonthCalendar today={now} colors={colors} />
-            <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.border }}>
-              <Text style={{ fontSize: 10, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.5, marginBottom: 8 }}>
-                {t("Today's Lessons").toUpperCase()}
-              </Text>
-              {timetableLoading ? (
-                <View style={{ height: 30, backgroundColor: colors.bgSecondary, borderRadius: 8 }} />
-              ) : todaySlots.length === 0 ? (
-                <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                  <Ionicons name="calendar-outline" size={20} color={colors.textMuted} />
-                  <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>{t('No lessons scheduled for today')}</Text>
-                </View>
-              ) : (
-                todaySlots.map((s) => (
-                  <View key={s.id} style={ts.lessonRow}>
-                    <Text style={ts.lessonTime}>{s.startTime}</Text>
-                    <Text style={ts.lessonTitle} numberOfLines={1}>
+            todaySlots.map((s) => {
+              const isNext = s.id === nextSlotId
+              return (
+                <View key={s.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md }}>
+                  <View style={{ width: 46 }}>
+                    <Text style={[type.dataMedium, { color: colors.text }]}>{s.startTime}</Text>
+                    {!!s.endTime && <Text style={[type.microLabel, { color: colors.textFaint }]}>{s.endTime}</Text>}
+                  </View>
+                  <View style={{ width: 1, alignSelf: 'stretch', marginHorizontal: space.md, backgroundColor: isNext ? colors.brassInk : colors.brassEdge }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.itemTitle, { color: colors.text }]} numberOfLines={1}>
                       {s.subjectId ? (s.subjectName ?? t('Unknown subject')) : (s.label ?? t('Private class'))}
                     </Text>
+                    {(s.room || s.classLevel) && (
+                      <Text style={[type.microLabel, { color: colors.textFaint, marginTop: 2 }]} numberOfLines={1}>
+                        {[s.room, s.classLevel].filter(Boolean).join(' · ').toLowerCase()}
+                      </Text>
+                    )}
                   </View>
-                ))
-              )}
-            </View>
-          </View>
-        </ScrollView>
-        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginBottom: 14 }}>
-          {[0, 1].map((i) => (
-            <View key={i} style={{
-              width: heroCardIndex === i ? 16 : 6, height: 6, borderRadius: 3,
-              backgroundColor: heroCardIndex === i ? colors.primary : colors.border,
-            }} />
-          ))}
+                </View>
+              )
+            })
+          )}
         </View>
+      </ScrollView>
 
-        <TouchableOpacity style={[ts.classesBtn, user?.role === 'CLASS_MASTER' && ts.classesBtnMaster]} onPress={() => router.push('/(tabs)/report-cards')} activeOpacity={0.85}>
-          <Ionicons name={user?.role === 'CLASS_MASTER' ? 'chatbubble-ellipses-outline' : 'school-outline'} size={20} color="#fff" />
-          <Text style={ts.classesBtnText}>{user?.role === 'CLASS_MASTER' ? t('Manage Remarks') : t('Enter My Classes')}</Text>
-          <Ionicons name="arrow-forward-outline" size={18} color="rgba(255,255,255,0.7)" />
-        </TouchableOpacity>
-        <Text style={ts.hint}>{user?.role === 'CLASS_MASTER' ? 'Tap to select a class and add general remarks' : 'Tap to select a class and start entering marks'}</Text>
-      </View>
+      {/* ── Primary button (§3.6) — flat brass, no glow ── */}
+      <TouchableOpacity
+        onPress={() => router.push('/(tabs)/report-cards')}
+        activeOpacity={0.85}
+        style={{ marginHorizontal: GUTTER, marginTop: space.xl, backgroundColor: colors.brassFill, borderRadius: radius.control, paddingVertical: 15, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center' }}
+      >
+        <Text style={[type.buttonLabel, { color: colors.onBrass, flex: 1 }]}>{isClassMaster ? t('Enter remarks') : t('Enter my classes')}</Text>
+        <Ionicons name="arrow-forward" size={18} color={colors.onBrass} />
+      </TouchableOpacity>
     </ScrollView>
   )
 }

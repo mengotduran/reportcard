@@ -1,25 +1,66 @@
+import { useEffect } from 'react'
+import { View } from 'react-native'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { Stack } from 'expo-router'
+import { StatusBar } from 'expo-status-bar'
+import * as SplashScreen from 'expo-splash-screen'
+import { useFonts } from 'expo-font'
+import { Newsreader_400Regular, Newsreader_500Medium } from '@expo-google-fonts/newsreader'
+import { IBMPlexSans_400Regular, IBMPlexSans_500Medium } from '@expo-google-fonts/ibm-plex-sans'
+import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 import { useTheme } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { applyGlobalFont } from '@/lib/theme/applyGlobalFont'
+
+// App-wide default font (IBM Plex Sans) for any Text/TextInput that doesn't set
+// its own — runs once at module load, before first render.
+applyGlobalFont()
+
+// Keep the native splash up until our custom fonts are ready — never flash the
+// system font, and never paint a white frame on cold start (see backgroundColor
+// on the root View below + expo.backgroundColor in app.json).
+SplashScreen.preventAutoHideAsync().catch(() => {})
 
 export default function RootLayout() {
-  const { colors } = useTheme()
+  const { colors, isDark } = useTheme()
   const t = useT()
   const { school } = useAuthStore()
+
+  const [fontsLoaded] = useFonts({
+    Newsreader_400Regular,
+    Newsreader_500Medium,
+    IBMPlexSans_400Regular,
+    IBMPlexSans_500Medium,
+    IBMPlexMono_400Regular,
+    IBMPlexMono_500Medium,
+  })
+
+  useEffect(() => {
+    if (fontsLoaded) SplashScreen.hideAsync().catch(() => {})
+  }, [fontsLoaded])
+
+  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: colors.bg }} />
+
   // Universities use different wording for the same screens — just a different header title.
   const isUniversity = school?.type === 'UNIVERSITY'
   const termsTitle = isUniversity ? t('Semesters') : t('Terms')
   const subjectsTitle = isUniversity ? t('Courses') : t('Subjects')
   const classesTitle = isUniversity ? t('Departments') : t('Classes')
   return (
-    <Stack
+    <SafeAreaProvider>
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack
       screenOptions={{
         animation: 'slide_from_right',
         animationDuration: 280,
         headerShadowVisible: false,
         headerBackButtonDisplayMode: 'minimal',
-        contentStyle: { backgroundColor: colors.bgSecondary },
+        headerStyle: { backgroundColor: colors.bg },
+        headerTintColor: colors.brassInk,
+        headerTitleStyle: { fontFamily: 'Newsreader_500Medium', color: colors.text },
+        contentStyle: { backgroundColor: colors.bg },
       }}
     >
       <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
@@ -39,7 +80,7 @@ export default function RootLayout() {
           // default) and trimming the font size keeps it clear of the arrow on both
           // platforms without truncating.
           headerTitleAlign: 'center',
-          headerTitleStyle: { fontSize: 16, fontWeight: '700' },
+          headerTitleStyle: { fontFamily: 'Newsreader_500Medium', fontSize: 16, color: colors.text },
         }}
       />
       <Stack.Screen name="report-card/[id]" options={{ title: t('Report Card'), headerBackTitle: '' }} />
@@ -57,5 +98,7 @@ export default function RootLayout() {
       <Stack.Screen name="admin/report-card-design" options={{ title: t('Card Design'), headerBackTitle: '' }} />
       <Stack.Screen name="admin/class-list-design" options={{ title: t('Class List Design'), headerBackTitle: '' }} />
     </Stack>
+    </View>
+    </SafeAreaProvider>
   )
 }

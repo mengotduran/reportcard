@@ -1,41 +1,35 @@
 import { useColorScheme } from 'react-native'
 import { useThemeStore } from './store/theme.store'
+import { themes, type Theme } from './theme/tokens'
 
-export const lightColors = {
-  bg:            '#e2e2e2',
-  bgSecondary:   '#d5d5d5',
-  card:          '#e8e8e8',
-  text:          '#09090b',
-  textSecondary: '#71717a',
-  textMuted:     '#a1a1aa',
-  border:        '#bebebe',
-  borderLight:   '#d5d5d5',
-  inputBg:       '#e2e2e2',
-  headerBg:      '#e8e8e8',
-  tabBg:         '#e8e8e8',
-  tabBorder:     '#bebebe',
-  primary:       '#F03E2F',
-  skeleton:      '#d5d5d5',
+// The design-system palette (new key names live in lib/theme/tokens.ts).
+// We expose those keys AND a set of back-compat aliases mapping the old palette
+// key names onto the new brass-on-brown tokens, so every screen that still reads
+// `colors.card` / `colors.primary` / etc. reskins instantly while it waits to be
+// rebuilt against the proper new keys.
+function withAliases(t: Theme) {
+  return {
+    ...t,
+    // ── back-compat aliases (old key name → new token) ──
+    bgSecondary: t.bg,
+    card: t.surface,
+    textSecondary: t.textDim,
+    textMuted: t.textFaint,
+    border: t.line,
+    borderLight: t.hairline,
+    inputBg: t.surface,
+    headerBg: t.bg,
+    tabBg: t.bg,
+    tabBorder: t.line,
+    primary: t.brassFill, // fills stay gold; text/line uses should migrate to brassInk
+    skeleton: t.line,
+  }
 }
 
-export const darkColors = {
-  bg:            '#101112',
-  bgSecondary:   '#1c1c1f',
-  card:          '#161618',
-  text:          '#ffffff',
-  textSecondary: '#a1a1aa',
-  textMuted:     '#71717a',
-  border:        '#27272a',
-  borderLight:   '#1f1f22',
-  inputBg:       '#1c1c1f',
-  headerBg:      '#101112',
-  tabBg:         '#101112',
-  tabBorder:     '#27272a',
-  primary:       '#F03E2F',
-  skeleton:      '#27272a',
-}
+const lightColors = withAliases(themes.light)
+const darkColors = withAliases(themes.dark)
 
-export type Colors = typeof lightColors
+export type Colors = typeof darkColors
 
 export function useTheme(): { isDark: boolean; colors: Colors } {
   const { theme } = useThemeStore()
@@ -47,3 +41,7 @@ export function useTheme(): { isDark: boolean; colors: Colors } {
 
   return { isDark, colors: isDark ? darkColors : lightColors }
 }
+
+// Re-export the design-system pieces so screens can import everything from one place.
+export { type, font, space, radius, hairlineWidth, themes } from './theme/tokens'
+export type { Theme } from './theme/tokens'
