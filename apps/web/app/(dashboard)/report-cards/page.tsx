@@ -72,6 +72,9 @@ interface ReportCard {
   status: string
   totalScore: number | null
   average: number | null
+  /** University only — this card's own semester GPA (credits × grade points). Null for
+   *  primary/secondary, and for a university card with no credited, scored courses yet. */
+  gpa?: number | null
   decision?: string | null
   // Every period of this card's session has a published report card, so the
   // annual transcript can be printed (see getReportCards).
@@ -706,7 +709,9 @@ export default function ReportCardsPage() {
           { label: tr('Name'), value: (s) => s.name },
           { label: tr('Student ID'), value: (s) => s.studentIdCode },
           ...data.subjects.map((subj) => ({ label: subj, value: (s: MarksExportStudent) => s.scores[subj] ?? '' })),
-          { label: tr('Average'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
+          // This export reads ReportCard.average, which for a university is a weighted
+          // mark out of 100, not a /20 average — label it for what it actually is.
+          { label: isUniversity ? tr('Total / 100') : tr('Average / 20'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
           { label: tr('Rank'), value: (s) => s.position ?? '' },
         ])
         files.push({ name: datedFilename(`school-marks-${data.term.name}`), content: csv })
@@ -851,7 +856,10 @@ export default function ReportCardsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Class')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Term')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr(isUniversity ? 'Courses' : 'Subjects')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Average')}</th>
+                {/* A university's `average` is a weighted mark out of 100, which reads as
+                    a broken /20 average here — GPA is the metric that means something for
+                    them. Primary/secondary keep the /20 average. */}
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr(isUniversity ? 'GPA' : 'Average')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Decision')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Status')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Actions')}</th>
@@ -874,7 +882,11 @@ export default function ReportCardsPage() {
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.student.classLevel}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.term.name} — {rc.term.session}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.entries.length} {tr('subjects')}</td>
-                  <td className="px-4 py-3 text-sm font-medium text-foreground">{rc.average != null ? rc.average.toFixed(1) : '—'}</td>
+                  <td className="px-4 py-3 text-sm font-medium text-foreground">
+                    {isUniversity
+                      ? (rc.gpa != null ? rc.gpa.toFixed(2) : '—')
+                      : (rc.average != null ? `${rc.average.toFixed(1)} / 20` : '—')}
+                  </td>
                   <td className="px-4 py-3">
                     {rc.decision === 'PASS' && (
                       <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded-full">PASS</span>

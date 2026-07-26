@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import {
-  getOverview, getAllSchools, getSchoolAdmins, getSchoolDetail,
+  getOverview, getAllSchools, getSchoolAdmins, updateAdminEmail, getSchoolDetail,
   createStandaloneSchool, createParentSchool, addSectionToParent, addSectionToSchool,
   toggleSchoolActive, toggleParentSchoolActive, deleteSchool, deleteParentSchool, updateSchool,
   toggleTermPrinting,
@@ -14,6 +14,7 @@ router.use(protect, restrictTo('SUPERADMIN'))
 router.get('/overview', getOverview)
 router.get('/schools', getAllSchools)
 router.get('/schools/:schoolId/admins', getSchoolAdmins)
+router.patch('/users/:userId/email', updateAdminEmail)
 router.get('/schools/:schoolId/detail', getSchoolDetail)
 
 router.post('/schools', createStandaloneSchool)

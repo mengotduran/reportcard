@@ -7,7 +7,7 @@ import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import {
   getClassFeesApi, addBulkPaymentsApi, formatXAF, ClassFees, FeeStatus,
 } from '@/lib/api/fees'
-import { Wallet, Save, Eye, Search } from 'lucide-react'
+import { Wallet, Save, Eye, Search, Loader2 } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
@@ -59,6 +59,10 @@ export default function FeesPage() {
   const [activeDeptId, setActiveDeptId] = useState('')
   const [data, setData]               = useState<ClassFees | null>(null)
   const [loading, setLoading]         = useState(false)
+  // Distinct from `loading` (which only covers switching between already-known classes):
+  // this covers the initial classes/departments fetch, so the "no classes" empty state
+  // can't flash before that fetch has even had a chance to populate `classes`.
+  const [initializing, setInitializing] = useState(true)
   const [rows, setRows]               = useState<Record<string, RowEntry>>({})
   const [saving, setSaving]           = useState(false)
   const [search, setSearch]           = useState('')
@@ -90,7 +94,7 @@ export default function FeesPage() {
         }
       }
     }
-    init().catch(() => {})
+    init().catch(() => {}).finally(() => setInitializing(false))
   }, [isAuthenticated])
 
   // Classes visible in the current level tab (university), active department
@@ -292,7 +296,12 @@ export default function FeesPage() {
         </div>
       )}
 
-      {!activeClass ? (
+      {initializing ? (
+        <div className="bg-card rounded-xl border border-border text-center py-12">
+          <Loader2 size={24} className="mx-auto mb-2 text-muted-foreground animate-spin" />
+          <p className="text-muted-foreground text-sm">{t('Loading...')}</p>
+        </div>
+      ) : !activeClass ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <Wallet size={32} className="mx-auto mb-2 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">{t('No classes defined yet — go to the Classes page to add them.')}</p>

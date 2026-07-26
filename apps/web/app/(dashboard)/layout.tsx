@@ -92,6 +92,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isAdminRole = NOTIFICATION_ADMIN_ROLES.includes(user?.role ?? '')
+  // Who gets the notification bell: admins (a teacher self-reported/retracted an absence)
+  // AND teachers/class masters (an admin logged or removed an absence FOR them). The API
+  // is role-agnostic — it returns each user's own notifications — so this is purely which
+  // roles we surface the bell + poll to.
+  const receivesNotifications = isAdminRole || isTeacher || isClassMaster
   const baseNavItems = isSuperAdmin ? SUPERADMIN_NAV : isClassMaster ? CLASS_MASTER_NAV : isTeacher ? TEACHER_NAV : ADMIN_NAV
   // Universities use different wording for the same routes/data — just relabel the nav.
   // Keyed by label (not href) since "Classes" appears on multiple hrefs across the
@@ -129,17 +134,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useBodyScrollLock(mobileNavOpen)
   const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'
 
-  // Only admins receive notifications (teacher-absence reports) for now — polled, not
-  // true push (see the mobile TabsLayout for the same pattern/reasoning).
+  // Polled, not true push (see the mobile TabsLayout for the same pattern/reasoning).
   const [unreadCount, setUnreadCount] = useState(0)
   useEffect(() => {
-    if (!user || !isAdminRole) return
+    if (!user || !receivesNotifications) return
     let cancelled = false
     const poll = () => getMyNotificationsApi().then((r) => { if (!cancelled) setUnreadCount(r.unreadCount) }).catch(() => {})
     poll()
     const interval = setInterval(poll, NOTIFICATION_POLL_MS)
     return () => { cancelled = true; clearInterval(interval) }
-  }, [user, isAdminRole])
+  }, [user, receivesNotifications])
 
   const handleLangToggle = async (lang: 'EN' | 'FR') => {
     updateUser({ preferredLanguage: lang })
@@ -172,7 +176,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span className="text-[13px] text-muted-foreground truncate border-l border-border pl-2">{school.name}</span>
             )}
           </div>
-          {isAdminRole && (
+          {receivesNotifications && (
             <button
               onClick={() => router.push('/notifications')}
               aria-label="Notifications"
@@ -254,7 +258,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </div>
             </div>
 
-            {isAdminRole && (
+            {receivesNotifications && (
               <button
                 onClick={() => { router.push('/notifications'); setMobileNavOpen(false) }}
                 className={`w-full flex items-center justify-between px-3 py-[7px] rounded-md text-[13px] transition-colors ${

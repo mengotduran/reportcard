@@ -113,6 +113,7 @@ model School {
   timetablePeriods         TimetablePeriod[]
   teacherAbsences          TeacherAbsence[]
   notifications            Notification[]
+  pastTermMarksGrants      PastTermMarksGrant[]
 }
 
 model GradingScale {
@@ -204,6 +205,7 @@ model User {
   absences         TeacherAbsence[] @relation("TeacherAbsences")
   absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
   notifications    Notification[]
+  pastTermMarksGrantsGiven PastTermMarksGrant[]
 }
 
 model Student {
@@ -310,27 +312,31 @@ model Subject {
   reportEntries   ReportEntry[]
   teacherSubjects TeacherSubject[]
   timetableSlots  TimetableSlot[]
+  pastTermGrants  PastTermMarksGrant[]
 }
 
 // Mirrors schema.prisma — see the comment there.
 model TimetableSlot {
-  id        String   @id @default(uuid())
-  schoolId  String
-  teacherId String
-  dayOfWeek String
-  startTime String
-  endTime   String
-  subjectId String?
-  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  label     String?
-  room      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  school    School   @relation(fields: [schoolId], references: [id])
-  teacher   User     @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  absences  TeacherAbsence[]
+  id           String    @id @default(uuid())
+  schoolId     String
+  teacherId    String
+  dayOfWeek    String
+  startTime    String
+  endTime      String
+  subjectId    String?
+  subject      Subject?  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  label        String?
+  room         String?
+  specificDate String?
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  school       School    @relation(fields: [schoolId], references: [id])
+  teacher      User      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  absences     TeacherAbsence[]
 
   @@index([schoolId, teacherId])
+  @@index([schoolId, teacherId, archivedAt])
 }
 
 // Mirrors schema.prisma — see the comment there.
@@ -404,6 +410,24 @@ model Term {
 
   school      School       @relation(fields: [schoolId], references: [id])
   reportCards ReportCard[]
+  pastTermMarksGrants PastTermMarksGrant[]
+}
+
+// Mirrors schema.prisma — see the comment there.
+model PastTermMarksGrant {
+  id          String   @id @default(uuid())
+  schoolId    String
+  subjectId   String
+  termId      String
+  createdAt   DateTime @default(now())
+  grantedById String
+  school      School   @relation(fields: [schoolId], references: [id])
+  subject     Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  term        Term     @relation(fields: [termId], references: [id], onDelete: Cascade)
+  grantedBy   User     @relation(fields: [grantedById], references: [id])
+
+  @@unique([subjectId, termId])
+  @@index([schoolId, termId])
 }
 
 model ReportCard {

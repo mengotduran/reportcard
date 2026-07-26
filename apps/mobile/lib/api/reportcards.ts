@@ -4,6 +4,10 @@ export interface ReportCardSummary {
   id: string
   status: string
   average: number | null
+  /** University only — this card's own semester GPA (credits × grade points). A
+   *  university's `average` is a weighted mark out of 100, not a /20 average, so the
+   *  list shows this instead. Null for primary/secondary. */
+  gpa?: number | null
   student: { name: string; classLevel: string }
   // The list endpoint returns the whole term; `id` was missing here, so the term filter
   // on the report cards tab could not compile against it.
@@ -75,9 +79,26 @@ export const getClassLevels = async (): Promise<{ classLevels: string[] }> => {
 
 export const getClassOverview = async (
   termId: string,
-  classLevel: string
-): Promise<{ students: ClassStudentOverview[]; subjectCount: number; teacherSubjectCount: number }> => {
-  const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel } })
+  classLevel: string,
+  subjectId?: string
+): Promise<{
+  students: ClassStudentOverview[]; subjectCount: number; teacherSubjectCount: number
+  // Only meaningful when subjectId is passed — whether this term is the currently
+  // active one, and (if not) whether an admin has unlocked this subject+term for
+  // teachers to edit anyway. See PastTermMarksGrant.
+  isCurrentTerm: boolean; pastTermEditGranted: boolean
+}> => {
+  const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel, subjectId } })
+  return res.data
+}
+
+export const getPastTermGrant = async (subjectId: string, termId: string): Promise<{ granted: boolean }> => {
+  const res = await api.get('/past-term-grants', { params: { subjectId, termId } })
+  return res.data
+}
+
+export const setPastTermGrant = async (subjectId: string, termId: string, granted: boolean): Promise<{ granted: boolean }> => {
+  const res = await api.put('/past-term-grants', { subjectId, termId, granted })
   return res.data
 }
 
@@ -181,7 +202,21 @@ export const bulkPublish = async (classLevel: string, termId: string) => {
   return res.data as { published: number; skipped: number; issues: { student: string; reason: string }[] }
 }
 
-export const getAllReportCards = async (params?: { termId?: string; classLevel?: string; session?: string }) => {
+// Paginated: one session unpaginated is ~2.6MB of JSON, which reliably blew the 15s
+// timeout and surfaced as "Failed to load report cards.". `search` is server-side for
+// the same reason — filtering only loaded rows would silently search one page.
+export const getAllReportCards = async (params?: {
+  termId?: string; classLevel?: string; session?: string
+  /** Comma-separated classes — how a secondary school's department filter is sent. */
+  classLevels?: string
+  page?: number; pageSize?: number; search?: string
+}) => {
   const res = await api.get('/report-cards', { params })
-  return res.data as { reportCards: (ReportCardSummary & { marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null })[]; total: number }
+  return res.data as {
+    reportCards: (ReportCardSummary & { marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null })[]
+    total: number
+    page?: number
+    pageSize?: number
+    hasMore?: boolean
+  }
 }

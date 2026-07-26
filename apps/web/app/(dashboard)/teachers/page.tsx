@@ -510,7 +510,9 @@ export default function TeachersPage() {
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, masterClassLevel: '' })}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="CLASS_TEACHER">{tr('Class Teacher')}</option>
-                  <option value="CLASS_MASTER">{tr('Class Master')}</option>
+                  {/* Class Master is a primary/secondary concept — one teacher overseeing
+                      a single class of students all day. Universities have no equivalent. */}
+                  {!isUniversity && <option value="CLASS_MASTER">{tr('Class Master')}</option>}
                 </select>
               </div>
               {hasDeptView && deptNames.length > 0 && (
@@ -649,7 +651,9 @@ export default function TeachersPage() {
                   onChange={(e) => setEditForm({ ...editForm, role: e.target.value, masterClassLevel: '' })}
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="CLASS_TEACHER">{tr('Class Teacher')}</option>
-                  <option value="CLASS_MASTER">{tr('Class Master')}</option>
+                  {/* Class Master is a primary/secondary concept — one teacher overseeing
+                      a single class of students all day. Universities have no equivalent. */}
+                  {!isUniversity && <option value="CLASS_MASTER">{tr('Class Master')}</option>}
                 </select>
               </div>
               {hasDeptView && deptNames.length > 0 && (

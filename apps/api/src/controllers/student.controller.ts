@@ -1,5 +1,5 @@
 import { Response } from 'express'
-import prisma from '../config/prisma'
+import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { demoLimitBlock } from '../config/demo'
 
@@ -92,17 +92,48 @@ export const getStudents = async (req: AuthRequest, res: Response) => {
         : { reportCards: { some: { term: { session } } } }
     }
 
-    const students = await prisma.student.findMany({
-      where: {
-        schoolId,
-        ...yearOrStatusScope,
-        ...(classLevel ? { classLevel: String(classLevel) } : {}),
-        ...(search ? { name: { contains: String(search), mode: 'insensitive' } } : {})
-      },
-      orderBy: { name: 'asc' }
-    })
+    const where = {
+      schoolId,
+      ...yearOrStatusScope,
+      ...(classLevel ? { classLevel: String(classLevel) } : {}),
+      // Matches name, matricule OR class — the same three fields the clients were
+      // filtering on locally, so moving search server-side (needed once the list is
+      // paginated) doesn't quietly narrow what's searchable.
+      //
+      // `mode: 'insensitive'` is Postgres-only — passing it to SQLite throws "Unknown
+      // argument mode", which took out student search entirely on offline installs.
+      // SQLite's LIKE is already case-insensitive for ASCII, so it just omits the flag.
+      ...(search
+        ? (() => {
+            const value = String(search)
+            const like = IS_OFFLINE_BUILD ? { contains: value } : { contains: value, mode: 'insensitive' as const }
+            return { OR: [{ name: like }, { studentId: like }, { classLevel: like }] }
+          })()
+        : {}),
+    }
 
-    res.json({ students, total: students.length })
+    // Optional pagination — omitting page/pageSize keeps the whole-roster behavior, so
+    // existing callers (web, imports, exports) are untouched. `id` breaks ties on name
+    // so paging can't drop or repeat a student between pages.
+    const pageNum = Number(req.query.page)
+    const pageSizeNum = Number(req.query.pageSize)
+    const paginated = Number.isInteger(pageNum) && pageNum > 0 && Number.isInteger(pageSizeNum) && pageSizeNum > 0
+    const pageSize = paginated ? Math.min(pageSizeNum, 200) : 0
+
+    const [students, totalCount] = await Promise.all([
+      prisma.student.findMany({
+        where,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        ...(paginated ? { skip: (pageNum - 1) * pageSize, take: pageSize } : {}),
+      }),
+      paginated ? prisma.student.count({ where }) : Promise.resolve(null),
+    ])
+
+    res.json({
+      students,
+      total: totalCount ?? students.length,
+      ...(paginated ? { page: pageNum, pageSize, hasMore: pageNum * pageSize < (totalCount ?? 0) } : {}),
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

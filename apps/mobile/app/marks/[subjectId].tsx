@@ -3,13 +3,13 @@ import { useTheme, Colors } from '@/lib/useTheme'
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView,
-  Platform, Keyboard,
+  Platform, Keyboard, Animated, Switch,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getClassOverview, getReportCard, createReportCard,
-  saveEntries, getSubjects,
+  saveEntries, getSubjects, setPastTermGrant,
 } from '@/lib/api/reportcards'
 import { getGradingScale, gradeFromScore, isFailingMark, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
 import { useAuthStore } from '@/lib/store/auth.store'
@@ -33,6 +33,55 @@ interface Row {
    *  from isLocked so the banner can't blame publishing for a row that simply passed. */
   isPublished?: boolean
   resitEligible?: boolean
+}
+
+// Slow pulse (opacity 0.5 <-> 1) shared by every placeholder block in the skeleton below.
+function useSkeletonPulse() {
+  const anim = useRef(new Animated.Value(0.5)).current
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1, duration: 650, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0.5, duration: 650, useNativeDriver: true }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [anim])
+  return anim
+}
+
+function SkeletonBlock({ colors, opacity, style }: { colors: Colors; opacity: Animated.Value; style?: any }) {
+  return <Animated.View style={[{ backgroundColor: colors.border, borderRadius: 4, opacity }, style]} />
+}
+
+// Mirrors the real table's structure (header + N rows, same column widths) instead of a
+// plain centered spinner, so the screen doesn't blank out then pop — and it can't be
+// mistaken for actual data, unlike leaving stale rows on screen during a refetch.
+function MarksSkeleton({ colors, s }: { colors: Colors; s: any }) {
+  const opacity = useSkeletonPulse()
+  return (
+    <>
+      <View style={s.headerRow}>
+        <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
+        <View style={s.colName}><Text style={s.headerText}>STUDENT NAME</Text></View>
+        <View style={s.colScore}><Text style={s.headerText}>MARKS</Text></View>
+        <View style={s.colRemark}><Text style={s.headerText}>PERFORMANCE</Text></View>
+      </View>
+      <ScrollView style={{ flex: 1 }}>
+        {Array.from({ length: 10 }).map((_, i) => (
+          <View key={i} style={[s.dataRow, i % 2 === 1 && s.dataRowAlt]}>
+            <View style={s.colNum}><SkeletonBlock colors={colors} opacity={opacity} style={{ width: 14, height: 10 }} /></View>
+            <View style={[s.colName, { justifyContent: 'center' }]}>
+              <SkeletonBlock colors={colors} opacity={opacity} style={{ width: `${55 + (i % 4) * 10}%`, height: 12 }} />
+            </View>
+            <View style={s.colScore}><SkeletonBlock colors={colors} opacity={opacity} style={{ width: 36, height: 22, borderRadius: 6 }} /></View>
+            <View style={s.colRemark}><SkeletonBlock colors={colors} opacity={opacity} style={{ width: 64, height: 18, borderRadius: 10 }} /></View>
+          </View>
+        ))}
+      </ScrollView>
+    </>
+  )
 }
 
 export default function MarksEntryScreen() {
@@ -71,6 +120,16 @@ export default function MarksEntryScreen() {
   const [saving, setSaving] = useState(false)
   const [activeCell, setActiveCell] = useState<string | null>(null)
   const inputRefs = useRef<Record<string, TextInput | null>>({})
+  // Whether this term is still the currently active one, and (if not) whether an admin
+  // has unlocked THIS subject for teachers to edit anyway. Defaults to true/false so
+  // nothing looks locked while the real values are still loading.
+  const [isCurrentTerm, setIsCurrentTerm] = useState(true)
+  const [pastTermEditGranted, setPastTermEditGranted] = useState(false)
+  const [grantSaving, setGrantSaving] = useState(false)
+  // A teacher may only edit a NON-current term if an admin has explicitly granted this
+  // exact subject+term. Admins are never subject to this — only a teacher's own standing
+  // changes once a term closes. Same rule the API actually enforces in saveEntries.
+  const pastTermLockedForTeacher = !isAdminRole && !isCurrentTerm && !pastTermEditGranted
 
   useEffect(() => {
     navigation.setOptions({ title: `${decodedSubjectName} · ${seqLabel}` })
@@ -85,7 +144,12 @@ export default function MarksEntryScreen() {
     if (subject?.maxScore) setMaxScore(subject.maxScore)
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
 
-    const overview = await getClassOverview(termId, decodedClass)
+    const overview = await getClassOverview(termId, decodedClass, decodedSubjectId)
+    setIsCurrentTerm(overview.isCurrentTerm)
+    setPastTermEditGranted(overview.pastTermEditGranted)
+    // Computed from THIS fetch's own result, not the outer pastTermLockedForTeacher —
+    // that's derived from state which wouldn't be updated yet inside this same closure.
+    const freshPastTermLocked = !isAdminRole && !overview.isCurrentTerm && !overview.pastTermEditGranted
     // Sort alphabetically
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
 
@@ -129,17 +193,21 @@ export default function MarksEntryScreen() {
           score, otherSeqScore,
           // Marks recorded centrally: readable, not editable (see the web grid) — except
           // the CA tab, which a university teacher may still fill under this policy.
-          isLocked: frozenByPublish || (isResit && !resitEligible) || (adminOnlyMarks && !grantedToMe && !caExemptForTeacher),
+          isLocked: frozenByPublish || (isResit && !resitEligible) || (adminOnlyMarks && !grantedToMe && !caExemptForTeacher) || freshPastTermLocked,
           isPublished: frozenByPublish,
           resitEligible,
         }
       })
     setRows(loaded)
-  }, [termId, decodedClass, decodedSubjectId, seqIndex])
+  }, [termId, decodedClass, decodedSubjectId, seqIndex, isAdminRole])
 
   useFocusEffect(useCallback(() => {
-    // Catch here or a timeout surfaces as an unhandled-rejection red box instead of a
-    // screen the user can act on.
+    // Re-runs whenever `fetchData`'s identity changes — including when the CA/Exam/Resit
+    // tab switches `seqIndex` via setParams, not just on focus. Without setLoading(true)
+    // here, the OLD sequence's rows stayed on screen but got re-labeled/re-graded against
+    // the NEW sequence's max score (e.g. a CA mark out of 30 briefly graded as an Exam
+    // mark out of 70 — a false "FAIL"), until the refetch quietly resolved underneath.
+    setLoading(true)
     setLoadError('')
     fetchData()
       .catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.')))
@@ -161,6 +229,21 @@ export default function MarksEntryScreen() {
   // tab that N cards were published and to contact their admin, when those rows were
   // really just students who passed and were never resit-eligible.
   const publishedCount = rows.filter(r => r.isPublished).length
+
+  // Admin-only: unlock/lock this exact subject+term for teachers to edit again, once it's
+  // no longer current. Contextual here rather than a separate management screen — the
+  // admin is already looking at exactly the (subject, term) pair this decision is about.
+  const handleTogglePastTermGrant = async (value: boolean) => {
+    setGrantSaving(true)
+    try {
+      const res = await setPastTermGrant(decodedSubjectId, termId, value)
+      setPastTermEditGranted(res.granted)
+    } catch {
+      Alert.alert(t('Error'), t('Failed to update access'))
+    } finally {
+      setGrantSaving(false)
+    }
+  }
 
   const handleSaveAll = async () => {
     setSaving(true)
@@ -225,12 +308,15 @@ export default function MarksEntryScreen() {
   const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
   const otherSeqShort = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
 
+  // Same lock every individual cell already respects (row.isLocked) — otherwise this was
+  // a back door around ADMIN_ONLY: a teacher couldn't type into a locked Exam cell, but
+  // could still bulk-fill every row from CA through this button.
   const handleCopyFromOther = () => {
-    const hasCurrent = rows.some((r) => r.score !== '')
+    const hasCurrent = rows.some((r) => !r.isLocked && r.score !== '')
     const doCopy = () => {
       setRows((prev) =>
         prev.map((r) =>
-          r.otherSeqScore !== null
+          !r.isLocked && r.otherSeqScore !== null
             ? { ...r, score: String(r.otherSeqScore) }
             : r
         )
@@ -243,7 +329,7 @@ export default function MarksEntryScreen() {
         [{ text: t('Cancel'), style: 'cancel' }, { text: t('Copy'), onPress: doCopy }]
       )
     } else {
-      const hasOther = rows.some((r) => r.otherSeqScore !== null)
+      const hasOther = rows.some((r) => !r.isLocked && r.otherSeqScore !== null)
       if (!hasOther) {
         Alert.alert(t('No data'), `${otherSeqLabel} ${t('has no marks yet.')}`)
         return
@@ -256,7 +342,7 @@ export default function MarksEntryScreen() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
       <View style={s.container}>
         {loading ? (
-          <View style={s.center}><ActivityIndicator size="large" color="#F03E2F" /></View>
+          <MarksSkeleton colors={colors} s={s} />
         ) : loadError ? (
           <View style={s.center}>
             <Ionicons name="cloud-offline-outline" size={40} color="#9ca3af" />
@@ -311,6 +397,28 @@ export default function MarksEntryScreen() {
           </View>
         )}
 
+        {/* Past-term lock — teacher's view: explains why a non-current term is read-only
+            even though nothing here is published. Admin's view: a contextual toggle to
+            unlock this exact subject+term, since they're already looking at it. */}
+        {!isCurrentTerm && (
+          isAdminRole ? (
+            <View style={[s.resitBar, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+              <Text style={[s.resitBarText, { flex: 1, marginRight: 8 }]}>
+                {t('This term has ended. Allow teachers to edit marks here anyway?')}
+              </Text>
+              {grantSaving ? <ActivityIndicator size="small" color="#1d4ed8" /> : (
+                <Switch value={pastTermEditGranted} onValueChange={handleTogglePastTermGrant} />
+              )}
+            </View>
+          ) : pastTermLockedForTeacher && (
+            <View style={s.resitBar}>
+              <Text style={s.resitBarText}>
+                {t("This term is no longer current, so it's locked. Ask an admin to grant you access if you need to fix something here.")}
+              </Text>
+            </View>
+          )
+        )}
+
         {/* Copy bar — resit has nothing to copy from */}
         {/* Why the sheet is read-only, or a teacher meets a dead grid and assumes the
             app is broken rather than seeing a school policy. */}
@@ -329,7 +437,9 @@ export default function MarksEntryScreen() {
               {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
             </Text>
           </View>
-        ) : (
+        ) : editableRows.length > 0 && (
+          // Pointless (and would look like a back door around ADMIN_ONLY) to show a
+          // "fill this in" shortcut on a tab this user has no editable rows on at all.
           <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
             <Ionicons name="copy-outline" size={15} color="#7c3aed" />
             <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>

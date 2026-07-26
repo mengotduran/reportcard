@@ -13,7 +13,10 @@ export interface Student {
   status?: StudentStatus
 }
 
-export const getStudents = async (params?: { classLevel?: string; search?: string; session?: string; status?: string }): Promise<{ students: Student[] }> => {
+export const getStudents = async (params?: {
+  classLevel?: string; search?: string; session?: string; status?: string
+  page?: number; pageSize?: number
+}): Promise<{ students: Student[]; total: number; page?: number; pageSize?: number; hasMore?: boolean }> => {
   const res = await api.get('/students', { params })
   return res.data
 }

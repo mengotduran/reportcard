@@ -133,11 +133,10 @@ export default function TabsLayout() {
         <Tabs.Screen name="report-cards" options={{ title: t('Report Cards'), tabBarIcon: ({ color, size }) => <Ionicons name="document-text-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ title: t('Students'), tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="more" options={{ title: t('More'), tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" size={size} color={color} /> }} />
+        <Tabs.Screen name="teaching-hours" options={{ title: t('Attendance'), tabBarIcon: ({ color, size }) => <Ionicons name="checkmark-done-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="schools" options={{ href: null }} />
         {/* Admin editor is web-only — no timetable-building screen on mobile. */}
         <Tabs.Screen name="timetable" options={{ href: null }} />
-        {/* Admin's coverage report is web-only (a filterable table), same reasoning as timetable above. */}
-        <Tabs.Screen name="teaching-hours" options={{ href: null }} />
       </Tabs>
     )
   }

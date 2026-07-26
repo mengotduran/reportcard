@@ -10,6 +10,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getDashboardStats, getWeeklyStats, getTeacherClasses, WeeklyStats, TeacherClassRow } from '@/lib/api/dashboard'
 import { getCurrentTerm, CurrentTerm } from '@/lib/api/terms'
 import { getMyTimetable, MyTimetableSlot } from '@/lib/api/timetable'
+import { getMyNotifications } from '@/lib/api/notifications'
 import { useTheme, Colors, type, space, radius, font, hairlineWidth } from '@/lib/useTheme'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import { API_BASE } from '@/lib/config'
@@ -100,6 +101,7 @@ function TeacherHome() {
   const [term, setTerm] = useState<CurrentTerm | null>(null)
   const [todaySlots, setTodaySlots] = useState<MyTimetableSlot[]>([])
   const [timetableLoading, setTimetableLoading] = useState(true)
+  const [unreadCount, setUnreadCount] = useState(0)
   const now = new Date()
   const roleLabel = (user?.role?.replace(/_/g, ' ') ?? '').toLowerCase()
   const logoUrl = school?.logo ? `${API_BASE}${school.logo}` : null
@@ -114,6 +116,10 @@ function TeacherHome() {
       const todayName = DAY_ORDER[new Date().getDay()]
       setTodaySlots(r.slots.filter((s) => s.dayOfWeek === todayName).sort((a, b) => a.startTime.localeCompare(b.startTime)))
     }).catch(() => {}).finally(() => setTimetableLoading(false))
+    // Unread notifications (e.g. an admin logged/removed an absence for this teacher) —
+    // the whole point is the teacher sees it on landing here, not only if they dig into
+    // Attendance. Refreshed on every focus, same as the rest.
+    getMyNotifications().then((r) => setUnreadCount(r.unreadCount)).catch(() => {})
   }, [])
 
   useEffect(() => { fetchAll() }, [fetchAll])
@@ -165,10 +171,10 @@ function TeacherHome() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ paddingBottom: space.xl }} showsVerticalScrollIndicator={false}>
       {/* ── Header row (§3.1) — pad below the status bar so the crest/name clear it ── */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: insets.top + space.sm, paddingBottom: 18 }}>
-        <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.brassInk, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: insets.top + space.lg, paddingBottom: 18 }}>
+        <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.brassInk, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', backgroundColor: logoUrl ? '#fff' : 'transparent' }}>
           {logoUrl
-            ? <Image source={{ uri: logoUrl }} style={{ width: 34, height: 34, borderRadius: 17 }} resizeMode="contain" />
+            ? <Image source={{ uri: logoUrl }} style={{ width: 32, height: 32, borderRadius: 16 }} resizeMode="contain" />
             : <Text style={[type.itemTitle, { color: colors.brassInk }]}>{initials}</Text>}
         </View>
         <View style={{ flex: 1, marginLeft: space.md }}>
@@ -177,6 +183,14 @@ function TeacherHome() {
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}>
           <ThemeToggle size="sm" />
+          <TouchableOpacity onPress={() => router.push('/notifications')} hitSlop={8}>
+            <Ionicons name="notifications-outline" size={22} color={colors.textDim} />
+            {unreadCount > 0 && (
+              <View style={{ position: 'absolute', top: -4, right: -4, backgroundColor: colors.danger, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 }}>
+                <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' }}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/account')} hitSlop={8}>
             <Ionicons name="person-circle-outline" size={22} color={colors.textDim} />
           </TouchableOpacity>

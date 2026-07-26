@@ -5,7 +5,7 @@ import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
 import { useFonts } from 'expo-font'
-import { Newsreader_400Regular, Newsreader_500Medium } from '@expo-google-fonts/newsreader'
+import { Blinker_400Regular, Blinker_600SemiBold } from '@expo-google-fonts/blinker'
 import { IBMPlexSans_400Regular, IBMPlexSans_500Medium } from '@expo-google-fonts/ibm-plex-sans'
 import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 import { useTheme } from '@/lib/useTheme'
@@ -28,8 +28,8 @@ export default function RootLayout() {
   const { school } = useAuthStore()
 
   const [fontsLoaded] = useFonts({
-    Newsreader_400Regular,
-    Newsreader_500Medium,
+    Blinker_400Regular,
+    Blinker_600SemiBold,
     IBMPlexSans_400Regular,
     IBMPlexSans_500Medium,
     IBMPlexMono_400Regular,
@@ -59,7 +59,7 @@ export default function RootLayout() {
         headerBackButtonDisplayMode: 'minimal',
         headerStyle: { backgroundColor: colors.bg },
         headerTintColor: colors.brassInk,
-        headerTitleStyle: { fontFamily: 'Newsreader_500Medium', color: colors.text },
+        headerTitleStyle: { fontFamily: 'Blinker_600SemiBold', color: colors.text },
         contentStyle: { backgroundColor: colors.bg },
       }}
     >
@@ -68,6 +68,7 @@ export default function RootLayout() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="account/index" options={{ title: t('My Account'), headerBackTitle: '' }} />
       <Stack.Screen name="notifications" options={{ title: t('Notifications'), headerBackTitle: '' }} />
+      <Stack.Screen name="absences" options={{ title: t('Absences'), headerBackTitle: '' }} />
       <Stack.Screen name="my-courses" options={{ headerBackTitle: '' }} />
       <Stack.Screen name="class/[classLevel]" options={{ headerBackTitle: '' }} />
       <Stack.Screen
@@ -80,7 +81,7 @@ export default function RootLayout() {
           // default) and trimming the font size keeps it clear of the arrow on both
           // platforms without truncating.
           headerTitleAlign: 'center',
-          headerTitleStyle: { fontFamily: 'Newsreader_500Medium', fontSize: 16, color: colors.text },
+          headerTitleStyle: { fontFamily: 'Blinker_600SemiBold', fontSize: 16, color: colors.text },
         }}
       />
       <Stack.Screen name="report-card/[id]" options={{ title: t('Report Card'), headerBackTitle: '' }} />

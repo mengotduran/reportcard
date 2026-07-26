@@ -202,26 +202,34 @@ export default function CreateTeacherScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>{t('ROLE')}</Text>
-          <View style={styles.toggle}>
-            <TouchableOpacity
-              style={[styles.toggleBtn, role === 'CLASS_TEACHER' && styles.toggleActive]}
-              onPress={() => setRole('CLASS_TEACHER')}
-            >
-              <Text style={[styles.toggleText, role === 'CLASS_TEACHER' && styles.toggleTextActive]}>
-                {t('Class Teacher')}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggleBtn, role === 'CLASS_MASTER' && styles.toggleActive]}
-              onPress={() => setRole('CLASS_MASTER')}
-            >
-              <Text style={[styles.toggleText, role === 'CLASS_MASTER' && styles.toggleTextActive]}>
-                {t('Class Master')}
-              </Text>
-            </TouchableOpacity>
-          </View>
+          {/* Class Master is a primary/secondary concept — one teacher overseeing a
+              single class of students all day. Universities have no equivalent. */}
+          {isUniversity ? (
+            <View style={[styles.toggleBtn, styles.toggleActive, { alignSelf: 'flex-start', paddingHorizontal: 20 }]}>
+              <Text style={[styles.toggleText, styles.toggleTextActive]}>{t('Class Teacher')}</Text>
+            </View>
+          ) : (
+            <View style={styles.toggle}>
+              <TouchableOpacity
+                style={[styles.toggleBtn, role === 'CLASS_TEACHER' && styles.toggleActive]}
+                onPress={() => setRole('CLASS_TEACHER')}
+              >
+                <Text style={[styles.toggleText, role === 'CLASS_TEACHER' && styles.toggleTextActive]}>
+                  {t('Class Teacher')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.toggleBtn, role === 'CLASS_MASTER' && styles.toggleActive]}
+                onPress={() => setRole('CLASS_MASTER')}
+              >
+                <Text style={[styles.toggleText, role === 'CLASS_MASTER' && styles.toggleTextActive]}>
+                  {t('Class Master')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-          {role === 'CLASS_MASTER' && (
+          {role === 'CLASS_MASTER' && !isUniversity && (
             <>
               <Text style={[styles.label, { marginTop: 16 }]}>{t('Master Class Level')} <Text style={styles.required}>*</Text></Text>
               <TextInput

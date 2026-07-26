@@ -64,16 +64,17 @@ export const themes = { dark, light } as const
 
 // ── Fonts ────────────────────────────────────────────────────────────────────
 // Three families, three jobs. Do not use a family outside its job.
-//   Newsreader      display serif  → names, section headings, course/session titles
+//   Blinker         display        → names, section headings, course/session titles
 //   IBM Plex Sans   UI sans        → body copy, button labels, conversational text
 //   IBM Plex Mono   data + labels  → dates, times, codes, lowercase letterspaced micro labels
 //
 // On React Native you set weight by picking the font key, NOT by fontWeight.
 // Setting fontWeight on a custom font does nothing or triggers a fake bold.
 // Always pick the right key and leave fontWeight unset.
+// Blinker has no 500-weight cut, so displayMedium uses 600SemiBold instead.
 export const font = {
-  displayRegular: 'Newsreader_400Regular',
-  displayMedium: 'Newsreader_500Medium',
+  displayRegular: 'Blinker_400Regular',
+  displayMedium: 'Blinker_600SemiBold',
   sansRegular: 'IBMPlexSans_400Regular',
   sansMedium: 'IBMPlexSans_500Medium',
   monoRegular: 'IBMPlexMono_400Regular',

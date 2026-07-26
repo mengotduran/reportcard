@@ -10,6 +10,10 @@ import { useT } from '@/lib/i18n'
 import WeekGrid, { WeekGridSlot } from '@/components/WeekGrid'
 
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
+const formatOneOffDate = (dateStr: string): string => {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
 
 const makeStyles = (colors: Colors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -64,7 +68,7 @@ export default function TimetableScreen() {
   const gridSlots: WeekGridSlot[] = slots.map((s) => ({
     id: s.id, dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime,
     title: s.subjectId ? (s.subjectName ?? t('Unknown subject')) : (s.label ?? ''),
-    subtitle: s.subjectId ? s.classLevel : s.room,
+    subtitle: s.subjectId ? s.classLevel : [s.room, s.specificDate ? formatOneOffDate(s.specificDate) : null].filter(Boolean).join(' · ') || null,
     isPrivate: !s.subjectId,
   }))
 
@@ -115,8 +119,10 @@ export default function TimetableScreen() {
                 </View>
 
                 <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>{t('Day')}</Text>
-                  <Text style={styles.detailValue}>{t(dayLabel(selectedSlot.dayOfWeek))}</Text>
+                  <Text style={styles.detailLabel}>{selectedSlot.specificDate ? t('Date') : t('Day')}</Text>
+                  <Text style={styles.detailValue}>
+                    {selectedSlot.specificDate ? formatOneOffDate(selectedSlot.specificDate) : t(dayLabel(selectedSlot.dayOfWeek))}
+                  </Text>
                 </View>
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>{t('Time')}</Text>

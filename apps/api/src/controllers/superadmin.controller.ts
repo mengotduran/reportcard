@@ -510,6 +510,28 @@ export const getSchoolAdmins = async (req: Request, res: Response) => {
   }
 }
 
+// A superadmin fixing a wrong/inaccessible admin email — the actual account-recovery
+// step is the existing "Reset Password" action right next to this one in the same
+// School Admins list, which emails a fresh setup link to whatever email is on file.
+// Changing it here just makes sure that link goes somewhere the admin can actually read.
+export const updateAdminEmail = async (req: Request, res: Response) => {
+  try {
+    const userId = String(req.params.userId)
+    const trimmed = String(req.body.email ?? '').trim().toLowerCase()
+    if (!trimmed) { res.status(400).json({ message: 'Email is required' }); return }
+
+    const admin = await prisma.user.findFirst({ where: { id: userId, role: { in: ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'] } } })
+    if (!admin) { res.status(404).json({ message: 'Admin not found' }); return }
+
+    const updated = await prisma.user.update({ where: { id: userId }, data: { email: trimmed } })
+    res.json({ id: updated.id, name: updated.name, email: updated.email, role: updated.role })
+  } catch (error: any) {
+    if (error?.code === 'P2002') { res.status(409).json({ message: 'That email is already in use by another account' }); return }
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 // Keep old endpoint for backward compat
 export const getAllSchools = async (_req: Request, res: Response) => {
   try {

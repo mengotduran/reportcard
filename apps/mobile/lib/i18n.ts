@@ -70,6 +70,9 @@ const FR: Record<string, string> = {
   'Actions': 'Actions',
   'Back': 'Retour',
   'Next': 'Suivant',
+  // Pagination
+  'of': 'sur',
+  'Page': 'Page',
   'Previous': 'Précédent',
   'Print': 'Imprimer',
   'Download': 'Télécharger',

@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { getCurrentTerm, getClassLevels, getClassOverview, getAllReportCards, bulkPublish, ReportCardSummary, Term } from '@/lib/api/reportcards'
 import { getClasses as getClassesFull } from '@/lib/api/classes'
 import { getDepartments, Department } from '@/lib/api/departments'
+import Pagination from '@/components/Pagination'
 
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 import { getTerms } from '@/lib/api/terms'
@@ -18,6 +19,9 @@ import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
+// Rows per request. Small enough that one page is ~90KB rather than the 2.6MB a whole
+// session used to ship in a single request (which timed out on a phone network).
+const PAGE_SIZE = 30
 
 interface ClassSummary {
   classLevel: string
@@ -69,7 +73,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   errorText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center' },
   emptyText: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
   searchWrap: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0,
     margin: 16, backgroundColor: colors.card, borderRadius: 10,
     borderWidth: 1, borderColor: colors.border, paddingHorizontal: 12,
   },
@@ -96,6 +100,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   rcMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   rcRight: { alignItems: 'flex-end', gap: 4 },
   rcAverage: { fontSize: 16, fontWeight: '800', color: colors.text },
+  rcAverageUnit: { fontSize: 10, fontWeight: '600', color: colors.textMuted },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
   publishedBadge: { backgroundColor: '#dcfce7' },
   draftBadge: { backgroundColor: '#fef9c3' },
@@ -189,6 +194,9 @@ function TeacherReportCards() {
         </View>
       )}
       <FlatList
+        // See the admin list below — without flex: 1 this sizes to full content height
+        // and squeezes the term banner above it once classes load.
+        style={{ flex: 1 }}
         data={isSecondary && activeDeptId ? classes.filter((c) => classDeptMap[c.classLevel] === activeDeptId) : classes}
         keyExtractor={(item) => item.classLevel}
         contentContainerStyle={styles.list}
@@ -261,6 +269,7 @@ function AdminReportCards() {
   const router = useRouter()
   const { activeSession, school } = useAuthStore()
   const isSecondary = school?.type === 'SECONDARY'
+  const isUniversity = school?.type === 'UNIVERSITY'
   const [reportCards, setReportCards] = useState<AdminReportCard[]>([])
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
   const [selectedTermId, setSelectedTermId] = useState<string | null>(null)
@@ -272,18 +281,43 @@ function AdminReportCards() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [activeDeptId, setActiveDeptId] = useState('')
   const [classDeptMap, setClassDeptMap] = useState<Record<string, string | null>>({})
+  const [page, setPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const listRef = useRef<FlatList<string>>(null)
+  // Typing hits the server now, so debounce it rather than firing a request per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), 350)
+    return () => clearTimeout(id)
+  }, [search])
 
   // Only the active academic year's terms.
   const visibleTerms = terms.filter((tm) => tm.session === activeSession)
 
-  const fetchData = useCallback(async (termId?: string | null) => {
+  // Loads ONE page — the whole session in a single request is ~2.6MB and blew the 15s
+  // timeout, which is what surfaced as "Failed to load report cards.". Search goes to
+  // the server for the same reason: filtering only the loaded page would search 30 rows
+  // and look like missing data.
+  const fetchData = useCallback(async (termId?: string | null, searchTerm = '', pageNum = 1) => {
     try {
       setError('')
+      // Department -> the classes it owns, sent server-side. Filtering it client-side
+      // would only filter the CURRENT page, which can empty a page out while later
+      // pages still hold matches.
+      const deptClassLevels = isSecondary && activeDeptId
+        ? Object.entries(classDeptMap).filter(([, d]) => d === activeDeptId).map(([c]) => c)
+        : []
       const [rcData, termData] = await Promise.all([
-        getAllReportCards(termId ? { termId } : { session: activeSession ?? undefined }),
+        getAllReportCards({
+          ...(termId ? { termId } : { session: activeSession ?? undefined }),
+          ...(deptClassLevels.length > 0 ? { classLevels: deptClassLevels.join(',') } : {}),
+          page: pageNum, pageSize: PAGE_SIZE, ...(searchTerm ? { search: searchTerm } : {}),
+        }),
         getTerms(),
       ])
       setReportCards(rcData.reportCards as AdminReportCard[])
+      setTotalCount(rcData.total)
+      setPage(pageNum)
       setTerms(termData.terms)
       if (isSecondary && departments.length === 0) {
         const [full, deptRes] = await Promise.all([getClassesFull(), getDepartments()])
@@ -294,7 +328,18 @@ function AdminReportCards() {
     } catch {
       setError(t('Failed to load report cards.'))
     }
-  }, [activeSession, isSecondary, departments.length])
+    // activeDeptId/classDeptMap are dependencies because the department filter is now
+    // part of the REQUEST, not a post-filter — changing it must refetch from page 1.
+  }, [activeSession, isSecondary, departments.length, activeDeptId, classDeptMap])
+
+  // Jump to a specific page — replaces the list rather than appending, and scrolls back
+  // to the top so a new page starts where you'd expect to read it.
+  const goToPage = useCallback(async (p: number) => {
+    setLoading(true)
+    await fetchData(selectedTermId, debouncedSearch, p)
+    setLoading(false)
+    listRef.current?.scrollToOffset({ offset: 0, animated: false })
+  }, [fetchData, selectedTermId, debouncedSearch])
 
   // Default the selected term to the active year's live term — once per year, so
   // a manual "All Terms" choice isn't reset every refresh.
@@ -312,18 +357,24 @@ function AdminReportCards() {
   }, [activeSession, terms])
 
   useEffect(() => {
-    fetchData(selectedTermId).finally(() => setLoading(false))
-  }, [fetchData, selectedTermId])
+    // setLoading(true) here matters beyond the initial mount: `selectedTermId` also
+    // changes once terms load and the effect above auto-selects the current term (see
+    // above) — without re-arming loading, the previous (unfiltered, whole-session)
+    // `reportCards` stayed on screen looking like the wrong term's data until the
+    // filtered refetch quietly resolved underneath.
+    setLoading(true)
+    fetchData(selectedTermId, debouncedSearch).finally(() => setLoading(false))
+  }, [fetchData, selectedTermId, debouncedSearch])
 
   useFocusEffect(useCallback(() => {
-    fetchData(selectedTermId)
-  }, [fetchData, selectedTermId]))
+    fetchData(selectedTermId, debouncedSearch)
+  }, [fetchData, selectedTermId, debouncedSearch]))
 
   const handleTermSelect = (id: string) => setSelectedTermId(id || null)
 
   const onRefresh = async () => {
     setRefreshing(true)
-    await fetchData(selectedTermId)
+    await fetchData(selectedTermId, debouncedSearch)
     setRefreshing(false)
   }
 
@@ -355,16 +406,9 @@ function AdminReportCards() {
     )
   }
 
-  const filtered = reportCards.filter((rc) => {
-    const termMatch = !selectedTermId || rc.term.id === selectedTermId
-    const deptMatch = !isSecondary || !activeDeptId || classDeptMap[rc.student.classLevel] === activeDeptId
-    const q = search.toLowerCase()
-    return termMatch && deptMatch && (
-      rc.student.name.toLowerCase().includes(q) ||
-      rc.student.classLevel.toLowerCase().includes(q) ||
-      rc.term.name.toLowerCase().includes(q)
-    )
-  })
+  // Term, search AND department are all applied SERVER-side now (see fetchData) —
+  // re-applying them here would only hide rows the server already matched.
+  const filtered = reportCards
 
   const grouped: Record<string, AdminReportCard[]> = {}
   for (const rc of filtered) {
@@ -378,9 +422,9 @@ function AdminReportCards() {
       {/* Term filter (active academic year only) */}
       {visibleTerms.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
-          style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}>
+          style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}>
           <TouchableOpacity onPress={() => handleTermSelect('')}
-            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+            style={{ flexShrink: 0, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
               borderColor: !selectedTermId ? '#F03E2F' : colors.border,
               backgroundColor: !selectedTermId ? '#FEF2F1' : colors.card }}>
             <Text style={{ fontSize: 12, fontWeight: '600', color: !selectedTermId ? '#F03E2F' : colors.textSecondary }}>
@@ -389,7 +433,7 @@ function AdminReportCards() {
           </TouchableOpacity>
           {visibleTerms.map(tm => (
             <TouchableOpacity key={tm.id} onPress={() => handleTermSelect(tm.id)}
-              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+              style={{ flexShrink: 0, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
                 borderColor: selectedTermId === tm.id ? '#F03E2F' : colors.border,
                 backgroundColor: selectedTermId === tm.id ? '#FEF2F1' : colors.card }}>
               <Text style={{ fontSize: 12, fontWeight: '600', color: selectedTermId === tm.id ? '#F03E2F' : colors.textSecondary }}>
@@ -403,12 +447,12 @@ function AdminReportCards() {
       {/* Department filter (secondary) */}
       {isSecondary && departments.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
-          style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8, gap: 8 }}>
+          style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={{ flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 8, gap: 8 }}>
           {departments.map((d) => {
             const active = activeDeptId === d.id
             return (
               <TouchableOpacity key={d.id} onPress={() => setActiveDeptId(d.id)}
-                style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+                style={{ flexShrink: 0, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
                   borderColor: active ? '#F03E2F' : colors.border, backgroundColor: active ? '#F03E2F' : colors.card }}>
                 <Text style={{ fontSize: 12, fontWeight: '600', color: active ? '#fff' : colors.textSecondary }}>{d.name}</Text>
               </TouchableOpacity>
@@ -436,9 +480,15 @@ function AdminReportCards() {
           <Text style={styles.errorText}>{error}</Text>
         </View>
       ) : <FlatList
+        // flex: 1 is load-bearing, not cosmetic: without it the list sizes itself to its
+        // FULL content height (every class section + card), which overflows this column
+        // and squeezes the filter chips above it — they render fine while loading (the
+        // spinner is a well-behaved flex:1 view) then collapse the moment data arrives.
+        style={{ flex: 1 }}
         data={Object.keys(grouped).sort()}
         keyExtractor={(item) => item}
         contentContainerStyle={styles.list}
+        ref={listRef}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={
           <View style={styles.center}>
@@ -482,8 +532,15 @@ function AdminReportCards() {
                       <Text style={styles.rcMeta}>{rc.term.name} · {rc.term.session}</Text>
                     </View>
                     <View style={styles.rcRight}>
-                      {rc.average != null && (
-                        <Text style={styles.rcAverage}>{rc.average.toFixed(1)}</Text>
+                      {/* A university's `average` is a weighted mark out of 100, which
+                          reads as a broken /20 average here — show its semester GPA
+                          instead. Primary/secondary keep the /20 average. */}
+                      {isUniversity ? (
+                        rc.gpa != null && (
+                          <Text style={styles.rcAverage}>{rc.gpa.toFixed(2)}<Text style={styles.rcAverageUnit}> {t('GPA')}</Text></Text>
+                        )
+                      ) : rc.average != null && (
+                        <Text style={styles.rcAverage}>{rc.average.toFixed(1)}<Text style={styles.rcAverageUnit}>/20</Text></Text>
                       )}
                       <View style={[styles.statusBadge, isPublished ? styles.publishedBadge : styles.draftBadge]}>
                         <Text style={[styles.statusText, { color: isPublished ? '#16a34a' : '#92400e' }]}>
@@ -498,6 +555,18 @@ function AdminReportCards() {
           )
         }}
       />}
+
+      {/* Page controls, mirroring the web table's pager. Sits outside the list so it
+          stays pinned at the bottom rather than scrolling away with the rows. */}
+      {!loading && !error && (
+        <Pagination
+          page={page}
+          totalPages={Math.max(1, Math.ceil(totalCount / PAGE_SIZE))}
+          total={totalCount}
+          pageSize={PAGE_SIZE}
+          onPage={goToPage}
+        />
+      )}
     </View>
   )
 }

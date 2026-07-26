@@ -21,6 +21,16 @@ function toUtcMidnight(d: Date): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
 }
 
+/** True if a "YYYY-MM-DD" date string falls within [start, end] (inclusive). Used to stop
+ *  an absence recorded in a PRIOR academic session/term from counting against the
+ *  current one — TimetableSlot rows persist unchanged across year rollover (nothing
+ *  recreates them), so matching only on slot ID isn't enough on its own. */
+export function dateStringWithinRange(dateStr: string, start: Date, end: Date): boolean {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const t = Date.UTC(y, m - 1, d)
+  return t >= toUtcMidnight(start) && t <= toUtcMidnight(end)
+}
+
 export function timeToMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number)
   return h * 60 + (m || 0)
@@ -29,6 +39,32 @@ export function timeToMinutes(hhmm: string): number {
 export function slotDurationHours(slot: { startTime: string; endTime: string }): number {
   const minutes = timeToMinutes(slot.endTime) - timeToMinutes(slot.startTime)
   return Math.max(0, minutes) / 60
+}
+
+// How many school PERIODS a slot spans (attendance is counted in periods, not clock
+// hours): a 100-minute class with a 50-minute period is 2 periods. Rounded to the nearest
+// whole period (going forward slots are exact multiples; this just tolerates legacy data),
+// min 1 — a missed class is never zero periods. null when the school hasn't set a period
+// length yet, so callers can fall back to a plain event count.
+export function slotPeriods(startTime: string, endTime: string, periodMinutes: number | null | undefined): number | null {
+  if (!periodMinutes || periodMinutes <= 0) return null
+  const dur = timeToMinutes(endTime) - timeToMinutes(startTime)
+  return Math.max(1, Math.round(dur / periodMinutes))
+}
+
+// Cameroon is UTC+1 (WAT) year-round, no DST. There's no per-school timezone field yet,
+// so this assumes WAT — fine for the calendar-day comparisons used elsewhere in this
+// file, and close enough for the hour-level cutoff this specific check needs.
+const SCHOOL_UTC_OFFSET_HOURS = 1
+
+/** True once `date` (YYYY-MM-DD) + a slot's `endTime` (HH:MM) is in the past, in the
+ *  school's local time — used to stop a teacher reporting or deleting an absence for a
+ *  period that has already happened. Any earlier calendar day is always true. */
+export function slotHasPassed(date: string, endTime: string, now: Date = new Date()): boolean {
+  const [y, m, d] = date.split('-').map(Number)
+  const [hh, mm] = endTime.split(':').map(Number)
+  const slotEndUtcMs = Date.UTC(y, m - 1, d, hh - SCHOOL_UTC_OFFSET_HOURS, mm || 0)
+  return slotEndUtcMs <= now.getTime()
 }
 
 /** Which weekday a "YYYY-MM-DD" string falls on, so an absence report ("I'll be out on
@@ -90,6 +126,10 @@ export interface CoverageSlot {
   dayOfWeek: DayOfWeek
   startTime: string
   endTime: string
+  // "YYYY-MM-DD" — set only for a one-off private/extra slot that happens on that single
+  // date instead of recurring every week. When set, this slot contributes its duration
+  // exactly once (on that date) rather than once per week across the scope terms.
+  specificDate?: string | null
 }
 
 export interface CoverageAbsence {
@@ -125,11 +165,22 @@ export function computeCoverage(params: {
   asOfDate: Date
 }): CoverageResult {
   const { requiredHours, slots, terms, absences, asOfDate } = params
+  const asOfDay = toUtcMidnight(asOfDate)
 
   let scheduledHours = 0
   let elapsedScheduledHours = 0
   for (const slot of slots) {
     const hours = slotDurationHours(slot)
+    // A one-off slot (specificDate set) happens exactly once, on that calendar date —
+    // not once per week across every scope term like a recurring slot. Counted
+    // regardless of whether that date actually falls inside any scope term: it's tied to
+    // a real date, not a recurring weekday pattern the term range is measuring.
+    if (slot.specificDate) {
+      scheduledHours += hours
+      const [y, m, d] = slot.specificDate.split('-').map(Number)
+      if (Date.UTC(y, m - 1, d) <= asOfDay) elapsedScheduledHours += hours
+      continue
+    }
     for (const term of terms) {
       scheduledHours += countWeekdayOccurrences(slot.dayOfWeek, term.startDate, term.endDate) * hours
       elapsedScheduledHours += countWeekdayOccurrences(slot.dayOfWeek, term.startDate, term.endDate, asOfDate) * hours
@@ -137,7 +188,6 @@ export function computeCoverage(params: {
   }
 
   const slotHoursById = new Map(slots.map((s) => [s.id, slotDurationHours(s)]))
-  const asOfDay = toUtcMidnight(asOfDate)
   let absentHoursToDate = 0
   let absentHoursTotal = 0
   for (const a of absences) {

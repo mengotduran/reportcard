@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
-  getOverview, toggleSchool, toggleParentSchool, createStandaloneSchool, getSchoolAdmins,
+  getOverview, toggleSchool, toggleParentSchool, createStandaloneSchool, getSchoolAdmins, updateAdminEmail,
   OverviewData, SchoolSection, ParentSchool,
 } from '@/lib/api/superadmin'
 import { resetUserPasswordApi } from '@/lib/api/auth'
@@ -131,43 +131,64 @@ function SchoolCard({ school, onToggle, onPress }: { school: SchoolSection; onTo
   const s = makeSStyles(colors)
   const tc = TYPE_COLOR[school.type] ?? { bg: '#f3f4f6', text: '#374151' }
 
-  const handleResetAdminPassword = async () => {
+  // Real modal + FlatList-style list instead of nested Alert.alerts — those cap out at 3
+  // buttons on iOS (Cancel + 2 admins), silently making any admin past the 2nd
+  // unreachable on a school with more than that.
+  const [adminsModalVisible, setAdminsModalVisible] = useState(false)
+  const [admins, setAdmins] = useState<{ id: string; name: string; email: string; role: string }[]>([])
+  const [adminsLoading, setAdminsLoading] = useState(false)
+  const [resetTarget, setResetTarget] = useState<{ id: string; name: string } | null>(null)
+  const [resetSaving, setResetSaving] = useState(false)
+  const [editEmailTarget, setEditEmailTarget] = useState<{ id: string; name: string } | null>(null)
+  const [editEmailValue, setEditEmailValue] = useState('')
+  const [editEmailSaving, setEditEmailSaving] = useState(false)
+  const [editEmailError, setEditEmailError] = useState('')
+
+  const openAdminsModal = async () => {
+    setAdminsModalVisible(true)
+    setResetTarget(null)
+    setEditEmailTarget(null)
+    setEditEmailError('')
+    setAdminsLoading(true)
     try {
-      const { admins } = await getSchoolAdmins(school.id)
-      if (admins.length === 0) { Alert.alert('No Admins', 'This school has no admin accounts.'); return }
-      const adminNames = admins.map((a, i) => `${i + 1}. ${a.name} (${a.role.replace('_', ' ')})`).join('\n')
-      Alert.alert(
-        'Reset Admin Password',
-        `Admins for ${school.name}:\n\n${adminNames}\n\nEnter admin number to reset:`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          ...admins.map((admin, i) => ({
-            text: `${i + 1}. ${admin.name.split(' ')[0]}`,
-            onPress: () => {
-              Alert.alert(
-                'Reset Password',
-                `Send ${admin.name} a link to set a new password?`,
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Send',
-                    onPress: async () => {
-                      try {
-                        await resetUserPasswordApi(admin.id)
-                        Alert.alert('Done', `Setup email sent to ${admin.name}.`)
-                      } catch (e: any) {
-                        Alert.alert('Error', e?.response?.data?.message || 'Failed to reset.')
-                      }
-                    },
-                  },
-                ]
-              )
-            },
-          })).slice(0, 3), // Alert supports max 3 buttons on iOS
-        ]
-      )
+      const { admins: list } = await getSchoolAdmins(school.id)
+      setAdmins(list)
     } catch {
-      Alert.alert('Error', 'Failed to load admins.')
+      setAdmins([])
+    } finally {
+      setAdminsLoading(false)
+    }
+  }
+
+  const handleResetPassword = async () => {
+    if (!resetTarget) return
+    setResetSaving(true)
+    try {
+      await resetUserPasswordApi(resetTarget.id)
+      Alert.alert('Done', `Setup email sent to ${resetTarget.name}.`)
+      setResetTarget(null)
+    } catch (e: any) {
+      Alert.alert('Error', e?.response?.data?.message || 'Failed to reset.')
+    } finally {
+      setResetSaving(false)
+    }
+  }
+
+  const handleChangeEmail = async () => {
+    if (!editEmailTarget) return
+    const trimmed = editEmailValue.trim()
+    if (!trimmed || !trimmed.includes('@')) { setEditEmailError('Enter a valid email address'); return }
+    setEditEmailSaving(true)
+    setEditEmailError('')
+    try {
+      const updated = await updateAdminEmail(editEmailTarget.id, trimmed)
+      setAdmins((prev) => prev.map((a) => a.id === updated.id ? { ...a, email: updated.email } : a))
+      Alert.alert('Done', `Email updated for ${editEmailTarget.name}.`)
+      setEditEmailTarget(null)
+    } catch (e: any) {
+      setEditEmailError(e?.response?.data?.message || 'Failed to update email')
+    } finally {
+      setEditEmailSaving(false)
     }
   }
 
@@ -183,7 +204,7 @@ function SchoolCard({ school, onToggle, onPress }: { school: SchoolSection; onTo
             <Text style={s.schoolSub}>{school.email}</Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity onPress={handleResetAdminPassword} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity onPress={openAdminsModal} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Ionicons name="key-outline" size={16} color="#ea580c" />
             </TouchableOpacity>
             <Switch
@@ -209,6 +230,99 @@ function SchoolCard({ school, onToggle, onPress }: { school: SchoolSection; onTo
           ))}
         </View>
       </TouchableOpacity>
+
+      <Modal visible={adminsModalVisible} transparent animationType="slide" onRequestClose={() => setAdminsModalVisible(false)}>
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={s.modalSheet}>
+            <View style={s.modalHandle} />
+            <View style={s.modalHeader}>
+              <View>
+                <Text style={s.modalTitle}>School Admins</Text>
+                <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>{school.name}</Text>
+              </View>
+              <TouchableOpacity onPress={() => setAdminsModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 320 }}>
+              {adminsLoading ? (
+                <ActivityIndicator color="#dc2626" style={{ marginVertical: 20 }} />
+              ) : admins.length === 0 ? (
+                <Text style={{ fontSize: 13, color: colors.textSecondary, textAlign: 'center', paddingVertical: 20 }}>
+                  This school has no admin accounts.
+                </Text>
+              ) : (
+                admins.map((admin) => (
+                  <View key={admin.id} style={{ backgroundColor: colors.bgSecondary, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>{admin.name}</Text>
+                    <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 8 }}>{admin.email} · {admin.role.replace('_', ' ')}</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        onPress={() => { setEditEmailTarget(admin); setEditEmailValue(admin.email); setEditEmailError(''); setResetTarget(null) }}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: '#FEF2F1', borderRadius: 8, paddingVertical: 6 }}
+                      >
+                        <Ionicons name="pencil-outline" size={12} color="#F03E2F" />
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: '#F03E2F' }}>Change Email</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => { setResetTarget(admin); setEditEmailTarget(null) }}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: '#fff7ed', borderRadius: 8, paddingVertical: 6 }}
+                      >
+                        <Ionicons name="key-outline" size={12} color="#ea580c" />
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: '#ea580c' }}>Reset Password</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            {editEmailTarget && (
+              <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 14, marginTop: 8 }}>
+                {!!editEmailError && (
+                  <Text style={{ fontSize: 12, color: '#ef4444', backgroundColor: '#fef2f2', borderRadius: 8, padding: 8, marginBottom: 8 }}>{editEmailError}</Text>
+                )}
+                <Text style={s.formLabel}>Change email for {editEmailTarget.name}</Text>
+                <TextInput
+                  style={s.formInput}
+                  placeholder="admin@example.com"
+                  placeholderTextColor="#9ca3af"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoFocus
+                  value={editEmailValue}
+                  onChangeText={setEditEmailValue}
+                />
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                  <TouchableOpacity onPress={() => setEditEmailTarget(null)} style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}>
+                    <Text style={{ color: colors.text, fontSize: 14 }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleChangeEmail} disabled={editEmailSaving} style={[s.createBtn, { flex: 1, marginTop: 0, marginBottom: 0 }, editEmailSaving && s.disabled]}>
+                    <Text style={s.createBtnText}>{editEmailSaving ? 'Saving…' : 'Save Email'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {resetTarget && (
+              <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 14, marginTop: 8 }}>
+                <Text style={{ fontSize: 13, color: colors.text, marginBottom: 12 }}>
+                  Send <Text style={{ fontWeight: '700' }}>{resetTarget.name}</Text> a link to set a new password?
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity onPress={() => setResetTarget(null)} style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}>
+                    <Text style={{ color: colors.text, fontSize: 14 }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleResetPassword} disabled={resetSaving} style={[s.createBtn, { flex: 1, marginTop: 0, marginBottom: 0 }, resetSaving && s.disabled]}>
+                    <Text style={s.createBtnText}>{resetSaving ? 'Sending…' : 'Send'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   )
 }
