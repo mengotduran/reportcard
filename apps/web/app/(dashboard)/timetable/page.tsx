@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { getTeachersApi } from '@/lib/api/teachers'
+import { getTeachersApi, getTeacherSubjectsApi } from '@/lib/api/teachers'
 import {
   getTeacherTimetableApi, saveTimetableApi, getPeriodsApi, savePeriodsApi, getSchoolTimetableApi,
   getTimetableHistoryApi, deleteTimetableHistoryVersionApi,
@@ -8,7 +8,7 @@ import {
 } from '@/lib/api/timetable'
 import { getClassLevelsApi } from '@/lib/api/classLevels'
 import { getDepartmentsApi } from '@/lib/api/departments'
-import { getSubjectsApi } from '@/lib/api/subjects'
+import { getTermsApi } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { Plus, X, ArrowLeft, Search, Briefcase, Clock, Trash2, Pencil } from 'lucide-react'
 import CustomSelect from '@/components/ui/CustomSelect'
@@ -47,6 +47,28 @@ const durationMinutes = (start: string, end: string): number => {
   const [eh, em] = end.split(':').map(Number)
   return (eh * 60 + em) - (sh * 60 + sm)
 }
+// How many periods a start-end span covers. Always derived from the real duration, never
+// from whatever a "Periods" input currently holds, so a displayed count can't disagree
+// with the times shown beside it. null when the school hasn't set its period length yet —
+// callers must say so rather than quietly showing 1.
+const periodsBetween = (start: string, end: string, periodLen: number | null): number | null =>
+  periodLen && start && end ? Math.max(1, Math.round(durationMinutes(start, end) / periodLen)) : null
+// True when a span isn't a whole number of periods (e.g. a 160-minute row left over from
+// before the school set 50 minutes per period). Such a row is what blocks the whole grid
+// from saving, so it has to be visible in the list, not just in the save error.
+const isWholePeriods = (start: string, end: string, periodLen: number | null): boolean =>
+  !periodLen || durationMinutes(start, end) % periodLen === 0
+// A row or class is as many periods as the admin types. Capped only to keep a typo like
+// "500" from producing a block that runs to the end of the day.
+const MAX_PERIODS_PER_ROW = 20
+// 0 means "the field is empty right now" — a number input has to be clearable while being
+// retyped, and snapping it back to 1 on every keystroke fights the admin. Submit-time
+// checks reject 0, so it can never be saved.
+const parsePeriodCount = (raw: string): number => {
+  const n = Math.floor(Number(raw))
+  if (!raw || !Number.isFinite(n) || n < 1) return 0
+  return Math.min(n, MAX_PERIODS_PER_ROW)
+}
 // The latest end time across every existing period (teaching or break) — used to default
 // a new period's start time to right where the schedule currently leaves off, so the
 // admin doesn't have to retype it for each consecutive add.
@@ -82,7 +104,10 @@ function TimeInput({ value, onChange }: { value: string; onChange: (v: string) =
 }
 
 interface Teacher { id: string; name: string; email: string; role: string; departments?: string[]; classLevels?: string[] }
-interface TeacherSubjectOption { id: string; name: string; classLevel: string }
+// `term` is the semester a university course belongs to; null means the subject runs the
+// whole academic year, which is how primary/secondary always store them.
+interface TeacherSubjectOption { id: string; name: string; classLevel: string; term?: string | null }
+interface TermOption { id: string; name: string; session: string; isCurrent: boolean }
 
 type EditableSlot = {
   id: string
@@ -135,7 +160,12 @@ export default function TimetablePage() {
   const [activeDept, setActiveDept] = useState<string | null>(null)
 
   const [activeTeacher, setActiveTeacher] = useState<Teacher | null>(null)
-  const [allSubjects, setAllSubjects] = useState<TeacherSubjectOption[]>([])
+  // The courses/subjects the OPEN teacher is actually assigned to (not the whole school's).
+  // The builder schedules what a teacher already teaches; assigning is done on the Teachers
+  // page. Loaded per teacher, alongside their timetable.
+  const [teacherSubjects, setTeacherSubjects] = useState<TeacherSubjectOption[]>([])
+  const [teacherSubjectsLoading, setTeacherSubjectsLoading] = useState(false)
+  const [terms, setTerms] = useState<TermOption[]>([])
   const [classOrder, setClassOrder] = useState<Record<string, number>>({})
   const [schoolSlots, setSchoolSlots] = useState<SchoolTimetableSlot[]>([])
   const [slots, setSlots] = useState<EditableSlot[]>([])
@@ -172,8 +202,8 @@ export default function TimetablePage() {
   useBodyScrollLock(showSlotModal || showPeriodsModal || !!deleteTarget || showHistoryModal || !!deleteVersionTarget)
 
   useEffect(() => {
-    Promise.all([getTeachersApi(), getPeriodsApi(), getSubjectsApi(), getSchoolTimetableApi()])
-      .then(([t, p, sd, st]) => { setTeachers(t.teachers); setPeriods(p.periods); setPeriodMinutes(p.periodMinutes != null ? String(p.periodMinutes) : ''); setAllSubjects(sd.subjects); setSchoolSlots(st.slots) })
+    Promise.all([getTeachersApi(), getPeriodsApi(), getTermsApi(), getSchoolTimetableApi()])
+      .then(([t, p, tm, st]) => { setTeachers(t.teachers); setPeriods(p.periods); setPeriodMinutes(p.periodMinutes != null ? String(p.periodMinutes) : ''); setTerms(tm.terms ?? []); setSchoolSlots(st.slots) })
       .catch(() => showToast(tr('Failed to load data'), 'error'))
       .finally(() => setLoading(false))
     // Class order (for sorting the Class picker) — every school type has this.
@@ -200,18 +230,29 @@ export default function TimetablePage() {
 
   const startEditPeriod = (p: TimetablePeriod) => {
     setEditingPeriodId(p.id)
-    // A teaching row can span more than one period (a "double period" block) — derive how
-    // many from its actual duration so editing shows what's really there.
-    const numPeriods = !p.isBreak && periodLen ? Math.max(1, Math.round(durationMinutes(p.startTime, p.endTime) / periodLen)) : 1
+    // A teaching row can span any number of periods (a "double period" block, a triple,
+    // ...) — derive how many from its actual duration so editing shows what's really
+    // there. A row that isn't a whole number of periods opens with the field blank, since
+    // rounding it silently would hide the very thing the admin came here to correct.
+    const exact = !p.isBreak && isWholePeriods(p.startTime, p.endTime, periodLen)
+    const numPeriods = exact ? (periodsBetween(p.startTime, p.endTime, periodLen) ?? 1) : 0
     setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak, numPeriods })
     setPeriodError('')
   }
 
-  const cancelEditPeriod = () => {
+  // The pending "add a row" form always starts where the schedule currently leaves off, so
+  // consecutive rows need no retyping. It must be recomputed from the list after EVERY
+  // change to it: adding, editing AND deleting all move where the day now ends. Taking the
+  // list as an argument rather than reading `periods` is deliberate — a caller that just
+  // called setPeriods still sees the OLD state in its own closure, which is exactly how the
+  // form came to offer 13:50 as a start when the last row ended at 13:00.
+  const resetPendingPeriodRow = (list: { endTime: string }[]) => {
     setEditingPeriodId(null)
-    setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(periods) })
+    setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(list) })
     setPeriodError('')
   }
+
+  const cancelEditPeriod = () => resetPendingPeriodRow(periods)
 
   const submitPeriodRow = () => {
     if (!periodForm.startTime) { setPeriodError(tr('Start time is required')); return }
@@ -221,35 +262,59 @@ export default function TimetablePage() {
       return
     }
 
+    if (!periodForm.isBreak && periodForm.numPeriods < 1) {
+      setPeriodError(tr('Enter how many periods this row is')); return
+    }
+
     // A teaching period's end is fixed by the period length (admin only picks the
-    // start) times how many periods this ONE row spans — e.g. picking 2 makes a single
-    // "double period" block, not two separate rows (add those manually if that's what's
-    // wanted). A break can be any length, so it keeps a free end-time input.
+    // start) times how many periods this ONE row spans — the admin types that number, so
+    // one row can be a double period and the next a single. A break can be any length, so
+    // it keeps a free end-time input.
     const endTime = periodForm.isBreak ? periodForm.endTime : addMinutes(periodForm.startTime, periodLen! * periodForm.numPeriods)
     if (!endTime) { setPeriodError(tr('End time is required')); return }
     if (endTime <= periodForm.startTime) { setPeriodError(tr('End time must be after start time')); return }
     const overlap = periods
       .filter((p) => p.id !== editingPeriodId)
-      .some((p) => periodForm.startTime < p.endTime && p.startTime < endTime)
-    if (overlap) { setPeriodError(tr('This overlaps with an existing period')); return }
+      .find((p) => periodForm.startTime < p.endTime && p.startTime < endTime)
+    if (overlap) {
+      // A class may never run across a break, so a teaching row that reaches into one is
+      // refused by name — "overlaps an existing period" would leave the admin hunting for
+      // which row, when the answer is almost always that the row is one period too long.
+      setPeriodError(overlap.isBreak && !periodForm.isBreak
+        ? `${tr('This runs across the break at')} ${overlap.startTime}–${overlap.endTime}. ${tr('Use fewer periods, or start after the break.')}`
+        : `${tr('This overlaps the existing')} ${overlap.startTime}–${overlap.endTime} ${tr('row')}`)
+      return
+    }
 
     const row = { startTime: periodForm.startTime, endTime, isBreak: periodForm.isBreak }
     const updatedList = editingPeriodId
       ? periods.map((p) => p.id === editingPeriodId ? { ...p, ...row } : p)
       : [...periods, { id: `new-${Date.now()}`, ...row }]
     setPeriods(updatedList.sort((a, b) => a.startTime.localeCompare(b.startTime)))
-    setEditingPeriodId(null)
-    setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(updatedList) })
-    setPeriodError('')
+    resetPendingPeriodRow(updatedList)
   }
 
   const removePeriodRow = (id: string) => {
-    setPeriods((prev) => prev.filter((p) => p.id !== id))
-    if (editingPeriodId === id) cancelEditPeriod()
+    const next = periods.filter((p) => p.id !== id)
+    setPeriods(next)
+    // Deleting the last row of the day moves where the next one starts, so the pending form
+    // follows it down. An edit in progress on a DIFFERENT row is left alone — dropping it
+    // would throw away typing the admin hasn't submitted yet.
+    if (!editingPeriodId || editingPeriodId === id) resetPendingPeriodRow(next)
   }
+
+  // Rows that aren't a whole number of periods — normally rows saved before the school set
+  // a period length, which the API rejects outright. Listed together so the admin fixes
+  // every one in a single pass instead of discovering them one save at a time.
+  const nonConformingPeriods = periods.filter((p) => !p.isBreak && !isWholePeriods(p.startTime, p.endTime, periodLen))
 
   const handleSavePeriods = async () => {
     if (!periodLen) { setPeriodError(tr('Enter how many minutes count as one period')); return }
+    if (nonConformingPeriods.length > 0) {
+      const rows = nonConformingPeriods.map((p) => `${p.startTime}–${p.endTime} (${durationMinutes(p.startTime, p.endTime)} min)`).join(', ')
+      setPeriodError(`${tr('These rows are not a whole number of')} ${periodLen} ${tr('minute periods')}: ${rows}. ${tr('Edit each one and set how many periods it is.')}`)
+      return
+    }
     setPeriodsSaving(true)
     try {
       const result = await savePeriodsApi(periods.map(({ startTime, endTime, isBreak }) => ({ startTime, endTime, isBreak })), periodLen)
@@ -297,20 +362,26 @@ export default function TimetablePage() {
     return t.name.toLowerCase().includes(q) || t.email.toLowerCase().includes(q)
   })
 
-  // Which department a subject belongs to, same convention as teacherDeptNames.
-  const subjectDept = (classLevel: string): string | undefined =>
-    isSecondary ? classToDept[classLevel] : isUniversity ? univDeptFromClassName(classLevel) : undefined
+  // The current teaching period, by name: universities teach a different set of courses each
+  // semester, primary/secondary run their subjects across the whole year. `Subject.term`
+  // holds a term NAME (not an id, and not session-qualified), which is the same match the
+  // rest of the app already does for this field.
+  const currentTerm = terms.find((t) => t.isCurrent)
+  const sessionTermNames = currentTerm ? terms.filter((t) => t.session === currentTerm.session).map((t) => t.name) : []
 
-  // Any teacher in a department can be given any course from that department —
-  // picking one from here is the assignment itself (see saveTimetable), it no
-  // longer has to already belong to this specific teacher. Primary schools have
-  // no department concept, so every subject in the school is fair game there.
-  const assignableSubjects = (t: Teacher): TeacherSubjectOption[] => {
-    if (!hasDeptView) return allSubjects
-    const depts = teacherDeptNames(t)
-    return allSubjects.filter((s) => { const d = subjectDept(s.classLevel); return d ? depts.includes(d) : false })
-  }
-  const activeAssignableSubjects = activeTeacher ? assignableSubjects(activeTeacher) : []
+  // Only what this teacher actually teaches, scoped to the period now running:
+  //   University        → courses whose semester IS the current semester
+  //   Primary/secondary → subjects for the current academic year (term null = the whole
+  //                       year, which is how every one of them is stored)
+  // Assigning a course is NOT done here — an admin does that on the Teachers page, and for
+  // universities that is also where the "one lecturer per course" hand-over happens. The
+  // API enforces the same rule (see saveTimetable), so a stale page can't get round it.
+  const inCurrentPeriod = (s: TeacherSubjectOption): boolean =>
+    isUniversity
+      ? !!currentTerm && s.term === currentTerm.name
+      : s.term == null || sessionTermNames.includes(s.term)
+
+  const activeAssignableSubjects = activeTeacher ? teacherSubjects.filter(inCurrentPeriod) : []
 
   // Slot modal pickers — same drill-down as the Subjects page, just as
   // cascading dropdowns instead of click-through screens:
@@ -386,18 +457,51 @@ export default function TimetablePage() {
     ? `${tr('This period is already taken')} — ${modalConflict.teacherName} ${tr('is already teaching')} ${effectiveClassLevel} ${tr('on')} ${tr(dayLabel(slotForm.dayOfWeek))} ${tr('at')} ${modalConflict.startTime}-${modalConflict.endTime}`
     : ''
 
-  const slotSubjectOptions = activeAssignableSubjects
-    .filter((s) => s.classLevel === effectiveClassLevel)
-    .map((s) => ({ value: s.id, label: s.name }))
+  // A slot already on the grid keeps its own course selectable even when that course is out
+  // of scope now — a timetable built under the old "any course in the department" rule can
+  // hold a course since unassigned, or one from a past semester, and opening such a slot
+  // just to change its room must not silently blank its course. Only what can be picked
+  // NEW is restricted.
+  const editingSlot = editingSlotId ? slots.find((s) => s.id === editingSlotId) : undefined
+  const existingSlotCourse = editingSlot?.subjectId && !activeAssignableSubjects.some((s) => s.id === editingSlot.subjectId)
+    ? { value: editingSlot.subjectId, label: `${editingSlot.subjectName ?? tr('Current course')} (${tr('already scheduled')})` }
+    : undefined
+  const slotSubjectOptions = [
+    ...activeAssignableSubjects
+      .filter((s) => s.classLevel === effectiveClassLevel)
+      .map((s) => ({ value: s.id, label: s.name })),
+    ...(existingSlotCourse ? [existingSlotCourse] : []),
+  ]
 
   const isWeekendDay = WEEKEND_DAYS.has(slotForm.dayOfWeek)
   // Saturday/Sunday classes don't necessarily follow the school's period grid, so subject
   // slots on those days use free start/end time inputs instead of the period picker.
   const useFreeSubjectTime = slotForm.mode === 'subject' && isWeekendDay
 
+  // A class must never run across a break — a double period that reaches into the break is
+  // really two blocks either side of it, and counting the break as teaching time would
+  // inflate both the hours total and any absence logged against it. Private/extra classes
+  // are exempt (they're off-grid by nature, which is the whole point of them), as are
+  // weekend classes, which already don't follow the period grid.
+  const breakCrossed = (slotForm.mode === 'subject' && !isWeekendDay && slotForm.startTime && slotForm.endTime)
+    ? breakPeriods.find((b) => timesOverlap(slotForm.startTime, slotForm.endTime, b.startTime, b.endTime))
+    : undefined
+  const breakCrossedMessage = breakCrossed
+    ? `${tr('A class cannot run across the break at')} ${breakCrossed.startTime}–${breakCrossed.endTime}. ${tr('Use fewer periods, or start after the break.')}`
+    : ''
+
   const openTeacher = async (teacher: Teacher) => {
     setActiveTeacher(teacher)
     setSlotsLoading(true)
+    // Their own course assignments, fetched here rather than up front: the school-wide list
+    // is no longer used at all, and only the open teacher's matters. Cleared first so the
+    // previous teacher's courses can't be offered during the fetch.
+    setTeacherSubjects([])
+    setTeacherSubjectsLoading(true)
+    getTeacherSubjectsApi(teacher.id)
+      .then(({ subjects }) => setTeacherSubjects(subjects))
+      .catch(() => showToast(tr('Failed to load this teacher\'s courses'), 'error'))
+      .finally(() => setTeacherSubjectsLoading(false))
     try {
       const { slots: fetched } = await getTeacherTimetableApi(teacher.id)
       setSlots(fetched.map((s: TimetableSlot) => ({
@@ -412,7 +516,7 @@ export default function TimetablePage() {
     }
   }
 
-  const closeTeacher = () => { setActiveTeacher(null); setSlots([]) }
+  const closeTeacher = () => { setActiveTeacher(null); setSlots([]); setTeacherSubjects([]) }
 
   const openHistory = async () => {
     if (!activeTeacher) return
@@ -453,7 +557,7 @@ export default function TimetablePage() {
     // A slot can now span several periods, so match the STARTING period by start time
     // (not start+end), and derive how many periods it covers from its duration.
     const matchingPeriod = teachingPeriods.find((p) => p.startTime === slot.startTime)
-    const numPeriods = periodLen ? Math.max(1, Math.round(durationMinutes(slot.startTime, slot.endTime) / periodLen)) : 1
+    const numPeriods = periodsBetween(slot.startTime, slot.endTime, periodLen) ?? 1
     const cls = slot.classLevel ?? ''
     setSlotForm({
       ...emptySlotForm,
@@ -469,16 +573,22 @@ export default function TimetablePage() {
   }
 
   // A class spans `numPeriods` periods from its start period. End time = start + N × the
-  // period length, so the class is always a whole number of periods.
+  // period length, so the class is always a whole number of periods. Without a period
+  // length the row's own end time is all there is to go on — the class-time line says so
+  // rather than presenting it as a period count.
   const handlePeriodSelect = (periodId: string) => {
     const period = teachingPeriods.find((p) => p.id === periodId)
     const start = period?.startTime ?? ''
-    const end = start && periodLen ? addMinutes(start, slotForm.numPeriods * periodLen) : (period?.endTime ?? '')
+    const end = start && periodLen && slotForm.numPeriods >= 1
+      ? addMinutes(start, slotForm.numPeriods * periodLen)
+      : (period?.endTime ?? '')
     setSlotForm({ ...slotForm, periodId, startTime: start, endTime: end })
   }
 
   const handleNumPeriodsChange = (n: number) => {
-    const end = slotForm.startTime && periodLen ? addMinutes(slotForm.startTime, n * periodLen) : slotForm.endTime
+    // n < 1 means the field is mid-edit (empty). Blank the end time rather than computing
+    // a zero-length class, so the form can't be submitted in that state.
+    const end = slotForm.startTime && periodLen ? (n >= 1 ? addMinutes(slotForm.startTime, n * periodLen) : '') : slotForm.endTime
     setSlotForm({ ...slotForm, numPeriods: n, endTime: end })
   }
 
@@ -487,6 +597,8 @@ export default function TimetablePage() {
     if (slotForm.mode === 'subject' && hasDeptView && !effectiveDepartment) { setSlotError(tr('Please select a department')); return }
     if (slotForm.mode === 'subject' && !effectiveClassLevel) { setSlotError(tr('Please select a class')); return }
     if (slotForm.mode === 'subject' && !useFreeSubjectTime && !slotForm.periodId) { setSlotError(tr('Please select a period')); return }
+    if (slotForm.mode === 'subject' && !useFreeSubjectTime && slotForm.numPeriods < 1) { setSlotError(tr('Enter how many periods this class spans')); return }
+    if (breakCrossed) { setSlotError(breakCrossedMessage); return }
     if (!slotForm.startTime || !slotForm.endTime) { setSlotError(tr('Start and end time are required')); return }
     if (slotForm.endTime <= slotForm.startTime) { setSlotError(tr('End time must be after start time')); return }
     if (slotForm.mode === 'subject' && !slotForm.subjectId) { setSlotError(tr('Please select a subject')); return }
@@ -545,18 +657,11 @@ export default function TimetablePage() {
     if (!activeTeacher) return
     setSaving(true)
     try {
-      const result = await saveTimetableApi(activeTeacher.id, slots.map(({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate }) => ({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate: specificDate ?? null })))
-      // A university course has one lecturer, so scheduling it here may have taken it off
-      // someone else. They get an in-app notification; say so here too, or the admin has
-      // no idea they just changed another lecturer's timetable.
-      if (result.reassigned?.length) {
-        showToast(result.reassigned.join(' · '))
-      } else {
-        showToast(tr('Timetable saved'))
-      }
-      // A newly-picked course may have just given this teacher a new derived
-      // department — refresh so the list/filter reflect it immediately.
-      getTeachersApi().then((t) => setTeachers(t.teachers)).catch(() => {})
+      await saveTimetableApi(activeTeacher.id, slots.map(({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate }) => ({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate: specificDate ?? null })))
+      // Scheduling never moves a course between lecturers any more (that happens on the
+      // Teachers page), so there's no reassignment to report and no derived department to
+      // refresh — this only ever arranges courses the teacher already holds.
+      showToast(tr('Timetable saved'))
       // Keep the cross-teacher clash check current for whoever's opened next.
       getSchoolTimetableApi().then((st) => setSchoolSlots(st.slots)).catch(() => {})
     } catch (err: unknown) {
@@ -589,7 +694,7 @@ export default function TimetablePage() {
                 <h2 className="text-2xl font-bold text-foreground">{tr('Timetable')}</h2>
                 <p className="text-muted-foreground text-sm mt-1">{tr('Pick a teacher to build their weekly schedule')}</p>
               </div>
-              <button onClick={() => { setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(periods) }); setEditingPeriodId(null); setPeriodError(''); setShowPeriodsModal(true) }}
+              <button onClick={() => { resetPendingPeriodRow(periods); setShowPeriodsModal(true) }}
                 className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition flex-shrink-0">
                 <Clock size={15} /> {tr('Set Up Periods')}
               </button>
@@ -731,6 +836,21 @@ export default function TimetablePage() {
                 </div>
                 {slotForm.mode === 'subject' ? (
                   <>
+                    {/* Nothing to schedule: every picker below is derived from this teacher's
+                        own assignments, so with none in the current period they'd all sit
+                        empty with no clue why. Say where the courses come from instead. */}
+                    {!teacherSubjectsLoading && activeAssignableSubjects.length === 0 && (
+                      <div className="p-3 bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-900 rounded-lg">
+                        <p className="text-xs text-sky-900 dark:text-sky-200">
+                          {activeTeacher?.name} {tr(isUniversity ? 'has no courses assigned for' : 'has no subjects assigned for')}{' '}
+                          <span className="font-semibold">{currentTerm ? currentTerm.name : tr('the current period')}</span>
+                          {currentTerm && !isUniversity ? ` (${currentTerm.session})` : ''}.{' '}
+                          {tr(isUniversity
+                            ? 'Assign their courses on the Teachers page first, then come back to schedule them. You can still add a Private Class here.'
+                            : 'Assign their subjects on the Teachers page first, then come back to schedule them. You can still add a Private Class here.')}
+                        </p>
+                      </div>
+                    )}
                     {isUniversity && (
                       <div>
                         <label className="block text-xs font-medium text-foreground mb-1">{tr('Level')} <span className="text-destructive">*</span></label>
@@ -740,9 +860,6 @@ export default function TimetablePage() {
                           options={slotLevelOptions}
                           placeholder={tr('Select a level...')}
                         />
-                        {slotLevelOptions.length === 0 && (
-                          <p className="text-xs text-muted-foreground mt-1">{tr('No levels found yet — add subjects from the Subjects page, or add a Private Class instead.')}</p>
-                        )}
                       </div>
                     )}
                     {hasDeptView && (!isUniversity || slotForm.level) && (
@@ -826,18 +943,35 @@ export default function TimetablePage() {
                         </select>
                       </div>
                       <div>
-                        {/* A class is measured in whole periods; the end time is derived. */}
+                        {/* A class is measured in whole periods; the end time is derived. Typed
+                            rather than picked from a list, so a long block isn't capped by
+                            whatever maximum the dropdown happened to offer. */}
                         <label className="block text-xs font-medium text-foreground mb-1">{tr('Periods')} <span className="text-destructive">*</span></label>
-                        <select value={slotForm.numPeriods} onChange={(e) => handleNumPeriodsChange(Number(e.target.value))}
-                          disabled={!effectiveClassLevel}
-                          className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed">
-                          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
-                        </select>
+                        <input
+                          type="number" min={1} max={MAX_PERIODS_PER_ROW} placeholder="1"
+                          value={slotForm.numPeriods || ''}
+                          onChange={(e) => handleNumPeriodsChange(parsePeriodCount(e.target.value))}
+                          disabled={!effectiveClassLevel || !periodLen}
+                          className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
                       </div>
                       {teachingPeriods.length === 0 ? (
                         <p className="col-span-3 text-xs text-muted-foreground">{tr("This school hasn't set up its period structure yet — use \"Set Up Periods\" first.")}</p>
                       ) : slotForm.startTime && slotForm.endTime ? (
-                        <p className="col-span-3 text-xs text-muted-foreground">{tr('Class time')}: <span className="font-semibold text-foreground">{slotForm.startTime} – {slotForm.endTime}</span> ({slotForm.numPeriods} {slotForm.numPeriods === 1 ? tr('period') : tr('periods')})</p>
+                        <div className="col-span-3 space-y-1">
+                          <p className="text-xs text-muted-foreground">
+                            {tr('Class time')}: <span className="font-semibold text-foreground">{slotForm.startTime} – {slotForm.endTime}</span>{' '}
+                            {(() => {
+                              // Counted from the times themselves. A slot saved before the school
+                              // set its period length keeps its own end time, and saying "1 period"
+                              // for a 100-minute class would be a plain lie about the schedule.
+                              const n = periodsBetween(slotForm.startTime, slotForm.endTime, periodLen)
+                              if (n == null) return <span className="text-destructive">({tr('minutes per period not set yet')})</span>
+                              return `(${n} ${n === 1 ? tr('period') : tr('periods')})`
+                            })()}
+                          </p>
+                          {breakCrossedMessage && <p className="text-xs text-destructive">{breakCrossedMessage}</p>}
+                        </div>
                       ) : null}
                     </div>
                     )}
@@ -1049,16 +1183,29 @@ export default function TimetablePage() {
 
               {periods.length > 0 && (
                 <div className="mb-4 border border-border rounded-lg overflow-hidden divide-y divide-border">
-                  {periods.map((p) => (
-                    <div key={p.id} className={`flex items-center justify-between px-3 py-2 ${editingPeriodId === p.id ? 'bg-primary/5' : 'bg-card'}`}>
+                  {periods.map((p) => {
+                    const rowPeriods = p.isBreak ? null : periodsBetween(p.startTime, p.endTime, periodLen)
+                    const rowBroken = !p.isBreak && !isWholePeriods(p.startTime, p.endTime, periodLen)
+                    return (
+                    <div key={p.id} className={`flex items-center justify-between px-3 py-2 ${editingPeriodId === p.id ? 'bg-primary/5' : rowBroken ? 'bg-destructive/5' : 'bg-card'}`}>
                       <span className="text-sm text-foreground">{p.startTime} – {p.endTime}</span>
                       <div className="flex items-center gap-2">
+                        {/* Each row states its own length in periods, so a mixed grid (a double
+                            period followed by a single) reads correctly at a glance, and a row
+                            left over from before the period length was set is visibly broken
+                            here rather than only when the save fails. */}
+                        {rowBroken ? (
+                          <span className="text-[10px] font-semibold text-destructive">{durationMinutes(p.startTime, p.endTime)} {tr('min, not whole periods')}</span>
+                        ) : rowPeriods != null ? (
+                          <span className="text-[10px] font-medium text-muted-foreground">{rowPeriods} {rowPeriods === 1 ? tr('period') : tr('periods')}</span>
+                        ) : null}
                         {p.isBreak && <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{tr('Break')}</span>}
                         <button onClick={() => startEditPeriod(p)} className="text-muted-foreground hover:text-primary p-1 rounded transition"><Pencil size={13} /></button>
                         <button onClick={() => removePeriodRow(p.id)} className="text-muted-foreground hover:text-destructive p-1 rounded transition"><Trash2 size={13} /></button>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
 
@@ -1077,10 +1224,13 @@ export default function TimetablePage() {
                   {!periodForm.isBreak && (
                     <div>
                       <label className="block text-xs font-medium text-foreground mb-1">{tr('Length (periods)')}</label>
-                      <select value={periodForm.numPeriods} onChange={(e) => setPeriodForm({ ...periodForm, numPeriods: Number(e.target.value) })}
-                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
-                        {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
-                      </select>
+                      <input
+                        type="number" min={1} max={MAX_PERIODS_PER_ROW} placeholder="1"
+                        value={periodForm.numPeriods || ''}
+                        onChange={(e) => setPeriodForm({ ...periodForm, numPeriods: parsePeriodCount(e.target.value) })}
+                        disabled={!periodLen}
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
                     </div>
                   )}
                   <div>

@@ -32,7 +32,10 @@ export const deleteTeacherApi = async (id: string) => {
 
 export const getTeacherSubjectsApi = async (id: string) => {
   const res = await api.get(`/teachers/${id}/subjects`)
-  return res.data as { subjects: { id: string; name: string; classLevel: string }[] }
+  // `term` is the semester a university course belongs to (null for primary/secondary,
+  // whose subjects run the whole year) — needed to scope a teacher's courses to the
+  // semester now running.
+  return res.data as { subjects: { id: string; name: string; classLevel: string; term: string | null }[] }
 }
 
 // `term` scopes the replace to one semester (universities). Without it the whole set is
