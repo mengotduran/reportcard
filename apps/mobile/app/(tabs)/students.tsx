@@ -1,5 +1,5 @@
 // app/(tabs)/students.tsx
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect, useRouter } from 'expo-router'
 import {
   View, Text, FlatList, TextInput, StyleSheet, ActivityIndicator,
@@ -17,10 +17,13 @@ import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 import { shareCsv } from '@/lib/csv'
 import StudentFeesModal from '@/components/StudentFeesModal'
+import Pagination from '@/components/Pagination'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 const STATUS_TABS: StudentStatus[] = ['ACTIVE', 'DISABLED', 'DISMISSED']
+// Rows per request — the roster is fetched a page at a time rather than all at once.
+const STUDENT_PAGE_SIZE = 40
 
 // Older cached data may not carry `status` yet — fall back to isActive so a
 // stale client still renders a sensible badge instead of crashing.
@@ -617,16 +620,30 @@ export default function StudentsScreen() {
   const [feesStudent, setFeesStudent] = useState<Student | null>(null)
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
   const [importVisible, setImportVisible] = useState(false)
+  const [studentPage, setStudentPage] = useState(1)
+  const [studentTotal, setStudentTotal] = useState(0)
+  const studentListRef = useRef<FlatList<Student>>(null)
+  // Search reaches the server now, so debounce instead of firing per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), 350)
+    return () => clearTimeout(id)
+  }, [search])
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
 
   // Disabled/Dismissed is a status filter, not a year filter — it bypasses
   // the year-aware roster entirely (see getStudents in student.controller.ts).
-  const fetchStudents = useCallback(async () => {
+  const fetchStudents = useCallback(async (searchTerm = '', pageNum = 1) => {
     try {
-      const studentParams = statusFilter === 'ACTIVE'
-        ? (activeSession ? { session: activeSession } : undefined)
-        : { status: statusFilter }
+      // One page at a time. Search is server-side (it has to be, or it would only match
+      // the rows that happen to be on the current page).
+      const studentParams = {
+        ...(statusFilter === 'ACTIVE'
+          ? (activeSession ? { session: activeSession } : {})
+          : { status: statusFilter }),
+        page: pageNum, pageSize: STUDENT_PAGE_SIZE, ...(searchTerm ? { search: searchTerm } : {}),
+      }
       const [sData, clData, subData, termData, deptData] = await Promise.all([
         getStudents(studentParams),
         isAdmin ? getClasses() : Promise.resolve({ classLevels: [] }),
@@ -635,6 +652,8 @@ export default function StudentsScreen() {
         isAdmin && isSecondary ? getDepartments() : Promise.resolve({ departments: [] }),
       ])
       setStudents(sData.students)
+      setStudentTotal(sData.total)
+      setStudentPage(pageNum)
       if (isAdmin) {
         setClassList((clData as { classLevels: ClassLevel[] }).classLevels.sort((a, b) => a.order - b.order))
         const map: Record<string, string[]> = {}
@@ -662,19 +681,29 @@ export default function StudentsScreen() {
     fetchStudents()
   }
 
+  // Jump to a specific page — replaces the list rather than appending, and scrolls back
+  // to the top so a new page starts where you'd expect to read it.
+  const goToStudentPage = useCallback(async (p: number) => {
+    setLoading(true)
+    await fetchStudents(debouncedSearch, p)
+    setLoading(false)
+    studentListRef.current?.scrollToOffset({ offset: 0, animated: false })
+  }, [fetchStudents, debouncedSearch])
+
   useEffect(() => {
     if (isSuperAdmin) { setLoading(false); return }
-    fetchStudents().finally(() => setLoading(false))
-  }, [fetchStudents, isSuperAdmin])
+    setLoading(true)
+    fetchStudents(debouncedSearch).finally(() => setLoading(false))
+  }, [fetchStudents, isSuperAdmin, debouncedSearch])
 
   useFocusEffect(useCallback(() => {
     if (isSuperAdmin) return
-    fetchStudents()
-  }, [fetchStudents]))
+    fetchStudents(debouncedSearch)
+  }, [fetchStudents, debouncedSearch]))
 
   const onRefresh = async () => {
     setRefreshing(true)
-    await fetchStudents()
+    await fetchStudents(debouncedSearch)
     setRefreshing(false)
   }
 
@@ -683,12 +712,9 @@ export default function StudentsScreen() {
   // surface that later, so blocked here too rather than letting add/import fail on submit.
   const hasCurrentTerm = !!liveSession
 
-  const filtered = students.filter(
-    (s) =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.studentId.toLowerCase().includes(search.toLowerCase()) ||
-      s.classLevel.toLowerCase().includes(search.toLowerCase())
-  )
+  // Search is applied SERVER-side now (name / matricule / class — same three fields),
+  // so re-filtering here would only hide rows the server already matched.
+  const filtered = students
 
   // Replaces the old silent "delete" (which never deleted anything — just set
   // isActive: false with no visible status and no way back). See
@@ -795,10 +821,14 @@ export default function StudentsScreen() {
       ) : error ? (
         <View style={styles.center}><Text style={styles.errorText}>{error}</Text></View>
       ) : <FlatList
+        // flex: 1 so the list can't size itself to full content height and squeeze the
+        // filters/search above it (same bug class as the report-cards term chips).
+        style={{ flex: 1 }}
         data={filtered}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        ref={studentListRef}
         ListEmptyComponent={
           <View style={styles.center}>
             <Ionicons name="people-outline" size={40} color="#d1d5db" />
@@ -838,6 +868,18 @@ export default function StudentsScreen() {
           </TouchableOpacity>
         )}
       />}
+
+      {/* Page controls, mirroring the web table's pager. Outside the list so it stays
+          pinned at the bottom rather than scrolling away with the rows. */}
+      {!loading && !isSuperAdmin && (
+        <Pagination
+          page={studentPage}
+          totalPages={Math.max(1, Math.ceil(studentTotal / STUDENT_PAGE_SIZE))}
+          total={studentTotal}
+          pageSize={STUDENT_PAGE_SIZE}
+          onPage={goToStudentPage}
+        />
+      )}
 
       {isAdmin && (
         <TouchableOpacity

@@ -104,11 +104,11 @@ export default function UniversityDashboard() {
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-lg md:text-xl font-bold text-white truncate min-w-0">{school?.name}</h1>
+              <h1 className="font-serif text-lg md:text-xl font-bold text-white truncate min-w-0">{school?.name}</h1>
               <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type ? t(school.type) : ''}</span>
             </div>
             <p className="text-sm text-white/60 mt-1">{today}</p>
-            <p className="text-sm text-white/90 mt-2">{t(getGreeting())}, <span className="font-semibold text-white">{user?.name?.split(' ')[0]}</span> 👋</p>
+            <p className="text-sm text-white/90 mt-2">{t(getGreeting())}, <span className="font-serif font-semibold text-white">{user?.name?.split(' ')[0]}</span> 👋</p>
           </div>
         </div>
       </div>

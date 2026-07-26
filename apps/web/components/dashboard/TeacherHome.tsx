@@ -93,10 +93,10 @@ export default function TeacherHome() {
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <p className="text-base md:text-lg text-white font-bold truncate min-w-0 max-w-full">{school?.name}</p>
+              <p className="font-serif text-base md:text-lg text-white font-bold truncate min-w-0 max-w-full">{school?.name}</p>
               <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/20 text-white border border-white/20 flex-shrink-0">{school?.type ? t(school.type) : ''}</span>
             </div>
-            <p className="text-white/60 text-sm">{t(getGreeting())}, <span className="text-white font-semibold">{user?.name}</span></p>
+            <p className="text-white/60 text-sm">{t(getGreeting())}, <span className="font-serif text-white font-semibold">{user?.name}</span></p>
             <p className="text-white/40 text-xs mt-1">{user?.role ? t(user.role.replace(/_/g, ' ')) : ''} · {today}</p>
           </div>
           <button

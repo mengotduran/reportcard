@@ -6,6 +6,11 @@ import { useTheme, Colors } from '@/lib/useTheme'
 import { changeMyPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 
+// Temporarily off during testing — flip back to true to restore the Change Password
+// card. Deliberately not deleted: the feature works fine, this is just a testing-phase
+// lockout so nobody accidentally changes their own password from the app.
+const PASSWORD_CHANGE_ENABLED = false
+
 const makeStyles = (colors: Colors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
   content: { padding: 16, paddingBottom: 40 },
@@ -34,6 +39,12 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.5 },
   buttonText: { color: '#fff', fontWeight: '700', fontSize: 14.5 },
+  disabledNotice: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.bgSecondary, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    padding: 12,
+  },
+  disabledNoticeText: { flex: 1, fontSize: 12.5, color: colors.textSecondary },
 })
 
 export default function AccountScreen() {
@@ -84,62 +95,71 @@ export default function AccountScreen() {
         <Text style={styles.cardTitle}>{t('Change Password')}</Text>
         <Text style={styles.cardSub}>{t('Update the password you sign in with')}</Text>
 
-        <Text style={styles.label}>{t('Current Password')}</Text>
-        <View style={styles.inputWrap}>
-          <TextInput
-            style={styles.input}
-            value={current}
-            onChangeText={setCurrent}
-            secureTextEntry={!show}
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholderTextColor="#9ca3af"
-            textContentType="password"
-          />
-          <TouchableOpacity style={styles.eyeBtn} onPress={() => setShow((v) => !v)} activeOpacity={0.7}>
-            <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={18} color="#9ca3af" />
-          </TouchableOpacity>
-        </View>
+        {!PASSWORD_CHANGE_ENABLED ? (
+          <View style={styles.disabledNotice}>
+            <Ionicons name="lock-closed-outline" size={18} color={colors.textMuted} />
+            <Text style={styles.disabledNoticeText}>{t('Password changes are temporarily disabled while the app is being tested.')}</Text>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.label}>{t('Current Password')}</Text>
+            <View style={styles.inputWrap}>
+              <TextInput
+                style={styles.input}
+                value={current}
+                onChangeText={setCurrent}
+                secureTextEntry={!show}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholderTextColor="#9ca3af"
+                textContentType="password"
+              />
+              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShow((v) => !v)} activeOpacity={0.7}>
+                <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={18} color="#9ca3af" />
+              </TouchableOpacity>
+            </View>
 
-        <Text style={styles.label}>{t('New Password')}</Text>
-        <TextInput
-          style={[styles.input, { marginBottom: 14 }]}
-          value={next}
-          onChangeText={setNext}
-          secureTextEntry={!show}
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholderTextColor="#9ca3af"
-          textContentType="newPassword"
-        />
+            <Text style={styles.label}>{t('New Password')}</Text>
+            <TextInput
+              style={[styles.input, { marginBottom: 14 }]}
+              value={next}
+              onChangeText={setNext}
+              secureTextEntry={!show}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholderTextColor="#9ca3af"
+              textContentType="newPassword"
+            />
 
-        <Text style={styles.label}>{t('Confirm New Password')}</Text>
-        <TextInput
-          style={[styles.input, { marginBottom: 18 }]}
-          value={confirm}
-          onChangeText={setConfirm}
-          secureTextEntry={!show}
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholderTextColor="#9ca3af"
-          textContentType="newPassword"
-          returnKeyType="done"
-          onSubmitEditing={handleSubmit}
-        />
+            <Text style={styles.label}>{t('Confirm New Password')}</Text>
+            <TextInput
+              style={[styles.input, { marginBottom: 18 }]}
+              value={confirm}
+              onChangeText={setConfirm}
+              secureTextEntry={!show}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholderTextColor="#9ca3af"
+              textContentType="newPassword"
+              returnKeyType="done"
+              onSubmitEditing={handleSubmit}
+            />
 
-        <TouchableOpacity
-          style={[styles.button, (saving || !canSubmit) && styles.buttonDisabled]}
-          onPress={handleSubmit}
-          disabled={saving || !canSubmit}
-          activeOpacity={0.8}
-        >
-          {saving ? <ActivityIndicator color="#fff" /> : (
-            <>
-              <Ionicons name="key-outline" size={16} color="#fff" />
-              <Text style={styles.buttonText}>{t('Change Password')}</Text>
-            </>
-          )}
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.button, (saving || !canSubmit) && styles.buttonDisabled]}
+              onPress={handleSubmit}
+              disabled={saving || !canSubmit}
+              activeOpacity={0.8}
+            >
+              {saving ? <ActivityIndicator color="#fff" /> : (
+                <>
+                  <Ionicons name="key-outline" size={16} color="#fff" />
+                  <Text style={styles.buttonText}>{t('Change Password')}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
       </View>
     </ScrollView>
   )

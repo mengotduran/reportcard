@@ -102,6 +102,13 @@ export const getSchoolAdminsApi = async (schoolId: string): Promise<{
   return res.data
 }
 
+// Fixing a wrong/inaccessible admin email — pair with resetUserPasswordApi right after
+// to actually get them back in (that's what emails the fresh setup link).
+export const updateAdminEmailApi = async (userId: string, email: string) => {
+  const res = await api.patch(`/superadmin/users/${userId}/email`, { email })
+  return res.data as { id: string; name: string; email: string; role: string }
+}
+
 export interface TermRow {
   id: string
   name: string

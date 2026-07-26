@@ -2,17 +2,27 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
-import { getCoverageApi, CoverageRow, CoverageStatus } from '@/lib/api/coverage'
-import { getTeacherAbsencesApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal } from '@/lib/api/coverage'
+import { getTeacherAbsencesApi, getAbsenceCountsApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { getTeachersApi } from '@/lib/api/teachers'
 import { getTeacherTimetableApi, TimetableSlot } from '@/lib/api/timetable'
+import { formatHours } from '@/lib/formatHours'
 import CustomSelect from '@/components/ui/CustomSelect'
 import Pagination from '@/components/ui/Pagination'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { usePagination } from '@/lib/usePagination'
-import { Clock, CalendarOff, Search, X, Trash2 } from 'lucide-react'
+import { Clock, CalendarOff, Search, X, Trash2, Users } from 'lucide-react'
+
+interface DrillTarget {
+  teacherId: string
+  teacherName: string
+  // null = show every absence for this teacher, not scoped to one course (the "By
+  // Teacher" view) — set when opened from the per-course table (the "By Course" view).
+  subjectName: string | null
+  classLevel: string | null
+}
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 
@@ -42,6 +52,23 @@ const STATUS_FILTERS: { value: CoverageStatus | 'ALL'; label: string }[] = [
 
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 
+// Mirrors the API's slotHasPassed (Cameroon is UTC+1/WAT, no DST) — lets the UI grey
+// elapsed periods out up front instead of only finding out after a rejected request.
+// Same helper the teacher's own page uses; kept local for the same reason (a one-liner).
+function slotHasPassed(dateStr: string, endTime: string): boolean {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const [hh, mm] = endTime.split(':').map(Number)
+  return Date.UTC(y, m - 1, d, hh - 1, mm || 0) <= Date.now()
+}
+
+/** Today in the school's local time (WAT), as YYYY-MM-DD — the earliest date an absence
+ *  can still be reported for, since anything before it has entirely elapsed. */
+function todayInSchoolTime(): string {
+  const now = new Date()
+  const wat = new Date(now.getTime() + 60 * 60 * 1000) // UTC+1
+  return wat.toISOString().slice(0, 10)
+}
+
 export default function TeachingHoursPage() {
   const t = useT()
   const { school } = useAuthStore()
@@ -54,7 +81,19 @@ export default function TeachingHoursPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<CoverageStatus | 'ALL'>('ALL')
 
-  const [drillDown, setDrillDown] = useState<CoverageRow | null>(null)
+  // By Course (existing coverage table, only courses with an hours target) vs By Teacher
+  // (every teacher, every absence — a course with no target set is otherwise invisible).
+  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('course')
+  const [teacherSearch, setTeacherSearch] = useState('')
+  // Value stored is PERIODS missed per teacher. periodMinutes null = school hasn't set a
+  // period length, so the numbers are event counts and we label them "absences" instead.
+  const [absenceCounts, setAbsenceCounts] = useState<Record<string, number>>({})
+  const [periodMinutes, setPeriodMinutes] = useState<number | null>(null)
+  const [hoursTotals, setHoursTotals] = useState<Record<string, TeacherHoursTotal>>({})
+  // "2 periods" vs "2 absences" — depends on whether a period length is configured.
+  const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period') : t('periods')) : (n === 1 ? t('absence') : t('absences'))
+
+  const [drillDown, setDrillDown] = useState<DrillTarget | null>(null)
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [absencesLoading, setAbsencesLoading] = useState(false)
 
@@ -77,6 +116,17 @@ export default function TeachingHoursPage() {
 
   useEffect(load, [])
   useEffect(() => { getTeachersApi().then((d) => setTeachers(d.teachers)).catch(() => {}) }, [])
+  const refreshCounts = () => {
+    getAbsenceCountsApi()
+      .then((d) => { setAbsenceCounts(Object.fromEntries(d.counts.map((c) => [c.teacherId, c.periods]))); setPeriodMinutes(d.periodMinutes) })
+      .catch(() => {})
+  }
+  useEffect(refreshCounts, [])
+  useEffect(() => {
+    getTeacherHoursTotalsApi()
+      .then((d) => setHoursTotals(Object.fromEntries(d.totals.map((t) => [t.teacherId, t]))))
+      .catch(() => {})
+  }, [])
 
   const openReportModal = () => {
     setReportTeacherId('')
@@ -94,6 +144,9 @@ export default function TeachingHoursPage() {
   }, [reportTeacherId])
 
   const daySlots = date ? teacherSlots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
+  // An absence can only be reported for a period that hasn't ENDED yet — admins are no
+  // longer exempt from that (the API enforces it either way).
+  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
 
   const handleReport = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -104,7 +157,16 @@ export default function TeachingHoursPage() {
       setShowReportModal(false)
       showToast(t('Absence recorded'))
       load()
-      if (drillDown && drillDown.teacherId === reportTeacherId) openDrillDown(drillDown)
+      if (drillDown && drillDown.teacherId === reportTeacherId) {
+        // Refresh whichever drill-down was open — course-scoped or the full teacher list.
+        if (drillDown.subjectName) {
+          const row = rows.find((r) => r.teacherId === drillDown.teacherId && r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel)
+          if (row) openDrillDown(row)
+        } else {
+          openTeacherDrillDown(drillDown.teacherId, drillDown.teacherName)
+        }
+      }
+      refreshCounts()
     } catch (err: any) {
       showToast(err.response?.data?.message || t('Failed to record absence'), 'error')
     } finally {
@@ -122,18 +184,43 @@ export default function TeachingHoursPage() {
   const { page, setPage, pageItems, totalPages } = usePagination(filtered, 15, `${search}|${statusFilter}`)
 
   const openDrillDown = (row: CoverageRow) => {
-    setDrillDown(row)
+    setDrillDown({ teacherId: row.teacherId, teacherName: row.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
     setAbsencesLoading(true)
     getTeacherAbsencesApi(row.teacherId)
       .then((d) => setAbsences(d.absences.filter((a) => a.subjectName === row.subjectName && a.classLevel === row.classLevel)))
       .finally(() => setAbsencesLoading(false))
   }
 
+  // "By Teacher" — every absence for this teacher, any course, targeted or not.
+  const openTeacherDrillDown = (teacherId: string, teacherName: string) => {
+    setDrillDown({ teacherId, teacherName, subjectName: null, classLevel: null })
+    setAbsencesLoading(true)
+    getTeacherAbsencesApi(teacherId)
+      .then((d) => setAbsences(d.absences))
+      .finally(() => setAbsencesLoading(false))
+  }
+
+  const teacherRows = teachers
+    .map((tch) => ({ ...tch, count: absenceCounts[tch.id] ?? 0 }))
+    .filter((tch) => !teacherSearch.trim() || tch.name.toLowerCase().includes(teacherSearch.toLowerCase()))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+
+  // 4 teachers per row, paginated once there are more than 7 rows' worth (28 teachers).
+  const TEACHER_COLS = 4
+  const TEACHER_ROWS_PER_PAGE = 7
+  const { page: teacherPage, setPage: setTeacherPage, pageItems: teacherPageItems, totalPages: teacherTotalPages } =
+    usePagination(teacherRows, TEACHER_COLS * TEACHER_ROWS_PER_PAGE, teacherSearch)
+
   const handleDeleteAbsence = async (id: string) => {
     try {
       await deleteAbsenceApi(id)
       setAbsences((prev) => prev.filter((a) => a.id !== id))
       showToast(t('Absence removed'))
+      // The hour this absence was subtracting goes straight back into taughtHours/
+      // projectedFinalHours server-side (computed fresh every fetch, nothing cached) —
+      // refetch here so that's visible immediately rather than only on next page load.
+      load()
+      refreshCounts()
     } catch {
       showToast(t('Failed to remove absence'), 'error')
     }
@@ -158,7 +245,79 @@ export default function TeachingHoursPage() {
         </button>
       </div>
 
-      {loading ? (
+      {/* By Course = existing coverage table, hours-target tracking, courses without a
+          target never appear here. By Teacher = every teacher, every absence, no matter
+          what course or whether it has an hours target — a separate concern from hours
+          tracking, so it's a distinct view rather than bolted onto the table above. */}
+      <div className="flex gap-1 mb-4 bg-muted rounded-lg p-1 w-fit">
+        <button
+          onClick={() => setViewMode('course')}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${viewMode === 'course' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+        >
+          {t('By Course')}
+        </button>
+        <button
+          onClick={() => setViewMode('teacher')}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${viewMode === 'teacher' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+        >
+          {t('By Teacher')}
+        </button>
+      </div>
+
+      {viewMode === 'teacher' ? (
+        <>
+          <p className="text-xs text-muted-foreground mb-3">
+            {isUniversity
+              ? t('Counts are for the current semester — once it ends, next semester starts a fresh record.')
+              : t('Counts are for the current academic year — once it ends, next year starts a fresh record.')}
+          </p>
+          <div className="relative mb-4">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text" placeholder={t('Search teacher...')}
+              value={teacherSearch} onChange={(e) => setTeacherSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2.5 border border-border rounded-lg text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          {teacherRows.length === 0 ? (
+            <div className="bg-card rounded-xl border border-border text-center py-14">
+              <Users size={32} className="mx-auto mb-3 text-muted-foreground" />
+              <p className="text-muted-foreground text-sm">{t('No teachers found.')}</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {teacherPageItems.map((tch) => {
+                  const totals = hoursTotals[tch.id]
+                  return (
+                    <button
+                      key={tch.id}
+                      onClick={() => openTeacherDrillDown(tch.id, tch.name)}
+                      className="bg-card border border-border rounded-xl px-4 py-3.5 hover:bg-muted/40 hover:border-primary/30 transition text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-sm font-medium text-foreground truncate">{tch.name}</span>
+                        <span className={`flex-shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${tch.count > 0 ? 'bg-orange-100 text-orange-700' : 'bg-muted text-muted-foreground'}`}>
+                          {tch.count}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{unit(tch.count)}</p>
+                      {totals && totals.scheduledHours > 0 && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {formatHours(totals.taughtHours)} {t('hours taught')}{!totals.isFinal && ` (${t('so far')})`}
+                        </p>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="mt-3">
+                <Pagination page={teacherPage} totalPages={teacherTotalPages} total={teacherRows.length} pageSize={TEACHER_COLS * TEACHER_ROWS_PER_PAGE} onPage={setTeacherPage} />
+              </div>
+            </>
+          )}
+        </>
+      ) : loading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
       ) : rows.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-14">
@@ -200,14 +359,19 @@ export default function TeachingHoursPage() {
               <tbody className="divide-y divide-border">
                 {pageItems.map((r) => (
                   <tr key={`${r.teacherId}-${r.subjectId}`} className="hover:bg-muted/40 transition cursor-pointer" onClick={() => openDrillDown(r)}>
-                    <td className="px-5 py-3 text-sm font-medium text-foreground">{r.teacherName}</td>
+                    <td className="px-5 py-3 text-sm font-medium text-foreground">
+                      {r.teacherName}
+                      {r.periodsMissed > 0 && (
+                        <span className="ml-2 inline-block text-xs font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full" title={`${r.periodsMissed} ${unit(r.periodsMissed)} ${t('missed')}`}>{r.periodsMissed}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <span className="text-sm text-foreground">{r.subjectName}</span>
                       <span className="text-xs text-muted-foreground ml-2">{r.classLevel}{r.term ? ` · ${r.term}` : ''}</span>
                     </td>
-                    <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours}</td>
-                    <td className="px-4 py-3 text-center text-sm text-foreground">{r.taughtHours.toFixed(1)}</td>
-                    <td className="px-4 py-3 text-center text-sm text-foreground">{r.projectedFinalHours.toFixed(1)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
+                    <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
+                    <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
+                    <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.projectedFinalHours)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>
                         {t(r.status)}
@@ -230,7 +394,9 @@ export default function TeachingHoursPage() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-semibold text-foreground text-lg">{drillDown.teacherName}</h3>
-                <p className="text-xs text-muted-foreground">{drillDown.subjectName} · {drillDown.classLevel}</p>
+                <p className="text-xs text-muted-foreground">
+                  {drillDown.subjectName ? `${drillDown.subjectName} · ${drillDown.classLevel}` : `${absences.reduce((s, a) => s + (a.periods ?? 1), 0)} ${unit(absences.reduce((s, a) => s + (a.periods ?? 1), 0))} ${t('missed, all courses')}`}
+                </p>
               </div>
               <button onClick={() => setDrillDown(null)} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
             </div>
@@ -238,13 +404,34 @@ export default function TeachingHoursPage() {
             {absencesLoading ? (
               <p className="text-sm text-muted-foreground py-4 text-center">{t('Loading…')}</p>
             ) : absences.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">{t('No absences reported for this course.')}</p>
+              <p className="text-sm text-muted-foreground py-4 text-center">{drillDown.subjectName ? t('No absences reported for this course.') : t('No absences reported for this teacher.')}</p>
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
+                {/* seenByAdmin only locks a TEACHER out of retracting their own report —
+                    an admin can remove one here regardless, right up until the period it
+                    was reported for has actually ENDED (hourHasPassed) — after that it's
+                    final for everyone, since there's no more chance the teacher shows up. */}
                 {absences.map((a) => (
                   <div key={a.id} className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2">
-                    <span className="text-foreground">{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</span>
-                    <button onClick={() => handleDeleteAbsence(a.id)} className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition" title={t('Remove')}>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-foreground">{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</span>
+                        {a.periods != null && a.periods > 1 && <span className="text-xs font-semibold text-orange-700">({a.periods} {t('periods')})</span>}
+                        {a.seenByAdmin && <span className="text-xs text-muted-foreground italic">({t('reviewed')})</span>}
+                      </div>
+                      {/* Only shown in the unscoped "By Teacher" view — the "By Course" view
+                          already scopes the whole list to one course, so this would be
+                          redundant there. */}
+                      {!drillDown.subjectName && (a.subjectName || a.classLevel) && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{a.subjectName} · {a.classLevel}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteAbsence(a.id)}
+                      disabled={a.hourHasPassed}
+                      className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
+                      title={a.hourHasPassed ? t('This period has already passed and can no longer be removed') : t('Remove')}
+                    >
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -273,10 +460,23 @@ export default function TeachingHoursPage() {
                 />
               </div>
 
+              {/* Catches the exact confusion that motivated this: a teacher with NO
+                  timetable set up at all silently has nothing to match on ANY date, so
+                  the per-date message below was easy to miss and looked like the report
+                  just wasn't going through, with no obvious next step. */}
+              {reportTeacherId && !slotsLoading && teacherSlots.length === 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs text-amber-800">
+                  {t('This teacher has no timetable set up yet, so an absence can\'t be recorded for them. Set up their timetable first, then come back here.')}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('Date')} <span className="text-destructive">*</span></label>
                 <input
-                  type="date" required disabled={!reportTeacherId}
+                  type="date" required disabled={!reportTeacherId || teacherSlots.length === 0}
+                  // A whole past day has, by definition, no period left to report — so
+                  // the picker won't offer one rather than accepting it and failing.
+                  min={todayInSchoolTime()}
                   value={date}
                   onChange={(e) => { setDate(e.target.value); setSelectedSlotIds([]) }}
                   className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
@@ -288,27 +488,37 @@ export default function TeachingHoursPage() {
                   <p className="text-xs text-muted-foreground">{t('Loading…')}</p>
                 ) : daySlots.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{t('No periods on this teacher\'s timetable for this day.')}</p>
+                ) : reportableSlots.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">{t('All periods for this day have already passed and can no longer be reported.')}</p>
                 ) : (
                   <div>
                     <label className="flex items-center gap-2 text-sm text-foreground mb-3">
                       <input type="checkbox" checked={wholeDay} onChange={(e) => setWholeDay(e.target.checked)} />
                       {t('Absent the whole day')}
                     </label>
-                    {!wholeDay && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-foreground mb-1">{t('Which periods?')}</p>
-                        {daySlots.map((s) => (
-                          <label key={s.id} className="flex items-center gap-2 text-sm text-foreground">
+                    {/* Always visible, not just once "whole day" is unchecked — while it's
+                        checked these just reflect that every period is covered (shown
+                        checked + disabled) rather than disappearing entirely. Periods that
+                        have already ended stay visible but locked, so it's clear they exist
+                        and why they can't be picked. */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-foreground mb-1">{t('Which periods?')}</p>
+                      {daySlots.map((s) => {
+                        const passed = slotHasPassed(date, s.endTime)
+                        return (
+                          <label key={s.id} className={`flex items-center gap-2 text-sm text-foreground ${wholeDay || passed ? 'opacity-50' : ''}`}>
                             <input
                               type="checkbox"
-                              checked={selectedSlotIds.includes(s.id)}
+                              checked={passed ? false : (wholeDay || selectedSlotIds.includes(s.id))}
+                              disabled={wholeDay || passed}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
                             {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{s.classLevel}</span>
+                            {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
                           </label>
-                        ))}
-                      </div>
-                    )}
+                        )
+                      })}
+                    </div>
                   </div>
                 )
               )}
@@ -320,7 +530,7 @@ export default function TeachingHoursPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || !reportTeacherId || !date || (!wholeDay && selectedSlotIds.length === 0) || daySlots.length === 0}
+                  disabled={saving || !reportTeacherId || !date || (!wholeDay && selectedSlotIds.length === 0) || reportableSlots.length === 0}
                   className="flex-1 bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
                 >
                   {saving ? t('Saving…') : t('Report Absence')}

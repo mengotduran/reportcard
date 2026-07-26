@@ -19,7 +19,7 @@
     "bcryptjs": "latest",
     "better-sqlite3": "^12.11.1",
     "cors": "latest",
-    "dotenv": "latest",
+    "dotenv": "17.4.2",
     "exceljs": "^4.4.0",
     "express": "latest",
     "jsonwebtoken": "latest",

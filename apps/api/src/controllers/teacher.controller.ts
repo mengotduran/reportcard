@@ -5,6 +5,7 @@ import { AuthRequest } from '../middleware/auth'
 import { demoLimitBlock } from '../config/demo'
 import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
 import { sendPasswordSetupEmail } from '../utils/email'
+import { takeCoursesFromOtherTeachers } from '../utils/courseAssignment'
 
 // Trims, drops blanks, and dedupes — a stray empty string or repeated entry from the
 // client shouldn't end up stored.
@@ -83,6 +84,16 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
       res.status(400).json({ message: 'masterClassLevel is required for Class Master' })
       return
     }
+    // Class Master is a primary/secondary concept (one teacher overseeing a single class
+    // of students all day) — a university has no equivalent, courses are taken across
+    // departments/levels with no single "class" a teacher masters.
+    if (role === 'CLASS_MASTER') {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+      if (school?.type === 'UNIVERSITY') {
+        res.status(400).json({ message: 'Class Master does not apply to universities' })
+        return
+      }
+    }
 
     const limit = await demoLimitBlock(schoolId, 'teachers')
     if (limit) { res.status(403).json({ message: limit }); return }
@@ -154,6 +165,15 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
 
     const teacher = await prisma.user.findFirst({ where: { id, schoolId } })
     if (!teacher) { res.status(404).json({ message: 'Teacher not found' }); return }
+
+    // Same reasoning as createTeacher — no Class Master concept at a university.
+    if (role === 'CLASS_MASTER') {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+      if (school?.type === 'UNIVERSITY') {
+        res.status(400).json({ message: 'Class Master does not apply to universities' })
+        return
+      }
+    }
 
     let displacedName: string | null = null
 
@@ -232,22 +252,15 @@ export const getTeacherSubjects = async (req: AuthRequest, res: Response) => {
 export const assignTeacherSubjects = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
     const { subjectIds }: { subjectIds: string[] } = req.body
-    const reassigned: string[] = []
 
-    // For each subject, if another teacher already has it → take it from them
-    for (const subjectId of subjectIds) {
-      const existing = await prisma.teacherSubject.findFirst({
-        where: { subjectId, userId: { not: id } },
-        include: { user: true, subject: true },
-      })
-      if (existing) {
-        await prisma.teacherSubject.delete({ where: { id: existing.id } })
-        reassigned.push(
-          `"${existing.subject.name} (${existing.subject.classLevel})" was reassigned from ${existing.user.name}`
-        )
-      }
-    }
+    // A course belongs to one teacher: giving it to this one takes it from whoever held
+    // it. That was already the behaviour here, but silently — only the admin saw a note,
+    // while the teacher who lost the course was never told and just found it gone. The
+    // shared helper now also removes their timetable periods for it and notifies them by
+    // name (see utils/courseAssignment.ts).
+    const reassigned = await takeCoursesFromOtherTeachers({ schoolId, subjectIds, newTeacherId: id })
 
     // Replace all assignments for this teacher
     await prisma.teacherSubject.deleteMany({ where: { userId: id } })

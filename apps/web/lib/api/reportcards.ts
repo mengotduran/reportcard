@@ -22,12 +22,27 @@ export interface ClassOverviewStudent {
   } | null
 }
 
-export const getClassOverviewApi = async (termId: string, classLevel: string): Promise<{
+export const getClassOverviewApi = async (termId: string, classLevel: string, subjectId?: string): Promise<{
   students: ClassOverviewStudent[]
   subjectCount: number
   teacherSubjectCount: number
+  // Only meaningful when subjectId is passed — whether this term is the currently
+  // active one, and (if not) whether an admin has unlocked this subject+term for
+  // teachers to edit anyway. See PastTermMarksGrant.
+  isCurrentTerm: boolean
+  pastTermEditGranted: boolean
 }> => {
-  const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel } })
+  const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel, subjectId } })
+  return res.data
+}
+
+export const getPastTermGrantApi = async (subjectId: string, termId: string): Promise<{ granted: boolean }> => {
+  const res = await api.get('/past-term-grants', { params: { subjectId, termId } })
+  return res.data
+}
+
+export const setPastTermGrantApi = async (subjectId: string, termId: string, granted: boolean): Promise<{ granted: boolean }> => {
+  const res = await api.put('/past-term-grants', { subjectId, termId, granted })
   return res.data
 }
 

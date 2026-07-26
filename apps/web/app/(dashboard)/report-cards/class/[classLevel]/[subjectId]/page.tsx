@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import {
   getClassOverviewApi, getReportCardApi, createReportCardApi,
-  saveEntriesWithSeqApi,
+  saveEntriesWithSeqApi, setPastTermGrantApi,
 } from '@/lib/api/reportcards'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getGradingScaleApi, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
@@ -79,6 +79,16 @@ export default function MarksEntryPage() {
   const [saving, setSaving] = useState(false)
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  // Whether this term is still the currently active one, and (if not) whether an admin
+  // has unlocked THIS subject for teachers to edit anyway. Defaults to true/false so
+  // nothing looks locked while the real values are still loading.
+  const [isCurrentTerm, setIsCurrentTerm] = useState(true)
+  const [pastTermEditGranted, setPastTermEditGranted] = useState(false)
+  const [grantSaving, setGrantSaving] = useState(false)
+  // A teacher may only edit a NON-current term if an admin has explicitly granted this
+  // exact subject+term. Admins are never subject to this — only a teacher's own standing
+  // changes once a term closes. Same rule the API actually enforces in saveEntries.
+  const pastTermLockedForTeacher = !isAdminRole && !isCurrentTerm && !pastTermEditGranted
 
   // ── Spreadsheet state ───────────────────────────────────────────────────────
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
@@ -129,7 +139,12 @@ export default function MarksEntryPage() {
     // card individually, one request per student, which is what made switching sequence
     // tabs slow, especially on mobile networks (the mobile app's own marks screen was
     // fixed the same way previously; the web grid never was).
-    const overview = await getClassOverviewApi(termId, classLevel)
+    const overview = await getClassOverviewApi(termId, classLevel, subjectId)
+    setIsCurrentTerm(overview.isCurrentTerm)
+    setPastTermEditGranted(overview.pastTermEditGranted)
+    // Computed from THIS fetch's own result, not the outer pastTermLockedForTeacher —
+    // that's derived from state which wouldn't be updated yet inside this same closure.
+    const freshPastTermLocked = !isAdminRole && !overview.isCurrentTerm && !overview.pastTermEditGranted
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
     const loaded: Row[] = sorted.map((s) => {
       let score = ''
@@ -177,7 +192,7 @@ export default function MarksEntryPage() {
         studentId: s.id, name: s.name, studentIdCode: s.studentId,
         reportCardId: s.reportCard?.id ?? null,
         score, otherSeqScore,
-        isLocked: frozenByPublish || (isResit && !resitEligible) || marksLockedToAdmin,
+        isLocked: frozenByPublish || (isResit && !resitEligible) || marksLockedToAdmin || freshPastTermLocked,
         isPublished: frozenByPublish,
         resitEligible,
       }
@@ -188,9 +203,14 @@ export default function MarksEntryPage() {
     setInvalidRows({})
     setSelectedIndices(new Set())
     setEditingIndex(null)
-  }, [termId, classLevel, subjectId, seqIndex, adminOnlyMarks, caExemptForTeacher, isResit, user?.id, updateSchool])
+  }, [termId, classLevel, subjectId, seqIndex, adminOnlyMarks, caExemptForTeacher, isResit, user?.id, updateSchool, isAdminRole])
 
-  useEffect(() => { fetchData().finally(() => setLoading(false)) }, [fetchData])
+  // setLoading(true) here matters as much as the initial mount: `fetchData`'s identity
+  // also changes when the CA/Exam/Resit tab switches `seqIndex` (see its deps above), and
+  // without re-arming loading, the OLD sequence's rows stayed rendered but got re-labeled
+  // /re-graded against the NEW sequence's max score (e.g. a CA mark out of 30 briefly
+  // graded as an Exam mark out of 70 — a false "FAIL") until the refetch quietly resolved.
+  useEffect(() => { setLoading(true); fetchData().finally(() => setLoading(false)) }, [fetchData])
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   const rangeSet = (a: number, b: number): Set<number> => {
@@ -394,12 +414,15 @@ export default function MarksEntryPage() {
   }
 
   // ── Copy-from-other-seq ─────────────────────────────────────────────────────
+  // Same lock every individual cell already respects (row.isLocked) — otherwise this
+  // was a back door around ADMIN_ONLY: a teacher couldn't type into a locked Exam cell,
+  // but could still bulk-fill every row from CA through this button.
   const handleCopyFromOther = () => {
-    const hasOther = rows.some(r => r.otherSeqScore !== null)
+    const hasOther = rows.some(r => !r.isLocked && r.otherSeqScore !== null)
     if (!hasOther) { showToast(`${otherSeqFull} has no marks yet`, 'error'); return }
-    const hasCurrent = rows.some(r => r.score !== '')
+    const hasCurrent = rows.some(r => !r.isLocked && r.score !== '')
     const doCopy = () => setRows(prev => prev.map(r =>
-      r.otherSeqScore !== null ? { ...r, score: String(r.otherSeqScore) } : r
+      !r.isLocked && r.otherSeqScore !== null ? { ...r, score: String(r.otherSeqScore) } : r
     ))
     if (hasCurrent) {
       if (confirm(`This will overwrite current marks with ${otherSeqFull} scores. Continue?`)) doCopy()
@@ -413,6 +436,21 @@ export default function MarksEntryPage() {
   // passed the course and were never resit-eligible.
   const publishedCount = rows.filter(r => r.isPublished).length
   const editableRows   = rows.filter(r => !r.isLocked)
+
+  // Admin-only: unlock/lock this exact subject+term for teachers to edit again, once it's
+  // no longer current. Contextual here rather than a separate management page — the
+  // admin is already looking at exactly the (subject, term) pair this decision is about.
+  const handleTogglePastTermGrant = async (granted: boolean) => {
+    setGrantSaving(true)
+    try {
+      const res = await setPastTermGrantApi(subjectId, termId, granted)
+      setPastTermEditGranted(res.granted)
+    } catch {
+      showToast(t('Failed to update access'), 'error')
+    } finally {
+      setGrantSaving(false)
+    }
+  }
 
   const handleSaveAll = async () => {
     if (editingIndex !== null) commitEdit()
@@ -484,8 +522,34 @@ export default function MarksEntryPage() {
   const invalidCount = Object.keys(invalidRows).length
   const getGrade     = (score: number) => gradeFromScore(score, effectiveMax, gradingRanges)
 
+  // Mirrors the real table's structure (header + N rows, same column widths) instead of
+  // a plain centered message, so the page doesn't blank out then pop — and it can't be
+  // mistaken for actual data, unlike leaving stale rows on screen during a refetch.
   if (loading) return (
-    <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">{t('Loading...')}</div>
+    <div className="flex flex-col h-full" style={{ minHeight: 'calc(100vh - 120px)' }}>
+      <div className="border border-border rounded-xl overflow-hidden">
+        <table className="w-full min-w-[640px]">
+          <thead>
+            <tr style={{ backgroundColor: '#1e3a5f' }}>
+              <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
+              <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">{t('STUDENT NAME')}</th>
+              <th className="text-center px-4 py-3 text-xs font-bold text-white w-44 border-r border-white/10">{t('MARKS')}</th>
+              <th className="text-center px-4 py-3 text-xs font-bold text-white">{t('PERFORMANCE')}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <tr key={i} className={i % 2 === 0 ? 'bg-card' : 'bg-muted/30'}>
+                <td className="px-4 py-3 border-r border-border"><div className="h-3 w-4 rounded bg-muted animate-pulse" /></td>
+                <td className="px-4 py-3 border-r border-border"><div className="h-3 rounded bg-muted animate-pulse" style={{ width: `${55 + (i % 4) * 10}%` }} /></td>
+                <td className="px-4 py-3 border-r border-border flex justify-center"><div className="h-6 w-10 rounded bg-muted animate-pulse" /></td>
+                <td className="px-4 py-3 flex justify-center"><div className="h-5 w-16 rounded bg-muted animate-pulse" /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 
   return (
@@ -534,14 +598,38 @@ export default function MarksEntryPage() {
         </span>
       </div>
 
-      {/* Copy-from-other-seq bar — resit has nothing to copy from */}
+      {/* Past-term lock — teacher's view: explains why a non-current term is read-only
+          even though nothing here is published. Admin's view: a contextual toggle to
+          unlock this exact subject+term, since they're already looking at it. */}
+      {!isCurrentTerm && (
+        isAdminRole ? (
+          <label className="flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-2.5 text-sm text-sky-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={pastTermEditGranted}
+              disabled={grantSaving}
+              onChange={(e) => handleTogglePastTermGrant(e.target.checked)}
+            />
+            <span className="flex-1">{t('This term has ended. Allow teachers to edit marks here anyway?')}</span>
+            {grantSaving && <span className="text-xs text-sky-500">{t('Saving...')}</span>}
+          </label>
+        ) : pastTermLockedForTeacher && (
+          <div className="flex items-center gap-2 bg-sky-50 border-b border-sky-200 px-4 py-2.5 text-sm text-sky-700">
+            🔒 {t("This term is no longer current, so it's locked. Ask an admin to grant you access if you need to fix something here.")}
+          </div>
+        )
+      )}
+
+      {/* Copy-from-other-seq bar — resit has nothing to copy from, and it's pointless
+          (and would look like a back door around ADMIN_ONLY) to show a "fill this in"
+          shortcut on a tab this user has no editable rows on at all. */}
       {isResit ? (
         <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
           <span className="flex-1 text-sm text-sky-700">
             {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
           </span>
         </div>
-      ) : (
+      ) : editableRows.length > 0 && (
         <button
           onClick={handleCopyFromOther}
           className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"

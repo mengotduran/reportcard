@@ -1,9 +1,13 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { timeToMinutes, dateStringToDayOfWeek } from '../utils/teachingHours'
+import { takeCoursesFromOtherTeachers } from '../utils/courseAssignment'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const DAY_SET = new Set(DAY_ORDER)
+const WEEKEND_DAYS = new Set(['SATURDAY', 'SUNDAY'])
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const TEACHER_ROLES = ['CLASS_TEACHER', 'CLASS_MASTER', 'SUBJECT_TEACHER', 'VICE_PRINCIPAL'] as const
 
 const byDayThenTime = <T extends { dayOfWeek: string; startTime: string }>(a: T, b: T) =>
@@ -11,6 +15,22 @@ const byDayThenTime = <T extends { dayOfWeek: string; startTime: string }>(a: T,
 
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 const overlaps = (aStart: string, aEnd: string, bStart: string, bEnd: string) => aStart < bEnd && bStart < aEnd
+
+// Same-day overlap, but two one-off (specificDate) slots that share a weekday without
+// sharing the actual date never really coincide — mirrors the rule in saveTimetable.
+const slotsOverlap = (
+  a: { dayOfWeek: string; startTime: string; endTime: string; specificDate?: string | null },
+  b: { dayOfWeek: string; startTime: string; endTime: string; specificDate?: string | null },
+) => {
+  if (a.dayOfWeek !== b.dayOfWeek) return false
+  if (a.specificDate && b.specificDate && a.specificDate !== b.specificDate) return false
+  return overlaps(a.startTime, a.endTime, b.startTime, b.endTime)
+}
+
+function shiftTime(hhmm: string, deltaMinutes: number): string {
+  const total = Math.max(0, Math.min(timeToMinutes(hhmm) + deltaMinutes, 23 * 60 + 59))
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
 
 function shapeSlot<T extends { dayOfWeek: string; startTime: string; subject: { name: string; classLevel: string } | null }>(
   { subject, ...s }: T
@@ -32,7 +52,7 @@ export const getTeacherTimetable = async (req: AuthRequest, res: Response) => {
     if (!teacher) { res.status(404).json({ message: 'Teacher not found' }); return }
 
     const slots = await prisma.timetableSlot.findMany({
-      where: { schoolId, teacherId },
+      where: { schoolId, teacherId, archivedAt: null },
       include: { subject: { select: { name: true, classLevel: true } } },
     })
 
@@ -48,7 +68,7 @@ export const getMyTimetable = async (req: AuthRequest, res: Response) => {
   try {
     const teacherId = req.user!.id
     const slots = await prisma.timetableSlot.findMany({
-      where: { teacherId },
+      where: { teacherId, archivedAt: null },
       include: { subject: { select: { name: true, classLevel: true } } },
     })
     res.json({ slots: slots.map(shapeSlot).sort(byDayThenTime) })
@@ -68,7 +88,7 @@ export const getSchoolTimetable = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const slots = await prisma.timetableSlot.findMany({
-      where: { schoolId, subjectId: { not: null } },
+      where: { schoolId, subjectId: { not: null }, archivedAt: null },
       include: { subject: { select: { classLevel: true } }, teacher: { select: { id: true, name: true } } },
     })
     res.json({
@@ -89,18 +109,32 @@ export const getSchoolTimetable = async (req: AuthRequest, res: Response) => {
 export const getPeriods = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const periods = await prisma.timetablePeriod.findMany({ where: { schoolId } })
-    res.json({ periods: periods.sort((a, b) => a.startTime.localeCompare(b.startTime)) })
+    const [periods, school] = await Promise.all([
+      prisma.timetablePeriod.findMany({ where: { schoolId } }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+    ])
+    res.json({
+      periods: periods.sort((a, b) => a.startTime.localeCompare(b.startTime)),
+      periodMinutes: school?.periodMinutes ?? null,
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
   }
 }
 
-// Replace-all, same pattern as saveTimetable. Admin-only.
+// Replace-all, same pattern as saveTimetable. Admin-only. Also persists the school-wide
+// periodMinutes ("minutes per teaching period"), which every non-break period must match.
 export const savePeriods = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
+
+    const rawMinutes = req.body.periodMinutes
+    const periodMinutes = rawMinutes === null || rawMinutes === undefined || rawMinutes === '' ? null : Number(rawMinutes)
+    if (periodMinutes !== null && (!Number.isInteger(periodMinutes) || periodMinutes <= 0)) {
+      res.status(400).json({ message: 'Minutes per period must be a positive whole number' }); return
+    }
+
     const rawPeriods = Array.isArray(req.body.periods) ? req.body.periods : []
     const periods = rawPeriods.map((p: Record<string, unknown>) => ({
       startTime: String(p.startTime ?? ''),
@@ -113,6 +147,19 @@ export const savePeriods = async (req: AuthRequest, res: Response) => {
         res.status(400).json({ message: 'Each period needs a valid start time before its end time' }); return
       }
     }
+    // Every teaching (non-break) period must be a whole multiple of one period — usually
+    // exactly one, but a "double period" block (2x, 3x, ...) is a single row too, so a
+    // class can still be measured in whole periods either way. Breaks are exempt — they
+    // can be any length.
+    if (periodMinutes !== null) {
+      for (const p of periods) {
+        if (p.isBreak) continue
+        const dur = timeToMinutes(p.endTime) - timeToMinutes(p.startTime)
+        if (dur % periodMinutes !== 0) {
+          res.status(400).json({ message: `Each teaching period must be a whole multiple of ${periodMinutes} minutes — ${p.startTime}-${p.endTime} is ${dur}. (Breaks can be any length.)` }); return
+        }
+      }
+    }
     const sorted = [...periods].sort((a, b) => a.startTime.localeCompare(b.startTime))
     for (let i = 1; i < sorted.length; i++) {
       if (sorted[i].startTime < sorted[i - 1].endTime) {
@@ -123,12 +170,107 @@ export const savePeriods = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // A teaching period whose time actually moved (whether the admin edited it in place
+    // or deleted it and added a differently-timed one — this can't tell the two apart,
+    // and doesn't need to) should carry every teacher's class at that old time along with
+    // it, rather than silently leaving them on the stale time. Matched old-vs-new by
+    // sorted position: the Nth period that disappeared is assumed to correspond to the
+    // Nth one that appeared — the only signal available without asking the admin to link
+    // them explicitly.
+    type PeriodSpan = { startTime: string; endTime: string; isBreak: boolean }
+    const oldPeriods = await prisma.timetablePeriod.findMany({ where: { schoolId } })
+    const oldTeaching = oldPeriods.filter((p) => !p.isBreak).sort((a, b) => a.startTime.localeCompare(b.startTime))
+    const newTeaching = periods.filter((p: PeriodSpan) => !p.isBreak).sort((a: PeriodSpan, b: PeriodSpan) => a.startTime.localeCompare(b.startTime))
+    const sameSpan = (a: { startTime: string; endTime: string }, b: { startTime: string; endTime: string }) => a.startTime === b.startTime && a.endTime === b.endTime
+    const removed = oldTeaching.filter((o) => !newTeaching.some((n: PeriodSpan) => sameSpan(o, n)))
+    const added = newTeaching.filter((n: PeriodSpan) => !oldTeaching.some((o) => sameSpan(o, n)))
+    const periodMoves = removed.slice(0, added.length).map((oldP, i) => ({ oldP, newP: added[i] })).filter(({ oldP, newP }) => oldP.startTime !== newP.startTime)
+
+    type ActiveSlot = { id: string; teacherId: string; dayOfWeek: string; startTime: string; endTime: string; subjectId: string | null; label: string | null; room: string | null; specificDate: string | null }
+    const slotShifts: { slot: ActiveSlot; newStartTime: string; newEndTime: string }[] = []
+    for (const { oldP, newP } of periodMoves) {
+      const deltaMinutes = timeToMinutes(newP.startTime) - timeToMinutes(oldP.startTime)
+      // Weekday, subject-linked slots only — private/one-off slots were never grid-locked
+      // to a period in the first place, and weekend classes are explicitly exempt from
+      // the period grid, so neither moves with it.
+      const affected = await prisma.timetableSlot.findMany({
+        where: { schoolId, archivedAt: null, subjectId: { not: null }, startTime: oldP.startTime, dayOfWeek: { notIn: [...WEEKEND_DAYS] } },
+      })
+      for (const slot of affected) {
+        slotShifts.push({ slot, newStartTime: shiftTime(slot.startTime, deltaMinutes), newEndTime: shiftTime(slot.endTime, deltaMinutes) })
+      }
+    }
+
+    if (slotShifts.length > 0) {
+      const shiftedIds = new Set(slotShifts.map((s) => s.slot.id))
+      const shiftById = new Map(slotShifts.map((s) => [s.slot.id, s]))
+      const allActive = await prisma.timetableSlot.findMany({
+        where: { schoolId, archivedAt: null },
+        include: { subject: { select: { classLevel: true } }, teacher: { select: { name: true } } },
+      })
+      // Every slot as it would look AFTER this save — shifted ones at their new time,
+      // everything else unchanged — so conflicts are checked against the real end state,
+      // not the current one.
+      const nextSlots = allActive.map((s) => {
+        const shift = shiftById.get(s.id)
+        return shift ? { ...s, startTime: shift.newStartTime, endTime: shift.newEndTime } : s
+      })
+      const newBreaks = periods.filter((p: PeriodSpan) => p.isBreak)
+
+      const conflicts: string[] = []
+      for (const s of nextSlots) {
+        if (!shiftedIds.has(s.id)) continue
+        const label = s.subjectId ? `${s.teacher.name} (${s.subject?.classLevel ?? ''})` : s.teacher.name
+        // Same-teacher clash — they'd be in two places at once.
+        const teacherClash = nextSlots.find((o) => o.id !== s.id && o.teacherId === s.teacherId && slotsOverlap(s, o))
+        if (teacherClash) {
+          conflicts.push(`${label} would clash with their own ${teacherClash.subjectId ? teacherClash.subject?.classLevel : (teacherClash.label ?? 'other')} slot on ${dayLabel(s.dayOfWeek)} at ${s.startTime}-${s.endTime}`)
+          continue
+        }
+        // Cross-teacher clash — same class, same time, different teacher.
+        if (s.subjectId) {
+          const otherClash = nextSlots.find((o) => o.id !== s.id && o.teacherId !== s.teacherId && o.subjectId && o.subject?.classLevel === s.subject?.classLevel && slotsOverlap(s, o))
+          if (otherClash) {
+            conflicts.push(`${s.teacher.name} and ${otherClash.teacher.name} would both be teaching ${s.subject?.classLevel} on ${dayLabel(s.dayOfWeek)} at ${s.startTime}-${s.endTime}`)
+            continue
+          }
+        }
+        // Clash with a break band.
+        const breakClash = newBreaks.find((b: PeriodSpan) => overlaps(s.startTime, s.endTime, b.startTime, b.endTime))
+        if (breakClash) {
+          conflicts.push(`${label} would overlap the break ${breakClash.startTime}-${breakClash.endTime} on ${dayLabel(s.dayOfWeek)}`)
+        }
+      }
+      if (conflicts.length > 0) {
+        res.status(400).json({ message: `Moving these periods would create conflicts — fix these first: ${conflicts.join('; ')}` })
+        return
+      }
+    }
+
+    const shiftArchivedAt = new Date()
     await prisma.$transaction([
+      prisma.school.update({ where: { id: schoolId }, data: { periodMinutes } }),
       prisma.timetablePeriod.deleteMany({ where: { schoolId } }),
       ...(periods.length > 0 ? [prisma.timetablePeriod.createMany({ data: periods.map((p: typeof periods[number]) => ({ ...p, schoolId })) })] : []),
+      ...(slotShifts.length > 0
+        ? [
+            prisma.timetableSlot.updateMany({ where: { id: { in: slotShifts.map((s) => s.slot.id) } }, data: { archivedAt: shiftArchivedAt } }),
+            prisma.timetableSlot.createMany({
+              data: slotShifts.map((s) => ({
+                schoolId, teacherId: s.slot.teacherId, dayOfWeek: s.slot.dayOfWeek,
+                startTime: s.newStartTime, endTime: s.newEndTime,
+                subjectId: s.slot.subjectId, label: s.slot.label, room: s.slot.room, specificDate: null,
+              })),
+            }),
+          ]
+        : []),
     ])
 
-    res.json({ message: 'Period structure saved' })
+    res.json({
+      message: slotShifts.length > 0
+        ? `Period structure saved — ${slotShifts.length} class${slotShifts.length === 1 ? '' : 'es'} automatically moved to match.`
+        : 'Period structure saved',
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -142,13 +284,21 @@ interface SlotInput {
   subjectId: string | null
   label: string | null
   room: string | null
+  // "YYYY-MM-DD" — set only for a one-off private slot (see the schema comment on
+  // TimetableSlot). Always null for a school-subject period.
+  specificDate: string | null
 }
 
-// Replace-all: deletes every existing slot for this teacher and recreates
-// from the submitted array — same delete-then-recreate approach already used
-// by assignTeacherSubjects, simpler and less error-prone than incremental
-// per-slot CRUD for what is fundamentally a whole-day schedule the admin
-// edits together.
+const slotKey = (s: SlotInput) =>
+  `${s.dayOfWeek}|${s.startTime}|${s.endTime}|${s.subjectId ?? ''}|${s.label ?? ''}|${s.room ?? ''}|${s.specificDate ?? ''}`
+
+// Replace-all: archives every currently-active slot for this teacher (rather than
+// deleting them — see the archivedAt comment on TimetableSlot) and recreates from the
+// submitted array as the new active set. Same delete-then-recreate SHAPE already used by
+// assignTeacherSubjects, just non-destructive: this also happens to fix a real bug the
+// old hard-delete had, where resaving ANY part of a teacher's timetable cascade-deleted
+// every TeacherAbsence ever logged against their old slots (TimetableSlot -> TeacherAbsence
+// is onDelete: Cascade).
 export const saveTimetable = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -159,14 +309,23 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
     if (!teacher) { res.status(404).json({ message: 'Teacher not found' }); return }
 
     const rawSlots = Array.isArray(req.body.slots) ? req.body.slots : []
-    const slots: SlotInput[] = rawSlots.map((s: Record<string, unknown>) => ({
-      dayOfWeek: String(s.dayOfWeek ?? '').toUpperCase(),
-      startTime: String(s.startTime ?? ''),
-      endTime: String(s.endTime ?? ''),
-      subjectId: s.subjectId ? String(s.subjectId) : null,
-      label: s.label ? String(s.label).trim() : null,
-      room: s.room ? String(s.room).trim() : null,
-    }))
+    const slots: SlotInput[] = rawSlots.map((s: Record<string, unknown>) => {
+      const specificDate = s.specificDate ? String(s.specificDate) : null
+      return {
+        // A one-off slot's weekday is derived from its actual date, not whatever the
+        // client sent — that's the one thing that can never be wrong or out of sync.
+        dayOfWeek: specificDate && DATE_RE.test(specificDate) ? dateStringToDayOfWeek(specificDate) : String(s.dayOfWeek ?? '').toUpperCase(),
+        startTime: String(s.startTime ?? ''),
+        endTime: String(s.endTime ?? ''),
+        subjectId: s.subjectId ? String(s.subjectId) : null,
+        label: s.label ? String(s.label).trim() : null,
+        room: s.room ? String(s.room).trim() : null,
+        specificDate,
+      }
+    })
+
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } })
+    const periodMinutes = school?.periodMinutes ?? null
 
     for (const s of slots) {
       if (!DAY_SET.has(s.dayOfWeek)) { res.status(400).json({ message: `Invalid day: ${s.dayOfWeek}` }); return }
@@ -174,19 +333,37 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
         res.status(400).json({ message: 'Each slot needs a valid start time before its end time' }); return
       }
       if (!s.subjectId && !s.label) { res.status(400).json({ message: 'Each slot needs either a subject or a label' }); return }
+      if (s.specificDate) {
+        if (!DATE_RE.test(s.specificDate)) { res.status(400).json({ message: 'Invalid one-off date' }); return }
+        if (s.subjectId) { res.status(400).json({ message: 'A one-off date can only be used for a private/extra class, not a school subject period' }); return }
+      }
+      // A class (subject slot) must be a whole number of periods. Private slots (label,
+      // no subject) are exempt — extra/after-hours classes can be any length. So are
+      // Saturday/Sunday classes: weekend schedules routinely don't follow the same
+      // period grid as the weekday timetable.
+      if (s.subjectId && periodMinutes && !WEEKEND_DAYS.has(s.dayOfWeek)) {
+        const dur = timeToMinutes(s.endTime) - timeToMinutes(s.startTime)
+        if (dur % periodMinutes !== 0) {
+          res.status(400).json({ message: `A class must be a whole number of ${periodMinutes}-minute periods — ${s.startTime}-${s.endTime} is ${dur} minutes.` }); return
+        }
+      }
     }
 
-    // Same-day overlap check — a teacher can't be scheduled in two places at once.
+    // Same-day overlap check — a teacher can't be scheduled in two places at once. Two
+    // one-off slots that share a weekday but fall on DIFFERENT actual dates never really
+    // coincide, so they're exempt from clashing with each other.
     const byDay = new Map<string, SlotInput[]>()
     for (const s of slots) byDay.set(s.dayOfWeek, [...(byDay.get(s.dayOfWeek) ?? []), s])
     for (const [day, daySlots] of byDay) {
       const sorted = [...daySlots].sort((a, b) => a.startTime.localeCompare(b.startTime))
-      for (let i = 1; i < sorted.length; i++) {
-        if (sorted[i].startTime < sorted[i - 1].endTime) {
-          res.status(400).json({
-            message: `Overlapping slots on ${day}: ${sorted[i - 1].startTime}-${sorted[i - 1].endTime} and ${sorted[i].startTime}-${sorted[i].endTime}`,
-          })
-          return
+      for (let i = 0; i < sorted.length; i++) {
+        for (let j = i + 1; j < sorted.length; j++) {
+          const a = sorted[i], b = sorted[j]
+          if (a.specificDate && b.specificDate && a.specificDate !== b.specificDate) continue
+          if (a.startTime < b.endTime && b.startTime < a.endTime) {
+            res.status(400).json({ message: `Overlapping slots on ${day}: ${a.startTime}-${a.endTime} and ${b.startTime}-${b.endTime}` })
+            return
+          }
         }
       }
     }
@@ -213,7 +390,7 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
     const classLevelsUsed = [...new Set([...subjectClassLevel.values()])]
     if (classLevelsUsed.length > 0) {
       const otherSlots = await prisma.timetableSlot.findMany({
-        where: { schoolId, teacherId: { not: teacherId }, subject: { classLevel: { in: classLevelsUsed } } },
+        where: { schoolId, teacherId: { not: teacherId }, archivedAt: null, subject: { classLevel: { in: classLevelsUsed } } },
         include: { subject: { select: { classLevel: true } }, teacher: { select: { name: true } } },
       })
       for (const s of slots) {
@@ -231,21 +408,100 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    await prisma.$transaction([
-      prisma.timetableSlot.deleteMany({ where: { schoolId, teacherId } }),
-      ...(slots.length > 0
-        ? [prisma.timetableSlot.createMany({ data: slots.map((s) => ({ ...s, schoolId, teacherId })) })]
-        : []),
-      // Picking a course for a teacher here is itself the assignment — no need
-      // to separately visit the Teachers page first. Doesn't touch any other
-      // teacher's existing link to the same subject; a course can now have more
-      // than one teacher as long as their slots don't clash (checked above).
-      ...(subjectIds.length > 0
-        ? [prisma.teacherSubject.createMany({ data: subjectIds.map((subjectId) => ({ userId: teacherId, subjectId })), skipDuplicates: true })]
-        : []),
-    ])
+    // Nothing to do if this is exactly the schedule already active — skip archiving a
+    // version that would be identical to the one it's replacing.
+    const existingActive = await prisma.timetableSlot.findMany({ where: { schoolId, teacherId, archivedAt: null } })
+    const existingKeys = existingActive.map(slotKey).sort()
+    const newKeys = slots.map(slotKey).sort()
+    const unchanged = existingKeys.length === newKeys.length && existingKeys.every((k, i) => k === newKeys[i])
 
-    res.json({ message: 'Timetable saved' })
+    let reassigned: string[] = []
+    if (!unchanged) {
+      // UNIVERSITIES: a course for a given class has exactly ONE lecturer. Scheduling it
+      // for this teacher therefore takes it off whoever held it — removing their
+      // assignment, archiving their periods for it, and notifying them by name. Done
+      // BEFORE the writes below so their now-stale slots are archived first and can't be
+      // mistaken for a live clash.
+      //
+      // Primary/secondary are deliberately untouched here: they follow a different flow,
+      // where a subject may legitimately sit with more than one teacher and the only real
+      // constraint is the class/time clash already checked above.
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+      if (school?.type === 'UNIVERSITY' && subjectIds.length > 0) {
+        reassigned = await takeCoursesFromOtherTeachers({ schoolId, subjectIds, newTeacherId: teacherId })
+      }
+
+      const archivedAt = new Date()
+      await prisma.$transaction([
+        ...(existingActive.length > 0
+          ? [prisma.timetableSlot.updateMany({ where: { schoolId, teacherId, archivedAt: null }, data: { archivedAt } })]
+          : []),
+        ...(slots.length > 0
+          ? [prisma.timetableSlot.createMany({ data: slots.map((s) => ({ ...s, schoolId, teacherId })) })]
+          : []),
+        // Picking a course for a teacher here is itself the assignment — no need to
+        // separately visit the Teachers page first.
+        ...(subjectIds.length > 0
+          ? [prisma.teacherSubject.createMany({ data: subjectIds.map((subjectId) => ({ userId: teacherId, subjectId })), skipDuplicates: true })]
+          : []),
+      ])
+    }
+
+    res.json({
+      message: unchanged ? 'No changes to save' : 'Timetable saved',
+      ...(reassigned.length > 0 ? { reassigned } : {}),
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Every past version of this teacher's timetable — every slot that's been archived
+// (superseded by a later save), grouped by the exact archivedAt timestamp they share
+// (everything archived in one save shares one timestamp; see saveTimetable). Newest
+// version first. Purely informational — hour/coverage math never looks at these.
+export const getTimetableHistory = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const teacherId = String(req.query.teacherId ?? '')
+    if (!teacherId) { res.status(400).json({ message: 'teacherId is required' }); return }
+
+    const archived = await prisma.timetableSlot.findMany({
+      where: { schoolId, teacherId, archivedAt: { not: null } },
+      include: { subject: { select: { name: true, classLevel: true } } },
+    })
+
+    const versions = new Map<string, ReturnType<typeof shapeSlot>[]>()
+    for (const s of archived) {
+      const key = s.archivedAt!.toISOString()
+      versions.set(key, [...(versions.get(key) ?? []), shapeSlot(s)])
+    }
+    const sorted = [...versions.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([archivedAt, versionSlots]) => ({ archivedAt, slots: versionSlots.sort(byDayThenTime) }))
+
+    res.json({ versions: sorted })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Permanently removes one archived version — the admin's way to actually get rid of a
+// past timetable they don't want kept, rather than it just sitting in history forever.
+// Admin-only. The CURRENT (active) timetable is never reachable through this endpoint.
+export const deleteTimetableHistoryVersion = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const teacherId = String(req.body.teacherId ?? '')
+    const archivedAtRaw = req.body.archivedAt ? String(req.body.archivedAt) : ''
+    const archivedAt = archivedAtRaw ? new Date(archivedAtRaw) : null
+    if (!teacherId || !archivedAt || isNaN(archivedAt.getTime())) {
+      res.status(400).json({ message: 'teacherId and archivedAt are required' }); return
+    }
+    await prisma.timetableSlot.deleteMany({ where: { schoolId, teacherId, archivedAt } })
+    res.json({ message: 'Timetable version removed' })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

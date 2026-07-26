@@ -37,6 +37,10 @@ export default function FeesGridScreen() {
   const [activeDeptId, setActiveDeptId] = useState('')
   const [data, setData] = useState<ClassFees | null>(null)
   const [loading, setLoading] = useState(false)
+  // Distinct from `loading` (which only covers loadClass, once a class is known):
+  // this covers the initial classes/departments fetch below, so the "No students found"
+  // empty state can't flash before that fetch has even had a chance to pick a class.
+  const [initializing, setInitializing] = useState(true)
   const [rows, setRows] = useState<Record<string, RowEntry>>({})
   const [saving, setSaving] = useState(false)
   const [historyFor, setHistoryFor] = useState<{ id: string; name: string } | null>(null)
@@ -70,7 +74,7 @@ export default function FeesGridScreen() {
       } else if (sorted.length) {
         loadClass(sorted[0].name)
       }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => setInitializing(false))
   }, [loadClass])
 
   const handleDeptChip = (deptId: string) => {
@@ -144,7 +148,7 @@ export default function FeesGridScreen() {
         ))}
       </ScrollView>
 
-      {loading ? (
+      {loading || initializing ? (
         <View style={s.center}><ActivityIndicator size="large" color="#F03E2F" /></View>
       ) : !data || data.students.length === 0 ? (
         <View style={s.center}>

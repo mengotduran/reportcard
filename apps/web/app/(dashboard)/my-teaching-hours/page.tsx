@@ -5,6 +5,7 @@ import { useT } from '@/lib/i18n'
 import { getMyTimetableApi, TimetableSlot } from '@/lib/api/timetable'
 import { getMyCoverageApi, CoverageRow, CoverageStatus } from '@/lib/api/coverage'
 import { getMyAbsencesApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { formatHours } from '@/lib/formatHours'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
@@ -20,6 +21,14 @@ function dayOfWeekFor(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
   return ['SUNDAY', ...DAY_ORDER.slice(0, 6)][jsDay]
+}
+
+// Mirrors the API's slotHasPassed (Cameroon is UTC+1/WAT, no DST) — lets the UI grey
+// these out up front instead of only finding out after a rejected request.
+function slotHasPassed(dateStr: string, endTime: string): boolean {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const [hh, mm] = endTime.split(':').map(Number)
+  return Date.UTC(y, m - 1, d, hh - 1, mm || 0) <= Date.now()
 }
 
 const STATUS_STYLE: Record<CoverageStatus, string> = {
@@ -39,6 +48,11 @@ export default function MyTeachingHoursPage() {
   const [rows, setRows] = useState<CoverageRow[]>([])
   const [slots, setSlots] = useState<TimetableSlot[]>([])
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
+  // Total periods missed (a 2-period class = 2) + whether a period length is configured
+  // (drives "periods" vs "absences" wording).
+  const [periodsMissed, setPeriodsMissed] = useState(0)
+  const [periodMinutes, setPeriodMinutes] = useState<number | null>(null)
+  const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period missed') : t('periods missed')) : (n === 1 ? t('absence') : t('absences'))
 
   const [showReportModal, setShowReportModal] = useState(false)
   const [date, setDate] = useState('')
@@ -51,7 +65,7 @@ export default function MyTeachingHoursPage() {
   const load = () => {
     setLoading(true)
     Promise.all([getMyCoverageApi(), getMyTimetableApi(), getMyAbsencesApi()])
-      .then(([c, tt, a]) => { setRows(c.rows); setSlots(tt.slots); setAbsences(a.absences) })
+      .then(([c, tt, a]) => { setRows(c.rows); setSlots(tt.slots); setAbsences(a.absences); setPeriodsMissed(a.periodsMissed); setPeriodMinutes(a.periodMinutes) })
       .finally(() => setLoading(false))
   }
 
@@ -65,6 +79,7 @@ export default function MyTeachingHoursPage() {
   }
 
   const daySlots = date ? slots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
+  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
 
   const handleReport = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -138,9 +153,9 @@ export default function MyTeachingHoursPage() {
                         <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
                         <span className="text-xs text-muted-foreground ml-2">{r.classLevel}{r.term ? ` · ${r.term}` : ''}</span>
                       </td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours}</td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{r.taughtHours.toFixed(1)}</td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{r.projectedFinalHours.toFixed(1)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
+                      <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
+                      <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
+                      <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.projectedFinalHours)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
                       <td className="px-4 py-3 text-center">
                         <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>
                           {t(r.status)}
@@ -152,6 +167,22 @@ export default function MyTeachingHoursPage() {
               </table></div>
             </div>
           )}
+
+          {/* Scoped to the current period server-side (semester for university, academic
+              year for primary/secondary) — once that period ends this resets to a fresh
+              record, even though nothing is ever deleted; older absences just age out of
+              this default view. */}
+          <div className="flex items-center gap-3 bg-card border border-border rounded-xl px-5 py-4 mb-4">
+            <div className={`w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0 ${periodsMissed > 0 ? 'bg-orange-100' : 'bg-muted'}`}>
+              <CalendarOff size={18} className={periodsMissed > 0 ? 'text-orange-600' : 'text-muted-foreground'} />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground leading-none">{periodsMissed}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {unit(periodsMissed)} {isUniversity ? t('this semester') : t('this academic year')}
+              </p>
+            </div>
+          </div>
 
           <h3 className="text-lg font-semibold text-foreground mb-3">{t('Absences reported')}</h3>
           {absences.length === 0 ? (
@@ -168,18 +199,32 @@ export default function MyTeachingHoursPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {absences.map((a) => (
-                    <tr key={a.id} className="hover:bg-muted/40 transition">
-                      <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>
-                      <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{a.classLevel}</span></td>
-                      <td className="px-4 py-3 text-sm text-muted-foreground">{t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</td>
-                      <td className="px-4 py-3 text-center">
-                        <button onClick={() => handleDeleteAbsence(a.id)} className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition" title={t('Remove')}>
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {absences.map((a) => {
+                    // Once the period's happened, only an admin can remove it (they may
+                    // want to mark the teacher present after all); once an admin has
+                    // reviewed it in a PRIOR visit to their list, it's locked for everyone.
+                    const locked = a.hourHasPassed || a.seenByAdmin
+                    const lockedReason = a.seenByAdmin
+                      ? t('Already reviewed by an admin — ask them to remove it if needed')
+                      : t('This period has already passed — ask an admin to remove it if needed')
+                    return (
+                      <tr key={a.id} className="hover:bg-muted/40 transition">
+                        <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{a.classLevel}</span></td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">{t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => handleDeleteAbsence(a.id)}
+                            disabled={locked}
+                            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
+                            title={locked ? lockedReason : t('Remove')}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table></div>
             </div>
@@ -208,27 +253,37 @@ export default function MyTeachingHoursPage() {
               {date && (
                 daySlots.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{t('No periods on your timetable for this day.')}</p>
+                ) : reportableSlots.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">{t('All periods for this day have already passed — ask an admin if this needs correcting.')}</p>
                 ) : (
                   <div>
                     <label className="flex items-center gap-2 text-sm text-foreground mb-3">
                       <input type="checkbox" checked={wholeDay} onChange={(e) => setWholeDay(e.target.checked)} />
                       {t('Absent the whole day')}
                     </label>
-                    {!wholeDay && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-foreground mb-1">{t('Which periods?')}</p>
-                        {daySlots.map((s) => (
-                          <label key={s.id} className="flex items-center gap-2 text-sm text-foreground">
+                    {/* Always visible, not just once "whole day" is unchecked — while it's
+                        checked these just reflect that every period is covered (shown
+                        checked + disabled) rather than disappearing entirely. Periods that
+                        have already happened are locked out regardless of wholeDay. */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-foreground mb-1">{t('Which periods?')}</p>
+                      {daySlots.map((s) => {
+                        const passed = slotHasPassed(date, s.endTime)
+                        const locked = wholeDay || passed
+                        return (
+                          <label key={s.id} className={`flex items-center gap-2 text-sm text-foreground ${locked ? 'opacity-50' : ''}`}>
                             <input
                               type="checkbox"
-                              checked={selectedSlotIds.includes(s.id)}
+                              checked={passed ? false : (wholeDay || selectedSlotIds.includes(s.id))}
+                              disabled={locked}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
                             {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{s.classLevel}</span>
+                            {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
                           </label>
-                        ))}
-                      </div>
-                    )}
+                        )
+                      })}
+                    </div>
                   </div>
                 )
               )}
@@ -240,7 +295,7 @@ export default function MyTeachingHoursPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || !date || (!wholeDay && selectedSlotIds.length === 0) || daySlots.length === 0}
+                  disabled={saving || !date || (!wholeDay && selectedSlotIds.length === 0) || reportableSlots.length === 0}
                   className="flex-1 bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
                 >
                   {saving ? t('Saving…') : t('Report Absence')}

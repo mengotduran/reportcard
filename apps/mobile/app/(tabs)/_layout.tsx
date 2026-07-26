@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getAcademicYears } from '@/lib/api/dashboard'
 import { getMyNotifications } from '@/lib/api/notifications'
-import { useTheme } from '@/lib/useTheme'
+import { useTheme, font, hairlineWidth } from '@/lib/useTheme'
 import ThemeToggle from '@/components/ThemeToggle'
 import { useT } from '@/lib/i18n'
 
@@ -100,19 +100,21 @@ export default function TabsLayout() {
   )
 
   const tabStyle = {
-    tabBarStyle: { backgroundColor: colors.tabBg, borderTopColor: colors.tabBorder },
-    headerStyle: { backgroundColor: colors.headerBg },
-    headerTitleStyle: { fontWeight: '700' as const, fontSize: 20, color: colors.text },
+    tabBarStyle: { backgroundColor: colors.bg, borderTopColor: colors.line, borderTopWidth: hairlineWidth },
+    tabBarLabelStyle: { fontFamily: font.monoRegular, fontSize: 11, letterSpacing: 0.4, textTransform: 'lowercase' as const },
+    tabBarIconStyle: { marginBottom: -2 },
+    headerStyle: { backgroundColor: colors.bg },
+    headerTitleStyle: { fontFamily: font.displayMedium, fontSize: 20, color: colors.text },
     headerShadowVisible: false,
-    tabBarActiveTintColor: colors.primary,
-    tabBarInactiveTintColor: colors.textMuted,
+    tabBarActiveTintColor: colors.brassInk,
+    tabBarInactiveTintColor: colors.textFaint,
     lazy: false,
-    sceneStyle: { backgroundColor: colors.bgSecondary },
+    sceneStyle: { backgroundColor: colors.bg },
   }
 
   if (isSuperAdmin) {
     return (
-      <Tabs screenOptions={{ ...tabStyle, headerStyle: { backgroundColor: '#F03E2F' }, headerTitleStyle: { fontWeight: '700', fontSize: 20, color: '#fff' }, tabBarActiveTintColor: '#F03E2F' }}>
+      <Tabs screenOptions={{ ...tabStyle, headerStyle: { backgroundColor: colors.brassFill }, headerTitleStyle: { fontFamily: font.displayMedium, fontSize: 20, color: colors.onBrass }, tabBarActiveTintColor: colors.brassInk }}>
         <Tabs.Screen name="index" options={{ title: 'SuperAdmin', headerRight: () => logoutButtonWhite, tabBarIcon: ({ color, size }) => <Ionicons name="shield-checkmark-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="schools" options={{ title: 'Schools', headerRight: () => logoutButtonWhite, tabBarIcon: ({ color, size }) => <Ionicons name="business-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ href: null }} />
@@ -131,19 +133,18 @@ export default function TabsLayout() {
         <Tabs.Screen name="report-cards" options={{ title: t('Report Cards'), tabBarIcon: ({ color, size }) => <Ionicons name="document-text-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="students" options={{ title: t('Students'), tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="more" options={{ title: t('More'), tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" size={size} color={color} /> }} />
+        <Tabs.Screen name="teaching-hours" options={{ title: t('Attendance'), tabBarIcon: ({ color, size }) => <Ionicons name="checkmark-done-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="schools" options={{ href: null }} />
         {/* Admin editor is web-only — no timetable-building screen on mobile. */}
         <Tabs.Screen name="timetable" options={{ href: null }} />
-        {/* Admin's coverage report is web-only (a filterable table), same reasoning as timetable above. */}
-        <Tabs.Screen name="teaching-hours" options={{ href: null }} />
       </Tabs>
     )
   }
 
   if (isTeacher || isClassMaster) {
     return (
-      <Tabs screenOptions={{ ...tabStyle, tabBarActiveTintColor: isClassMaster ? '#F03E2F' : colors.primary }}>
-        <Tabs.Screen name="index" options={{ title: t('Home'), headerRight: () => teacherHeaderButtons, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
+      <Tabs screenOptions={tabStyle}>
+        <Tabs.Screen name="index" options={{ title: t('Home'), headerShown: false, tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="report-cards" options={{ title: isClassMaster ? t(isUniversity ? 'My Departments' : 'My Classes') : t(isUniversity ? 'Departments' : 'Classes'), tabBarIcon: ({ color, size }) => <Ionicons name={isClassMaster ? 'chatbubble-ellipses-outline' : 'school-outline'} size={size} color={color} /> }} />
         <Tabs.Screen name="timetable" options={{ title: t('Timetable'), tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} /> }} />
         <Tabs.Screen name="teaching-hours" options={{ title: t('Attendance'), tabBarIcon: ({ color, size }) => <Ionicons name="checkmark-done-outline" size={size} color={color} /> }} />

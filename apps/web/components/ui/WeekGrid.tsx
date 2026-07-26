@@ -16,6 +16,9 @@ export interface WeekGridSlot {
   title: string
   subtitle?: string | null
   isPrivate?: boolean
+  // A one-off slot (a specific calendar date, not a weekly recurrence) — shown with a
+  // dashed border so it reads as "just this once" rather than part of the standing schedule.
+  isOneOff?: boolean
 }
 
 export interface WeekGridBreak {
@@ -105,7 +108,7 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
                         s.isPrivate
                           ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-400'
                           : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/15'
-                      } ${onSlotClick ? 'cursor-pointer' : 'cursor-default'}`}
+                      } ${s.isOneOff ? 'border-dashed' : ''} ${onSlotClick ? 'cursor-pointer' : 'cursor-default'}`}
                       style={{ top, height, zIndex: 1 }}
                     >
                       <div className="text-[11px] font-semibold leading-tight truncate">{s.title}</div>

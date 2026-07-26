@@ -1,7 +1,11 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { getTeachersApi } from '@/lib/api/teachers'
-import { getTeacherTimetableApi, saveTimetableApi, getPeriodsApi, savePeriodsApi, getSchoolTimetableApi, TimetableSlot, TimetablePeriod, SchoolTimetableSlot } from '@/lib/api/timetable'
+import {
+  getTeacherTimetableApi, saveTimetableApi, getPeriodsApi, savePeriodsApi, getSchoolTimetableApi,
+  getTimetableHistoryApi, deleteTimetableHistoryVersionApi,
+  TimetableSlot, TimetablePeriod, SchoolTimetableSlot, TimetableHistoryVersion,
+} from '@/lib/api/timetable'
 import { getClassLevelsApi } from '@/lib/api/classLevels'
 import { getDepartmentsApi } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
@@ -18,8 +22,35 @@ import WeekGrid, { WeekGridSlot } from '@/components/ui/WeekGrid'
 import { levelGroupOf, programmeOf, sortLevelGroups } from '@/lib/universityLevels'
 
 const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
+const WEEKEND_DAYS = new Set(['SATURDAY', 'SUNDAY'])
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 const timesOverlap = (aStart: string, aEnd: string, bStart: string, bEnd: string) => aStart < bEnd && bStart < aEnd
+const JS_DAY_TO_DAY_OF_WEEK = ['SUNDAY', ...DAYS.slice(0, 6)]
+// Which weekday a "YYYY-MM-DD" string falls on — mirrors the API's dateStringToDayOfWeek,
+// used so a one-off slot's day column is always derived from its real date.
+const dayOfWeekForDate = (dateStr: string): string => {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return JS_DAY_TO_DAY_OF_WEEK[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]
+}
+const formatOneOffDate = (dateStr: string): string => {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
+// "07:30" + 100 -> "09:10". Clamps at 23:59 so a late-day period can't roll past midnight.
+const addMinutes = (hhmm: string, mins: number): string => {
+  const [h, m] = hhmm.split(':').map(Number)
+  const total = Math.min(h * 60 + m + mins, 23 * 60 + 59)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+const durationMinutes = (start: string, end: string): number => {
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  return (eh * 60 + em) - (sh * 60 + sm)
+}
+// The latest end time across every existing period (teaching or break) — used to default
+// a new period's start time to right where the schedule currently leaves off, so the
+// admin doesn't have to retype it for each consecutive add.
+const latestEndTime = (list: { endTime: string }[]): string => list.reduce((max, p) => (p.endTime > max ? p.endTime : max), '')
 
 // University class-name convention: "HND {Department} - Level 1|2", "Degree
 // {Department}". Mirrors univDeptFromClassName in the Teachers page.
@@ -63,6 +94,13 @@ type EditableSlot = {
   room: string | null
   subjectName?: string | null
   classLevel?: string | null
+  specificDate?: string | null
+}
+
+const slotsOverlap = (a: { dayOfWeek: string; startTime: string; endTime: string; specificDate?: string | null }, b: typeof a) => {
+  if (a.dayOfWeek !== b.dayOfWeek) return false
+  if (a.specificDate && b.specificDate && a.specificDate !== b.specificDate) return false
+  return a.startTime < b.endTime && b.startTime < a.endTime
 }
 
 const roleLabels: Record<string, string> = {
@@ -72,8 +110,15 @@ const roleLabels: Record<string, string> = {
   VICE_PRINCIPAL: 'Vice Principal',
 }
 
-const emptySlotForm = { dayOfWeek: 'MONDAY', periodId: '', startTime: '', endTime: '', mode: 'subject' as 'subject' | 'private', level: '', department: '', classLevel: '', subjectId: '', label: '', room: '' }
-const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false }
+const emptySlotForm = {
+  dayOfWeek: 'MONDAY', periodId: '', numPeriods: 1, startTime: '', endTime: '', mode: 'subject' as 'subject' | 'private',
+  level: '', department: '', classLevel: '', subjectId: '', label: '', room: '',
+  // Private-class-only: recurring weekly (default) vs one-off specific date(s). In edit
+  // mode, specificDates holds exactly the one date being edited; in add mode it's a
+  // growable list (one slot gets created per date, all sharing the same time/label/room).
+  recurring: true, specificDates: [] as string[], dateInput: '',
+}
+const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false, numPeriods: 1 }
 
 export default function TimetablePage() {
   const { toast, showToast, hideToast } = useToast()
@@ -104,17 +149,31 @@ export default function TimetablePage() {
   const [deleteTarget, setDeleteTarget] = useState<EditableSlot | null>(null)
 
   const [periods, setPeriods] = useState<TimetablePeriod[]>([])
+  // Minutes per teaching period ("school hour"), e.g. 50. Must be set before class slots
+  // can be measured in whole periods. Kept as a string for the input; '' means unset.
+  const [periodMinutes, setPeriodMinutes] = useState<string>('')
   const [showPeriodsModal, setShowPeriodsModal] = useState(false)
   const [periodForm, setPeriodForm] = useState(emptyPeriodForm)
   const [editingPeriodId, setEditingPeriodId] = useState<string | null>(null)
   const [periodError, setPeriodError] = useState('')
   const [periodsSaving, setPeriodsSaving] = useState(false)
+  // Incremented (never reset) each time "Add"/"Save Changes" is rejected for a missing
+  // period length — used as a key on the Minutes-per-period field so its shake animation
+  // replays on every attempt, not just the first.
+  const [minutesShakeKey, setMinutesShakeKey] = useState(0)
 
-  useBodyScrollLock(showSlotModal || showPeriodsModal || !!deleteTarget)
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [historyVersions, setHistoryVersions] = useState<TimetableHistoryVersion[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [deleteVersionTarget, setDeleteVersionTarget] = useState<string | null>(null)
+
+  const periodLen = Number(periodMinutes) > 0 ? Number(periodMinutes) : null
+
+  useBodyScrollLock(showSlotModal || showPeriodsModal || !!deleteTarget || showHistoryModal || !!deleteVersionTarget)
 
   useEffect(() => {
     Promise.all([getTeachersApi(), getPeriodsApi(), getSubjectsApi(), getSchoolTimetableApi()])
-      .then(([t, p, sd, st]) => { setTeachers(t.teachers); setPeriods(p.periods); setAllSubjects(sd.subjects); setSchoolSlots(st.slots) })
+      .then(([t, p, sd, st]) => { setTeachers(t.teachers); setPeriods(p.periods); setPeriodMinutes(p.periodMinutes != null ? String(p.periodMinutes) : ''); setAllSubjects(sd.subjects); setSchoolSlots(st.slots) })
       .catch(() => showToast(tr('Failed to load data'), 'error'))
       .finally(() => setLoading(false))
     // Class order (for sorting the Class picker) — every school type has this.
@@ -141,32 +200,46 @@ export default function TimetablePage() {
 
   const startEditPeriod = (p: TimetablePeriod) => {
     setEditingPeriodId(p.id)
-    setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak })
+    // A teaching row can span more than one period (a "double period" block) — derive how
+    // many from its actual duration so editing shows what's really there.
+    const numPeriods = !p.isBreak && periodLen ? Math.max(1, Math.round(durationMinutes(p.startTime, p.endTime) / periodLen)) : 1
+    setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak, numPeriods })
     setPeriodError('')
   }
 
   const cancelEditPeriod = () => {
     setEditingPeriodId(null)
-    setPeriodForm(emptyPeriodForm)
+    setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(periods) })
     setPeriodError('')
   }
 
   const submitPeriodRow = () => {
-    if (!periodForm.startTime || !periodForm.endTime) { setPeriodError(tr('Start and end time are required')); return }
-    if (periodForm.endTime <= periodForm.startTime) { setPeriodError(tr('End time must be after start time')); return }
+    if (!periodForm.startTime) { setPeriodError(tr('Start time is required')); return }
+    if (!periodForm.isBreak && !periodLen) {
+      setPeriodError(tr('Set the minutes per period first'))
+      setMinutesShakeKey((k) => k + 1)
+      return
+    }
+
+    // A teaching period's end is fixed by the period length (admin only picks the
+    // start) times how many periods this ONE row spans — e.g. picking 2 makes a single
+    // "double period" block, not two separate rows (add those manually if that's what's
+    // wanted). A break can be any length, so it keeps a free end-time input.
+    const endTime = periodForm.isBreak ? periodForm.endTime : addMinutes(periodForm.startTime, periodLen! * periodForm.numPeriods)
+    if (!endTime) { setPeriodError(tr('End time is required')); return }
+    if (endTime <= periodForm.startTime) { setPeriodError(tr('End time must be after start time')); return }
     const overlap = periods
       .filter((p) => p.id !== editingPeriodId)
-      .some((p) => periodForm.startTime < p.endTime && p.startTime < periodForm.endTime)
+      .some((p) => periodForm.startTime < p.endTime && p.startTime < endTime)
     if (overlap) { setPeriodError(tr('This overlaps with an existing period')); return }
 
-    setPeriods((prev) => {
-      const next = editingPeriodId
-        ? prev.map((p) => p.id === editingPeriodId ? { ...p, ...periodForm } : p)
-        : [...prev, { id: `new-${Date.now()}`, ...periodForm }]
-      return next.sort((a, b) => a.startTime.localeCompare(b.startTime))
-    })
+    const row = { startTime: periodForm.startTime, endTime, isBreak: periodForm.isBreak }
+    const updatedList = editingPeriodId
+      ? periods.map((p) => p.id === editingPeriodId ? { ...p, ...row } : p)
+      : [...periods, { id: `new-${Date.now()}`, ...row }]
+    setPeriods(updatedList.sort((a, b) => a.startTime.localeCompare(b.startTime)))
     setEditingPeriodId(null)
-    setPeriodForm(emptyPeriodForm)
+    setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(updatedList) })
     setPeriodError('')
   }
 
@@ -176,11 +249,25 @@ export default function TimetablePage() {
   }
 
   const handleSavePeriods = async () => {
+    if (!periodLen) { setPeriodError(tr('Enter how many minutes count as one period')); return }
     setPeriodsSaving(true)
     try {
-      await savePeriodsApi(periods.map(({ startTime, endTime, isBreak }) => ({ startTime, endTime, isBreak })))
-      showToast(tr('Period structure saved'))
+      const result = await savePeriodsApi(periods.map(({ startTime, endTime, isBreak }) => ({ startTime, endTime, isBreak })), periodLen)
+      showToast(result.message)
       setShowPeriodsModal(false)
+      // A period's time moving can carry teacher slots along with it (school-wide, not
+      // just the one open here) — refresh whatever's currently on screen so it's not
+      // showing stale times.
+      getSchoolTimetableApi().then((st) => setSchoolSlots(st.slots)).catch(() => {})
+      if (activeTeacher) {
+        getTeacherTimetableApi(activeTeacher.id)
+          .then(({ slots: fetched }) => setSlots(fetched.map((s: TimetableSlot) => ({
+            id: s.id, dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime,
+            subjectId: s.subjectId ?? null, label: s.label ?? null, room: s.room ?? null,
+            subjectName: s.subjectName, classLevel: s.classLevel, specificDate: s.specificDate ?? null,
+          }))))
+          .catch(() => {})
+      }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
       setPeriodError(e.response?.data?.message || tr('Failed to save period structure'))
@@ -303,6 +390,11 @@ export default function TimetablePage() {
     .filter((s) => s.classLevel === effectiveClassLevel)
     .map((s) => ({ value: s.id, label: s.name }))
 
+  const isWeekendDay = WEEKEND_DAYS.has(slotForm.dayOfWeek)
+  // Saturday/Sunday classes don't necessarily follow the school's period grid, so subject
+  // slots on those days use free start/end time inputs instead of the period picker.
+  const useFreeSubjectTime = slotForm.mode === 'subject' && isWeekendDay
+
   const openTeacher = async (teacher: Teacher) => {
     setActiveTeacher(teacher)
     setSlotsLoading(true)
@@ -311,7 +403,7 @@ export default function TimetablePage() {
       setSlots(fetched.map((s: TimetableSlot) => ({
         id: s.id, dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime,
         subjectId: s.subjectId ?? null, label: s.label ?? null, room: s.room ?? null,
-        subjectName: s.subjectName, classLevel: s.classLevel,
+        subjectName: s.subjectName, classLevel: s.classLevel, specificDate: s.specificDate ?? null,
       })))
     } catch {
       showToast(tr('Failed to load timetable'), 'error')
@@ -322,6 +414,33 @@ export default function TimetablePage() {
 
   const closeTeacher = () => { setActiveTeacher(null); setSlots([]) }
 
+  const openHistory = async () => {
+    if (!activeTeacher) return
+    setShowHistoryModal(true)
+    setHistoryLoading(true)
+    try {
+      const { versions } = await getTimetableHistoryApi(activeTeacher.id)
+      setHistoryVersions(versions)
+    } catch {
+      showToast(tr('Failed to load timetable history'), 'error')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const handleDeleteHistoryVersion = async () => {
+    if (!activeTeacher || !deleteVersionTarget) return
+    try {
+      await deleteTimetableHistoryVersionApi(activeTeacher.id, deleteVersionTarget)
+      setHistoryVersions((prev) => prev.filter((v) => v.archivedAt !== deleteVersionTarget))
+      showToast(tr('Timetable version removed'))
+    } catch {
+      showToast(tr('Failed to remove timetable version'), 'error')
+    } finally {
+      setDeleteVersionTarget(null)
+    }
+  }
+
   const openAddSlot = () => {
     setEditingSlotId(null)
     setSlotForm(emptySlotForm)
@@ -331,34 +450,68 @@ export default function TimetablePage() {
 
   const openEditSlot = (slot: EditableSlot) => {
     setEditingSlotId(slot.id)
-    const matchingPeriod = teachingPeriods.find((p) => p.startTime === slot.startTime && p.endTime === slot.endTime)
+    // A slot can now span several periods, so match the STARTING period by start time
+    // (not start+end), and derive how many periods it covers from its duration.
+    const matchingPeriod = teachingPeriods.find((p) => p.startTime === slot.startTime)
+    const numPeriods = periodLen ? Math.max(1, Math.round(durationMinutes(slot.startTime, slot.endTime) / periodLen)) : 1
     const cls = slot.classLevel ?? ''
     setSlotForm({
-      dayOfWeek: slot.dayOfWeek, periodId: matchingPeriod?.id ?? '', startTime: slot.startTime, endTime: slot.endTime,
+      ...emptySlotForm,
+      dayOfWeek: slot.dayOfWeek, periodId: matchingPeriod?.id ?? '', numPeriods, startTime: slot.startTime, endTime: slot.endTime,
       mode: slot.subjectId ? 'subject' : 'private',
       level: isUniversity && cls ? levelGroupOf(cls) : '',
       department: !cls ? '' : isUniversity ? programmeOf(cls) : isSecondary ? (classToDept[cls] ?? '') : '',
       classLevel: cls, subjectId: slot.subjectId ?? '', label: slot.label ?? '', room: slot.room ?? '',
+      recurring: !slot.specificDate, specificDates: slot.specificDate ? [slot.specificDate] : [],
     })
     setSlotError('')
     setShowSlotModal(true)
   }
 
+  // A class spans `numPeriods` periods from its start period. End time = start + N × the
+  // period length, so the class is always a whole number of periods.
   const handlePeriodSelect = (periodId: string) => {
     const period = teachingPeriods.find((p) => p.id === periodId)
-    setSlotForm({ ...slotForm, periodId, startTime: period?.startTime ?? '', endTime: period?.endTime ?? '' })
+    const start = period?.startTime ?? ''
+    const end = start && periodLen ? addMinutes(start, slotForm.numPeriods * periodLen) : (period?.endTime ?? '')
+    setSlotForm({ ...slotForm, periodId, startTime: start, endTime: end })
+  }
+
+  const handleNumPeriodsChange = (n: number) => {
+    const end = slotForm.startTime && periodLen ? addMinutes(slotForm.startTime, n * periodLen) : slotForm.endTime
+    setSlotForm({ ...slotForm, numPeriods: n, endTime: end })
   }
 
   const handleSlotSubmit = () => {
     if (slotForm.mode === 'subject' && isUniversity && !slotForm.level) { setSlotError(tr('Please select a level')); return }
     if (slotForm.mode === 'subject' && hasDeptView && !effectiveDepartment) { setSlotError(tr('Please select a department')); return }
     if (slotForm.mode === 'subject' && !effectiveClassLevel) { setSlotError(tr('Please select a class')); return }
-    if (slotForm.mode === 'subject' && !slotForm.periodId) { setSlotError(tr('Please select a period')); return }
+    if (slotForm.mode === 'subject' && !useFreeSubjectTime && !slotForm.periodId) { setSlotError(tr('Please select a period')); return }
     if (!slotForm.startTime || !slotForm.endTime) { setSlotError(tr('Start and end time are required')); return }
     if (slotForm.endTime <= slotForm.startTime) { setSlotError(tr('End time must be after start time')); return }
     if (slotForm.mode === 'subject' && !slotForm.subjectId) { setSlotError(tr('Please select a subject')); return }
     if (slotForm.mode === 'subject' && modalConflict) { setSlotError(modalConflictMessage); return }
     if (slotForm.mode === 'private' && !slotForm.label.trim()) { setSlotError(tr('Please enter a label')); return }
+
+    // One-off private slot(s): one EditableSlot per chosen date, all sharing this same
+    // time/label/room — adding creates all of them at once, editing only ever has one.
+    if (slotForm.mode === 'private' && !slotForm.recurring) {
+      if (slotForm.specificDates.length === 0) { setSlotError(tr('Add at least one date')); return }
+      const candidates: EditableSlot[] = slotForm.specificDates.map((date, i) => ({
+        id: editingSlotId && slotForm.specificDates.length === 1 ? editingSlotId : `new-${Date.now()}-${i}`,
+        dayOfWeek: dayOfWeekForDate(date),
+        startTime: slotForm.startTime, endTime: slotForm.endTime,
+        subjectId: null, label: slotForm.label.trim(), room: slotForm.room.trim() || null,
+        specificDate: date,
+      }))
+      const others = editingSlotId ? slots.filter((s) => s.id !== editingSlotId) : slots
+      for (const c of candidates) {
+        if (others.some((o) => slotsOverlap(o, c))) { setSlotError(tr('This overlaps with another slot on the same day')); return }
+      }
+      setSlots((prev) => [...(editingSlotId ? prev.filter((s) => s.id !== editingSlotId) : prev), ...candidates])
+      setShowSlotModal(false)
+      return
+    }
 
     const chosenSubject = activeAssignableSubjects.find((s) => s.id === slotForm.subjectId)
     const next: EditableSlot = {
@@ -371,11 +524,9 @@ export default function TimetablePage() {
       room: slotForm.room.trim() || null,
       subjectName: slotForm.mode === 'subject' ? chosenSubject?.name : null,
       classLevel: slotForm.mode === 'subject' ? chosenSubject?.classLevel : null,
+      specificDate: null,
     }
-    const overlap = slots.some((s) =>
-      s.id !== next.id && s.dayOfWeek === next.dayOfWeek &&
-      next.startTime < s.endTime && s.startTime < next.endTime
-    )
+    const overlap = slots.some((s) => s.id !== next.id && slotsOverlap(s, next))
     if (overlap) { setSlotError(tr('This overlaps with another slot on the same day')); return }
 
     setSlots((prev) => editingSlotId
@@ -394,8 +545,15 @@ export default function TimetablePage() {
     if (!activeTeacher) return
     setSaving(true)
     try {
-      await saveTimetableApi(activeTeacher.id, slots.map(({ dayOfWeek, startTime, endTime, subjectId, label, room }) => ({ dayOfWeek, startTime, endTime, subjectId, label, room })))
-      showToast(tr('Timetable saved'))
+      const result = await saveTimetableApi(activeTeacher.id, slots.map(({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate }) => ({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate: specificDate ?? null })))
+      // A university course has one lecturer, so scheduling it here may have taken it off
+      // someone else. They get an in-app notification; say so here too, or the admin has
+      // no idea they just changed another lecturer's timetable.
+      if (result.reassigned?.length) {
+        showToast(result.reassigned.join(' · '))
+      } else {
+        showToast(tr('Timetable saved'))
+      }
       // A newly-picked course may have just given this teacher a new derived
       // department — refresh so the list/filter reflect it immediately.
       getTeachersApi().then((t) => setTeachers(t.teachers)).catch(() => {})
@@ -412,8 +570,9 @@ export default function TimetablePage() {
   const gridSlots: WeekGridSlot[] = slots.map((s) => ({
     id: s.id, dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime,
     title: s.subjectId ? (s.subjectName ?? tr('Unknown subject')) : (s.label ?? ''),
-    subtitle: s.subjectId ? s.classLevel : s.room,
+    subtitle: s.subjectId ? s.classLevel : [s.room, s.specificDate ? formatOneOffDate(s.specificDate) : null].filter(Boolean).join(' · ') || null,
     isPrivate: !s.subjectId,
+    isOneOff: !!s.specificDate,
   }))
 
   const sortedSlots = [...slots].sort((a, b) =>
@@ -430,7 +589,7 @@ export default function TimetablePage() {
                 <h2 className="text-2xl font-bold text-foreground">{tr('Timetable')}</h2>
                 <p className="text-muted-foreground text-sm mt-1">{tr('Pick a teacher to build their weekly schedule')}</p>
               </div>
-              <button onClick={() => { setPeriodForm(emptyPeriodForm); setEditingPeriodId(null); setPeriodError(''); setShowPeriodsModal(true) }}
+              <button onClick={() => { setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(periods) }); setEditingPeriodId(null); setPeriodError(''); setShowPeriodsModal(true) }}
                 className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition flex-shrink-0">
                 <Clock size={15} /> {tr('Set Up Periods')}
               </button>
@@ -506,6 +665,10 @@ export default function TimetablePage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                <button onClick={openHistory}
+                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+                  <Clock size={15} /> {tr('History')}
+                </button>
                 <button onClick={openAddSlot}
                   className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
                   <Plus size={16} /> {tr('Add Slot')}
@@ -544,13 +707,18 @@ export default function TimetablePage() {
                 <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{slotError || modalConflictMessage}</div>
               )}
               <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{tr('Day')}</label>
-                  <select value={slotForm.dayOfWeek} onChange={(e) => setSlotForm({ ...slotForm, dayOfWeek: e.target.value })}
-                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
-                    {DAYS.map((d) => <option key={d} value={d}>{tr(dayLabel(d))}</option>)}
-                  </select>
-                </div>
+                {/* One-off private slots derive their day from the date(s) picked below —
+                    asking for a day here too would just be a second, contradictable
+                    answer to the same question. */}
+                {!(slotForm.mode === 'private' && !slotForm.recurring) && (
+                  <div>
+                    <label className="block text-xs font-medium text-foreground mb-1">{tr('Day')}</label>
+                    <select value={slotForm.dayOfWeek} onChange={(e) => setSlotForm({ ...slotForm, dayOfWeek: e.target.value })}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
+                      {DAYS.map((d) => <option key={d} value={d}>{tr(dayLabel(d))}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <button type="button" onClick={() => setSlotForm({ ...slotForm, mode: 'subject' })}
                     className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition ${slotForm.mode === 'subject' ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
@@ -626,25 +794,53 @@ export default function TimetablePage() {
                         )}
                       </div>
                     )}
-                    <div>
-                      <label className="block text-xs font-medium text-foreground mb-1">{tr('Period')} <span className="text-destructive">*</span></label>
-                      <select value={slotForm.periodId} onChange={(e) => handlePeriodSelect(e.target.value)}
-                        disabled={!effectiveClassLevel}
-                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed">
-                        <option value="">{tr(effectiveClassLevel ? 'Select...' : 'Select a class first')}</option>
-                        {teachingPeriods.map((p) => {
-                          const clash = periodConflict(p)
-                          return (
-                            <option key={p.id} value={p.id} disabled={!!clash}>
-                              {p.startTime} – {p.endTime}{clash ? ` (${tr('taken')} — ${clash.teacherName})` : ''}
-                            </option>
-                          )
-                        })}
-                      </select>
-                      {teachingPeriods.length === 0 && (
-                        <p className="text-xs text-muted-foreground mt-1">{tr("This school hasn't set up its period structure yet — use \"Set Up Periods\" first.")}</p>
-                      )}
+                    {useFreeSubjectTime ? (
+                      // Weekend classes don't necessarily follow the weekday period grid,
+                      // so Saturday/Sunday subject slots get free start/end times instead.
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-foreground mb-1">{tr('Start Time')} <span className="text-destructive">*</span></label>
+                          <TimeInput value={slotForm.startTime} onChange={(v) => setSlotForm({ ...slotForm, startTime: v })} />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-foreground mb-1">{tr('End Time')} <span className="text-destructive">*</span></label>
+                          <TimeInput value={slotForm.endTime} onChange={(v) => setSlotForm({ ...slotForm, endTime: v })} />
+                        </div>
+                      </div>
+                    ) : (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="block text-xs font-medium text-foreground mb-1">{tr('Starts at period')} <span className="text-destructive">*</span></label>
+                        <select value={slotForm.periodId} onChange={(e) => handlePeriodSelect(e.target.value)}
+                          disabled={!effectiveClassLevel}
+                          className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed">
+                          <option value="">{tr(effectiveClassLevel ? 'Select...' : 'Select a class first')}</option>
+                          {teachingPeriods.map((p) => {
+                            const clash = periodConflict(p)
+                            return (
+                              <option key={p.id} value={p.id} disabled={!!clash}>
+                                {p.startTime}{clash ? ` (${tr('taken')} — ${clash.teacherName})` : ''}
+                              </option>
+                            )
+                          })}
+                        </select>
+                      </div>
+                      <div>
+                        {/* A class is measured in whole periods; the end time is derived. */}
+                        <label className="block text-xs font-medium text-foreground mb-1">{tr('Periods')} <span className="text-destructive">*</span></label>
+                        <select value={slotForm.numPeriods} onChange={(e) => handleNumPeriodsChange(Number(e.target.value))}
+                          disabled={!effectiveClassLevel}
+                          className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed">
+                          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                      </div>
+                      {teachingPeriods.length === 0 ? (
+                        <p className="col-span-3 text-xs text-muted-foreground">{tr("This school hasn't set up its period structure yet — use \"Set Up Periods\" first.")}</p>
+                      ) : slotForm.startTime && slotForm.endTime ? (
+                        <p className="col-span-3 text-xs text-muted-foreground">{tr('Class time')}: <span className="font-semibold text-foreground">{slotForm.startTime} – {slotForm.endTime}</span> ({slotForm.numPeriods} {slotForm.numPeriods === 1 ? tr('period') : tr('periods')})</p>
+                      ) : null}
                     </div>
+                    )}
                     <div>
                       <label className="block text-xs font-medium text-foreground mb-1">{tr(isUniversity ? 'Course' : 'Subject')} <span className="text-destructive">*</span></label>
                       <CustomSelect
@@ -661,6 +857,55 @@ export default function TimetablePage() {
                   </>
                 ) : (
                   <>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: true, specificDates: [] })}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition ${slotForm.recurring ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                        {tr('Recurring weekly')}
+                      </button>
+                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: false, specificDates: editingSlotId && slotForm.specificDates.length ? slotForm.specificDates : [] })}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition ${!slotForm.recurring ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                        {tr('One-off date(s)')}
+                      </button>
+                    </div>
+                    {!slotForm.recurring && (
+                      <div>
+                        <label className="block text-xs font-medium text-foreground mb-1">
+                          {editingSlotId ? tr('Date') : tr('Dates')} <span className="text-destructive">*</span>
+                        </label>
+                        {editingSlotId ? (
+                          <input type="date" value={slotForm.specificDates[0] ?? ''}
+                            onChange={(e) => setSlotForm({ ...slotForm, specificDates: e.target.value ? [e.target.value] : [] })}
+                            className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                        ) : (
+                          <>
+                            <div className="flex gap-2">
+                              <input type="date" value={slotForm.dateInput}
+                                onChange={(e) => setSlotForm({ ...slotForm, dateInput: e.target.value })}
+                                className="flex-1 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                              <button type="button"
+                                onClick={() => {
+                                  if (!slotForm.dateInput || slotForm.specificDates.includes(slotForm.dateInput)) return
+                                  setSlotForm({ ...slotForm, specificDates: [...slotForm.specificDates, slotForm.dateInput].sort(), dateInput: '' })
+                                }}
+                                className="px-3 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted transition">
+                                {tr('Add')}
+                              </button>
+                            </div>
+                            {slotForm.specificDates.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 mt-2">
+                                {slotForm.specificDates.map((date) => (
+                                  <span key={date} className="flex items-center gap-1 bg-amber-50 border border-amber-300 text-amber-800 text-xs px-2 py-1 rounded-full">
+                                    {formatOneOffDate(date)}
+                                    <button type="button" onClick={() => setSlotForm({ ...slotForm, specificDates: slotForm.specificDates.filter((d) => d !== date) })}
+                                      className="hover:text-amber-950"><X size={11} /></button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-foreground mb-1">{tr('Start Time')}</label>
@@ -716,6 +961,66 @@ export default function TimetablePage() {
           onCancel={() => setDeleteTarget(null)}
         />
 
+        {/* Timetable History Modal — every past version of this teacher's schedule,
+            kept purely for reference (hours/coverage math only ever looks at the
+            CURRENT timetable, never these). The admin can permanently purge one. */}
+        {showHistoryModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-card rounded-2xl border border-border w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-semibold text-foreground text-lg">{tr('Previous Timetables')}</h3>
+                <button onClick={() => setShowHistoryModal(false)} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
+              </div>
+              <p className="text-xs text-muted-foreground mb-4">
+                {tr('Older versions of this timetable, kept for reference. Hours already counted are not affected by these.')}
+              </p>
+              {historyLoading ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">{tr('Loading...')}</div>
+              ) : historyVersions.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">{tr('No previous timetables yet — this schedule has never been changed.')}</div>
+              ) : (
+                <div className="space-y-4">
+                  {historyVersions.map((v) => (
+                    <div key={v.archivedAt} className="border border-border rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-foreground">
+                          {tr('Replaced on')} {new Date(v.archivedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </p>
+                        <button onClick={() => setDeleteVersionTarget(v.archivedAt)}
+                          className="text-muted-foreground hover:text-destructive p-1 rounded transition"><Trash2 size={13} /></button>
+                      </div>
+                      <div className="space-y-1">
+                        {v.slots.map((s) => (
+                          <p key={s.id} className="text-xs text-muted-foreground">
+                            {tr(dayLabel(s.dayOfWeek))} {s.startTime}–{s.endTime} · {s.subjectId ? `${s.subjectName} (${s.classLevel})` : s.label}
+                            {s.specificDate ? ` · ${formatOneOffDate(s.specificDate)}` : ''}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-3 mt-5">
+                <button onClick={() => setShowHistoryModal(false)}
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  {tr('Close')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <ConfirmModal
+          isOpen={!!deleteVersionTarget}
+          title={tr('Remove Timetable Version')}
+          message={tr('Permanently delete this previous timetable? This cannot be undone.')}
+          confirmLabel={tr('Remove')}
+          confirmColor="red"
+          onConfirm={handleDeleteHistoryVersion}
+          onCancel={() => setDeleteVersionTarget(null)}
+        />
+
         {/* Period Structure Modal */}
         {showPeriodsModal && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -726,6 +1031,21 @@ export default function TimetablePage() {
               </div>
               <p className="text-xs text-muted-foreground mb-4">{tr("Define the school's daily bell schedule once — every teacher's timetable picks periods from this same list.")}</p>
               {periodError && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{periodError}</div>}
+
+              {/* Minutes per period is the foundation — every teaching period is exactly this
+                  long, and a class is measured in whole periods. Set it before adding rows. */}
+              <div key={minutesShakeKey} className={`mb-4 p-3 bg-muted/50 border rounded-lg ${minutesShakeKey > 0 ? 'animate-shake' : ''} ${minutesShakeKey > 0 && !periodLen ? 'border-destructive/40' : 'border-border'}`}>
+                <label className="block text-xs font-medium text-foreground mb-1">{tr('Minutes per period')} <span className="text-destructive">*</span></label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" min={1} placeholder="50"
+                    value={periodMinutes}
+                    onChange={(e) => setPeriodMinutes(e.target.value)}
+                    className="w-24 border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <span className="text-xs text-muted-foreground">{tr('minutes — one teaching period. Breaks can be any length.')}</span>
+                </div>
+              </div>
 
               {periods.length > 0 && (
                 <div className="mb-4 border border-border rounded-lg overflow-hidden divide-y divide-border">
@@ -746,18 +1066,38 @@ export default function TimetablePage() {
                 {editingPeriodId && (
                   <p className="text-xs font-medium text-primary">{tr('Editing period')} — {tr('update the fields below')}</p>
                 )}
-                <div className="grid grid-cols-2 gap-2">
+                <div className={`grid gap-2 ${!periodForm.isBreak ? 'grid-cols-3' : 'grid-cols-2'}`}>
                   <div>
                     <label className="block text-xs font-medium text-foreground mb-1">{tr('Start Time')}</label>
                     <TimeInput value={periodForm.startTime} onChange={(v) => setPeriodForm({ ...periodForm, startTime: v })} />
                   </div>
+                  {/* How many periods this ONE row spans — 2 makes a single combined
+                      "double period" block, not two separate rows. Want two separate
+                      rows instead? Add each one manually. */}
+                  {!periodForm.isBreak && (
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">{tr('Length (periods)')}</label>
+                      <select value={periodForm.numPeriods} onChange={(e) => setPeriodForm({ ...periodForm, numPeriods: Number(e.target.value) })}
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
+                        {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-medium text-foreground mb-1">{tr('End Time')}</label>
-                    <TimeInput value={periodForm.endTime} onChange={(v) => setPeriodForm({ ...periodForm, endTime: v })} />
+                    {periodForm.isBreak ? (
+                      <TimeInput value={periodForm.endTime} onChange={(v) => setPeriodForm({ ...periodForm, endTime: v })} />
+                    ) : (
+                      // A teaching period's end is fixed by the period length times how
+                      // many periods long this row is — shown, not editable.
+                      <div className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-muted text-muted-foreground">
+                        {periodForm.startTime && periodLen ? addMinutes(periodForm.startTime, periodLen * periodForm.numPeriods) : tr('auto')}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <label className="flex items-center gap-2 text-xs text-foreground">
-                  <input type="checkbox" checked={periodForm.isBreak} onChange={(e) => setPeriodForm({ ...periodForm, isBreak: e.target.checked })} />
+                  <input type="checkbox" checked={periodForm.isBreak} onChange={(e) => setPeriodForm({ ...periodForm, isBreak: e.target.checked, endTime: '', numPeriods: 1 })} />
                   {tr('This is a break (not a teaching period)')}
                 </label>
                 <div className="flex gap-2">
@@ -769,9 +1109,12 @@ export default function TimetablePage() {
                   )}
                   <button onClick={submitPeriodRow}
                     className="flex-1 flex items-center justify-center gap-2 border border-border text-foreground py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
-                    {editingPeriodId ? tr('Save Changes') : <><Plus size={14} /> {tr('Add Row')}</>}
+                    {editingPeriodId ? tr('Save Changes') : <><Plus size={14} /> {tr('Add')}</>}
                   </button>
                 </div>
+                {minutesShakeKey > 0 && !periodLen && (
+                  <p className="text-xs text-destructive">{tr('Set the minutes per period above first')}</p>
+                )}
               </div>
 
               <div className="flex gap-3 mt-5">

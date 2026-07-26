@@ -1,5 +1,5 @@
 import { Response } from 'express'
-import prisma from '../config/prisma'
+import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 import { parseStoredScale } from '../utils/gradingScale'
@@ -44,9 +44,20 @@ const subjectTermFilter = (termName: string) => ({ OR: [{ term: null }, { term: 
 // Positions are class-relative, so publishing one card while classmates are
 // still incomplete would show a rank that later changes — this list is what
 // blocks BOTH single-card publish and bulk publish until it's empty.
+//
+// UNIVERSITIES ARE EXEMPT. The whole justification for this rule is the class
+// position, and a university has none — it reports GPA/CGPA and classification,
+// all of which are computed from that ONE student's own courses and can't be
+// changed by whether a classmate has been marked yet. Holding a finished
+// semester result hostage to the rest of the cohort would be a rule with no
+// purpose behind it. Returning [] here (rather than at each call site) keeps
+// single publish, bulk publish and the readiness report from drifting apart.
 async function findPublishBlockers(
   schoolId: string, classLevel: string, termId: string, termName: string,
 ): Promise<{ studentId: string; student: string; reason: string }[]> {
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+  if (school?.type === 'UNIVERSITY') return []
+
   const [students, subjects, reportCards] = await Promise.all([
     prisma.student.findMany({ where: { schoolId, classLevel, isActive: true }, select: { id: true, name: true } }),
     prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(termName) }, select: { id: true, name: true, compulsory: true } }),
@@ -87,29 +98,87 @@ async function findPublishBlockers(
 export const getReportCards = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { termId, classLevel, session } = req.query
+    const { termId, classLevel, classLevels, session } = req.query
 
-    const [reportCards, school] = await Promise.all([
+    // Search has to happen server-side once the list is paginated — filtering only the
+    // rows that happen to be loaded would quietly turn "search all report cards" into
+    // "search the first 30", which looks like missing data rather than a narrowed view.
+    // `mode: 'insensitive'` is Postgres-only; SQLite's LIKE is already case-insensitive
+    // for ASCII, and passing the flag there errors, hence the build-time branch.
+    const search = String(req.query.search ?? '').trim()
+    const like = (value: string) => (IS_OFFLINE_BUILD ? { contains: value } : { contains: value, mode: 'insensitive' as const })
+
+    const where = {
+      schoolId,
+      ...(termId ? { termId: String(termId) } : {}),
+      ...(session ? { term: { session: String(session) } } : {}),
+      ...(classLevel ? { student: { classLevel: String(classLevel) } } : {}),
+      // Comma-separated set of classes — how a secondary school's DEPARTMENT filter is
+      // expressed (a department spans several classes). Must be server-side once the
+      // list is paginated: filtering a page client-side can empty it out while later
+      // pages still hold matches, which reads as "no report cards" rather than "keep going".
+      ...(classLevels
+        ? { student: { classLevel: { in: String(classLevels).split(',').map((c) => c.trim()).filter(Boolean) } } }
+        : {}),
+      ...(search
+        ? {
+            OR: [
+              { student: { name: like(search) } },
+              { student: { studentId: like(search) } },
+              { student: { classLevel: like(search) } },
+              { term: { name: like(search) } },
+            ],
+          }
+        : {}),
+    }
+
+    // Optional pagination. Omitting page/pageSize keeps the whole-set behavior, so the
+    // web table and the CSV exports are untouched. Mobile passes it because one session
+    // unpaginated is ~2.6MB of JSON (every card's entries AND their full subject rows),
+    // which reliably blew the app's 15s timeout and surfaced as "Failed to load report
+    // cards." — the list only ever renders name/term/average, so shipping all of it was
+    // waste as well as a failure.
+    const pageNum = Number(req.query.page)
+    const pageSizeNum = Number(req.query.pageSize)
+    const paginated = Number.isInteger(pageNum) && pageNum > 0 && Number.isInteger(pageSizeNum) && pageSizeNum > 0
+    const pageSize = paginated ? Math.min(pageSizeNum, 100) : 0
+
+    const [reportCards, school, totalCount] = await Promise.all([
       prisma.reportCard.findMany({
-        where: {
-          schoolId,
-          ...(termId ? { termId: String(termId) } : {}),
-          ...(session ? { term: { session: String(session) } } : {}),
-          ...(classLevel ? { student: { classLevel: String(classLevel) } } : {})
-        },
+        where,
         include: {
           student: true,
           term: true,
           entries: { include: { subject: true } },
           createdBy: { select: { id: true, name: true } }
         },
-        orderBy: { createdAt: 'desc' }
+        // `id` is a tiebreaker, not decoration: cards created in the same bulk operation
+        // share a createdAt to the millisecond, so ordering by it alone is arbitrary
+        // between queries — with skip/take that silently drops some rows and repeats
+        // others across pages (measured: 676 of 698 cards, with duplicates). Same
+        // stable-sort pattern the position ranking below already uses.
+        //
+        // Paginated callers get class/name order instead: they render the list GROUPED by
+        // class, and creation order scatters one class across many pages, so sections
+        // would keep re-shuffling as you scroll. Unpaginated callers keep newest-first.
+        orderBy: paginated
+          ? [{ student: { classLevel: 'asc' as const } }, { student: { name: 'asc' as const } }, { id: 'asc' as const }]
+          : [{ createdAt: 'desc' as const }, { id: 'asc' as const }],
+        ...(paginated ? { skip: (pageNum - 1) * pageSize, take: pageSize } : {}),
       }),
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
+      paginated ? prisma.reportCard.count({ where }) : Promise.resolve(null),
     ])
 
     // For university schools, compute CGPA per student in one batch query.
     let cgpaByStudent: Record<string, number> = {}
+    // ...and this card's OWN semester GPA, which is what a per-semester list should show.
+    // Deliberately separate from CGPA: CGPA is cumulative and published-only, so it repeats
+    // the same figure on every row for a student and is null on drafts. A university's
+    // `average` field holds a weighted mark out of 100, which reads like a broken /20
+    // average next to primary/secondary — GPA is the metric that actually means something
+    // here. Computed from entries already loaded above, so it costs no extra query.
+    let gpaByCardId: Record<string, number> = {}
     if (school?.type === 'UNIVERSITY' && reportCards.length > 0) {
       const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
       const rawRanges: any[] = gradingScale?.ranges
@@ -134,7 +203,11 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
         const studentId = (e.reportCard as any).studentId
         const credit = (e.subject as any).credit ?? 0
         const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
-        const match = sorted.find((r: any) => e.score! >= r.minScore && e.score! <= r.maxScore)
+        // Matched on the LOWER BOUND only, per DOCUMENTATION.md §7: integer bands
+        // (0-44, 45-49, …) leave gaps a fractional mark falls straight through, and
+        // min..max containment then matched nothing — which here meant `continue`,
+        // silently dropping that course from the student's CGPA altogether.
+        const match = sorted.find((r: any) => e.score! >= r.minScore)
         if (match == null) continue
         if (!wpMap[studentId]) wpMap[studentId] = { wp: 0, cr: 0 }
         wpMap[studentId].wp += match.gradePoint * credit
@@ -142,6 +215,27 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       }
       for (const [sid, { wp, cr }] of Object.entries(wpMap)) {
         if (cr > 0) cgpaByStudent[sid] = wp / cr
+      }
+
+      // Per-card semester GPA — same weighting as CGPA (Σ(gradePoint × credit) / Σcredit)
+      // but scoped to this one card's courses, and NOT gated on publish status so a draft
+      // still shows a real figure. `entry.score` already accounts for a resit (see
+      // saveEntries: effectiveSeq2 = resit ?? seq2).
+      const sortedUniRanges = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
+      for (const rc of reportCards) {
+        let wp = 0
+        let cr = 0
+        for (const e of rc.entries) {
+          if (e.score == null) continue
+          const credit = (e.subject as any)?.credit ?? 0
+          if (credit <= 0) continue // no credit = can't weight it; excluded rather than counted as 0
+          // Lower-bound match, same rule as CGPA above (DOCUMENTATION.md §7).
+          const match = sortedUniRanges.find((r: any) => e.score! >= r.minScore)
+          if (match == null) continue
+          wp += match.gradePoint * credit
+          cr += credit
+        }
+        if (cr > 0) gpaByCardId[rc.id] = wp / cr
       }
     }
 
@@ -182,13 +276,23 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
     }
 
     // Class size per term: how many students in this class + term actually got
-    // ranked (non-null average) — the denominator next to "Position". Computed
-    // in-memory from the already-fetched set (it always includes every card
-    // matching the term/class filters, same population saveEntries ranks).
-    // Class average uses the same population — mean of their `average` field.
+    // ranked (non-null average) — the denominator next to "Position". Class average
+    // is the mean of their `average` field over that same population.
+    //
+    // This MUST span every card matching the filters, never just the current page —
+    // otherwise a class of 30 would report a size of 20 on page 1 and 10 on page 2,
+    // and its average would swing with whichever rows you happened to be looking at.
+    // So when paginating, re-derive it from a deliberately tiny projection (three
+    // fields, no entries) rather than the page's own rows.
+    const populationCards = paginated
+      ? await prisma.reportCard.findMany({
+          where: { ...where, average: { not: null } },
+          select: { termId: true, average: true, student: { select: { classLevel: true } } },
+        })
+      : reportCards
     const classSizeByKey = new Map<string, number>()
     const classAverageSumByKey = new Map<string, number>()
-    for (const rc of reportCards) {
+    for (const rc of populationCards) {
       if (rc.average == null) continue
       const key = `${rc.termId}::${rc.student.classLevel}`
       classSizeByKey.set(key, (classSizeByKey.get(key) ?? 0) + 1)
@@ -258,6 +362,7 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       return {
         ...rc,
         cgpa: cgpaByStudent[rc.studentId] ?? null,
+        gpa: gpaByCardId[rc.id] ?? null,
         transcriptReady: transcriptReadyByKey[`${rc.studentId}::${rc.term.session}`] ?? false,
         isFinalTerm: finalTermIdBySession.get(rc.term.session) === rc.termId,
         classSize,
@@ -268,7 +373,13 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       }
     })
 
-    res.json({ reportCards: result, total: result.length })
+    res.json({
+      reportCards: result,
+      // Unpaginated callers keep seeing "how many I just got"; paginated ones need the
+      // full matching count to know whether another page exists.
+      total: totalCount ?? result.length,
+      ...(paginated ? { page: pageNum, pageSize, hasMore: pageNum * pageSize < (totalCount ?? 0) } : {}),
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -412,7 +523,9 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
         if (e.score == null) continue
         const credit = (e.subject as any).credit ?? 0
         const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
-        const match = sorted.find((r: any) => e.score! >= r.minScore && e.score! <= r.maxScore)
+        // Lower-bound match — see the CGPA comment in getReportCards for why containment
+        // silently dropped courses out of the total.
+        const match = sorted.find((r: any) => e.score! >= r.minScore)
         if (match == null) continue
         totalWP += match.gradePoint * credit
         totalCredits += credit
@@ -518,7 +631,10 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const { entries, remarks } = req.body
 
-    const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
+    const reportCard = await prisma.reportCard.findFirst({
+      where: { id, schoolId },
+      include: { term: { select: { isCurrent: true } } },
+    })
     if (!reportCard) {
       res.status(404).json({ message: 'Report card not found' })
       return
@@ -584,10 +700,11 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // only against marks that are actually being added or changed (see below).
     const priorEntries = await prisma.reportEntry.findMany({
       where: { reportCardId: id },
-      select: { subjectId: true, seq2Score: true, resitScore: true },
+      select: { subjectId: true, score: true, seq1Score: true, seq2Score: true, resitScore: true },
     })
     const priorResit = new Map(priorEntries.map(e => [e.subjectId, e.resitScore]))
     const priorSeq2 = new Map(priorEntries.map(e => [e.subjectId, e.seq2Score]))
+    const priorByEntrySubject = new Map(priorEntries.map(e => [e.subjectId, e]))
 
     // Fetch subjects for maxScore and coefficient
     const subjectIds = entries.map((e: { subjectId: string }) => e.subjectId)
@@ -610,6 +727,37 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       if (blocked.length > 0) {
         res.status(403).json({
           message: `Exam marks are entered by the administration at this school. You can record CA marks. Not allowed for: ${blocked.join(', ')}.`,
+        })
+        return
+      }
+    }
+
+    // A teacher may only edit marks for the CURRENTLY active term/semester — once it's
+    // no longer current, this is locked regardless of publish status, unless an admin has
+    // explicitly unlocked this exact (subject, term) pair (see PastTermMarksGrant). Admins
+    // are never subject to this — only a teacher's own standing changes once a term
+    // closes. Same "only a genuine change is refused" pattern as the checks above: every
+    // subject on the card is re-sent on every save, so an untouched value passes through.
+    if (TEACHER_ROLES.includes(role) && !reportCard.term.isCurrent) {
+      const grants = await prisma.pastTermMarksGrant.findMany({
+        where: { schoolId, termId: reportCard.termId, subjectId: { in: subjectIds } },
+        select: { subjectId: true },
+      })
+      const grantedSubjectIds = new Set(grants.map(g => g.subjectId))
+      const blockedPastTerm: string[] = []
+      for (const entry of entries as { subjectId: string; score?: number; seq1Score?: number; seq2Score?: number; resitScore?: number }[]) {
+        if (grantedSubjectIds.has(entry.subjectId)) continue
+        const prior = priorByEntrySubject.get(entry.subjectId)
+        const changed =
+          (entry.score ?? null) !== (prior?.score ?? null) ||
+          (entry.seq1Score ?? null) !== (prior?.seq1Score ?? null) ||
+          (entry.seq2Score ?? null) !== (prior?.seq2Score ?? null) ||
+          (entry.resitScore ?? null) !== (prior?.resitScore ?? null)
+        if (changed) blockedPastTerm.push(subjectMap[entry.subjectId]?.name ?? entry.subjectId)
+      }
+      if (blockedPastTerm.length > 0) {
+        res.status(403).json({
+          message: `This term is no longer current, so it's locked. Ask an admin to grant you access if you need to fix something here. Not allowed for: ${blockedPastTerm.join(', ')}.`,
         })
         return
       }
@@ -765,19 +913,42 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       where: { id },
       include: { student: true }
     })
-    if (savedCard) {
+    // Class position is a PRIMARY/SECONDARY concept only. A university ranks students by
+    // GPA/CGPA and classification, not by position in class, so no position is computed
+    // for them at all (leaving a stale one on the card is worse than having none).
+    if (savedCard && !isUniversity) {
+      // Rank ONLY the cards that actually have an average, and do the ordering here
+      // rather than leaning on the database's null ordering.
+      //
+      // The previous version ordered by `average: 'desc'` and walked the whole list.
+      // Postgres sorts NULLS FIRST on a DESC order, so every unmarked card sat ABOVE the
+      // top scorer and pushed each real rank down by however many students had no marks
+      // yet — measured on real data: a class with 5 unmarked students had its best
+      // student (15.50) recorded as position 6 instead of 1. Mid-term, when plenty of
+      // cards are still empty, that made positions wrong for whole classes at a time.
       const allCards = await prisma.reportCard.findMany({
         where: { schoolId, termId: savedCard.termId, student: { classLevel: savedCard.student.classLevel } },
-        orderBy: [{ average: 'desc' }, { id: 'asc' }]
+        select: { id: true, average: true },
       })
+      const ranked = allCards
+        .filter((c) => c.average != null)
+        .sort((a, b) => b.average! - a.average! || a.id.localeCompare(b.id))
+      const unranked = allCards.filter((c) => c.average == null).map((c) => c.id)
+
+      // Competition ranking — equal averages share a position and the next one skips
+      // (1, 2, 2, 4), which is what "3rd in class" conventionally means.
+      const writes = []
       let pos = 1
-      for (let i = 0; i < allCards.length; i++) {
-        if (i > 0 && allCards[i].average !== allCards[i - 1].average) pos = i + 1
-        await prisma.reportCard.update({
-          where: { id: allCards[i].id },
-          data: { position: allCards[i].average != null ? pos : null }
-        })
+      for (let i = 0; i < ranked.length; i++) {
+        if (i > 0 && ranked[i].average !== ranked[i - 1].average) pos = i + 1
+        writes.push(prisma.reportCard.update({ where: { id: ranked[i].id }, data: { position: pos } }))
       }
+      if (unranked.length > 0) {
+        writes.push(prisma.reportCard.updateMany({ where: { id: { in: unranked } }, data: { position: null } }))
+      }
+      // One transaction: a half-applied re-rank would leave the class with duplicate or
+      // missing positions until the next save happened to fix it.
+      await prisma.$transaction(writes)
     }
 
     res.json({ message: 'Entries saved', entries: createdEntries })
@@ -890,15 +1061,26 @@ export const deleteReportCard = async (req: AuthRequest, res: Response) => {
 export const getClassOverview = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { termId, classLevel } = req.query
+    const { termId, classLevel, subjectId } = req.query
 
     if (!termId || !classLevel) {
       res.status(400).json({ message: 'termId and classLevel are required' })
       return
     }
 
-    const term = await prisma.term.findFirst({ where: { id: String(termId), schoolId }, select: { name: true } })
+    const term = await prisma.term.findFirst({ where: { id: String(termId), schoolId }, select: { name: true, isCurrent: true } })
     if (!term) { res.status(404).json({ message: 'Term not found' }); return }
+
+    // Only computed when the marks screen tells us which subject it's showing — a
+    // teacher may only edit a NON-current term's marks if an admin has explicitly
+    // unlocked this exact (subject, term) pair. See PastTermMarksGrant.
+    let pastTermEditGranted = false
+    if (subjectId && !term.isCurrent) {
+      const grant = await prisma.pastTermMarksGrant.findUnique({
+        where: { subjectId_termId: { subjectId: String(subjectId), termId: String(termId) } },
+      })
+      pastTermEditGranted = !!grant
+    }
 
     // Fetch students + their entries, subject count, and the teacher's assigned subjects for this class
     const [students, subjectCount, teacherSubjects] = await Promise.all([
@@ -961,7 +1143,7 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
     // teacherSubjectCount = how many of this class's subjects the caller teaches
     // (0 for admins/VPs, who don't have TeacherSubject rows). Lets the teacher
     // classes view hide classes where the teacher teaches nothing.
-    res.json({ students: result, subjectCount, teacherSubjectCount: teacherSubjectIds.length })
+    res.json({ students: result, subjectCount, teacherSubjectCount: teacherSubjectIds.length, isCurrentTerm: term.isCurrent, pastTermEditGranted })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

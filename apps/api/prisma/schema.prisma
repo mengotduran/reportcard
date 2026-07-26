@@ -44,6 +44,13 @@ model School {
   batch              Int?
   repeatThreshold    Float?
   authorizationNumber String?
+  // How many minutes the school counts as one teaching period ("school hour"), e.g. 50.
+  // Set on the Set Up Periods screen and required before timetable/attendance features
+  // work. Distinct from a real 60-min clock hour: a course's required *hours* are counted
+  // in real 60-min hours, but a teacher's *attendance* (periods missed) is counted in
+  // these periods — missing a 100-min class with a 50-min period is 2 periods missed.
+  // Nullable so existing schools are prompted to set it rather than silently defaulted.
+  periodMinutes      Int?
   // Official-header letterhead text (left/right blocks in the "Official"
   // report-card header style), set once here so it stays consistent no
   // matter how many report-card templates/layouts render it. One EN and one
@@ -70,6 +77,7 @@ model School {
   timetablePeriods   TimetablePeriod[]
   teacherAbsences    TeacherAbsence[]
   notifications      Notification[]
+  pastTermMarksGrants PastTermMarksGrant[]
 }
 
 model GradingScale {
@@ -178,6 +186,7 @@ model User {
   absences         TeacherAbsence[] @relation("TeacherAbsences")
   absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
   notifications    Notification[]
+  pastTermMarksGrantsGiven PastTermMarksGrant[]
   school           School?          @relation(fields: [schoolId], references: [id])
 }
 
@@ -264,6 +273,30 @@ model Subject {
   school          School           @relation(fields: [schoolId], references: [id])
   teacherSubjects TeacherSubject[]
   timetableSlots  TimetableSlot[]
+  pastTermGrants  PastTermMarksGrant[]
+}
+
+// A teacher may only edit marks for the CURRENTLY active term/semester — once it's no
+// longer current, saveEntries refuses any real change from them regardless of publish
+// status (a locked grid is a suggestion; this is what actually decides). This is the
+// explicit, admin-granted exception for one (subject, term) pair: e.g. a teacher asks
+// (outside the app) to fix a mistake found after the term closed, and the admin flips
+// this on for just that course. Deliberately not scoped to one teacher — a course can
+// have more than one — and not per-student: unlocking is a whole-class decision.
+model PastTermMarksGrant {
+  id          String   @id @default(uuid())
+  schoolId    String
+  subjectId   String
+  termId      String
+  createdAt   DateTime @default(now())
+  grantedById String
+  school      School   @relation(fields: [schoolId], references: [id])
+  subject     Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  term        Term     @relation(fields: [termId], references: [id], onDelete: Cascade)
+  grantedBy   User     @relation(fields: [grantedById], references: [id])
+
+  @@unique([subjectId, termId])
+  @@index([schoolId, termId])
 }
 
 // A teacher's own weekly schedule — one row per period, owned directly by the
@@ -278,23 +311,36 @@ model Subject {
 //    the teacher directly rather than being derived via a class's subjects, and
 //    why it can extend beyond normal school hours.
 model TimetableSlot {
-  id        String   @id @default(uuid())
-  schoolId  String
-  teacherId String
-  dayOfWeek String   // 'MONDAY'..'SUNDAY'
-  startTime String   // "08:00", 24h zero-padded — sortable as plain strings
-  endTime   String   // "08:55"
-  subjectId String?  // set for a school period; null for a private/personal slot
-  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  label     String?  // free text, used when subjectId is null (e.g. "Private tutoring")
-  room      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  school    School   @relation(fields: [schoolId], references: [id])
-  teacher   User     @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  absences  TeacherAbsence[]
+  id           String    @id @default(uuid())
+  schoolId     String
+  teacherId    String
+  dayOfWeek    String    // 'MONDAY'..'SUNDAY' — for a one-off slot, the weekday specificDate falls on
+  startTime    String    // "08:00", 24h zero-padded — sortable as plain strings
+  endTime      String    // "08:55"
+  subjectId    String?   // set for a school period; null for a private/personal slot
+  subject      Subject?  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  label        String?   // free text, used when subjectId is null (e.g. "Private tutoring")
+  room         String?
+  // "YYYY-MM-DD" — set only for a one-off private/extra slot that doesn't repeat every
+  // week (e.g. a single Saturday tutoring session). null means the slot recurs weekly on
+  // dayOfWeek, same as the original behavior.
+  specificDate String?
+  // Set when this slot has been superseded by a newer save of the same teacher's
+  // timetable. Archived rows are never deleted (so TeacherAbsence rows already logged
+  // against them keep working, and the admin can browse "previous timetable" history) but
+  // are excluded from every live query — hours/coverage math only ever looks at the
+  // current (archivedAt: null) timetable, never a mix of old and new. All slots archived
+  // by the same save share the exact same timestamp, which is how they're grouped into
+  // one "version" for the history view.
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  school       School    @relation(fields: [schoolId], references: [id])
+  teacher      User      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  absences     TeacherAbsence[]
 
   @@index([schoolId, teacherId])
+  @@index([schoolId, teacherId, archivedAt])
 }
 
 // A teacher missing one scheduled period. One row per missed period — a "whole day
@@ -312,6 +358,12 @@ model TeacherAbsence {
   date            String
   recordedById    String
   createdAt       DateTime @default(now())
+  // True once an admin has viewed this record in the per-teacher absence list — from
+  // then on it's a locked historical record (nobody, admin included, can delete it). Set
+  // one view AFTER the admin actually looked at it (see getTeacherAbsences), not the same
+  // view — so an admin still has their current visit's window to delete it if they want
+  // to mark the teacher present instead ("just in case"), and only a later visit locks it.
+  seenByAdmin     Boolean  @default(false)
   school          School         @relation(fields: [schoolId], references: [id])
   teacher         User           @relation("TeacherAbsences", fields: [teacherId], references: [id], onDelete: Cascade)
   slot            TimetableSlot  @relation(fields: [timetableSlotId], references: [id], onDelete: Cascade)
@@ -380,6 +432,7 @@ model Term {
   createdAt       DateTime     @default(now())
   reportCards     ReportCard[]
   school          School       @relation(fields: [schoolId], references: [id])
+  pastTermMarksGrants PastTermMarksGrant[]
 }
 
 model ReportCard {

@@ -5,6 +5,7 @@ import {
   getOverviewApi, toggleSchoolActiveApi, toggleParentSchoolActiveApi,
   createStandaloneSchoolApi, createParentSchoolApi, addSectionToParentApi,
   deleteSchoolApi, deleteParentSchoolApi, updateSchoolApi, addSectionToSchoolApi, getSchoolAdminsApi,
+  updateAdminEmailApi,
   OverviewData, ParentSchool, SchoolSection,
 } from '@/lib/api/superadmin'
 import { resetUserPasswordApi } from '@/lib/api/auth'
@@ -146,6 +147,10 @@ export default function SuperAdminPage() {
   const [resetAdminSaving, setResetAdminSaving] = useState(false)
   const [resetAdminError, setResetAdminError] = useState('')
   const [showResetAdminPw, setShowResetAdminPw] = useState(false)
+  const [editEmailTarget, setEditEmailTarget] = useState<{ id: string; name: string } | null>(null)
+  const [editEmailValue, setEditEmailValue] = useState('')
+  const [editEmailSaving, setEditEmailSaving] = useState(false)
+  const [editEmailError, setEditEmailError] = useState('')
 
   useEffect(() => { fetchData() }, [])
 
@@ -190,6 +195,9 @@ export default function SuperAdminPage() {
     setResetAdminTarget(null)
     setResetAdminPw('')
     setResetAdminError('')
+    setEditEmailTarget(null)
+    setEditEmailValue('')
+    setEditEmailError('')
     try {
       const { admins: list } = await getSchoolAdminsApi(school.id)
       setAdmins(list)
@@ -197,6 +205,25 @@ export default function SuperAdminPage() {
       setAdmins([])
     } finally {
       setAdminsLoading(false)
+    }
+  }
+
+  const handleChangeAdminEmail = async () => {
+    if (!editEmailTarget) return
+    const trimmed = editEmailValue.trim()
+    if (!trimmed || !trimmed.includes('@')) { setEditEmailError('Enter a valid email address'); return }
+    setEditEmailSaving(true)
+    setEditEmailError('')
+    try {
+      const updated = await updateAdminEmailApi(editEmailTarget.id, trimmed)
+      setAdmins((prev) => prev.map((a) => a.id === updated.id ? { ...a, email: updated.email } : a))
+      showToast(`Email updated for ${editEmailTarget.name}`)
+      setEditEmailTarget(null)
+      setEditEmailValue('')
+    } catch (e: any) {
+      setEditEmailError(e.response?.data?.message || 'Failed to update email')
+    } finally {
+      setEditEmailSaving(false)
     }
   }
 
@@ -903,7 +930,7 @@ export default function SuperAdminPage() {
                 <h3 className="font-semibold text-foreground">School Admins</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">{adminsSchool.name}</p>
               </div>
-              <button onClick={() => { setAdminsSchool(null); setResetAdminTarget(null) }}
+              <button onClick={() => { setAdminsSchool(null); setResetAdminTarget(null); setEditEmailTarget(null) }}
                 className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
             </div>
 
@@ -926,14 +953,50 @@ export default function SuperAdminPage() {
                       </div>
                       <p className="text-xs text-muted-foreground">{admin.email} · {admin.role.replace('_', ' ')}</p>
                     </div>
-                    <button
-                      onClick={() => { setResetAdminTarget(admin); setResetAdminPw(''); setResetAdminError(''); setShowResetAdminPw(false) }}
-                      className="flex items-center gap-1.5 text-xs text-orange-600 hover:text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg transition"
-                    >
-                      <KeyRound size={12} /> Reset Password
-                    </button>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => { setEditEmailTarget(admin); setEditEmailValue(admin.email); setEditEmailError(''); setResetAdminTarget(null) }}
+                        className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80 bg-primary/10 px-2.5 py-1.5 rounded-lg transition"
+                      >
+                        <Pencil size={12} /> Change Email
+                      </button>
+                      <button
+                        onClick={() => { setResetAdminTarget(admin); setResetAdminPw(''); setResetAdminError(''); setShowResetAdminPw(false); setEditEmailTarget(null) }}
+                        className="flex items-center gap-1.5 text-xs text-orange-600 hover:text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg transition"
+                      >
+                        <KeyRound size={12} /> Reset Password
+                      </button>
+                    </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {editEmailTarget && (
+              <div className="border-t border-border pt-4 mt-2">
+                {editEmailError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5 mb-2">{editEmailError}</p>}
+                <p className="text-xs font-medium text-foreground mb-2">Change email for <span className="text-primary">{editEmailTarget.name}</span></p>
+                <label className="block text-xs font-medium text-foreground mb-1">New Email <span className="text-destructive">*</span></label>
+                <input
+                  type="email"
+                  placeholder="admin@example.com"
+                  required
+                  autoFocus
+                  value={editEmailValue}
+                  onChange={e => setEditEmailValue(e.target.value)}
+                  className="w-full border border-border rounded-lg px-3 py-2.5 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring mb-3"
+                />
+                <p className="text-xs text-muted-foreground mb-3">This only changes their login email. Use "Reset Password" next to send them a fresh setup link once this is corrected.</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setEditEmailTarget(null)}
+                    className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                    Cancel
+                  </button>
+                  <button onClick={handleChangeAdminEmail} disabled={editEmailSaving}
+                    className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
+                    {editEmailSaving ? 'Saving…' : 'Save Email'}
+                  </button>
+                </div>
               </div>
             )}
 
