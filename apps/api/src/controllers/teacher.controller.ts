@@ -254,6 +254,28 @@ export const assignTeacherSubjects = async (req: AuthRequest, res: Response) => 
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
     const { subjectIds }: { subjectIds: string[] } = req.body
+    // Optional semester scope. Universities teach a different set of courses each
+    // semester, so assigning courses while viewing Second Semester must leave the
+    // teacher's First Semester courses alone — otherwise this replace-all would wipe
+    // every course the current view happens not to show. Primary/secondary omit it:
+    // their subjects run the whole year, so there is nothing to scope by.
+    const term = req.body.term ? String(req.body.term) : null
+
+    if (term && subjectIds.length > 0) {
+      // Everything submitted must actually belong to the scope being replaced, or a
+      // stray course would be created here and then be invisible (and undeletable) the
+      // next time this same scope is saved.
+      const mismatched = await prisma.subject.findMany({
+        where: { id: { in: subjectIds }, schoolId, NOT: { term } },
+        select: { name: true, term: true },
+      })
+      if (mismatched.length > 0) {
+        res.status(400).json({
+          message: `These courses are not in ${term}: ${mismatched.map((m) => `${m.name} (${m.term ?? 'no semester'})`).join(', ')}`,
+        })
+        return
+      }
+    }
 
     // A course belongs to one teacher: giving it to this one takes it from whoever held
     // it. That was already the behaviour here, but silently — only the admin saw a note,
@@ -262,8 +284,12 @@ export const assignTeacherSubjects = async (req: AuthRequest, res: Response) => 
     // name (see utils/courseAssignment.ts).
     const reassigned = await takeCoursesFromOtherTeachers({ schoolId, subjectIds, newTeacherId: id })
 
-    // Replace all assignments for this teacher
-    await prisma.teacherSubject.deleteMany({ where: { userId: id } })
+    // Replace this teacher's assignments — but only WITHIN the scope being edited. With
+    // a `term`, courses from other semesters are left exactly as they were; without one
+    // (primary/secondary, whose subjects span the year) it stays a full replace.
+    await prisma.teacherSubject.deleteMany({
+      where: { userId: id, ...(term ? { subject: { term } } : {}) },
+    })
     if (subjectIds.length > 0) {
       await prisma.teacherSubject.createMany({
         data: subjectIds.map((sid) => ({ userId: id, subjectId: sid })),

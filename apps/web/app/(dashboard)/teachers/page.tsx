@@ -259,15 +259,21 @@ export default function TeachersPage() {
     if (!assignTarget) return
     setAssigning(true)
     try {
-      const result = await assignTeacherSubjectsApi(assignTarget.id, assignedIds)
+      // Semester-scoped for universities — see idsToSave/termScopedAssign below.
+      const result = await assignTeacherSubjectsApi(
+        assignTarget.id,
+        idsToSave,
+        termScopedAssign ? selectedTerm : undefined,
+      )
       if (result.reassigned?.length) {
         setReassignedInfo(result.reassigned)
       } else {
         showToast(tr(isUniversity ? 'Courses assigned successfully' : 'Subjects assigned successfully'))
         setAssignTarget(null)
       }
-    } catch {
-      showToast(tr('Failed to assign subjects'), 'error')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || tr('Failed to assign subjects'), 'error')
     } finally {
       setAssigning(false)
     }
@@ -292,6 +298,24 @@ export default function TeachersPage() {
     acc[s.classLevel].push(s)
     return acc
   }, {})
+
+  // `assignedIds` holds EVERY course this teacher has, across all semesters — the modal
+  // list is filtered, so most of them may be off screen.
+  //
+  // For a university this modal edits ONE semester: only that semester's selections are
+  // submitted, and the API replaces only that semester (see assignTeacherSubjects), so
+  // the other semester's courses are untouched rather than wiped by a whole-set replace.
+  // Deliberately filtered by semester ONLY, not by department: a course this teacher
+  // holds in the same semester but a different department is still off screen here, and
+  // dropping it from the payload would delete it.
+  const termScopedAssign = isUniversity && !!selectedTerm
+  const idsToSave = termScopedAssign
+    ? assignedIds.filter((id) => allSubjects.find((s) => s.id === id)?.term === selectedTerm)
+    : assignedIds
+  // What's left over is hidden by the DEPARTMENT filter only — still saved, but worth
+  // naming so the count can't look wrong with no explanation.
+  const hiddenSelectedCount = idsToSave.filter((id) => !modalSubjects.some((s) => s.id === id)).length
+  const visibleSelectedCount = idsToSave.length - hiddenSelectedCount
 
   // Department picker (secondary/university only): a teacher's department(s) are the
   // union of what they're explicitly placed in (t.departments, set at creation/edit)
@@ -620,12 +644,22 @@ export default function TeachersPage() {
               ))}
               {!assignedLoading && allSubjects.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{tr(isUniversity ? 'No courses found. Add courses first.' : 'No subjects found. Add subjects first.')}</p>}
             </div>
+            {/* Without this, the Save count looks wrong: it includes selections the
+                current semester/department filter is hiding, which can't be seen or
+                unticked from here. They're kept rather than dropped on save. */}
+            {hiddenSelectedCount > 0 && !assignedLoading && (
+              <p className="text-xs text-muted-foreground mt-3">
+                {visibleSelectedCount} {tr('selected here')} · {hiddenSelectedCount} {tr('in another department (kept on save)')}
+              </p>
+            )}
             <div className="flex gap-3 pt-4 border-t border-gray-100 mt-4">
               <button onClick={() => setAssignTarget(null)}
                 className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{tr('Cancel')}</button>
               <button onClick={handleAssignSave} disabled={assigning || assignedLoading || reassignedInfo.length > 0}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                {assigning ? tr('Saving...') : `${tr('Save (')}${assignedIds.length} ${tr(isUniversity ? 'courses' : 'subjects')})`}
+                {/* Counts what will actually be saved for THIS semester, not every
+                    course the teacher holds across the year. */}
+                {assigning ? tr('Saving...') : `${tr('Save (')}${idsToSave.length} ${tr(isUniversity ? 'courses' : 'subjects')})`}
               </button>
             </div>
           </div>

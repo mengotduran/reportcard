@@ -35,7 +35,9 @@ export const getTeacherSubjectsApi = async (id: string) => {
   return res.data as { subjects: { id: string; name: string; classLevel: string }[] }
 }
 
-export const assignTeacherSubjectsApi = async (id: string, subjectIds: string[]) => {
-  const res = await api.put(`/teachers/${id}/subjects`, { subjectIds })
+// `term` scopes the replace to one semester (universities). Without it the whole set is
+// replaced, which is right for primary/secondary where subjects run the full year.
+export const assignTeacherSubjectsApi = async (id: string, subjectIds: string[], term?: string) => {
+  const res = await api.put(`/teachers/${id}/subjects`, { subjectIds, ...(term ? { term } : {}) })
   return res.data
 }
