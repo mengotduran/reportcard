@@ -131,7 +131,16 @@ export const copySubjects = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const source = await prisma.subject.findMany({ where: { schoolId, classLevel: fromClassLevel } })
+    // Optional subset. An evening class is created from a day department but need not take
+    // every one of its courses, so the caller may name exactly which to bring over. Omitted
+    // means all of them, which is what the secondary section-copy flow does.
+    const rawIds = req.body.subjectIds
+    const subjectIds: string[] | undefined = Array.isArray(rawIds) ? rawIds.map((v: unknown) => String(v)) : undefined
+    if (subjectIds && subjectIds.length === 0) { res.json({ copied: 0 }); return }
+
+    const source = await prisma.subject.findMany({
+      where: { schoolId, classLevel: fromClassLevel, ...(subjectIds ? { id: { in: subjectIds } } : {}) },
+    })
     const existing = new Set(
       (await prisma.subject.findMany({ where: { schoolId, classLevel: toClassLevel }, select: { name: true } }))
         .map((s) => s.name.toLowerCase()),

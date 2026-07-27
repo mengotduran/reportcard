@@ -4,12 +4,13 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, ClassLevel } from '@/lib/api/classLevels'
 import { getDepartmentsApi, createDepartmentApi, updateDepartmentApi, deleteDepartmentApi, Department } from '@/lib/api/departments'
-import { copySubjectsApi } from '@/lib/api/subjects'
+import { copySubjectsApi, getSubjectsApi } from '@/lib/api/subjects'
 import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import { useToast } from '@/lib/useToast'
+import { Programme, PROGRAMME_LABELS, stripProgrammeSuffix, withProgrammeSuffix } from '@/lib/programme'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 import { formatXAF } from '@/lib/api/fees'
@@ -17,13 +18,20 @@ import { formatXAF } from '@/lib/api/fees'
 // ── University class-name helpers ────────────────────────────────────────────
 type UniLevel = 'Level 1' | 'Level 2' | 'Level 3'
 
-function deptFromClassName(name: string): string {
+function deptFromClassName(rawName: string): string {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const name = stripProgrammeSuffix(rawName)
   if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
   return name
 }
 
-function levelFromClassName(name: string): UniLevel | '' {
+function levelFromClassName(rawName: string): UniLevel | '' {
+  // Past the Day/Evening marker: these patterns anchor at the end of the name, so an
+  // evening class would otherwise match no level and vanish from every level tab.
+  const name = stripProgrammeSuffix(rawName)
   if (/ - Level 1$/i.test(name)) return 'Level 1'
   if (/ - Level 2$/i.test(name)) return 'Level 2'
   if (name.startsWith('Degree ') || / - Level 3$/i.test(name)) return 'Level 3'
@@ -37,6 +45,11 @@ function buildClassName(dept: string, level: UniLevel): string {
 }
 
 const UNI_LEVELS: UniLevel[] = ['Level 1', 'Level 2', 'Level 3']
+// Level 3 is the Degree year. It runs once, follows the day curriculum and continues from
+// Level 2 day, so it belongs to the day section even though it is taught in the evening.
+// The evening section is Level 1 and Level 2 only.
+const levelsForProgramme = (p: Programme | 'ALL'): UniLevel[] =>
+  p === 'EVENING' ? UNI_LEVELS.filter((lv) => lv !== 'Level 3') : UNI_LEVELS
 const UNI_LEVEL_LABELS: Record<UniLevel, string> = {
   'Level 1': 'Level 1 (HND I)',
   'Level 2': 'Level 2 (HND II)',
@@ -71,6 +84,7 @@ type FormState = {
   maxScore: string
   feeAmount: string
   hndRegistrationFee: string
+  programme: Programme
 }
 
 // feeAmount deliberately starts empty, not a real number: it used to default to a stock
@@ -78,8 +92,8 @@ type FormState = {
 // text), so a distracted admin could save every class with a fee that has nothing to do
 // with their school's actual tuition. The input's placeholder already shows the same
 // number as a hint — this just stops it from also being the submitted value.
-const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE }
-const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '', hndRegistrationFee: '65000' }
+const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY' }
+const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY' }
 
 export default function ClassesPage() {
   const router = useRouter()
@@ -99,6 +113,9 @@ export default function ClassesPage() {
   const [error, setError]             = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ClassLevel | null>(null)
   const [activeLevel, setActiveLevel] = useState<UniLevel>('Level 1')
+  // Day/Evening filter. 'ALL' by default so a school with no evening programme sees no
+  // change at all, and the chips only earn their place once an evening class exists.
+  const [activeProgramme, setActiveProgramme] = useState<Programme | 'ALL'>('ALL')
 
   // ── Secondary departments ──
   const [departments, setDepartments]   = useState<Department[]>([])
@@ -117,11 +134,20 @@ export default function ClassesPage() {
   // class at a school can have sections while another at the same school has none.
   const [sections, setSections] = useState<string[]>([])
   const [copyFrom, setCopyFrom] = useState<string>('')  // source class to copy subjects from
+  // Creating an evening class from an existing day department: the day class it is based on,
+  // and which of its courses to bring over. The department name is then taken from that
+  // class rather than retyped, which is what stops a misspelling from silently creating a
+  // second department (it already happened once: "Software Enginering").
+  const [takeFromDay, setTakeFromDay] = useState(false)
+  const [baseClass, setBaseClass] = useState<string>('')
+  const [pickedCourses, setPickedCourses] = useState<Set<string>>(new Set())
+  const [allSubjects, setAllSubjects] = useState<{ id: string; name: string; classLevel: string; term?: string | null }[]>([])
 
   useEffect(() => {
     if (!isAuthenticated) router.push('/login')
     else {
       fetchClasses()
+      fetchSubjects()
       if (isSecondary) fetchDepartments()
     }
   }, [isAuthenticated])
@@ -133,6 +159,13 @@ export default function ClassesPage() {
       setClasses(data.classLevels)
     } catch { console.error('Failed to fetch classes') }
     finally { setLoading(false) }
+  }
+
+  const fetchSubjects = async () => {
+    try {
+      const d = await getSubjectsApi()
+      setAllSubjects(d.subjects)
+    } catch { /* the base-on-day picker just shows no courses */ }
   }
 
   const fetchDepartments = async () => {
@@ -148,10 +181,48 @@ export default function ClassesPage() {
 
   // Which classes to show for the active tab / department
   const displayedClasses = useMemo(() => {
-    if (isUniversity) return classes.filter((c) => levelFromClassName(c.name) === activeLevel)
-    if (isSecondary && activeDeptId) return classes.filter((c) => c.departmentId === activeDeptId)
+    const bySitting = activeProgramme === 'ALL'
+      ? classes
+      : classes.filter((c) => (c.programme ?? 'DAY') === activeProgramme)
+    if (isUniversity) return bySitting.filter((c) => levelFromClassName(c.name) === activeLevel)
+    if (isSecondary && activeDeptId) return bySitting.filter((c) => c.departmentId === activeDeptId)
+    return bySitting
+  }, [isUniversity, isSecondary, classes, activeLevel, activeDeptId, activeProgramme])
+
+  // The chips only appear once the school actually runs an evening sitting, so nothing
+  // changes for the schools that don't.
+  const hasEveningClasses = classes.some((c) => (c.programme ?? 'DAY') === 'EVENING')
+
+  const baseClassOptions = useMemo(() => {
+    if (form.programme !== 'EVENING' || editing) return []
     return classes
-  }, [isUniversity, isSecondary, classes, activeLevel, activeDeptId])
+      .filter((c) => (c.programme ?? 'DAY') === 'DAY')
+      .filter((c) => !isUniversity || levelFromClassName(c.name) === form.uniLevel)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [classes, form.programme, form.uniLevel, editing, isUniversity])
+
+  const baseClassCourses = useMemo(
+    () => allSubjects.filter((s) => s.classLevel === baseClass).sort((a, b) => a.name.localeCompare(b.name)),
+    [allSubjects, baseClass],
+  )
+
+  // Taking a day department as the base fills in everything that must match for the two
+  // sittings to stay one programme: the name (never retyped, so it cannot be misspelled into
+  // a separate department), the abbreviation (one continuous matricule series), the fee and
+  // the max score. All still editable except the name.
+  const applyBaseClass = (name: string) => {
+    setBaseClass(name)
+    const src = classes.find((c) => c.name === name)
+    if (!src) { setPickedCourses(new Set()); return }
+    setForm((f) => ({
+      ...f,
+      ...(isUniversity ? { deptName: deptFromClassName(src.name) } : { name: stripDeptSuffix(stripProgrammeSuffix(src.name)) }),
+      abbreviation: src.abbreviation ?? '',
+      maxScore: String(src.maxScore ?? (isUniversity ? 100 : 20)),
+      feeAmount: String(src.feeAmount ?? 0),
+    }))
+    setPickedCourses(new Set(allSubjects.filter((s) => s.classLevel === name).map((s) => s.id)))
+  }
 
   const composeClassName = (base: string): string => {
     const b = stripDeptSuffix(base)
@@ -159,18 +230,25 @@ export default function ClassesPage() {
     return `${b} (${activeDept.name})`
   }
 
-  const displayClassName = (cls: ClassLevel): string =>
-    isUniversity ? deptFromClassName(cls.name) : isSecondary ? stripDeptSuffix(cls.name) : cls.name
+  const displayClassName = (cls: ClassLevel): string => {
+    const base = stripProgrammeSuffix(cls.name)
+    return isUniversity ? deptFromClassName(base) : isSecondary ? stripDeptSuffix(base) : base
+  }
 
   const openAdd = () => {
     setEditing(null)
     // Entry/registration fees are never pre-filled on create — only shown as
     // placeholder suggestions — so the admin has to consciously enter them.
+    const seedProgramme: Programme = activeProgramme === 'ALL' ? 'DAY' : activeProgramme
+    const seedLevel: UniLevel = seedProgramme === 'EVENING' && activeLevel === 'Level 3' ? 'Level 1' : activeLevel
     setForm(isUniversity
-      ? { ...UNI_EMPTY, uniLevel: activeLevel, feeAmount: activeLevel === 'Level 2' ? '' : UNI_EMPTY.feeAmount, hndRegistrationFee: '' }
-      : { ...STD_EMPTY, hndRegistrationFee: '' })
+      ? { ...UNI_EMPTY, uniLevel: seedLevel, feeAmount: seedLevel === 'Level 2' ? '' : UNI_EMPTY.feeAmount, hndRegistrationFee: '', programme: seedProgramme }
+      : { ...STD_EMPTY, hndRegistrationFee: '', programme: seedProgramme })
     setSections([])
     setCopyFrom('')
+    setBaseClass('')
+    setPickedCourses(new Set())
+    setTakeFromDay(false)
     setError('')
     setShowModal(true)
   }
@@ -180,17 +258,18 @@ export default function ClassesPage() {
     if (isUniversity) {
       setForm({
         name: cls.name,
-        deptName: deptFromClassName(cls.name),
+        deptName: deptFromClassName(stripProgrammeSuffix(cls.name)),
         uniLevel: levelFromClassName(cls.name) || 'Level 1',
         abbreviation: cls.abbreviation ?? '',
         hasStream: false,
         maxScore: String(cls.maxScore ?? 100),
         feeAmount: String(cls.feeAmount ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? 65000),
+        programme: cls.programme ?? 'DAY',
       })
     } else {
       setForm({
-        name: isSecondary ? stripDeptSuffix(cls.name) : cls.name,
+        name: stripProgrammeSuffix(isSecondary ? stripDeptSuffix(cls.name) : cls.name),
         deptName: '',
         uniLevel: 'Level 1',
         abbreviation: cls.abbreviation ?? '',
@@ -198,6 +277,7 @@ export default function ClassesPage() {
         maxScore: String(cls.maxScore ?? 20),
         feeAmount: String(cls.feeAmount ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? GCE_DEFAULT_FEE),
+        programme: cls.programme ?? 'DAY',
       })
     }
     setError('')
@@ -222,19 +302,23 @@ export default function ClassesPage() {
     if (isUniversity) {
       if (!form.deptName.trim()) { setError(tt('Class name is required.', 'Department name is required.')); return }
       if (!form.abbreviation.trim()) { setError(t('Abbreviation for student matricule is required.')); return }
-      finalNames = [buildClassName(form.deptName.trim(), form.uniLevel)]
+      if (form.programme === 'EVENING' && form.uniLevel === 'Level 3') {
+        setError(t('Level 3 runs once, on the day curriculum. Create it in the Day section.')); return
+      }
+      finalNames = [withProgrammeSuffix(buildClassName(form.deptName.trim(), form.uniLevel), form.programme)]
     } else if (isSecondary) {
       if (!secBase) { setError(t('Class name is required.')); return }
-      finalNames = editing
+      finalNames = (editing
         ? [composeClassName(secBase)]
         // No section letters selected → one bare class, e.g. "Form 1". A school with
         // enough students to split a class picks letters instead, one class per letter.
         : sections.length
           ? sections.map((l) => composeClassName(`${secBase} ${l}`))
           : [composeClassName(secBase)]
+      ).map((n) => withProgrammeSuffix(n, form.programme))
     } else {
       if (!form.name.trim()) { setError(t('Class name is required.')); return }
-      finalNames = [form.name.trim()]
+      finalNames = [withProgrammeSuffix(form.name.trim(), form.programme)]
     }
 
     // Level 2 entry fee defaults to half of Level 1's fee (suggested when the field
@@ -255,6 +339,7 @@ export default function ClassesPage() {
         feeAmount: Number(form.feeAmount) || 0,
         hndRegistrationFee: isExamReg ? (Number(form.hndRegistrationFee) || 0) : null,
         ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
+        programme: form.programme,
       }
     }
 
@@ -271,10 +356,24 @@ export default function ClassesPage() {
         for (let i = 0; i < toCreate.length; i++) {
           await createClassLevelApi({ ...buildPayload(toCreate[i]), order: classes.length + i })
         }
-        if (isSecondary && copyFrom) {
-          await Promise.all(toCreate.map((nm) => copySubjectsApi(copyFrom, nm).catch(() => {})))
+        // Either an explicitly chosen source (secondary sections) or the day twin of an
+        // evening class. Failures are swallowed deliberately: the class itself is created
+        // either way, and a failed copy is recoverable from the Classes page.
+        // Either the day department this evening class is based on (bringing only the
+        // courses that were ticked) or the secondary section-copy picker (whole list).
+        // Failures are swallowed deliberately: the class itself exists either way, and the
+        // copy can be redone from the Classes page.
+        let copied = 0
+        if (baseClass && pickedCourses.size > 0) {
+          const ids = [...pickedCourses]
+          const results = await Promise.all(toCreate.map((nm) => copySubjectsApi(baseClass, nm, ids).catch(() => ({ copied: 0 }))))
+          copied = results.reduce((sum, r) => sum + (r?.copied ?? 0), 0)
+        } else if (isSecondary && copyFrom) {
+          const results = await Promise.all(toCreate.map((nm) => copySubjectsApi(copyFrom, nm).catch(() => ({ copied: 0 }))))
+          copied = results.reduce((sum, r) => sum + (r?.copied ?? 0), 0)
         }
-        showToast(toCreate.length > 1 ? `${toCreate.length} ${t('classes added')}` : tt('Class added', 'Department added'))
+        const addedMsg = toCreate.length > 1 ? `${toCreate.length} ${t('classes added')}` : tt('Class added', 'Department added')
+        showToast(copied > 0 ? `${addedMsg}. ${copied} ${t(isUniversity ? 'courses copied over' : 'subjects copied over')}.` : addedMsg)
       }
       closeModal()
       fetchClasses()
@@ -287,12 +386,17 @@ export default function ClassesPage() {
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return
     try {
-      await deleteClassLevelApi(deleteTarget.id)
+      const result = await deleteClassLevelApi(deleteTarget.id)
       setDeleteTarget(null)
       fetchClasses()
-      showToast(tt('Class deleted', 'Department deleted'))
-    } catch {
-      showToast(tt('Failed to delete class', 'Failed to delete department'), 'error')
+      // The API's own message names what it also cleaned up (a class master who was
+      // assigned to it, say), which a fixed string here would throw away.
+      showToast(result?.message || tt('Class deleted', 'Department deleted'))
+    } catch (err: unknown) {
+      // The refusal explains itself ("still has 22 students and 6 courses"). Replacing it
+      // with "Failed to delete" would leave the admin guessing at a rule they can't see.
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || tt('Failed to delete class', 'Failed to delete department'), 'error')
     }
   }
 
@@ -377,6 +481,32 @@ export default function ClassesPage() {
         </button>
       </div>
 
+      {/* ── Day / Evening sitting ──
+          Only shown once the school actually runs an evening sitting: a school with a
+          single sitting has nothing to filter and shouldn't be asked to think about it. */}
+      {hasEveningClasses && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          {(['ALL', 'DAY', 'EVENING'] as const).map((p) => {
+            const count = p === 'ALL' ? classes.length : classes.filter((c) => (c.programme ?? 'DAY') === p).length
+            const active = activeProgramme === p
+            return (
+              <button key={p} onClick={() => {
+                setActiveProgramme(p)
+                if (p === 'EVENING' && activeLevel === 'Level 3') setActiveLevel('Level 1')
+              }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
+                  active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                }`}>
+                {t(p === 'ALL' ? 'All' : PROGRAMME_LABELS[p])}
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${active ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* ── Secondary department bar ── */}
       {isSecondary && (
         <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -423,8 +553,11 @@ export default function ClassesPage() {
       {/* ── University level tabs ── */}
       {isUniversity && (
         <div className="flex gap-2 mb-4">
-          {UNI_LEVELS.map((lv) => {
-            const count = classes.filter((c) => levelFromClassName(c.name) === lv).length
+          {levelsForProgramme(activeProgramme).map((lv) => {
+            const count = classes.filter((c) =>
+              levelFromClassName(c.name) === lv &&
+              (activeProgramme === 'ALL' || (c.programme ?? 'DAY') === activeProgramme)
+            ).length
             return (
               <button key={lv} onClick={() => setActiveLevel(lv)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
@@ -507,6 +640,13 @@ export default function ClassesPage() {
                           <span className="text-sm font-medium text-foreground">
                             {displayClassName(cls)}
                           </span>
+                          {/* The sitting is shown as a tag rather than left in the name,
+                              so the name reads the same as it does on a report card. */}
+                          {(cls.programme ?? 'DAY') === 'EVENING' && (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                              {t('Evening')}
+                            </span>
+                          )}
                         </div>
                       </td>
                       {isUniversity && (
@@ -589,6 +729,123 @@ export default function ClassesPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Which SECTION the class belongs to, not what time it is taught. Level 3
+                  runs in the evening by the clock but follows the day curriculum, so it is a
+                  Day class. The word never reaches a printed report card. */}
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">{t('Section')}</label>
+                <div className="flex gap-2">
+                  {(['DAY', 'EVENING'] as const).map((p) => (
+                    <button key={p} type="button" onClick={() => setForm({
+                      ...form,
+                      programme: p,
+                      // Level 3 exists only in the day section, so a switch to Evening has to
+                      // move off it rather than leave an invalid choice selected but hidden.
+                      uniLevel: p === 'EVENING' && form.uniLevel === 'Level 3' ? 'Level 1' : form.uniLevel,
+                    })}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition active:scale-95 ${
+                        form.programme === p ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'
+                      }`}>
+                      {t(PROGRAMME_LABELS[p])}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {form.programme === 'EVENING'
+                    ? t('A separate intake following the evening programme, with its own students, marks and fees. Used to group and filter inside the app only, it never appears on a printed report card.')
+                    : t('Follows the day curriculum. Choose this even for a class taught in the evening, if it follows the day programme.')}
+                </p>
+
+                {/* Evening intakes are almost always the same programme run again, so the
+                    department is TAKEN from the day one rather than retyped. The courses are
+                    then copied, and copied is the point: the evening cohort may edit theirs
+                    without touching the day class. Which ones to bring is a choice, since an
+                    evening intake need not take every course the day one does. */}
+                {form.programme === 'EVENING' && !editing && baseClassOptions.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-border p-3 space-y-3">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input type="checkbox" checked={takeFromDay}
+                        onChange={(e) => {
+                          setTakeFromDay(e.target.checked)
+                          // Unticking hands the form back: the name unlocks and nothing is
+                          // queued for copying.
+                          if (!e.target.checked) { setBaseClass(''); setPickedCourses(new Set()) }
+                        }}
+                        className="mt-0.5 accent-primary w-4 h-4 flex-shrink-0" />
+                      <span>
+                        <span className="block text-sm text-foreground">
+                          {t(isUniversity ? 'Take the department from the day section' : 'Take the class from the day section')}
+                        </span>
+                        <span className="block text-xs text-muted-foreground mt-0.5">
+                          {t('Same programme run again in the evening. Leave this unticked to type a new one.')}
+                        </span>
+                      </span>
+                    </label>
+
+                    {takeFromDay && (
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">
+                        {t(isUniversity ? 'Base it on a day department' : 'Base it on a day class')}
+                      </label>
+                      <select value={baseClass} onChange={(e) => applyBaseClass(e.target.value)}
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
+                        <option value="">{t('Select a department...')}</option>
+                        {baseClassOptions.map((c) => (
+                          <option key={c.id} value={c.name}>{displayClassName(c)}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {baseClass
+                          ? t('Name, abbreviation, fee and max score are taken from it. Pick the courses to copy below.')
+                          : t('Pick the day department this evening intake belongs to.')}
+                      </p>
+                    </div>
+                    )}
+
+                    {baseClass && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-medium text-foreground">
+                            {t(isUniversity ? 'Courses to copy' : 'Subjects to copy')}
+                            <span className="text-muted-foreground font-normal"> ({pickedCourses.size}/{baseClassCourses.length})</span>
+                          </label>
+                          {baseClassCourses.length > 0 && (
+                            <button type="button"
+                              onClick={() => setPickedCourses(pickedCourses.size === baseClassCourses.length ? new Set() : new Set(baseClassCourses.map((c) => c.id)))}
+                              className="text-xs text-primary font-medium hover:underline">
+                              {pickedCourses.size === baseClassCourses.length ? t('Clear all') : t('Select all')}
+                            </button>
+                          )}
+                        </div>
+                        {baseClassCourses.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">{t('That class has no courses yet, so there is nothing to copy.')}</p>
+                        ) : (
+                          <div className="max-h-44 overflow-y-auto border border-border rounded-lg divide-y divide-border">
+                            {baseClassCourses.map((c) => (
+                              <label key={c.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/40">
+                                <input type="checkbox" checked={pickedCourses.has(c.id)}
+                                  onChange={(e) => {
+                                    const next = new Set(pickedCourses)
+                                    if (e.target.checked) next.add(c.id); else next.delete(c.id)
+                                    setPickedCourses(next)
+                                  }}
+                                  className="accent-primary w-4 h-4 flex-shrink-0" />
+                                <span className="text-sm text-foreground flex-1">{c.name}</span>
+                                {c.term && <span className="text-[10px] text-muted-foreground">{c.term}</span>}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {t('Copies, not shared: editing an evening course never changes the day one. Lecturers are not copied, assign the evening teachers yourself.')}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              </div>
+
 
               {/* University: department name + level picker */}
               {isUniversity ? (
@@ -599,7 +856,16 @@ export default function ClassesPage() {
                       value={form.deptName}
                       onChange={(e) => setForm({ ...form, deptName: e.target.value })}
                       required
-                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                      // Taken from the day department and locked: the two sittings are one
+                      // department only while their names agree exactly, and one stray
+                      // keystroke here is what created a phantom department last time.
+                      readOnly={!!baseClass}
+                      className={`w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring ${baseClass ? 'bg-muted cursor-not-allowed' : ''}`} />
+                    {baseClass && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t('Taken from the day department, so both sittings stay one department. Untick "Take the department from the day section" to type your own.')}
+                      </p>
+                    )}
                     {form.deptName.trim() && (
                       <p className="text-xs text-muted-foreground mt-1">
                         Will be saved as: <span className="font-medium text-foreground">{buildClassName(form.deptName.trim(), form.uniLevel)}</span>
@@ -609,8 +875,8 @@ export default function ClassesPage() {
 
                   <div>
                     <label className="block text-xs font-medium text-foreground mb-2">Class <span className="text-destructive">*</span></label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {UNI_LEVELS.map((lv) => (
+                    <div className={`grid gap-2 ${levelsForProgramme(form.programme).length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                      {levelsForProgramme(form.programme).map((lv) => (
                         <button key={lv} type="button"
                           onClick={() => {
                             // Never pre-fill the Level 2 entry fee on create — the half-fee is
@@ -725,8 +991,11 @@ export default function ClassesPage() {
 
               {/* School fee */}
               {isUniversity && form.uniLevel === 'Level 2' ? (() => {
+                // Same section: an evening Level 2's programme fee lives on the EVENING
+                // Level 1, so suggesting half the day programme's fee would quote the
+                // wrong figure entirely.
                 const l1 = form.deptName.trim()
-                  ? classes.find((c) => c.name === `HND ${form.deptName.trim()} - Level 1`)
+                  ? classes.find((c) => c.name === withProgrammeSuffix(`HND ${form.deptName.trim()} - Level 1`, form.programme))
                   : null
                 const halfFee = l1 && l1.feeAmount > 0 ? Math.round(l1.feeAmount / 2) : null
                 return (

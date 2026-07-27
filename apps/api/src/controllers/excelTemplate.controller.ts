@@ -2,6 +2,7 @@ import { Response } from 'express'
 import ExcelJS from 'exceljs'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { stripProgramme } from '../utils/programme'
 
 const MAX_TEMPLATES = 10
 
@@ -170,7 +171,9 @@ async function buildFilledBuffer(
   const fixed: Record<string, string> = {
     student_name:       student.name,
     student_id:         student.studentId,
-    program:            student.classLevel,
+    // Same rule as the printed report card: the Day/Evening section is internal and must
+    // not appear on a document handed to a student.
+    program:            stripProgramme(student.classLevel),
     session,
     gender:             student.gender ?? '',
     date_of_birth:      student.dateOfBirth ?? '',

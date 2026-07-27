@@ -10,6 +10,7 @@ import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { CalendarOff, Trash2, X } from 'lucide-react'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
@@ -151,7 +152,7 @@ export default function MyTeachingHoursPage() {
                     <tr key={r.subjectId} className="hover:bg-muted/40 transition">
                       <td className="px-5 py-3">
                         <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
-                        <span className="text-xs text-muted-foreground ml-2">{r.classLevel}{r.term ? ` · ${r.term}` : ''}</span>
+                        <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(r.classLevel)}{r.term ? ` · ${r.term}` : ''}</span>
                       </td>
                       <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
                       <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
@@ -210,7 +211,7 @@ export default function MyTeachingHoursPage() {
                     return (
                       <tr key={a.id} className="hover:bg-muted/40 transition">
                         <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{a.classLevel}</span></td>
+                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(a.classLevel)}</span></td>
                         <td className="px-4 py-3 text-sm text-muted-foreground">{t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</td>
                         <td className="px-4 py-3 text-center">
                           <button
@@ -278,7 +279,7 @@ export default function MyTeachingHoursPage() {
                               disabled={locked}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
-                            {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{s.classLevel}</span>
+                            {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(s.classLevel)}</span>
                             {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
                           </label>
                         )

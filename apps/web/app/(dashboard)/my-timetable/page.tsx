@@ -6,6 +6,7 @@ import { useT } from '@/lib/i18n'
 import { X } from 'lucide-react'
 import WeekGrid, { WeekGridSlot } from '@/components/ui/WeekGrid'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 
@@ -94,7 +95,7 @@ export default function MyTimetablePage() {
               {selectedSlot.subjectId && selectedSlot.classLevel && (
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{tr('Class')}</span>
-                  <span className="text-foreground font-medium">{selectedSlot.classLevel}</span>
+                  <span className="text-foreground font-medium">{stripProgrammeSuffix(selectedSlot.classLevel)}</span>
                 </div>
               )}
               {selectedSlot.room && (

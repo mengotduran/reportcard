@@ -17,6 +17,7 @@ import addTimetablePeriod from '../../prisma/sqlite/migrations/20260720183000_ad
 import addTeachingHoursCoverage from '../../prisma/sqlite/migrations/20260721183500_add_teaching_hours_coverage/migration.sql'
 import addTimetableSlotVersioning from '../../prisma/sqlite/migrations/20260725163400_add_timetable_slot_versioning/migration.sql'
 import addPastTermMarksGrant from '../../prisma/sqlite/migrations/20260725185800_add_past_term_marks_grant/migration.sql'
+import addClassLevelProgramme from '../../prisma/sqlite/migrations/20260726191800_add_class_level_programme/migration.sql'
 
 export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260624111054_init', sql: init },
@@ -30,4 +31,5 @@ export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260721183500_add_teaching_hours_coverage', sql: addTeachingHoursCoverage },
   { name: '20260725163400_add_timetable_slot_versioning', sql: addTimetableSlotVersioning },
   { name: '20260725185800_add_past_term_marks_grant', sql: addPastTermMarksGrant },
+  { name: '20260726191800_add_class_level_programme', sql: addClassLevelProgramme },
 ]

@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs'
+import { stripProgramme } from './programme'
 
 export interface ParsedStudentRow {
   row: number
@@ -85,11 +86,13 @@ function stripDeptSuffix(name: string): string {
 // apps/web/app/(dashboard)/classes/page.tsx — universities have no real Department
 // table row, the department (programme) lives only in the class name string.
 function univDeptFromClassName(name: string): string {
+  name = stripProgramme(name)
   if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
   return name
 }
 function univLevelFromClassName(name: string): 'Level 1' | 'Level 2' | 'Level 3' | '' {
+  name = stripProgramme(name)
   if (/ - Level 1$/i.test(name)) return 'Level 1'
   if (/ - Level 2$/i.test(name)) return 'Level 2'
   if (name.startsWith('Degree ') || / - Level 3$/i.test(name)) return 'Level 3'

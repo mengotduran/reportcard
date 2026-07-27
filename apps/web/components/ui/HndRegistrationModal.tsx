@@ -11,6 +11,7 @@ import {
 import { formatXAF } from '@/lib/api/fees'
 import { useLocaleCode } from '@/lib/i18n'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 function statusChip(status: RegStatus) {
   const map: Record<RegStatus, { label: string; cls: string }> = {
@@ -135,7 +136,7 @@ export default function HndRegistrationModal({
               <div className="min-w-0 col-span-2 sm:col-span-1">
                 <span className="text-xs text-muted-foreground block">{isUniversity ? 'Department' : 'Class'}</span>
                 <span className="text-sm text-foreground font-medium break-words">
-                  {data.student.classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')}
+                  {stripProgrammeSuffix(data.student.classLevel).replace(/^HND /, '').replace(/ - Level \d+$/i, '')}
                 </span>
               </div>
               <div className="min-w-0">

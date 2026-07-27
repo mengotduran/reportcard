@@ -4,7 +4,9 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
-import { getClassLevelsApi as getClassLevelsFullApi } from '@/lib/api/classLevels'
+import { getClassLevelsApi as getClassLevelsFullApi, ClassLevel as ClassLevelDef } from '@/lib/api/classLevels'
+import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getStudentsApi } from '@/lib/api/students'
 import { getSubjectsApi } from '@/lib/api/subjects'
@@ -110,6 +112,10 @@ function TeacherClassesView() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [activeDeptId, setActiveDeptId] = useState('')
   const [classDeptMap, setClassDeptMap] = useState<Record<string, string | null>>({})
+  // Full class rows, which carry the Day/Evening sitting. The class grid above works with
+  // plain class-name strings, so it can't tell the two cohorts apart on its own.
+  const [classDefs, setClassDefs] = useState<ClassLevelDef[]>([])
+  const programmeFilter = useProgrammeFilter(classDefs)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
@@ -195,10 +201,12 @@ function TeacherClassesView() {
         const { classLevels } = await getClassLevelsApi()
         const overviews = await Promise.all(classLevels.map((cl) => getClassOverviewApi(t.id, cl)))
         setClasses(buildClasses(classLevels, overviews))
-        // Secondary: build a class-name → departmentId map and load departments
-        // so the class grid can be grouped/filtered by department.
+        // Class rows carry the Day/Evening sitting, so they're needed for every school
+        // type now, not just secondary's department map.
+        const full = await getClassLevelsFullApi()
+        setClassDefs(full.classLevels)
         if (isSecondary) {
-          const [full, deptRes] = await Promise.all([getClassLevelsFullApi(), getDepartmentsApi()])
+          const deptRes = await getDepartmentsApi()
           setClassDeptMap(Object.fromEntries(full.classLevels.map((c) => [c.name, c.departmentId ?? null])))
           setDepartments(deptRes.departments)
           setActiveDeptId((deptRes.departments.find((d) => d.isDefault) ?? deptRes.departments[0])?.id ?? '')
@@ -211,9 +219,10 @@ function TeacherClassesView() {
     load()
   }, [])
 
-  const displayedClasses = isSecondary && activeDeptId
+  const displayedClasses = (isSecondary && activeDeptId
     ? classes.filter((c) => classDeptMap[c.classLevel] === activeDeptId)
     : classes
+  ).filter((c) => programmeFilter.matches(c.classLevel))
 
   if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">Loading classes...</div>
   if (error) return (
@@ -230,6 +239,15 @@ function TeacherClassesView() {
           {term && <p className="text-muted-foreground text-sm mt-1">{term.name} — {term.session}</p>}
         </div>
       </div>
+
+      {/* Day/Evening sitting, above the department tabs it narrows. */}
+      {programmeFilter.hasEvening && (
+        <ProgrammeChips
+          value={programmeFilter.programme}
+          onChange={programmeFilter.setProgramme}
+          className="mb-4"
+        />
+      )}
 
       {/* Secondary: department tabs to group the class grid */}
       {isSecondary && departments.length > 0 && (
@@ -264,10 +282,17 @@ function TeacherClassesView() {
               <div key={c.classLevel} className="bg-card rounded-xl border border-border p-5 hover:shadow-md hover:border-primary/20 transition group">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-lg">
-                    {(isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel).charAt(0)}
+                    {stripProgrammeSuffix(isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel).charAt(0)}
                   </div>
                   <div>
-                    <p className="font-bold text-foreground">{isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel}</p>
+                    <p className="font-bold text-foreground">
+                      {stripProgrammeSuffix(isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel)}
+                      {programmeFilter.programmeOf(c.classLevel) === 'EVENING' && (
+                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 align-middle">
+                          {tr('Evening')}
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-muted-foreground">{c.total} {tr('students')}{isClassMaster ? ` · ${c.published} ${tr('published')}` : ''}</p>
                   </div>
                 </div>
@@ -667,7 +692,7 @@ export default function ReportCardsPage() {
         const cols = [
           { label: tr('Name'), value: (s: ExportStudent) => s.name },
           { label: tr('Student ID'), value: (s: ExportStudent) => s.studentId },
-          { label: tr('Class'), value: (s: ExportStudent) => s.classLevel },
+          { label: tr('Class'), value: (s: ExportStudent) => stripProgrammeSuffix(s.classLevel) },
           { label: tr(isUniversity ? 'Courses' : 'Subjects'), value: (s: ExportStudent) => (subjectsByClass[s.classLevel] || []).join(', ') },
           { label: tr('Guardian'), value: (s: ExportStudent) => s.guardianName || '' },
           { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
@@ -705,7 +730,7 @@ export default function ReportCardsPage() {
         const data = await getMarksExportApi(term.id)
         if (data.students.length === 0) continue
         const csv = buildCsv(data.students, [
-          { label: tr('Class'), value: (s) => s.classLevel },
+          { label: tr('Class'), value: (s) => stripProgrammeSuffix(s.classLevel) },
           { label: tr('Name'), value: (s) => s.name },
           { label: tr('Student ID'), value: (s) => s.studentIdCode },
           ...data.subjects.map((subj) => ({ label: subj, value: (s: MarksExportStudent) => s.scores[subj] ?? '' })),

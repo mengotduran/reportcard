@@ -8,6 +8,7 @@ import { MessageSquare, CheckCircle, Clock, X, Save, Sparkles } from 'lucide-rea
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 interface Student {
   id: string
@@ -232,7 +233,7 @@ export default function ClassMasterPage() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-semibold text-foreground">{editTarget.name}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">{editTarget.classLevel} · {t('General Remarks')}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{stripProgrammeSuffix(editTarget.classLevel)} · {t('General Remarks')}</p>
               </div>
               <button onClick={() => setEditTarget(null)} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
                 <X size={20} />

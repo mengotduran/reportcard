@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { stripProgramme, withProgrammeOf } from '../utils/programme'
 import { demoLimitBlock } from '../config/demo'
 
 /** '' / whitespace from an untouched optional form field means "not provided", i.e. NULL,
@@ -174,6 +175,9 @@ function deptAbbr(dept: string): string {
   return words.map(w => (w.length > 5 ? w.slice(0, 2) : w[0]).toUpperCase()).join('')
 }
 function parseProgramAndDept(classLevel: string): { prog: string; dept: string; levelSuffix: string } {
+  // Normalised first, so an evening student's matricule is built exactly like a day
+  // student's — otherwise the level digit is dropped from their abbreviation.
+  classLevel = stripProgramme(classLevel)
   if (classLevel.startsWith('HND ')) {
     const m = classLevel.match(/ - Level (\d+)$/)
     return { prog: 'HND', dept: classLevel.replace(/^HND /, '').replace(/ - Level \d+$/, ''), levelSuffix: m ? m[1] : '' }
@@ -396,8 +400,13 @@ export const bulkPromoteStudents = async (req: AuthRequest, res: Response) => {
 
     const toUpdate: { id: string; newLevel: string }[] = []
     for (const s of students) {
-      if (!/ - Level 1$/i.test(s.classLevel)) continue
-      const newLevel = s.classLevel.replace(/ - Level 1$/i, ' - Level 2')
+      // Evening Level 1 students were skipped entirely here: the test anchors at the end
+      // of the name, where their section marker sits, so a promotion either dropped them
+      // silently or reported "none are in a Level 1 class". They promote into the EVENING
+      // Level 2, never the day one.
+      const bare = stripProgramme(s.classLevel)
+      if (!/ - Level 1$/i.test(bare)) continue
+      const newLevel = withProgrammeOf(s.classLevel, bare.replace(/ - Level 1$/i, ' - Level 2'))
       toUpdate.push({ id: s.id, newLevel })
     }
 

@@ -20,7 +20,8 @@ export const deleteSubjectApi = async (id: string) => {
   return res.data
 }
 
-export const copySubjectsApi = async (fromClassLevel: string, toClassLevel: string): Promise<{ copied: number }> => {
-  const res = await api.post('/subjects/copy', { fromClassLevel, toClassLevel })
+// `subjectIds` copies only those courses; omitted copies the whole class's list.
+export const copySubjectsApi = async (fromClassLevel: string, toClassLevel: string, subjectIds?: string[]): Promise<{ copied: number }> => {
+  const res = await api.post('/subjects/copy', { fromClassLevel, toClassLevel, ...(subjectIds ? { subjectIds } : {}) })
   return res.data
 }

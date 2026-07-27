@@ -4,6 +4,8 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getSubjectsApi, createSubjectApi, deleteSubjectApi, updateSubjectApi } from '@/lib/api/subjects'
 import { getClassLevelsApi, ClassLevel as ClassLevelOption } from '@/lib/api/classLevels'
+import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
 import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar, Layers } from 'lucide-react'
@@ -41,6 +43,9 @@ export default function SubjectsPage() {
   const tc = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<ClassLevelOption[]>([])
+  // Day/Evening. The two sittings carry their own copy of the curriculum, so a course list
+  // that mixed them would show every course twice.
+  const programmeFilter = useProgrammeFilter(classLevels)
   const [departments, setDepartments] = useState<Department[]>([])
   const [terms, setTerms] = useState<TermOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -253,13 +258,24 @@ export default function SubjectsPage() {
   // 2), so the level comes first: it halves the list before you read it, and it is how
   // the school itself thinks about its courses.
   if (isUniversity && !selectedLevel) {
-    const groups = Array.from(new Set(classLevels.map(cl => levelGroupOf(cl.name)))).sort(sortLevelGroups)
+    const sittingClasses = classLevels.filter(cl => programmeFilter.matches(cl.name))
+    const groups = Array.from(new Set(sittingClasses.map(cl => levelGroupOf(cl.name)))).sort(sortLevelGroups)
     return (
       <div>
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-foreground">{t('Courses')}</h2>
           <p className="text-muted-foreground text-sm mt-1">{t('Select a level, then a department, to manage its courses')}</p>
         </div>
+
+        {/* Day/Evening sitting. Each sitting keeps its own copy of the curriculum, so this
+            decides which one you are editing before any level is chosen. */}
+        {programmeFilter.hasEvening && (
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={programmeFilter.setProgramme}
+            className="mb-4"
+          />
+        )}
 
         {groups.length === 0 ? (
           <div className="bg-card rounded-xl border border-border text-center py-12">
@@ -272,7 +288,7 @@ export default function SubjectsPage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
             {groups.map(g => {
-              const inGroup = classLevels.filter(cl => levelGroupOf(cl.name) === g)
+              const inGroup = sittingClasses.filter(cl => levelGroupOf(cl.name) === g)
               const courseCount = subjects.filter(sub => inGroup.some(cl => cl.name === sub.classLevel)).length
               return (
                 <button

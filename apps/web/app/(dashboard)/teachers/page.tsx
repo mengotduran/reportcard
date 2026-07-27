@@ -10,7 +10,11 @@ const stripSection = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim
 // University class-name convention: "HND {Department} - Level 1|2", "Degree
 // {Department}". Universities have no real Department table row — mirrors
 // deptFromClassName in apps/web/app/(dashboard)/classes/page.tsx.
-const univDeptFromClassName = (name: string): string => {
+const univDeptFromClassName = (rawName: string): string => {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const name = stripProgrammeSuffix(rawName)
   if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
   return name
@@ -24,6 +28,7 @@ import { useToast } from '@/lib/useToast'
 import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean }
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
@@ -623,7 +628,7 @@ export default function TeachersPage() {
                 .map(([classLevel, subjects]) => (
                 <div key={classLevel}>
                   <p className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-2">
-                    {isSecondary ? stripSection(classLevel) : classLevel}
+                    {isSecondary ? stripSection(classLevel) : stripProgrammeSuffix(classLevel)}
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {subjects.map((s) => (

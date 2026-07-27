@@ -6,9 +6,10 @@ import {
   getTimetableHistoryApi, deleteTimetableHistoryVersionApi,
   TimetableSlot, TimetablePeriod, SchoolTimetableSlot, TimetableHistoryVersion,
 } from '@/lib/api/timetable'
-import { getClassLevelsApi } from '@/lib/api/classLevels'
+import { getClassLevelsApi, ClassLevel as ClassLevelDef } from '@/lib/api/classLevels'
 import { getDepartmentsApi } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
+import { stripProgrammeSuffix, programmeFromName, Programme } from '@/lib/programme'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { Plus, X, ArrowLeft, Search, Briefcase, Clock, Trash2, Pencil } from 'lucide-react'
 import CustomSelect from '@/components/ui/CustomSelect'
@@ -76,7 +77,11 @@ const latestEndTime = (list: { endTime: string }[]): string => list.reduce((max,
 
 // University class-name convention: "HND {Department} - Level 1|2", "Degree
 // {Department}". Mirrors univDeptFromClassName in the Teachers page.
-const univDeptFromClassName = (name: string): string => {
+const univDeptFromClassName = (rawName: string): string => {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const name = stripProgrammeSuffix(rawName)
   if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
   return name
@@ -167,6 +172,9 @@ export default function TimetablePage() {
   const [teacherSubjectsLoading, setTeacherSubjectsLoading] = useState(false)
   const [terms, setTerms] = useState<TermOption[]>([])
   const [classOrder, setClassOrder] = useState<Record<string, number>>({})
+  // Class rows, kept for the Day/Evening sitting they carry. The builder works with class
+  // NAMES everywhere else, which can't distinguish a morning cohort from an evening one.
+  const [classDefs, setClassDefs] = useState<ClassLevelDef[]>([])
   const [schoolSlots, setSchoolSlots] = useState<SchoolTimetableSlot[]>([])
   const [slots, setSlots] = useState<EditableSlot[]>([])
   const [slotsLoading, setSlotsLoading] = useState(false)
@@ -213,6 +221,7 @@ export default function TimetablePage() {
     getClassLevelsApi()
       .then((cl) => {
         setClassOrder(Object.fromEntries(cl.classLevels.map((c) => [c.name, c.order])))
+        setClassDefs(cl.classLevels)
         if (isSecondary) {
           getDepartmentsApi()
             .then((d) => {
@@ -412,14 +421,22 @@ export default function TimetablePage() {
   // otherwise resolve it silently and just show it as context.
   const effectiveDepartment = slotDeptOptions.length === 1 ? slotDeptOptions[0].value : slotForm.department
 
+  // A lecturer can teach the same programme in both sittings, so the class picker labels
+  // each option with its sitting instead of filtering one out: both are legitimately
+  // theirs, and the times are what differ.
+  const sittingOfClass = (name: string): Programme =>
+    classDefs.find((c) => c.name === name)?.programme ?? programmeFromName(name)
+  const classOptionLabel = (name: string, base: string): string =>
+    sittingOfClass(name) === 'EVENING' ? `${base} (${tr('Evening')})` : base
+
   const slotClassOptions = isSecondary
     ? [...new Set(activeAssignableSubjects.filter((s) => classToDept[s.classLevel] === effectiveDepartment).map((s) => s.classLevel))]
         .sort((a, b) => (classOrder[a] ?? 0) - (classOrder[b] ?? 0))
-        .map((name) => ({ value: name, label: stripDeptSuffix(name) }))
+        .map((name) => ({ value: name, label: classOptionLabel(name, stripProgrammeSuffix(stripDeptSuffix(name))) }))
     : !hasDeptView
       ? [...new Set(activeAssignableSubjects.map((s) => s.classLevel))]
           .sort((a, b) => (classOrder[a] ?? 0) - (classOrder[b] ?? 0))
-          .map((name) => ({ value: name, label: name }))
+          .map((name) => ({ value: name, label: classOptionLabel(name, stripProgrammeSuffix(name)) }))
       : []
 
   // University has no separate Class step — Level + Department together

@@ -2,6 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
+import { stripProgramme } from '../utils/programme'
 
 export const HND_REGISTRATION_FEE = 65_000
 // Default GCE exam-registration fee for secondary schools (Form 5 → O Level, Upper Sixth → A Level).
@@ -17,14 +18,15 @@ function regStatus(paid: number, fee: number): RegStatus {
 }
 
 function deptFromLevel2Class(classLevel: string): string {
-  return classLevel.replace(/^HND /, '').replace(/ - Level 2$/, '')
+  return stripProgramme(classLevel).replace(/^HND /, '').replace(/ - Level 2$/, '')
 }
 
 // A class requires exam registration when: it's a university's final (Level 2) HND
 // class, or a secondary school's Form 5 (O Level) / Upper Sixth (A Level) class —
 // including any stream suffix, e.g. "Form 5 Science", "Upper Sixth Arts".
 export function isRegistrationClass(schoolType: string | undefined, classLevel: string): boolean {
-  if (schoolType === 'UNIVERSITY') return /- Level 2$/i.test(classLevel)
+  // Normalised first: an evening Level 2 is still a registration class.
+  if (schoolType === 'UNIVERSITY') return /- Level 2$/i.test(stripProgramme(classLevel))
   if (schoolType === 'SECONDARY') return /^Form\s?5\b/i.test(classLevel) || /^Upper\s?Sixth\b/i.test(classLevel)
   return false
 }

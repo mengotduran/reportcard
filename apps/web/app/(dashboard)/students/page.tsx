@@ -8,6 +8,8 @@ import {
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
+import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
+import { stripProgrammeSuffix, withProgrammeSuffix, PROGRAMME_LABELS } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
@@ -49,12 +51,20 @@ const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender:
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
 // Helpers for parsing university class level names
-function univDept(classLevel: string): string {
+function univDept(rawName: string): string {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const classLevel = stripProgrammeSuffix(rawName)
   if (classLevel.startsWith('HND ')) return classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (classLevel.startsWith('Degree ')) return classLevel.replace(/^Degree /, '')
   return classLevel
 }
-function univLevel(classLevel: string): string {
+function univLevel(rawName: string): string {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const classLevel = stripProgrammeSuffix(rawName)
   if (/ - Level 2$/i.test(classLevel)) return 'Level 2'
   if (/ - Level 1$/i.test(classLevel)) return 'Level 1'
   if (classLevel.startsWith('Degree ')) return 'Level 3'
@@ -78,6 +88,9 @@ export default function StudentsPage() {
   const [students, setStudents] = useState<Student[]>([])
   const [filterClasses, setFilterClasses] = useState<string[]>([])
   const [definedClasses, setDefinedClasses] = useState<ClassLevel[]>([])
+  // Day/Evening. Morning and evening cohorts are entirely different people, so this filters
+  // the roster itself, not just the class dropdown.
+  const programmeFilter = useProgrammeFilter(definedClasses)
   const [departments, setDepartments] = useState<Department[]>([])
   const [deptFilter, setDeptFilter] = useState('all')
   const [activeClass, setActiveClass] = useState('all')
@@ -243,26 +256,71 @@ export default function StudentsPage() {
   // student's department is never stored directly — it's always derived from which
   // class they're in — so picking department-first is what guarantees the class they
   // end up with actually belongs to it.
+  // Classes the form may offer: narrowed to the section being browsed, so the modal can
+  // never enrol into the other one behind the filter's back. With no filter ('ALL') the
+  // whole school is offered and the level list labels each section.
+  const formClasses = useMemo(
+    () => definedClasses.filter((c) => programmeFilter.matches(c.name)),
+    [definedClasses, programmeFilter.programme],
+  )
+
   const secDeptClasses = useMemo(() =>
-    isSecondary && form.secDept ? definedClasses.filter((c) => c.departmentId === form.secDept) : [],
-  [isSecondary, form.secDept, definedClasses])
+    isSecondary && form.secDept ? formClasses.filter((c) => c.departmentId === form.secDept) : [],
+  [isSecondary, form.secDept, formClasses])
 
   // University two-step picker: unique departments, then available levels per dept
   const uniDepts = useMemo(() =>
-    isUniversity ? Array.from(new Set(definedClasses.map((c) => univDept(c.name)))).sort() : [],
-  [isUniversity, definedClasses])
+    isUniversity ? Array.from(new Set(formClasses.map((c) => univDept(c.name)))).sort() : [],
+  [isUniversity, formClasses])
 
   const uniLevelsForDept = useMemo(() => {
     if (!isUniversity || !form.uniDept) return []
-    return definedClasses
+    return formClasses
       .filter((c) => univDept(c.name) === form.uniDept)
-      .map((c) => ({ label: univLevel(c.name), classLevel: c.name }))
+      .map((c) => ({
+        label: univLevel(c.name),
+        classLevel: c.name,
+        // Both sittings of a programme have the same levels, so "Level 1" would otherwise
+        // appear twice with nothing to tell them apart.
+        sitting: programmeFilter.programmeOf(c.name),
+      }))
       .filter((x) => x.label)
       .sort((a, b) => {
         const order: Record<string, number> = { 'Level 1': 0, 'Level 2': 1, 'Level 3': 2 }
         return (order[a.label] ?? 3) - (order[b.label] ?? 3)
       })
   }, [isUniversity, form.uniDept, definedClasses])
+
+  // Split into the two sittings. A flat row reading "Level 1, Level 1, Level 2, Level 3"
+  // makes the reader work out which is which from a tag on one of them; a heading per
+  // sitting says it outright. Levels need not exist in both: Level 3 (Degree) continues
+  // from Level 2 and runs only in the evening, so it appears under one heading and not
+  // the other, with nothing missing-looking about it.
+  // Does the class being enrolled into have a Level 1 to carry over from, in its own
+  // section? A brand-new programme has none: every student in it is necessarily a direct
+  // entrant, so asking the question would be a choice with one right answer.
+  const level1ForSelectedClass = useMemo(() => {
+    if (!isUniversity || !form.classLevel) return null
+    const bare = stripProgrammeSuffix(form.classLevel)
+    if (!/ - Level 2$/i.test(bare)) return null
+    const wanted = withProgrammeSuffix(bare.replace(/ - Level 2$/i, ' - Level 1'), programmeFilter.programmeOf(form.classLevel))
+    return definedClasses.find((c) => c.name === wanted) ?? null
+  }, [isUniversity, form.classLevel, definedClasses])
+
+  // With no Level 1 in this section there is nothing to carry over from, so the student IS
+  // a direct entrant. Set it rather than leaving the default: the carry-over path resolves
+  // the fee from a Level 1 class that does not exist, which silently comes out as zero.
+  useEffect(() => {
+    if (!isUniversity) return
+    if (/ - Level 2$/i.test(stripProgrammeSuffix(form.classLevel)) && !level1ForSelectedClass && !form.directLevel2Entry) {
+      setForm((f) => ({ ...f, directLevel2Entry: true }))
+    }
+  }, [isUniversity, form.classLevel, level1ForSelectedClass])
+
+  const uniLevelsBySitting = useMemo(() => ({
+    DAY: uniLevelsForDept.filter((x) => x.sitting === 'DAY'),
+    EVENING: uniLevelsForDept.filter((x) => x.sitting === 'EVENING'),
+  }), [uniLevelsForDept])
 
   const openAdd = () => {
     setEditingId(null)
@@ -469,7 +527,7 @@ export default function StudentsPage() {
       { label: t('Name'), value: (s: Student) => s.name },
       { label: t('Student ID'), value: (s: Student) => s.studentId },
       ...(isSecondary ? [{ label: t('Department'), value: (s: Student) => deptNameOf(s.classLevel) }] : []),
-      { label: t('Class'), value: (s: Student) => isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel },
+      { label: t('Class'), value: (s: Student) => stripProgrammeSuffix(isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel) },
       { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
       { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
       { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
@@ -527,13 +585,15 @@ export default function StudentsPage() {
   const classFilterOptions = (isSecondary && deptFilter !== 'all'
     ? filterClasses.filter((cls) => deptIdOfClass(cls) === deptFilter)
     : filterClasses
-  ).map((cls) => ({ value: cls, label: isSecondary ? stripDeptSuffix(cls) : cls }))
+  ).filter((cls) => programmeFilter.matches(cls))
+    .map((cls) => ({ value: cls, label: stripProgrammeSuffix(isSecondary ? stripDeptSuffix(cls) : cls) }))
 
   // The roster to display: when a department is selected (and no single class),
   // narrow the server roster to that department's classes client-side.
-  const visibleStudents = (isSecondary && deptFilter !== 'all' && activeClass === 'all')
+  const visibleStudents = ((isSecondary && deptFilter !== 'all' && activeClass === 'all')
     ? students.filter((s) => deptIdOfClass(s.classLevel) === deptFilter)
     : students
+  ).filter((s) => programmeFilter.matches(s.classLevel))
 
   const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(visibleStudents, 15, `${deptFilter}|${activeClass}|${search}|${statusFilter}`)
 
@@ -544,14 +604,14 @@ export default function StudentsPage() {
           <h2 className="text-2xl font-bold text-foreground">{t('Students')}</h2>
           <p className="text-muted-foreground text-sm mt-1">
             {visibleStudents.length} {activeClass !== 'all'
-              ? `${t('in')} ${isSecondary ? stripDeptSuffix(activeClass) : activeClass}`
+              ? `${t('in')} ${stripProgrammeSuffix(isSecondary ? stripDeptSuffix(activeClass) : activeClass)}`
               : (isSecondary && deptFilter !== 'all')
                 ? `${t('in')} ${departments.find(d => d.id === deptFilter)?.name ?? ''}`
                 : t('total students')}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {isUniversity && / - Level 1$/i.test(activeClass) && statusFilter === 'ACTIVE' && (
+          {isUniversity && / - Level 1$/i.test(stripProgrammeSuffix(activeClass)) && statusFilter === 'ACTIVE' && (
             <button onClick={() => {
               setPromoteSelected(new Set(students.map((s) => s.id)))
               setPromoteModalOpen(true)
@@ -587,6 +647,15 @@ export default function StudentsPage() {
 
       {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
         <div className="flex flex-wrap items-center gap-2 mb-4">
+          {/* Day/Evening sitting, only once the school runs one. Placed before the class
+              picker because it narrows what that picker offers. */}
+          {programmeFilter.hasEvening && (
+            <ProgrammeChips
+              value={programmeFilter.programme}
+              onChange={(p) => { programmeFilter.setProgramme(p); handleClassFilter('all') }}
+              className="mr-1"
+            />
+          )}
           {isSecondary && departments.length > 0 && (
             <>
               <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}:</span>
@@ -689,7 +758,7 @@ export default function StudentsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel}
+                    {stripProgrammeSuffix(isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel)}
                   </td>
                   {isUniversity && (
                     <td className="px-4 py-3">
@@ -794,36 +863,93 @@ export default function StudentsPage() {
                     <div className="space-y-3">
                       <div>
                         <label className="block text-xs font-medium text-foreground mb-2">Level <span className="text-destructive">*</span></label>
-                        <div className="flex flex-wrap gap-3">
-                          {uniLevelsForDept.map(({ label, classLevel }) => (
-                            <label key={label} className="flex items-center gap-2 cursor-pointer">
-                              <input type="radio" name="uniLevel" value={label} required
-                                checked={form.uniLevel === label}
-                                onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
-                                className="accent-primary" />
-                              <span className="text-sm text-foreground">{label}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      {form.uniLevel === 'Level 2' && !editingId && (
-                        <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
-                          <strong>Old Level 1 students?</strong> Use the <strong>"Promote to Level 2"</strong> button on the students list instead — it moves existing students in bulk without creating duplicates.
-                        </div>
-                      )}
-                      {form.uniLevel === 'Level 2' && (
-                        <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
-                          <input type="checkbox"
-                            checked={form.directLevel2Entry}
-                            onChange={(e) => setForm({ ...form, directLevel2Entry: e.target.checked })}
-                            className="mt-0.5 accent-amber-600 w-4 h-4 flex-shrink-0" />
-                          <div>
-                            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Direct Level 2 entrant (new student)</p>
-                            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
-                              Check this only if the student is enrolling fresh at Level 2 and was NOT here in Level 1. They will be charged the Level 2 entry fee instead of the full 2-year program fee.
-                            </p>
+                        {/* One block per sitting, each labelled. A department that only runs
+                            in the daytime shows a single unlabelled row exactly as before,
+                            so nothing changes for a school with no evening programme. */}
+                        {uniLevelsBySitting.EVENING.length === 0 ? (
+                          <div className="flex flex-wrap gap-3">
+                            {uniLevelsForDept.map(({ label, classLevel }) => (
+                              <label key={classLevel} className="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="uniLevel" value={classLevel} required
+                                  checked={form.classLevel === classLevel}
+                                  onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
+                                  className="accent-primary" />
+                                <span className="text-sm text-foreground">{label}</span>
+                              </label>
+                            ))}
                           </div>
-                        </label>
+                        ) : (
+                          <div className="space-y-2">
+                            {(['DAY', 'EVENING'] as const).map((sitting) => {
+                              const options = uniLevelsBySitting[sitting]
+                              if (options.length === 0) return null
+                              return (
+                                <div key={sitting} className="rounded-lg border border-border p-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                                    {t(PROGRAMME_LABELS[sitting])} {t('section')}
+                                  </p>
+                                  <div className="flex flex-wrap gap-4">
+                                    {options.map(({ label, classLevel }) => (
+                                      <label key={classLevel} className="flex items-center gap-2 cursor-pointer">
+                                        <input type="radio" name="uniLevel" value={classLevel} required
+                                          checked={form.classLevel === classLevel}
+                                          onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
+                                          className="accent-primary" />
+                                        <span className="text-sm text-foreground">{label}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      {/* Level 2 has two kinds of student, and which one this is decides what
+                          they are charged. The question is only worth asking when there is a
+                          Level 1 to have come from — IN THE SAME SECTION, since an evening
+                          Level 2 continues from evening Level 1, never from the day one. A
+                          programme running Level 2 for the first time has no such cohort, so
+                          every student in it is a direct entrant and the choice is made for
+                          them rather than asked. */}
+                      {form.uniLevel === 'Level 2' && (
+                        level1ForSelectedClass ? (
+                          <div className="space-y-2">
+                            {!editingId && (
+                              <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+                                <strong>{t('Moving up a whole class?')}</strong> {t('Use the "Promote to Level 2" button on the students list instead, it moves the existing cohort in bulk without creating duplicates.')}
+                              </div>
+                            )}
+                            <div className="rounded-lg border border-border p-3">
+                              <p className="text-xs font-medium text-foreground mb-2">
+                                {t('How is this student joining Level 2?')} <span className="text-destructive">*</span>
+                              </p>
+                              <div className="space-y-2">
+                                {([false, true] as const).map((direct) => (
+                                  <label key={String(direct)} className="flex items-start gap-2.5 cursor-pointer">
+                                    <input type="radio" name="level2Entry" className="mt-0.5 accent-primary"
+                                      checked={form.directLevel2Entry === direct}
+                                      onChange={() => setForm({ ...form, directLevel2Entry: direct })} />
+                                    <span>
+                                      <span className="text-sm text-foreground block">
+                                        {direct ? t('Direct entry') : t('Continuing from Level 1')}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {direct
+                                          ? t('New here, did not do Level 1 at this school. Charged the Level 2 entry fee.')
+                                          : `${t('Was in')} ${stripProgrammeSuffix(level1ForSelectedClass.name)}${programmeFilter.programmeOf(level1ForSelectedClass.name) === 'EVENING' ? ` (${t('Evening')})` : ''}. ${t('Already covered by the 2-year programme fee.')}`}
+                                      </span>
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-3 rounded-lg border border-border bg-muted/40 text-xs text-muted-foreground">
+                            {t('This programme has no Level 1 to continue from, so this student is a direct entrant and is charged the Level 2 entry fee.')}
+                          </div>
+                        )
                       )}
                     </div>
                   )}
@@ -857,7 +983,11 @@ export default function StudentsPage() {
                           required
                           className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                           <option value="">{t('Select class')}</option>
-                          {secDeptClasses.map((c) => <option key={c.id} value={c.name}>{stripDeptSuffix(c.name)}</option>)}
+                          {secDeptClasses.map((c) => (
+                            <option key={c.id} value={c.name}>
+                              {stripDeptSuffix(stripProgrammeSuffix(c.name))}{(c.programme ?? 'DAY') === 'EVENING' ? ` (${t('Evening')})` : ''}
+                            </option>
+                          ))}
                         </select>
                       ) : (
                         <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
@@ -870,14 +1000,14 @@ export default function StudentsPage() {
               ) : (
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">{t('Class')} <span className="text-destructive">*</span></label>
-                  {definedClasses.length > 0 ? (
+                  {formClasses.length > 0 ? (
                     <select
                       value={form.classLevel}
                       onChange={(e) => setForm({ ...form, classLevel: e.target.value, stream: '' })}
                       required
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                       <option value="">{t('Select class')}</option>
-                      {definedClasses.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                      {formClasses.map((c) => <option key={c.id} value={c.name}>{stripProgrammeSuffix(c.name)}</option>)}
                     </select>
                   ) : (
                     <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
@@ -1014,7 +1144,7 @@ export default function StudentsPage() {
                         <div className="bg-muted rounded-lg border border-border max-h-36 overflow-y-auto">
                           {importPreview.carryOvers.map((c: CarryOverRow) => (
                             <div key={c.row} className="px-3 py-2 text-xs text-muted-foreground border-b border-border last:border-0 flex items-center justify-between gap-2">
-                              <span>{c.name} <span className="text-foreground/50">— {c.classLevel}</span></span>
+                              <span>{c.name} <span className="text-foreground/50">— {stripProgrammeSuffix(c.classLevel)}</span></span>
                               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${c.matchType === 'matricule' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'}`}>
                                 {c.matchType === 'matricule' ? t('Matricule match') : t('Name match')}
                               </span>

@@ -129,6 +129,9 @@ model ClassLevel {
   maxScore             Int      @default(20)
   hndRegistrationFee   Int?
   departmentId         String?
+  // Day or Evening sitting. Existing classes are all DAY, which keeps every school that
+  // has no evening programme exactly as it was.
+  programme            Programme @default(DAY)
   department           Department? @relation(fields: [departmentId], references: [id])
   school               School   @relation(fields: [schoolId], references: [id])
 
@@ -531,6 +534,19 @@ enum StudentStatus {
 enum MarksEntryMode {
   TEACHERS
   ADMIN_ONLY
+}
+
+/// Which sitting of the school a class belongs to. A university commonly runs the same
+/// programme twice with the same lecturers but different students (Level 1 Morning and
+/// Level 1 Evening), and the two sittings need not offer the same levels at all — an
+/// evening-only Level 3 is normal. Each sitting is its own ClassLevel, so students, marks,
+/// positions and fees are already separate; this field only records which sitting a class
+/// belongs to, so the app can group and filter by it instead of parsing the class name.
+/// A secondary evening programme with a genuinely different curriculum is NOT this: that
+/// is a separate School under the same ParentSchool.
+enum Programme {
+  DAY
+  EVENING
 }
 
 /**

@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
+import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import {
   getClassFeesApi, addBulkPaymentsApi, formatXAF, ClassFees, FeeStatus,
@@ -15,12 +16,17 @@ import CustomSelect from '@/components/ui/CustomSelect'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 type RowEntry = { amount: string; date: string; note: string }
 type UniLevel = 'Level 1' | 'Level 2' | 'Level 3'
 const UNI_LEVELS: UniLevel[] = ['Level 1', 'Level 2', 'Level 3']
 
-function deptFromClassName(name: string): string {
+function deptFromClassName(rawName: string): string {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const name = stripProgrammeSuffix(rawName)
   if (/^HND .+ - Level \d+$/i.test(name)) return name.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (name.startsWith('Degree ')) return name.replace(/^Degree /, '')
   return name
@@ -29,7 +35,11 @@ function deptFromClassName(name: string): string {
 // Secondary non-default departments store classes with a " (Department)" suffix.
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
-function levelFromClassName(name: string): UniLevel | null {
+function levelFromClassName(rawName: string): UniLevel | null {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const name = stripProgrammeSuffix(rawName)
   if (/ - Level 1$/i.test(name)) return 'Level 1'
   if (/ - Level 2$/i.test(name)) return 'Level 2'
   if (name.startsWith('Degree ')) return 'Level 3'
@@ -53,6 +63,9 @@ export default function FeesPage() {
   const today = new Date().toISOString().slice(0, 10)
 
   const [classes, setClasses]         = useState<ClassLevel[]>([])
+  // Day/Evening. Each sitting sets its own fee per class, so mixing them in one list makes
+  // the amounts hard to compare.
+  const programmeFilter = useProgrammeFilter(classes)
   const [activeClass, setActiveClass] = useState('')
   const [activeUniLevel, setActiveUniLevel] = useState<UniLevel>('Level 1')
   const [departments, setDepartments] = useState<Department[]>([])
@@ -100,10 +113,10 @@ export default function FeesPage() {
   // Classes visible in the current level tab (university), active department
   // (secondary), or all classes (primary)
   const visibleClasses = useMemo(() =>
-    isUniversity ? classes.filter((c) => levelFromClassName(c.name) === activeUniLevel)
-    : isSecondary ? classes.filter((c) => c.departmentId === activeDeptId)
-    : classes,
-  [isUniversity, isSecondary, classes, activeUniLevel, activeDeptId])
+    isUniversity ? classes.filter((c) => levelFromClassName(c.name) === activeUniLevel && programmeFilter.matches(c.name))
+    : isSecondary ? classes.filter((c) => c.departmentId === activeDeptId && programmeFilter.matches(c.name))
+    : classes.filter((c) => programmeFilter.matches(c.name)),
+  [isUniversity, isSecondary, classes, activeUniLevel, activeDeptId, programmeFilter.programme])
 
   // When switching level tabs, auto-select first class in that level
   const handleLevelTab = (lv: UniLevel) => {
@@ -203,12 +216,25 @@ export default function FeesPage() {
         )}
       </div>
 
+      {/* Day/Evening sitting, above the level and department tabs it narrows. */}
+      {programmeFilter.hasEvening && (
+        <ProgrammeChips
+          value={programmeFilter.programme}
+          onChange={programmeFilter.setProgramme}
+          className="mb-4"
+        />
+      )}
+
       {/* University: level tabs + department pills */}
       {isUniversity && (
         <div className="mb-4 space-y-3">
           <div className="flex gap-2">
-            {UNI_LEVELS.map((lv) => {
-              const count = classes.filter((c) => levelFromClassName(c.name) === lv).length
+            {(programmeFilter.programme === 'EVENING' ? UNI_LEVELS.filter((lv) => lv !== 'Level 3') : UNI_LEVELS).map((lv) => {
+              // Counts follow the chosen section, or the tabs would advertise day classes
+              // while the list below shows only evening ones.
+              const count = classes.filter((c) =>
+                levelFromClassName(c.name) === lv && programmeFilter.matches(c.name)
+              ).length
               return (
                 <button key={lv} onClick={() => handleLevelTab(lv)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ${

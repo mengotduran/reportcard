@@ -47,6 +47,14 @@ enum MarksEntryMode {
   ADMIN_ONLY
 }
 
+/// Day or Evening sitting of the school. See the Postgres schema for the full rationale:
+/// a university runs the same programme twice with the same lecturers and different
+/// students, each sitting being its own ClassLevel.
+enum Programme {
+  DAY
+  EVENING
+}
+
 model ParentSchool {
   id        String   @id @default(uuid())
   name      String
@@ -168,6 +176,8 @@ model ClassLevel {
   feeAmount          Int      @default(0) // total fee for this class per academic session, in XAF
   hndRegistrationFee Int?
   departmentId       String?
+  // Day or Evening sitting; existing classes are all DAY.
+  programme          Programme @default(DAY)
   createdAt          DateTime @default(now())
 
   school     School      @relation(fields: [schoolId], references: [id])

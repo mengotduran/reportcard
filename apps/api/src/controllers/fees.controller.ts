@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { stripProgramme, withProgrammeOf } from '../utils/programme'
 
 export type FeeStatus = 'COMPLETE' | 'PARTIAL' | 'UNPAID' | 'NONE'
 
@@ -45,14 +46,17 @@ async function loadClassFees(schoolId: string): Promise<ClassFeeInfo[]> {
 
 // ── HND 2-year program fee helpers ──────────────────────────────────────────
 
-/** True for HND Level 1 and Level 2 classes. Level 3 (Degree) is a separate program. */
+/** True for HND Level 1 and Level 2 classes. Level 3 (Degree) is a separate program.
+ *  Normalised first: the pattern anchors at the end, where the Day/Evening marker sits. */
 function isHndClass(classLevel: string): boolean {
-  return / - Level [12]$/i.test(classLevel)
+  return / - Level [12]$/i.test(stripProgramme(classLevel))
 }
 
-/** Given any HND class name, returns the Level 1 version (where the program fee lives). */
+/** Given any HND class name, returns the Level 1 version (where the program fee lives) —
+ *  IN THE SAME SECTION. An evening Level 2 carries over from evening Level 1, so resolving
+ *  it to the day Level 1 would charge the student against the wrong programme's fee. */
 function toLevel1ClassName(classLevel: string): string {
-  return classLevel.replace(/ - Level \d+$/i, ' - Level 1')
+  return withProgrammeOf(classLevel, stripProgramme(classLevel).replace(/ - Level \d+$/i, ' - Level 1'))
 }
 
 /**
@@ -69,10 +73,11 @@ function resolveStudentFee(
   student: { classLevel: string; directLevel2Entry: boolean },
   classes: ClassFeeInfo[],
 ): number {
-  if (/ - Level 1$/i.test(student.classLevel)) {
+  const bareClass = stripProgramme(student.classLevel)
+  if (/ - Level 1$/i.test(bareClass)) {
     return classes.find((c) => c.name === student.classLevel)?.feeAmount ?? 0
   }
-  if (/ - Level 2$/i.test(student.classLevel)) {
+  if (/ - Level 2$/i.test(bareClass)) {
     if (student.directLevel2Entry) {
       // Direct Level 2 entrant: pay the Level 2 class fee (admin-configured)
       return classes.find((c) => c.name === student.classLevel)?.feeAmount ?? 0

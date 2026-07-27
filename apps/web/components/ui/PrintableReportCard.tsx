@@ -1,6 +1,7 @@
 import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { translate } from '@/lib/i18n'
 
 export interface PrintEntry {
@@ -1438,7 +1439,18 @@ function calculateGrade(score: number) {
 }
 
 // ─── Main export ─────────────────────────────────────────────────────────────
-export default function PrintableReportCard(props: PrintableReportCardProps) {
+export default function PrintableReportCard(rawProps: PrintableReportCardProps) {
+  // USER RULE: the Evening sitting is an internal grouping, not something a student's
+  // printed report card or transcript announces ("the evening is just that you are in
+  // evening section"). The marker only exists in the class NAME because class references
+  // are name strings and two sittings would otherwise collide, so it is stripped here, at
+  // the single entry point every layout and the sections renderer passes through. Doing it
+  // once at the boundary means no individual field below can leak it, and neither can a
+  // field added later.
+  const props: PrintableReportCardProps = {
+    ...rawProps,
+    student: { ...rawProps.student, classLevel: stripProgrammeSuffix(rawProps.student.classLevel) },
+  }
   const cfg: TemplateConfig = { ...DEFAULT_CONFIG, ...props.config } as TemplateConfig
 
   // If sections-based layout saved → use it

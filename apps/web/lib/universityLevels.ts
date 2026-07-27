@@ -6,6 +6,7 @@
  * Pure and importable so the grouping can be tested against a school's real class names,
  * which is where the edge cases are (Degree programmes carry no level at all).
  */
+import { stripProgrammeSuffix } from './programme'
 
 /**
  * The level a class belongs to: "Level 1", "Level 2", …
@@ -15,7 +16,11 @@
  * mislabelled as a Degree or dropped off the page entirely, which would make its courses
  * unreachable.
  */
-export function levelGroupOf(className: string): string {
+export function levelGroupOf(rawName: string): string {
+  // The Day/Evening marker is stripped first: these patterns anchor at the end of the
+  // name, so an evening class would otherwise fall through to "Other" and take its whole
+  // programme off the picker. The sitting is `ClassLevel.programme`, never the level.
+  const className = stripProgrammeSuffix(rawName)
   const m = /^\s*(.*?)\s*-\s*Level\s*(\d+)\s*$/i.exec(className)
   // Rebuilt from the number rather than echoed back, so however the class was typed
   // ("level 2", "Level  2", "LEVEL 2") it lands in ONE group. Echoing the matched text
@@ -25,7 +30,8 @@ export function levelGroupOf(className: string): string {
 }
 
 /** The programme within a level: "HND Nursing - Level 1" -> "HND Nursing". */
-export function programmeOf(className: string): string {
+export function programmeOf(rawName: string): string {
+  const className = stripProgrammeSuffix(rawName)
   const m = /^\s*(.*?)\s*-\s*Level\s*\d+\s*$/i.exec(className)
   return m ? m[1] : className
 }
