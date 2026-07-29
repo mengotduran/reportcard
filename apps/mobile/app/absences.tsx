@@ -52,7 +52,14 @@ export default function AbsencesScreen() {
       { text: t('Cancel'), style: 'cancel' },
       {
         text: t('Remove'), style: 'destructive', onPress: async () => {
-          try { await deleteAbsence(id); load() } catch { Alert.alert(t('Error'), t('Failed to remove absence')) }
+          try { await deleteAbsence(id); load() } catch (err: any) {
+            // The list may simply be stale: an admin can review (locking it) or the grace
+            // period can expire while this screen sits open, and the bin stays on screen
+            // until something refetches. Show the API's actual reason and reload, so the
+            // row corrects itself instead of failing again on the next tap.
+            Alert.alert(t('Cannot remove'), err?.response?.data?.message || t('Failed to remove absence'))
+            load()
+          }
         },
       },
     ])
@@ -78,7 +85,7 @@ export default function AbsencesScreen() {
         renderItem={({ item: a }) => {
           // Same rule as the Attendance tab: locked once the period's actually over, or
           // once an admin has reviewed it in a prior visit to their list.
-          const locked = a.hourHasPassed || a.seenByAdmin
+          const locked = a.isFinal || a.seenByAdmin
           return (
             <View style={styles.row}>
               <View style={{ flex: 1 }}>

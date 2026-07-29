@@ -2,6 +2,10 @@ import api from './client'
 
 export type CoverageStatus = 'NO_TARGET' | 'UNDER' | 'EXACT' | 'OVER'
 
+/** A course that has an hours target but nobody assigned to teach it, so it can never
+ *  produce a coverage row. Returned only when the coverage list came back empty. */
+export interface UnassignedTarget { name: string; classLevel: string }
+
 export interface CoverageRow {
   teacherId: string
   teacherName: string
@@ -25,7 +29,7 @@ export const getMyCoverageApi = async (session?: string): Promise<{ session: str
   return res.data
 }
 
-export const getCoverageApi = async (params?: { session?: string; teacherId?: string }): Promise<{ session: string | null; rows: CoverageRow[]; periodMinutes: number | null }> => {
+export const getCoverageApi = async (params?: { session?: string; teacherId?: string }): Promise<{ session: string | null; rows: CoverageRow[]; periodMinutes: number | null; unassignedTargets: UnassignedTarget[] }> => {
   const res = await api.get('/coverage', { params })
   return res.data
 }

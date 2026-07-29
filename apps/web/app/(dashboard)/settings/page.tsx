@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, type LucideIcon } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, CalendarCheck, type LucideIcon } from 'lucide-react'
 import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
@@ -217,6 +217,10 @@ export default function SettingsPage() {
   const [savingInfo, setSavingInfo] = useState(false)
   const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
   const [savingThreshold, setSavingThreshold] = useState(false)
+  // Minutes after a period starts before it counts as missed. Blank = the older rule
+  // (changeable until the period ends), which is what every school starts on.
+  const [graceValue, setGraceValue] = useState<string>(school?.absenceGraceMinutes != null ? String(school.absenceGraceMinutes) : '')
+  const [savingGrace, setSavingGrace] = useState(false)
   // Who records marks. University only: some keep marks out of teachers' hands so the
   // person who teaches a course never enters its marks.
   const [marksMode, setMarksMode] = useState<'TEACHERS' | 'ADMIN_ONLY'>((school as any)?.marksEntryMode ?? 'TEACHERS')
@@ -255,6 +259,7 @@ export default function SettingsPage() {
         authorizationNumber: s.authorizationNumber ?? '',
       })
       setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
+      setGraceValue(s.absenceGraceMinutes != null ? String(s.absenceGraceMinutes) : '')
       setMarksMode((s as any).marksEntryMode ?? 'TEACHERS')
       setMarksSwitches(res.data.marksEntrySwitches ?? null)
       setMarksHistory(res.data.marksEntryModeHistory ?? [])
@@ -324,6 +329,27 @@ export default function SettingsPage() {
     finally { setSavingThreshold(false) }
   }
 
+  // Worked example against a concrete start time, because "15 minutes" alone doesn't tell
+  // an admin what it does to their actual timetable.
+  const graceExample = (() => {
+    const mins = Number(graceValue)
+    if (!Number.isFinite(mins) || mins < 0) return '--:--'
+    const total = 7 * 60 + 30 + mins
+    return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+  })()
+
+  const handleSaveGrace = async () => {
+    setSavingGrace(true)
+    try {
+      const res = await api.put('/school/settings', { absenceGraceMinutes: graceValue === '' ? null : Number(graceValue) })
+      updateSchool(res.data.school)
+      showToast(t('Attendance setting saved'))
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to save'), 'error')
+    } finally { setSavingGrace(false) }
+  }
+
   const handleSaveOfficialText = async () => {
     setSavingOfficialText(true)
     try {
@@ -374,26 +400,45 @@ export default function SettingsPage() {
     { id: 'profile', label: t('School Profile') },
     { id: 'branding', label: t('Branding') },
     { id: 'reportcards', label: t('Report Cards') },
+    { id: 'attendance', label: t('Attendance') },
     ...(isOfflineInstall ? [{ id: 'data', label: t('Data & Backup') }] : []),
   ]
   const scrollRef = useRef<HTMLDivElement>(null)
   const [activeSection, setActiveSection] = useState('account')
   useEffect(() => {
-    const els = sections
-      .map(s => document.getElementById(s.id))
+    const root = scrollRef.current
+    if (!root) return
+    const ids = sections.map(s => s.id)
+    const els = ids
+      .map(id => document.getElementById(id))
       .filter((el): el is HTMLElement => el != null)
+
+    // The detection band is only the top 10–30% of the column, and the LAST section is
+    // shorter than the distance left to scroll, so it can never climb into that band —
+    // scrolled fully to the bottom, the (very tall) section above it was still spanning
+    // the band and stayed highlighted. Hitting the bottom means you are looking at the
+    // last section, whatever the geometry says, so treat that as authoritative.
+    const atBottom = () => root.scrollTop + root.clientHeight >= root.scrollHeight - 4
+
     const observer = new IntersectionObserver(
       entries => {
+        if (atBottom()) { setActiveSection(ids[ids.length - 1]); return }
         const visible = entries
           .filter(e => e.isIntersecting)
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
         if (visible[0]) setActiveSection(visible[0].target.id)
       },
       // Root is the inner scroll column (below), not the window — only it scrolls.
-      { root: scrollRef.current, rootMargin: '-10% 0px -70% 0px' },
+      { root, rootMargin: '-10% 0px -70% 0px' },
     )
     els.forEach(el => observer.observe(el))
-    return () => observer.disconnect()
+
+    // The observer only fires when an intersection actually changes, which it doesn't
+    // once you're parked at the bottom, so the bottom is also checked on plain scroll.
+    const onScroll = () => { if (atBottom()) setActiveSection(ids[ids.length - 1]) }
+    root.addEventListener('scroll', onScroll, { passive: true })
+
+    return () => { observer.disconnect(); root.removeEventListener('scroll', onScroll) }
   }, [isOfflineInstall])
 
   return (
@@ -1101,6 +1146,46 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </section>
+
+          {/* ══ Attendance ═══════════════════════════════════════════════ */}
+          <section id="attendance" className="scroll-mt-8 space-y-4">
+            <h4 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">{t('Attendance')}</h4>
+
+            <div className={CARD}>
+              <CardHead
+                icon={CalendarCheck}
+                title={t('When a period counts as missed')}
+                desc={t('How long after a period starts a teacher can still arrive and count as having taught it. Once that time is up the period is missed, and nobody, including you, can mark them present for it again. Each period is judged on its own, so on a double period a teacher who arrives late loses only the first one.')}
+              />
+              <div className="mt-5 flex items-end gap-3">
+                <div className="flex-1 max-w-xs">
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    {t('Minutes after a period starts')}
+                  </label>
+                  <input
+                    type="number"
+                    min={0} max={240} step={5}
+                    placeholder={t('e.g. 15')}
+                    value={graceValue}
+                    onChange={(e) => setGraceValue(e.target.value)}
+                    className={FIELD}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {graceValue !== ''
+                      ? `${t('A period starting 07:30 is missed for good at')} ${graceExample}.`
+                      : t('Leave blank to keep the current rule: a period stays changeable until it ends.')}
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveGrace}
+                  disabled={savingGrace}
+                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+                >
+                  {savingGrace ? t('Saving…') : t('Save')}
+                </button>
+              </div>
+            </div>
           </section>
 
           {/* ══ Data & Backup (offline installs only) ════════════════════ */}

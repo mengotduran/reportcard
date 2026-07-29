@@ -108,7 +108,9 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
   const slotIds = slots.map((s) => s.id)
   const absences = await prisma.teacherAbsence.findMany({
     where: { schoolId, timetableSlotId: { in: slotIds } },
-    select: { teacherId: true, timetableSlotId: true, date: true },
+    // periodIndex matters to the hours math: a split double period is two rows that must
+    // together subtract what the single row they replaced did.
+    select: { teacherId: true, timetableSlotId: true, date: true, periodIndex: true },
   })
 
   const asOfDate = new Date()
@@ -134,6 +136,8 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     const periodsMissed = teacherCourseAbsences
       .filter((a) => scopeTerms.some((term) => dateStringWithinRange(a.date, term.startDate, absenceCutoffForTerm(term, allTerms))))
       .reduce((sum, a) => {
+        // One period per per-period row; only a legacy whole-slot row expands.
+        if (a.periodIndex != null) return sum + 1
         const slot = teacherSlots.find((s) => s.id === a.timetableSlotId)
         return sum + (slot ? (slotPeriods(slot.startTime, slot.endTime, periodMinutes) ?? 1) : 1)
       }, 0)
@@ -144,6 +148,7 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       terms: scopeTerms,
       absences: teacherAbsences,
       asOfDate,
+      periodMinutes,
     })
 
     return {
@@ -184,7 +189,19 @@ export const getCoverage = async (req: AuthRequest, res: Response) => {
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } })
     if (!session) { res.json({ session: null, rows: [], periodMinutes: school?.periodMinutes ?? null }); return }
     const teacherId = req.query.teacherId ? String(req.query.teacherId) : undefined
-    res.json({ session, rows: await buildCoverageRows(schoolId, session, teacherId), periodMinutes: school?.periodMinutes ?? null })
+    const rows = await buildCoverageRows(schoolId, session, teacherId)
+    // A coverage row is a (teacher, subject) pair, so a course with an hours target but no
+    // lecturer assigned produces nothing at all. That is indistinguishable, from the
+    // client's side, from having set no target anywhere — and the empty state used to
+    // tell the admin to go and set a target they had already set. Name the real gap.
+    const unassignedTargets = rows.length === 0
+      ? await prisma.subject.findMany({
+          where: { schoolId, requiredHours: { not: null }, teacherSubjects: { none: {} } },
+          select: { name: true, classLevel: true },
+          orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
+        })
+      : []
+    res.json({ session, rows, periodMinutes: school?.periodMinutes ?? null, unassignedTargets })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -212,16 +229,22 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
   if (!range) return []
   const scopeTerm: ScopeTerm = { id: 'current', name: 'current', startDate: range.start, endDate: range.end }
 
-  const slots = await prisma.timetableSlot.findMany({
-    where: { schoolId, archivedAt: null },
-    include: { teacher: { select: { id: true, name: true } } },
-  })
+  const [slots, school] = await Promise.all([
+    prisma.timetableSlot.findMany({
+      where: { schoolId, archivedAt: null },
+      include: { teacher: { select: { id: true, name: true } } },
+    }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+  ])
   if (slots.length === 0) return []
+  const periodMinutes = school?.periodMinutes ?? null
 
   const slotIds = slots.map((s) => s.id)
   const absences = await prisma.teacherAbsence.findMany({
     where: { schoolId, timetableSlotId: { in: slotIds } },
-    select: { teacherId: true, timetableSlotId: true, date: true },
+    // periodIndex matters to the hours math: a split double period is two rows that must
+    // together subtract what the single row they replaced did.
+    select: { teacherId: true, timetableSlotId: true, date: true, periodIndex: true },
   })
 
   const byTeacher = new Map<string, { teacherName: string; slots: typeof slots }>()
@@ -240,6 +263,7 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
       terms: [scopeTerm],
       absences: teacherAbsences,
       asOfDate,
+      periodMinutes,
     })
     return {
       teacherId, teacherName,

@@ -33,7 +33,7 @@ export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
 export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, phone, address, website, acronym, batch, repeatThreshold, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr, marksEntryMode } = req.body
+    const { name, email, phone, address, website, acronym, batch, repeatThreshold, absenceGraceMinutes, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr, marksEntryMode } = req.body
     const data: Record<string, unknown> = {}
     if (name             !== undefined) data.name             = String(name).trim()
     if (phone            !== undefined) data.phone            = String(phone).trim() || null
@@ -42,6 +42,23 @@ export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
     if (acronym          !== undefined) data.acronym          = String(acronym).trim().toUpperCase() || null
     if (batch            !== undefined) data.batch            = batch === null || batch === '' ? null : Number(batch)
     if (repeatThreshold  !== undefined) data.repeatThreshold  = repeatThreshold === null || repeatThreshold === '' ? null : Number(repeatThreshold)
+    // Minutes after a period starts before the teacher counts as having missed it. Cleared
+    // back to null means "no grace", which restores the older rule that a period is only
+    // final once it has ENDED. Rejected rather than clamped when out of range: silently
+    // storing something other than what an admin typed is how a school ends up believing
+    // absences lock at a time they don't.
+    if (absenceGraceMinutes !== undefined) {
+      if (absenceGraceMinutes === null || absenceGraceMinutes === '') {
+        data.absenceGraceMinutes = null
+      } else {
+        const grace = Number(absenceGraceMinutes)
+        if (!Number.isInteger(grace) || grace < 0 || grace > 240) {
+          res.status(400).json({ message: 'Grace period must be a whole number of minutes between 0 and 240.' })
+          return
+        }
+        data.absenceGraceMinutes = grace
+      }
+    }
     // Who records marks. Validated against the enum rather than passed through: an
     // unrecognised value would otherwise 500 at the database, and silently accepting a
     // typo here would leave a school believing marks were locked when they were not.

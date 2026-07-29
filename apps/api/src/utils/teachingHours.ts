@@ -67,6 +67,73 @@ export function slotHasPassed(date: string, endTime: string, now: Date = new Dat
   return slotEndUtcMs <= now.getTime()
 }
 
+const minutesToTime = (mins: number) =>
+  `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`
+
+/** One school period inside a timetable slot. `index` is 0-based and is what a
+ *  TeacherAbsence row stores, so a record always names the exact period it refers to. */
+export interface PeriodWindow {
+  index: number
+  startTime: string
+  endTime: string
+}
+
+/**
+ * A slot broken into the individual periods it spans.
+ *
+ * A double period is ONE timetable slot but TWO periods, and attendance is judged per
+ * period: a teacher who arrives twenty minutes into a double period has missed the first
+ * period, not the block. When the school has no period length set the slot can't be split,
+ * so it stands as a single window and behaves exactly as it did before.
+ */
+export function periodWindows(
+  startTime: string,
+  endTime: string,
+  periodMinutes: number | null | undefined,
+): PeriodWindow[] {
+  const count = slotPeriods(startTime, endTime, periodMinutes)
+  if (count == null || count <= 1 || !periodMinutes) return [{ index: 0, startTime, endTime }]
+  const start = timeToMinutes(startTime)
+  return Array.from({ length: count }, (_, index) => ({
+    index,
+    startTime: minutesToTime(start + index * periodMinutes),
+    // The last window keeps the slot's real end time, so rounding can never leave a gap
+    // or overshoot into the next class.
+    endTime: index === count - 1 ? endTime : minutesToTime(start + (index + 1) * periodMinutes),
+  }))
+}
+
+/**
+ * The moment an absence against `window` becomes FINAL: from then on nobody, admin
+ * included, can mark the teacher present for it again.
+ *
+ * With a grace period configured this is `startTime + graceMinutes` — the school's answer
+ * to "how late can a teacher turn up and still count as having taught this period". With
+ * none set it falls back to the period's END, which is the rule that applied before the
+ * setting existed, so a school that never configures it sees no change.
+ */
+export function absenceFinalAtMs(
+  date: string,
+  window: { startTime: string; endTime: string },
+  graceMinutes: number | null | undefined,
+  ): number {
+  const useGrace = graceMinutes != null && graceMinutes >= 0
+  const [hh, mm] = (useGrace ? window.startTime : window.endTime).split(':').map(Number)
+  const [y, m, d] = date.split('-').map(Number)
+  const base = Date.UTC(y, m - 1, d, hh - SCHOOL_UTC_OFFSET_HOURS, mm || 0)
+  return base + (useGrace ? graceMinutes * 60_000 : 0)
+}
+
+/** True once that moment has passed. */
+export function absenceIsFinal(
+  date: string,
+  window: { startTime: string; endTime: string },
+  graceMinutes: number | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  return absenceFinalAtMs(date, window, graceMinutes) <= now.getTime()
+}
+
 /** Which weekday a "YYYY-MM-DD" string falls on, so an absence report ("I'll be out on
  *  this date") can be matched against the teacher's Monday-Sunday timetable. */
 export function dateStringToDayOfWeek(dateStr: string): DayOfWeek {
@@ -135,6 +202,9 @@ export interface CoverageSlot {
 export interface CoverageAbsence {
   timetableSlotId: string
   date: string // "YYYY-MM-DD"
+  /** Which period of the slot was missed; null for a legacy row covering the whole slot.
+   *  Without this a split double period would subtract the block's hours twice. */
+  periodIndex?: number | null
 }
 
 export type CoverageStatus = 'NO_TARGET' | 'UNDER' | 'EXACT' | 'OVER'
@@ -163,8 +233,10 @@ export function computeCoverage(params: {
   terms: ScopeTerm[]
   absences: CoverageAbsence[]
   asOfDate: Date
+  /** Needed to work out what one period of a multi-period slot is worth. */
+  periodMinutes?: number | null
 }): CoverageResult {
-  const { requiredHours, slots, terms, absences, asOfDate } = params
+  const { requiredHours, slots, terms, absences, asOfDate, periodMinutes } = params
   const asOfDay = toUtcMidnight(asOfDate)
 
   let scheduledHours = 0
@@ -187,12 +259,18 @@ export function computeCoverage(params: {
     }
   }
 
-  const slotHoursById = new Map(slots.map((s) => [s.id, slotDurationHours(s)]))
+  const slotById = new Map(slots.map((s) => [s.id, s]))
   let absentHoursToDate = 0
   let absentHoursTotal = 0
   for (const a of absences) {
-    const hours = slotHoursById.get(a.timetableSlotId)
-    if (hours == null) continue
+    const slot = slotById.get(a.timetableSlotId)
+    if (slot == null) continue
+    const slotHours = slotDurationHours(slot)
+    // A per-period row costs ONE period's share of the block, not the whole block: a double
+    // period that's been split into two rows must still subtract the same total as the one
+    // row it replaced. A legacy row (null index) already stands for the entire slot.
+    const count = a.periodIndex != null ? (slotPeriods(slot.startTime, slot.endTime, periodMinutes) ?? 1) : 1
+    const hours = slotHours / Math.max(1, count)
     absentHoursTotal += hours
     const [y, m, d] = a.date.split('-').map(Number)
     if (Date.UTC(y, m - 1, d) <= asOfDay) absentHoursToDate += hours

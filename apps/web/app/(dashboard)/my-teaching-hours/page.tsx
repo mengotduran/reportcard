@@ -204,7 +204,7 @@ export default function MyTeachingHoursPage() {
                     // Once the period's happened, only an admin can remove it (they may
                     // want to mark the teacher present after all); once an admin has
                     // reviewed it in a PRIOR visit to their list, it's locked for everyone.
-                    const locked = a.hourHasPassed || a.seenByAdmin
+                    const locked = a.isFinal || a.seenByAdmin
                     const lockedReason = a.seenByAdmin
                       ? t('Already reviewed by an admin — ask them to remove it if needed')
                       : t('This period has already passed — ask an admin to remove it if needed')

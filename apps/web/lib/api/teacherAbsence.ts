@@ -11,14 +11,18 @@ export interface TeacherAbsence {
   endTime: string
   subjectName: string | null
   classLevel: string | null
-  /** True once the period's scheduled end time is in the past — the API is the real
-   *  gate on delete either way, this is just enough for the UI to grey the button out. */
-  hourHasPassed: boolean
+  /** True once this period can no longer be changed by anyone: its start plus the school's
+   *  grace period, or its end when no grace is configured. The API is the real gate on
+   *  delete either way, this is just enough for the UI to grey the button out. */
+  isFinal: boolean
   /** True once an admin has reviewed this in the per-teacher list on a PRIOR visit — from
    *  then on it's locked for everyone, admin included. See getTeacherAbsencesApi. */
   seenByAdmin: boolean
-  /** How many periods this one missed class is worth (a 2-period class = 2); null when the
-   *  school hasn't set a period length yet. */
+  /** Which period of the slot this row is, 0-based. null on a legacy row that still stands
+   *  for the whole slot. startTime/endTime above are already this period's own. */
+  periodIndex: number | null
+  /** What this row is worth: 1 for a per-period row, the whole block for a legacy one.
+   *  null when the school hasn't set a period length yet. */
   periods: number | null
 }
 

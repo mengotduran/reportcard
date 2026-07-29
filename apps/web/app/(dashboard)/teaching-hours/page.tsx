@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
-import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal } from '@/lib/api/coverage'
+import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
 import { getTeacherAbsencesApi, getAbsenceCountsApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { getTeachersApi } from '@/lib/api/teachers'
 import { getTeacherTimetableApi, TimetableSlot } from '@/lib/api/timetable'
@@ -78,6 +78,9 @@ export default function TeachingHoursPage() {
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<string | null>(null)
   const [rows, setRows] = useState<CoverageRow[]>([])
+  // Courses with an hours target but no lecturer — they produce no coverage row at all,
+  // so without naming them the empty state blames the wrong thing.
+  const [unassignedTargets, setUnassignedTargets] = useState<UnassignedTarget[]>([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<CoverageStatus | 'ALL'>('ALL')
 
@@ -111,7 +114,7 @@ export default function TeachingHoursPage() {
 
   const load = () => {
     setLoading(true)
-    getCoverageApi().then((d) => { setSession(d.session); setRows(d.rows) }).finally(() => setLoading(false))
+    getCoverageApi().then((d) => { setSession(d.session); setRows(d.rows); setUnassignedTargets(d.unassignedTargets ?? []) }).finally(() => setLoading(false))
   }
 
   useEffect(load, [])
@@ -320,9 +323,28 @@ export default function TeachingHoursPage() {
       ) : loading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
       ) : rows.length === 0 ? (
-        <div className="bg-card rounded-xl border border-border text-center py-14">
+        <div className="bg-card rounded-xl border border-border text-center py-14 px-6">
           <Clock size={32} className="mx-auto mb-3 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">{t('No subjects have a required-hours target set yet. Set one from the Subjects page.')}</p>
+          {unassignedTargets.length > 0 ? (
+            <>
+              <p className="text-foreground text-sm font-medium">
+                {unassignedTargets.length === 1
+                  ? t('One course has an hours target but no lecturer assigned.')
+                  : `${unassignedTargets.length} ${t('courses have an hours target but no lecturer assigned.')}`}
+              </p>
+              <p className="text-muted-foreground text-sm mt-1">
+                {t('Hours are counted against the lecturer who teaches the course, so assign one from the Courses page and it will appear here.')}
+              </p>
+              <ul className="text-muted-foreground text-xs mt-3 space-y-0.5">
+                {unassignedTargets.slice(0, 6).map((u) => (
+                  <li key={`${u.classLevel}-${u.name}`}>{u.name} · {u.classLevel}</li>
+                ))}
+                {unassignedTargets.length > 6 && <li>+{unassignedTargets.length - 6}</li>}
+              </ul>
+            </>
+          ) : (
+            <p className="text-muted-foreground text-sm">{t('No subjects have a required-hours target set yet. Set one from the Subjects page.')}</p>
+          )}
         </div>
       ) : (
         <>
@@ -409,7 +431,7 @@ export default function TeachingHoursPage() {
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {/* seenByAdmin only locks a TEACHER out of retracting their own report —
                     an admin can remove one here regardless, right up until the period it
-                    was reported for has actually ENDED (hourHasPassed) — after that it's
+                    was reported for is FINAL (isFinal: start + the school's grace period) — after that it's
                     final for everyone, since there's no more chance the teacher shows up. */}
                 {absences.map((a) => (
                   <div key={a.id} className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2">
@@ -428,9 +450,9 @@ export default function TeachingHoursPage() {
                     </div>
                     <button
                       onClick={() => handleDeleteAbsence(a.id)}
-                      disabled={a.hourHasPassed}
+                      disabled={a.isFinal}
                       className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
-                      title={a.hourHasPassed ? t('This period has already passed and can no longer be removed') : t('Remove')}
+                      title={a.isFinal ? t('This period can no longer be changed') : t('Remove')}
                     >
                       <Trash2 size={14} />
                     </button>

@@ -93,6 +93,14 @@ model School {
   acronym        String?
   batch          Int?
   repeatThreshold Float?
+  // Length of one school period in minutes. Teaching hours are counted in real clock
+  // hours, but a teacher's ATTENDANCE is counted in these periods, so a 100-minute class
+  // on a 50-minute grid is 2 periods missed. Mirrors the Postgres schema.
+  periodMinutes  Int?
+  // Minutes after a period STARTS before the teacher counts as having missed it; once up,
+  // that period's absence is final for everyone. null keeps the older end-of-period rule.
+  // Mirrors the Postgres schema — see the fuller comment there.
+  absenceGraceMinutes Int?
   authorizationNumber String?
   // Official-header letterhead text (left/right blocks in the "Official"
   // report-card header style). One EN and one FR variant per side; the
@@ -207,6 +215,10 @@ model User {
   // university term-scoping and passwordSetAt always non-null (set at creation).
   createdForTerm    String?
   passwordSetAt     DateTime?
+  // Forgot-password flow: a single-use token hash and its expiry. Mirrors the Postgres
+  // schema — without these the reset endpoints fail on an offline install.
+  resetTokenHash      String?   @unique
+  resetTokenExpiresAt DateTime?
 
   school          School?          @relation(fields: [schoolId], references: [id])
   reportCards     ReportCard[]
@@ -356,14 +368,21 @@ model TeacherAbsence {
   teacherId       String
   timetableSlotId String
   date            String
+  // Which period WITHIN the slot this row is, 0-based, so a double period books two rows
+  // and a late arrival loses only the period actually missed. null = a legacy whole-slot
+  // row. Mirrors the Postgres schema.
+  periodIndex     Int?
   recordedById    String
+  // Once an admin has viewed this in the per-teacher list on a PRIOR visit it becomes a
+  // locked historical record. Mirrors the Postgres schema.
+  seenByAdmin     Boolean  @default(false)
   createdAt       DateTime @default(now())
   school          School         @relation(fields: [schoolId], references: [id])
   teacher         User           @relation("TeacherAbsences", fields: [teacherId], references: [id], onDelete: Cascade)
   slot            TimetableSlot  @relation(fields: [timetableSlotId], references: [id], onDelete: Cascade)
   recordedBy      User           @relation("AbsencesRecorded", fields: [recordedById], references: [id])
 
-  @@unique([teacherId, timetableSlotId, date])
+  @@unique([teacherId, timetableSlotId, date, periodIndex])
   @@index([schoolId, teacherId])
 }
 

@@ -51,6 +51,12 @@ model School {
   // these periods — missing a 100-min class with a 50-min period is 2 periods missed.
   // Nullable so existing schools are prompted to set it rather than silently defaulted.
   periodMinutes      Int?
+  // Minutes after a period STARTS before the teacher counts as having missed it. Once this
+  // is up, an absence logged against that period is final: nobody, admin included, can
+  // mark them present again. Judged per period, so on a double period a late arrival loses
+  // only the first one. Nullable, and null keeps the older behaviour (a period is only
+  // final once it has ENDED), so a live school is unaffected until an admin sets it.
+  absenceGraceMinutes Int?
   // Official-header letterhead text (left/right blocks in the "Official"
   // report-card header style), set once here so it stays consistent no
   // matter how many report-card templates/layouts render it. One EN and one
@@ -359,6 +365,13 @@ model TeacherAbsence {
   teacherId       String
   timetableSlotId String
   date            String
+  // Which period WITHIN the slot this row is, 0-based — a double period books two rows,
+  // so a teacher who turns up late loses only the period they actually missed rather than
+  // the whole block. null means a legacy row written before absences became per-period: it
+  // still stands for the WHOLE slot and is counted with slotPeriods, and is never given
+  // per-period siblings (see createAbsence), so counts can't double up. Both shapes are
+  // read correctly and indefinitely; no backfill is required.
+  periodIndex     Int?
   recordedById    String
   createdAt       DateTime @default(now())
   // True once an admin has viewed this record in the per-teacher absence list — from
@@ -372,7 +385,7 @@ model TeacherAbsence {
   slot            TimetableSlot  @relation(fields: [timetableSlotId], references: [id], onDelete: Cascade)
   recordedBy      User           @relation("AbsencesRecorded", fields: [recordedById], references: [id])
 
-  @@unique([teacherId, timetableSlotId, date])
+  @@unique([teacherId, timetableSlotId, date, periodIndex])
   @@index([schoolId, teacherId])
 }
 

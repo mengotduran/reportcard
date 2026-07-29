@@ -5,9 +5,9 @@ import {
   RefreshControl, Modal, Alert, FlatList, TextInput,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getMyCoverage, getCoverage, getTeacherHoursTotals, CoverageRow, CoverageStatus, TeacherHoursTotal } from '@/lib/api/coverage'
+import { getMyCoverage, getCoverage, getTeacherHoursTotals, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
 import { getMyTimetable, getTeacherTimetable, MyTimetableSlot } from '@/lib/api/timetable'
-import { getMyAbsences, getTeacherAbsences, getAbsenceCounts, reportAbsence, deleteAbsence, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { getMyAbsences, getTeacherAbsences, getAbsenceCounts, reportAbsence, deleteAbsence, TeacherAbsence, AbsenceDay } from '@/lib/api/teacherAbsence'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import { formatHours } from '@/lib/formatHours'
 import { useTheme, Colors } from '@/lib/useTheme'
@@ -38,18 +38,103 @@ const toDateStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).pa
 const todayStr = () => toDateStr(new Date())
 const dayShort = (d: string) => d.charAt(0) + d.slice(1, 3).toLowerCase()
 
-/** This calendar week (Monday–Sunday, local time) as concrete dates, in DAY_ORDER. */
-function thisWeekDates(): { date: string; dayOfWeek: string }[] {
-  const now = new Date()
-  const jsDay = now.getDay() // 0=Sun..6=Sat
-  const mondayOffset = jsDay === 0 ? -6 : 1 - jsDay
-  const monday = new Date(now)
-  monday.setDate(now.getDate() + mondayOffset)
-  return DAY_ORDER.map((dayOfWeek, i) => {
-    const d = new Date(monday)
-    d.setDate(monday.getDate() + i)
-    return { date: toDateStr(d), dayOfWeek }
-  })
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const monthDay = (dateStr: string) => `${MONTH_SHORT[Number(dateStr.slice(5, 7)) - 1]} ${Number(dateStr.slice(8, 10))}`
+// Both sides are YYYY-MM-DD, which Date.parse reads as UTC midnight — no local-timezone
+// drift, so the difference is always a whole number of days.
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000)
+
+/** One calendar month on, clamped so 31 Jan gives 28/29 Feb rather than rolling into March. */
+function oneMonthAhead(from: Date): Date {
+  const d = new Date(from)
+  const dayOfMonth = d.getDate()
+  d.setMonth(d.getMonth() + 1)
+  if (d.getDate() !== dayOfMonth) d.setDate(0) // overflowed into the next month, step back to its last day
+  return d
+}
+
+/**
+ * Every date a teacher can book an absence for: from TODAY up to a month ahead.
+ *
+ * Starts at today rather than Monday because a period that has already ENDED can never be
+ * reported by anyone (the API rejects it outright), so earlier days this week would only
+ * ever render as dead, unselectable chips.
+ *
+ * `maxDate` is the end of the current record (semester for a university, academic year for
+ * primary/secondary) and pulls the far edge in when it lands sooner than a month out.
+ * Booking past it would create an absence counted against the NEXT semester/year, which
+ * would disappear from the teacher's own list the instant it was saved.
+ */
+function bookingWindowDates(maxDate?: string | null): { date: string; dayOfWeek: string }[] {
+  const start = new Date()
+  const monthOut = toDateStr(oneMonthAhead(start))
+  const end = maxDate && maxDate < monthOut ? maxDate : monthOut
+  const out: { date: string; dayOfWeek: string }[] = []
+  const cursor = new Date(start)
+  for (let dateStr = toDateStr(cursor); dateStr <= end; dateStr = toDateStr(cursor)) {
+    out.push({ date: dateStr, dayOfWeek: dayOfWeekFor(dateStr) })
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return out
+}
+
+/** Monday of the week `dateStr` falls in. Groups the chips so a bare day number is never
+ *  ambiguous once the window runs weeks out. */
+function weekStartOf(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  const jsDay = dt.getDay() // 0=Sun..6=Sat
+  dt.setDate(dt.getDate() + (jsDay === 0 ? -6 : 1 - jsDay))
+  return toDateStr(dt)
+}
+
+function addDays(dateStr: string, n: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  dt.setDate(dt.getDate() + n)
+  return toDateStr(dt)
+}
+
+// Quick spans for booking a stretch of leave in one go, instead of ticking twenty days by
+// hand. There is deliberately no "one day" preset: a single day IS the unticked default,
+// and adding one would tick the whole day for you, which is exactly what shouldn't happen
+// before you ask for it.
+const RANGE_PRESETS = [
+  { key: 'WEEK', label: '1 week' },
+  { key: 'TWO_WEEKS', label: '2 weeks' },
+  { key: 'THREE_WEEKS', label: '3 weeks' },
+  { key: 'MONTH', label: '1 month' },
+] as const
+type RangePresetKey = (typeof RANGE_PRESETS)[number]['key']
+
+/** Last date a preset covers, counting from (and including) `start`. */
+function spanEndFor(start: string, preset: RangePresetKey): string {
+  if (preset === 'WEEK') return addDays(start, 6)
+  if (preset === 'TWO_WEEKS') return addDays(start, 13)
+  if (preset === 'THREE_WEEKS') return addDays(start, 20)
+  const [y, m, d] = start.split('-').map(Number)
+  return toDateStr(oneMonthAhead(new Date(y, m - 1, d)))
+}
+
+/** Heading for a week group: relative for the two nearest weeks, then a concrete date,
+ *  which stays unambiguous however far out the window reaches. */
+function weekGroupLabel(weekKey: string, t: (s: string) => string): string {
+  const offset = daysBetween(weekStartOf(todayStr()), weekKey)
+  if (offset <= 0) return t('This week')
+  if (offset === 7) return t('Next week')
+  return `${t('Week of')} ${monthDay(weekKey)}`
+}
+
+/** The booking window split into weeks, in order, each keyed by its Monday. */
+function groupByWeek(choices: { date: string; dayOfWeek: string }[]) {
+  const groups: { key: string; days: { date: string; dayOfWeek: string }[] }[] = []
+  for (const c of choices) {
+    const key = weekStartOf(c.date)
+    const existing = groups.find((g) => g.key === key)
+    if (existing) existing.days.push(c)
+    else groups.push({ key, days: [c] })
+  }
+  return groups
 }
 
 const STATUS_COLOR: Record<CoverageStatus, string> = {
@@ -87,16 +172,41 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
   required: { color: '#ef4444' },
   input: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 10, padding: 12, fontSize: 14, color: colors.text, marginBottom: 14 },
-  dateChipRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  dateChipRow: { marginBottom: 16 },
+  // Weeks are laid out as labelled groups inside the one horizontal scroller, so a chip
+  // reading "11" is always anchored to a week even a month out.
+  dateChipRowContent: { flexDirection: 'row', gap: 18, alignItems: 'flex-start', paddingRight: 4 },
+  weekGroup: { gap: 6 },
+  weekGroupLabel: { fontSize: 10, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.5, textTransform: 'uppercase' },
+  weekGroupDays: { flexDirection: 'row', gap: 8 },
   dateChip: {
     alignItems: 'center', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12,
     borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary, minWidth: 58,
   },
   dateChipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  // "Has something selected" is a separate state from "currently being edited" — across a
+  // month of chips you need to see what you've already ticked without visiting each day.
+  dateChipMarked: { borderColor: '#F03E2F' },
   dateChipDay: { fontSize: 11, fontWeight: '600', color: colors.textSecondary },
   dateChipDayActive: { color: 'rgba(255,255,255,0.85)' },
   dateChipNum: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: 1 },
   dateChipNumActive: { color: '#fff' },
+  dateChipDotSlot: { height: 9, justifyContent: 'center' },
+  dateChipDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#F03E2F' },
+  dateChipDotActive: { backgroundColor: '#fff' },
+  presetRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  presetIntro: { fontSize: 12, color: colors.textSecondary, marginBottom: 8 },
+  presetAnchor: { fontWeight: '700', color: colors.text },
+  presetHint: { fontSize: 11, color: colors.textMuted, marginBottom: 12, marginTop: -2 },
+  presetChip: {
+    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary,
+  },
+  presetChipActive: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  presetChipText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  presetChipTextActive: { color: '#fff' },
+  clearText: { fontSize: 12, fontWeight: '600', color: '#F03E2F' },
+  summaryText: { fontSize: 12, color: colors.textSecondary, marginBottom: 10 },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
   checkBox: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' },
   checkBoxChecked: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
@@ -140,6 +250,257 @@ function Checkbox({ checked, onToggle, label, colors, disabled }: { checked: boo
   )
 }
 
+/** What's selected for ONE day. Whole-day and specific periods are alternatives, but the
+ *  ticked periods survive toggling whole day off and on again. */
+type DaySelection = { wholeDay: boolean; slotIds: string[] }
+/** Keyed by date. A date absent from the map has nothing selected. */
+type Selections = Record<string, DaySelection>
+
+/**
+ * Date + period picker for a report that may span many days.
+ *
+ * Selection is held PER DATE, which is the whole point: moving to another day and back
+ * restores exactly what was ticked, and ticking "whole day" applies to that day alone
+ * rather than every day at once. Nothing is ticked until the teacher ticks it.
+ *
+ * Shared by the teacher's own flow and the admin's report-on-behalf so the two can't drift
+ * apart again — they had already grown two copies of the old single-day chip row.
+ */
+function AbsenceDayPicker({
+  slots, reportedPeriods, periodMinutes, periodEnd, selections, onChange, date, onDateChange, colors, t, noDaysMessage,
+}: {
+  slots: MyTimetableSlot[]
+  /** `${date}|${slotId}` for periods already on record, which can't be reported twice. */
+  reportedPeriods: Map<string, number>
+  /** Slot length divider, so a double period knows it is worth two. */
+  periodMinutes: number | null
+  periodEnd: string | null
+  selections: Selections
+  onChange: (next: Selections) => void
+  date: string
+  onDateChange: (d: string) => void
+  colors: Colors
+  t: (s: string) => string
+  noDaysMessage: string
+}) {
+  const styles = makeStyles(colors)
+  // Which preset was applied, and from WHICH day. The anchor is part of it: "2 weeks" only
+  // describes the current selection while you're still standing on the day it counted from,
+  // so moving to another day drops the highlight and tapping it again re-runs it from there.
+  const [applied, setApplied] = useState<{ preset: RangePresetKey; anchor: string } | null>(null)
+
+  const dayChoices = bookingWindowDates(periodEnd).filter((w) => slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+  const weekGroups = groupByWeek(dayChoices)
+
+  const daySlotsFor = (d: string) => slots.filter((s) => s.dayOfWeek === dayOfWeekFor(d) && s.subjectId)
+  // How many periods a slot spans — a 100-minute class on a 50-minute grid is two.
+  const periodCountOf = (s: MyTimetableSlot) => {
+    if (!periodMinutes || periodMinutes <= 0) return 1
+    const [sh, sm] = s.startTime.split(':').map(Number)
+    const [eh, em] = s.endTime.split(':').map(Number)
+    return Math.max(1, Math.round(((eh * 60 + em) - (sh * 60 + sm)) / periodMinutes))
+  }
+  // Fully reported only when EVERY period of the slot is on record. A double period whose
+  // second period an admin cancelled is partly free again, and must stay reportable.
+  const isFullyReported = (d: string, s: MyTimetableSlot) =>
+    (reportedPeriods.get(`${d}|${s.id}`) ?? 0) >= periodCountOf(s)
+  // What can still be reported on a given day: not already elapsed, not already on record.
+  const bookableSlotsFor = (d: string) =>
+    daySlotsFor(d).filter((s) => !slotHasPassed(d, s.endTime) && !isFullyReported(d, s))
+
+  // A preset that's been manually adjusted is no longer that preset.
+  useEffect(() => {
+    if (Object.keys(selections).length === 0) setApplied(null)
+  }, [selections])
+
+  const setDay = (d: string, next: DaySelection) => {
+    const copy = { ...selections }
+    if (!next.wholeDay && next.slotIds.length === 0) delete copy[d]
+    else copy[d] = next
+    setApplied(null)
+    onChange(copy)
+  }
+
+  // Ticks the whole day for every teaching day from the selected chip through the end of
+  // the span. REPLACES the selection rather than adding to it, so tapping 1 week after
+  // 1 month gives a week, not both.
+  const applyPreset = (preset: RangePresetKey) => {
+    const end = spanEndFor(date, preset)
+    const next: Selections = {}
+    for (const c of dayChoices) {
+      if (c.date < date || c.date > end) continue
+      if (bookableSlotsFor(c.date).length === 0) continue // nothing left to report that day
+      next[c.date] = { wholeDay: true, slotIds: [] }
+    }
+    onChange(next)
+    setApplied({ preset, anchor: date })
+  }
+
+  const current = selections[date] ?? { wholeDay: false, slotIds: [] }
+  const daySlots = DATE_RE.test(date) ? daySlotsFor(date) : []
+  const bookableToday = DATE_RE.test(date) ? bookableSlotsFor(date) : []
+
+  const selectedDays = Object.keys(selections)
+  const selectedPeriods = selectedDays.reduce((sum, d) => {
+    const sel = selections[d]
+    return sum + (sel.wholeDay ? bookableSlotsFor(d).length : sel.slotIds.length)
+  }, 0)
+
+  if (dayChoices.length === 0) {
+    return <Text style={[styles.emptyText, { marginBottom: 12 }]}>{noDaysMessage}</Text>
+  }
+
+  return (
+    <>
+      {/* Names the day the span will count FROM, and changes as you tap another day. The
+          anchoring always worked, but with a static label there was no way to tell that
+          the start was the selected day rather than always today. */}
+      <Text style={styles.presetIntro}>
+        {t('Report from')}{' '}
+        <Text style={styles.presetAnchor}>
+          {date === todayStr() ? t('today') : `${t(dayShort(dayOfWeekFor(date)))} ${monthDay(date)}`}
+        </Text>
+        {' '}{t('for')}
+      </Text>
+      <View style={styles.presetRow}>
+        {RANGE_PRESETS.map((p) => {
+          const active = applied?.preset === p.key && applied.anchor === date
+          return (
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.presetChip, active && styles.presetChipActive]}
+              onPress={() => applyPreset(p.key)}
+            >
+              <Text style={[styles.presetChipText, active && styles.presetChipTextActive]}>{t(p.label)}</Text>
+            </TouchableOpacity>
+          )
+        })}
+        {selectedDays.length > 0 && (
+          <TouchableOpacity onPress={() => { onChange({}); setApplied(null) }}>
+            <Text style={styles.clearText}>{t('Clear')}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {selectedDays.length === 0 && (
+        <Text style={styles.presetHint}>{t('Tap a day below to start from it.')}</Text>
+      )}
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.dateChipRow}
+        contentContainerStyle={styles.dateChipRowContent}
+      >
+        {weekGroups.map((g) => (
+          <View key={g.key} style={styles.weekGroup}>
+            <Text style={styles.weekGroupLabel}>{weekGroupLabel(g.key, t)}</Text>
+            <View style={styles.weekGroupDays}>
+              {g.days.map((c) => {
+                const active = c.date === date
+                const marked = !!selections[c.date]
+                const isToday = c.date === todayStr()
+                return (
+                  <TouchableOpacity
+                    key={c.date}
+                    style={[styles.dateChip, marked && styles.dateChipMarked, active && styles.dateChipActive]}
+                    onPress={() => onDateChange(c.date)}
+                  >
+                    <Text style={[styles.dateChipDay, active && styles.dateChipDayActive]}>
+                      {isToday ? t('Today') : t(dayShort(c.dayOfWeek))}
+                    </Text>
+                    <Text style={[styles.dateChipNum, active && styles.dateChipNumActive]}>{Number(c.date.slice(8, 10))}</Text>
+                    {/* Fixed-height row either way, so chips don't jump as days are ticked. */}
+                    <View style={styles.dateChipDotSlot}>
+                      {marked && <View style={[styles.dateChipDot, active && styles.dateChipDotActive]} />}
+                    </View>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+          </View>
+        ))}
+      </ScrollView>
+
+      {selectedDays.length > 0 && (
+        <Text style={styles.summaryText}>
+          {selectedDays.length} {selectedDays.length === 1 ? t('day') : t('days')} · {selectedPeriods} {selectedPeriods === 1 ? t('period') : t('periods')} {t('selected')}
+        </Text>
+      )}
+
+      {DATE_RE.test(date) && (
+        daySlots.length === 0 ? (
+          <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t('No periods on the timetable for this day.')}</Text>
+        ) : bookableToday.length === 0 ? (
+          <Text style={[styles.emptyText, { marginBottom: 12 }]}>
+            {daySlots.every((s) => isFullyReported(date, s))
+              ? t('Every period for this day has already been reported.')
+              : t('All periods for this day have already passed. Ask an admin if this needs correcting.')}
+          </Text>
+        ) : (
+          <ScrollView style={{ maxHeight: 220 }}>
+            <Checkbox
+              checked={current.wholeDay}
+              onToggle={() => setDay(date, { wholeDay: !current.wholeDay, slotIds: current.slotIds })}
+              label={t('Absent the whole day')}
+              colors={colors}
+            />
+            {/* Always visible, not just once "whole day" is unchecked — while it's checked
+                these just reflect that every period is covered (shown checked + disabled)
+                rather than disappearing entirely. Periods already elapsed or already on
+                record are locked out regardless. */}
+            {daySlots.map((s) => {
+              const passed = slotHasPassed(date, s.endTime)
+              const reported = isFullyReported(date, s)
+              const note = passed ? ` (${t('already passed')})` : reported ? ` (${t('already reported')})` : ''
+              return (
+                <Checkbox
+                  key={s.id}
+                  checked={passed ? false : (reported || current.wholeDay || current.slotIds.includes(s.id))}
+                  disabled={current.wholeDay || passed || reported}
+                  onToggle={() => setDay(date, {
+                    wholeDay: false,
+                    slotIds: current.slotIds.includes(s.id)
+                      ? current.slotIds.filter((id) => id !== s.id)
+                      : [...current.slotIds, s.id],
+                  })}
+                  label={`${s.startTime}–${s.endTime} · ${s.subjectName} (${s.classLevel})${note}`}
+                  colors={colors}
+                />
+              )
+            })}
+          </ScrollView>
+        )
+      )}
+    </>
+  )
+}
+
+/**
+ * Everything selected, as the API's `days` payload.
+ *
+ * Specifically-picked periods that elapsed while the form was open are dropped here. The
+ * server rejects a report naming an already-passed period outright (deliberately: those
+ * exact periods were chosen), and a long multi-day report is easily open for long enough
+ * to cross a period boundary, so filtering here keeps that from failing the whole
+ * submission over one stale tick. Whole-day entries need no filtering: the server drops
+ * elapsed periods from those by design.
+ */
+function selectionsToDays(selections: Selections, slots: MyTimetableSlot[]): AbsenceDay[] {
+  const endTimeById = new Map(slots.map((s) => [s.id, s.endTime]))
+  return Object.keys(selections).sort().flatMap((date): AbsenceDay[] => {
+    const sel = selections[date]
+    if (sel.wholeDay) return [{ date, wholeDay: true }]
+    const slotIds = sel.slotIds.filter((id) => {
+      const endTime = endTimeById.get(id)
+      return endTime != null && !slotHasPassed(date, endTime)
+    })
+    return slotIds.length > 0 ? [{ date, wholeDay: false, timetableSlotIds: slotIds }] : []
+  })
+}
+
+/** Stable empty map, so passing "no known reported periods" doesn't rebuild every render. */
+const EMPTY_REPORTED_PERIODS: Map<string, number> = new Map()
+
 // Inline preview cap on the "Absences reported" list — past this, "See all" hands off to
 // a dedicated history screen instead of letting the card grow indefinitely.
 const ABSENCES_PREVIEW_LIMIT = 5
@@ -157,6 +518,9 @@ function TeacherAttendanceScreen() {
   const [slots, setSlots] = useState<MyTimetableSlot[]>([])
   const [periodsMissed, setPeriodsMissed] = useState(0)
   const [periodMinutes, setPeriodMinutes] = useState<number | null>(null)
+  // Last day of the current semester/academic-year record — the far edge of how far ahead
+  // an absence may be booked. See bookingWindowDates.
+  const [periodEnd, setPeriodEnd] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -164,14 +528,14 @@ function TeacherAttendanceScreen() {
 
   const [modalVisible, setModalVisible] = useState(false)
   const [date, setDate] = useState('')
-  const [wholeDay, setWholeDay] = useState(true)
-  const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([])
+  // Per-date, so switching days keeps what was ticked on each. See AbsenceDayPicker.
+  const [selections, setSelections] = useState<Selections>({})
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const [c, a, tt] = await Promise.all([getMyCoverage(), getMyAbsences(), getMyTimetable()])
-      setRows(c.rows); setAbsences(a.absences); setSlots(tt.slots); setPeriodsMissed(a.periodsMissed); setPeriodMinutes(a.periodMinutes)
+      setRows(c.rows); setAbsences(a.absences); setSlots(tt.slots); setPeriodsMissed(a.periodsMissed); setPeriodMinutes(a.periodMinutes); setPeriodEnd(a.periodEnd)
     } catch { /* keep last-known data on transient failure */ }
     finally { setLoading(false); setRefreshing(false) }
   }, [])
@@ -180,35 +544,50 @@ function TeacherAttendanceScreen() {
 
   const onRefresh = () => { setRefreshing(true); load() }
 
-  // Only this week's days you actually teach on — no free-text date entry, so you can
-  // never file an absence against a day with no class in the first place.
-  const weekChoices = thisWeekDates().filter((w) => slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+  // Days you actually teach on, from today up to a month ahead — no free-text date entry,
+  // so you can never file an absence against a day with no class in the first place. The
+  // month lets you book known absences (travel, medical, a funeral) well in advance rather
+  // than only within the current week.
+  const dayChoices = bookingWindowDates(periodEnd).filter((w) => slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+  // Booking weeks ahead makes it easy to forget you already filed a day, and a repeat save
+  // is silently swallowed server-side (the row is unique on teacher+slot+date), so the
+  // picker shows those periods as already reported rather than letting it look like
+  // nothing happened.
+  const reportedPeriods = new Map<string, number>()
+  for (const a of absences) {
+    const key = `${a.date}|${a.timetableSlotId}`
+    // periods is 1 for a per-period row and the whole block for a legacy one, so both
+    // shapes add up to "how much of this slot is already on record".
+    reportedPeriods.set(key, (reportedPeriods.get(key) ?? 0) + (a.periods ?? 1))
+  }
 
   const openModal = () => {
     const today = todayStr()
-    const initial = weekChoices.find((c) => c.date === today)?.date ?? weekChoices[0]?.date ?? ''
-    setDate(initial); setWholeDay(true); setSelectedSlotIds([])
+    const initial = dayChoices.find((c) => c.date === today)?.date ?? dayChoices[0]?.date ?? ''
+    setDate(initial); setSelections({})
     setModalVisible(true)
   }
 
-  const daySlots = DATE_RE.test(date) ? slots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
-  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
+  const pendingDays = selectionsToDays(selections, slots)
 
   const handleSubmit = async () => {
-    if (!DATE_RE.test(date)) {
-      Alert.alert(t('Validation'), t('Select a day'))
-      return
-    }
-    if (!wholeDay && selectedSlotIds.length === 0) {
+    if (pendingDays.length === 0) {
       Alert.alert(t('Validation'), t('Select the whole day or at least one period'))
       return
     }
     setSaving(true)
     try {
-      await reportAbsence({ date, wholeDay, timetableSlotIds: wholeDay ? undefined : selectedSlotIds })
+      const result = await reportAbsence({ days: pendingDays })
       setModalVisible(false)
       load()
-      Alert.alert(t('Saved'), t('Absence recorded'))
+      Alert.alert(
+        t('Saved'),
+        result.count === 0
+          ? t('Those periods were already reported.')
+          : result.days > 1
+            ? `${result.count} ${result.count === 1 ? t('period') : t('periods')} ${t('recorded across')} ${result.days} ${t('days')}.`
+            : t('Absence recorded'),
+      )
     } catch (err: any) {
       Alert.alert(t('Error'), err.response?.data?.message || t('Failed to record absence'))
     } finally {
@@ -221,7 +600,14 @@ function TeacherAttendanceScreen() {
       { text: t('Cancel'), style: 'cancel' },
       {
         text: t('Remove'), style: 'destructive', onPress: async () => {
-          try { await deleteAbsence(id); load() } catch { Alert.alert(t('Error'), t('Failed to remove absence')) }
+          try { await deleteAbsence(id); load() } catch (err: any) {
+            // The list may simply be stale: an admin can review (locking it) or the grace
+            // period can expire while this screen sits open, and the bin stays on screen
+            // until something refetches. Show the API's actual reason and reload, so the
+            // row corrects itself instead of failing again on the next tap.
+            Alert.alert(t('Cannot remove'), err?.response?.data?.message || t('Failed to remove absence'))
+            load()
+          }
         },
       },
     ])
@@ -281,7 +667,7 @@ function TeacherAttendanceScreen() {
               // Once the period's happened, only an admin can remove it (they may want to
               // mark the teacher present after all); once an admin has reviewed it in a PRIOR
               // visit to their list, it's locked for everyone.
-              const locked = a.hourHasPassed || a.seenByAdmin
+              const locked = a.isFinal || a.seenByAdmin
               return (
                 <View key={a.id} style={styles.absenceRow}>
                   <Text style={styles.absenceText}>
@@ -323,64 +709,25 @@ function TeacherAttendanceScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{t('Date')} <Text style={styles.required}>*</Text></Text>
-            {weekChoices.length === 0 ? (
-              <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t('No periods on your timetable this week.')}</Text>
-            ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dateChipRow}>
-                {weekChoices.map((c) => {
-                  const active = c.date === date
-                  const isToday = c.date === todayStr()
-                  const dayNum = Number(c.date.slice(8, 10))
-                  return (
-                    <TouchableOpacity
-                      key={c.date}
-                      style={[styles.dateChip, active && styles.dateChipActive]}
-                      onPress={() => { setDate(c.date); setSelectedSlotIds([]) }}
-                    >
-                      <Text style={[styles.dateChipDay, active && styles.dateChipDayActive]}>
-                        {isToday ? t('Today') : t(dayShort(c.dayOfWeek))}
-                      </Text>
-                      <Text style={[styles.dateChipNum, active && styles.dateChipNumActive]}>{dayNum}</Text>
-                    </TouchableOpacity>
-                  )
-                })}
-              </ScrollView>
-            )}
-
-            {DATE_RE.test(date) && (
-              daySlots.length === 0 ? (
-                <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t('No periods on your timetable for this day.')}</Text>
-              ) : reportableSlots.length === 0 ? (
-                <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t('All periods for this day have already passed — ask an admin if this needs correcting.')}</Text>
-              ) : (
-                <ScrollView style={{ maxHeight: 260 }}>
-                  <Checkbox checked={wholeDay} onToggle={() => setWholeDay((v) => !v)} label={t('Absent the whole day')} colors={colors} />
-                  {/* Always visible, not just once "whole day" is unchecked — while it's
-                      checked these just reflect that every period is covered (shown
-                      checked + disabled) rather than disappearing entirely. Periods that
-                      have already happened are locked out regardless of wholeDay. */}
-                  {daySlots.map((s) => {
-                    const passed = slotHasPassed(date, s.endTime)
-                    return (
-                      <Checkbox
-                        key={s.id}
-                        checked={passed ? false : (wholeDay || selectedSlotIds.includes(s.id))}
-                        disabled={wholeDay || passed}
-                        onToggle={() => setSelectedSlotIds((prev) => prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id])}
-                        label={`${s.startTime}–${s.endTime} · ${s.subjectName} (${s.classLevel})${passed ? ` — ${t('already passed')}` : ''}`}
-                        colors={colors}
-                      />
-                    )
-                  })}
-                </ScrollView>
-              )
-            )}
+            <Text style={styles.label}>{t('Days')} <Text style={styles.required}>*</Text></Text>
+            <AbsenceDayPicker
+              slots={slots}
+              reportedPeriods={reportedPeriods}
+              periodMinutes={periodMinutes}
+              periodEnd={periodEnd}
+              selections={selections}
+              onChange={setSelections}
+              date={date}
+              onDateChange={setDate}
+              colors={colors}
+              t={t}
+              noDaysMessage={t('No periods on your timetable in the coming month.')}
+            />
 
             <TouchableOpacity
-              style={[styles.createBtn, (saving || !DATE_RE.test(date) || reportableSlots.length === 0) && styles.disabled]}
+              style={[styles.createBtn, (saving || pendingDays.length === 0) && styles.disabled]}
               onPress={handleSubmit}
-              disabled={saving || !DATE_RE.test(date) || reportableSlots.length === 0}
+              disabled={saving || pendingDays.length === 0}
             >
               {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.createBtnText}>{t('Report Absence')}</Text>}
             </TouchableOpacity>
@@ -475,8 +822,12 @@ function AdminAttendanceScreen() {
   const [teacherSearch, setTeacherSearch] = useState('')
   // Value stored is PERIODS missed per teacher; periodMinutes null → numbers are event
   // counts, labelled "absences" rather than "periods".
+  const [unassignedTargets, setUnassignedTargets] = useState<UnassignedTarget[]>([])
   const [absenceCounts, setAbsenceCounts] = useState<Record<string, number>>({})
   const [periodMinutes, setPeriodMinutes] = useState<number | null>(null)
+  // Booking cutoff, same meaning as on the teacher's own screen. Comes from the counts
+  // endpoint rather than a per-teacher fetch, which would mark their records reviewed.
+  const [periodEnd, setPeriodEnd] = useState<string | null>(null)
   const [hoursTotals, setHoursTotals] = useState<Record<string, TeacherHoursTotal>>({})
   const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period') : t('periods')) : (n === 1 ? t('absence') : t('absences'))
 
@@ -490,17 +841,20 @@ function AdminAttendanceScreen() {
   const [teacherSlots, setTeacherSlots] = useState<MyTimetableSlot[]>([])
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [date, setDate] = useState('')
-  const [wholeDay, setWholeDay] = useState(true)
-  const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([])
+  // Per-date, so switching days keeps what was ticked on each. See AbsenceDayPicker.
+  const [selections, setSelections] = useState<Selections>({})
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(() => {
-    getCoverage().then((d) => setRows(d.rows)).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false) })
+    getCoverage()
+      .then((d) => { setRows(d.rows); setUnassignedTargets(d.unassignedTargets ?? []) })
+      .catch(() => {})
+      .finally(() => { setLoading(false); setRefreshing(false) })
   }, [])
 
   const loadCounts = useCallback(() => {
     getAbsenceCounts()
-      .then((d) => { setAbsenceCounts(Object.fromEntries(d.counts.map((c) => [c.teacherId, c.periods]))); setPeriodMinutes(d.periodMinutes) })
+      .then((d) => { setAbsenceCounts(Object.fromEntries(d.counts.map((c) => [c.teacherId, c.periods]))); setPeriodMinutes(d.periodMinutes); setPeriodEnd(d.periodEnd) })
       .catch(() => {})
   }, [])
 
@@ -558,8 +912,9 @@ function AdminAttendanceScreen() {
             // cached) — refetch here so that's visible immediately, not just next load.
             load()
             loadCounts()
-          } catch {
-            Alert.alert(t('Error'), t('Failed to remove absence'))
+          } catch (err: any) {
+            Alert.alert(t('Cannot remove'), err?.response?.data?.message || t('Failed to remove absence'))
+            load(); loadCounts()
           }
         },
       },
@@ -567,38 +922,44 @@ function AdminAttendanceScreen() {
   }
 
   const openReportModal = () => {
-    setReportTeacher(null); setTeacherSlots([]); setDate(''); setWholeDay(true); setSelectedSlotIds([])
+    setReportTeacher(null); setTeacherSlots([]); setDate(''); setSelections({})
     setReportModalVisible(true)
   }
 
   const onPickTeacher = (teacher: Teacher) => {
-    setReportTeacher(teacher); setDate(''); setSelectedSlotIds([])
+    setReportTeacher(teacher); setDate(''); setSelections({})
     setTeacherPickerVisible(false)
     setSlotsLoading(true)
-    getTeacherTimetable(teacher.id).then((d) => setTeacherSlots(d.slots)).catch(() => setTeacherSlots([])).finally(() => setSlotsLoading(false))
+    getTeacherTimetable(teacher.id)
+      .then((d) => {
+        setTeacherSlots(d.slots)
+        // Land on today when they teach today, otherwise their next teaching day — the
+        // picker needs a day in hand, and this teacher's timetable is only known now.
+        const choices = bookingWindowDates(periodEnd).filter((w) => d.slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+        setDate(choices.find((c) => c.date === todayStr())?.date ?? choices[0]?.date ?? '')
+      })
+      .catch(() => setTeacherSlots([]))
+      .finally(() => setSlotsLoading(false))
   }
 
-  // Same "this week, days they actually teach" restriction as the teacher's own flow —
-  // just against the SELECTED teacher's timetable rather than the admin's own.
-  const weekChoices = thisWeekDates().filter((w) => teacherSlots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
-  const daySlots = DATE_RE.test(date) ? teacherSlots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
-  // An absence can only be reported for a period that hasn't ENDED yet — the same rule
-  // now applies to admins as to teachers (the API enforces it either way), so the picker
-  // has to grey out elapsed periods rather than offer them and then fail on submit.
-  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
+  // Same "today up to a month ahead, days they actually teach" window as the teacher's own
+  // flow — just against the SELECTED teacher's timetable rather than the admin's own. Kept
+  // deliberately identical: an admin logging it on their behalf shouldn't have a narrower
+  // reach than the teacher, and the API applies the same rules to both.
+  const pendingDays = selectionsToDays(selections, teacherSlots)
 
   const handleSubmit = async () => {
-    if (!reportTeacher || !DATE_RE.test(date)) {
+    if (!reportTeacher) {
       Alert.alert(t('Validation'), t('Select a teacher and a day'))
       return
     }
-    if (!wholeDay && selectedSlotIds.length === 0) {
+    if (pendingDays.length === 0) {
       Alert.alert(t('Validation'), t('Select the whole day or at least one period'))
       return
     }
     setSaving(true)
     try {
-      await reportAbsence({ teacherId: reportTeacher.id, date, wholeDay, timetableSlotIds: wholeDay ? undefined : selectedSlotIds })
+      const result = await reportAbsence({ teacherId: reportTeacher.id, days: pendingDays })
       setReportModalVisible(false)
       load()
       loadCounts()
@@ -611,7 +972,14 @@ function AdminAttendanceScreen() {
           openTeacherDrillDown(drillDown.teacherId, drillDown.teacherName)
         }
       }
-      Alert.alert(t('Saved'), t('Absence recorded'))
+      Alert.alert(
+        t('Saved'),
+        result.count === 0
+          ? t('Those periods were already reported.')
+          : result.days > 1
+            ? `${result.count} ${result.count === 1 ? t('period') : t('periods')} ${t('recorded across')} ${result.days} ${t('days')}.`
+            : t('Absence recorded'),
+      )
     } catch (err: any) {
       Alert.alert(t('Error'), err.response?.data?.message || t('Failed to record absence'))
     } finally {
@@ -728,7 +1096,27 @@ function AdminAttendanceScreen() {
             ListEmptyComponent={
               <View style={styles.center}>
                 <Ionicons name="time-outline" size={36} color={colors.textMuted} />
-                <Text style={styles.emptyText}>{t('No subjects have a required-hours target set yet.')}</Text>
+                {unassignedTargets.length > 0 ? (
+                  <>
+                    {/* An hours target with nobody assigned produces no coverage row, which
+                        is not the same thing as no target being set anywhere. */}
+                    <Text style={[styles.emptyText, { color: colors.text, fontWeight: '600' }]}>
+                      {unassignedTargets.length === 1
+                        ? t('One course has an hours target but no lecturer assigned.')
+                        : `${unassignedTargets.length} ${t('courses have an hours target but no lecturer assigned.')}`}
+                    </Text>
+                    <Text style={styles.emptyText}>
+                      {t('Hours are counted against the lecturer who teaches the course, so assign one and it will appear here.')}
+                    </Text>
+                    {unassignedTargets.slice(0, 5).map((u) => (
+                      <Text key={`${u.classLevel}-${u.name}`} style={[styles.emptyText, { fontSize: 12 }]}>
+                        {u.name} · {u.classLevel}
+                      </Text>
+                    ))}
+                  </>
+                ) : (
+                  <Text style={styles.emptyText}>{t('No subjects have a required-hours target set yet.')}</Text>
+                )}
               </View>
             }
             renderItem={({ item: r }) => (
@@ -784,7 +1172,7 @@ function AdminAttendanceScreen() {
             ) : (
               // seenByAdmin only locks a TEACHER out of retracting their own report — an
               // admin can remove one here regardless, right up until the period it was
-              // reported for has actually ENDED (hourHasPassed) — after that it's final
+              // reported for is FINAL (isFinal: start + the school's grace period, or the
               // for everyone, since there's no more chance the teacher shows up.
               <ScrollView style={{ maxHeight: 320 }}>
                 {absences.map((a) => (
@@ -798,7 +1186,7 @@ function AdminAttendanceScreen() {
                       )}
                       {a.seenByAdmin && <Text style={styles.absenceHint}>{t('reviewed')}</Text>}
                     </View>
-                    {a.hourHasPassed ? (
+                    {a.isFinal ? (
                       <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
                     ) : (
                       <TouchableOpacity onPress={() => handleDeleteAbsence(a.id)}>
@@ -835,7 +1223,7 @@ function AdminAttendanceScreen() {
               slotsLoading ? (
                 <ActivityIndicator color="#F03E2F" />
               ) : teacherSlots.length === 0 ? (
-                // Distinct from "none THIS week" below — catches the exact confusion
+                // Distinct from "none in the coming month" below — catches the exact confusion
                 // that motivated this: a teacher with NO timetable at all silently has
                 // nothing to match on any date, and the report never actually goes
                 // through, with no obvious next step for the admin.
@@ -846,66 +1234,31 @@ function AdminAttendanceScreen() {
                 </View>
               ) : (
                 <>
-                  <Text style={styles.label}>{t('Date')} <Text style={styles.required}>*</Text></Text>
-                  {weekChoices.length === 0 ? (
-                    <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t("No periods on this teacher's timetable this week.")}</Text>
-                  ) : (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dateChipRow}>
-                      {weekChoices.map((c) => {
-                        const active = c.date === date
-                        const isToday = c.date === todayStr()
-                        const dayNum = Number(c.date.slice(8, 10))
-                        return (
-                          <TouchableOpacity
-                            key={c.date}
-                            style={[styles.dateChip, active && styles.dateChipActive]}
-                            onPress={() => { setDate(c.date); setSelectedSlotIds([]) }}
-                          >
-                            <Text style={[styles.dateChipDay, active && styles.dateChipDayActive]}>
-                              {isToday ? t('Today') : t(dayShort(c.dayOfWeek))}
-                            </Text>
-                            <Text style={[styles.dateChipNum, active && styles.dateChipNumActive]}>{dayNum}</Text>
-                          </TouchableOpacity>
-                        )
-                      })}
-                    </ScrollView>
-                  )}
-
-                  {DATE_RE.test(date) && (
-                    daySlots.length === 0 ? (
-                      <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t("No periods on this teacher's timetable for this day.")}</Text>
-                    ) : reportableSlots.length === 0 ? (
-                      <Text style={[styles.emptyText, { marginBottom: 12 }]}>{t('All periods for this day have already passed and can no longer be reported.')}</Text>
-                    ) : (
-                      <ScrollView style={{ maxHeight: 220 }}>
-                        <Checkbox checked={wholeDay} onToggle={() => setWholeDay((v) => !v)} label={t('Absent the whole day')} colors={colors} />
-                        {daySlots.map((s) => {
-                          // Elapsed periods stay VISIBLE but locked, so it's clear they
-                          // exist and why they can't be picked, rather than silently
-                          // vanishing from the day's list.
-                          const passed = slotHasPassed(date, s.endTime)
-                          return (
-                            <Checkbox
-                              key={s.id}
-                              checked={passed ? false : (wholeDay || selectedSlotIds.includes(s.id))}
-                              disabled={wholeDay || passed}
-                              onToggle={() => setSelectedSlotIds((prev) => prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id])}
-                              label={`${s.startTime}–${s.endTime} · ${s.subjectName} (${s.classLevel})${passed ? ` — ${t('already passed')}` : ''}`}
-                              colors={colors}
-                            />
-                          )
-                        })}
-                      </ScrollView>
-                    )
-                  )}
+                  <Text style={styles.label}>{t('Days')} <Text style={styles.required}>*</Text></Text>
+                  <AbsenceDayPicker
+                    slots={teacherSlots}
+                    // Empty: the admin has no copy of this teacher's absences here, and
+                    // fetching them would mark every one of their records as reviewed as a
+                    // side effect. A day already on record is simply skipped server-side.
+                    reportedPeriods={EMPTY_REPORTED_PERIODS}
+                    periodMinutes={periodMinutes}
+                    periodEnd={periodEnd}
+                    selections={selections}
+                    onChange={setSelections}
+                    date={date}
+                    onDateChange={setDate}
+                    colors={colors}
+                    t={t}
+                    noDaysMessage={t("No periods on this teacher's timetable in the coming month.")}
+                  />
                 </>
               )
             )}
 
             <TouchableOpacity
-              style={[styles.createBtn, (saving || !reportTeacher || !DATE_RE.test(date) || reportableSlots.length === 0) && styles.disabled]}
+              style={[styles.createBtn, (saving || !reportTeacher || pendingDays.length === 0) && styles.disabled]}
               onPress={handleSubmit}
-              disabled={saving || !reportTeacher || !DATE_RE.test(date) || reportableSlots.length === 0}
+              disabled={saving || !reportTeacher || pendingDays.length === 0}
             >
               {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.createBtnText}>{t('Report Absence')}</Text>}
             </TouchableOpacity>
