@@ -30,7 +30,10 @@ import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 import { stripProgrammeSuffix } from '@/lib/programme'
 
-interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean }
+interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean
+  /** Which sitting(s) they actually teach, derived server-side from their live course
+   *  assignments. Universities only in practice — every other school type is all-DAY. */
+  programmes?: ('DAY' | 'EVENING')[] }
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
 const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '', departments: [] as string[] }
@@ -458,6 +461,16 @@ export default function TeachersPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-foreground">{t.name}</span>
+                        {/* Which sitting they teach, from the classes their live courses
+                            belong to. Universities only: everywhere else every class is DAY,
+                            so the badge would say the same thing on every row. */}
+                        {isUniversity && t.programmes && t.programmes.length > 0 && (
+                          <span className="inline-block whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium bg-primary/10 text-primary">
+                            {t.programmes.length > 1
+                              ? tr('Day & Evening')
+                              : tr(t.programmes[0] === 'EVENING' ? 'Evening' : 'Day')}
+                          </span>
+                        )}
                         {!isOfflineInstall && t.pendingSetup && (
                           <span className="inline-block whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700" title={tr('Has not set a password yet')}>
                             {tr('Pending Setup')}

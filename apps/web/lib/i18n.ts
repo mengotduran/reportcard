@@ -865,6 +865,7 @@ const FR: Record<string, string> = {
   'Whole school': 'Toute l\u2019école',
   'Day only': 'Jour uniquement',
   'Evening only': 'Soir uniquement',
+  'Day & Evening': 'Jour et soir',
   // ── Holidays ──
   'Holidays': 'Jours fériés',
   'Add Holiday': 'Ajouter un jour férié',

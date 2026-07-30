@@ -58,6 +58,14 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
     // of this (derived from what they actually teach) and their explicit
     // `departments` placement, so they show up under a department the moment
     // they're placed there, not only once a subject happens to be assigned.
+    // Which sitting(s) a lecturer actually teaches, derived from the classes their live
+    // courses belong to. University only in practice: every other school type has DAY
+    // classes exclusively, so this always comes back as ['DAY'] and the UI hides it.
+    const programmeByClassLevel = new Map(
+      (await prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, programme: true } }))
+        .map((c) => [c.name, c.programme as string]),
+    )
+
     const shaped = teachers.map(({ teacherSubjects, passwordSetAt, ...t }) => ({
       ...t,
       // Online-invited teacher who hasn't clicked their setup link yet. Always
@@ -68,6 +76,14 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
         ...teacherSubjects.map((ts) => ts.subject.classLevel),
         ...(t.masterClassLevel ? [t.masterClassLevel] : []),
       ])],
+      // Derived from ASSIGNED courses, not timetable slots: an assignment is what generates
+      // the hours, and it survives a timetable being rebuilt. Empty when they hold nothing
+      // yet, which the UI shows as no badge rather than guessing.
+      programmes: [...new Set(
+        teacherSubjects
+          .map((ts) => programmeByClassLevel.get(ts.subject.classLevel))
+          .filter((p): p is string => !!p),
+      )].sort(),
     }))
     res.json({ teachers: shaped, total: shaped.length })
   } catch (error) {
