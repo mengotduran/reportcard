@@ -147,7 +147,13 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     // for the open-ended absence-count cutoff below.
     prisma.term.findMany({ where: { schoolId }, select: { startDate: true, endDate: true, isCurrent: true, session: true } }),
     prisma.teacherSubject.findMany({
-      where: { subject: { schoolId, requiredHours: { not: null } }, ...(teacherId ? { userId: teacherId } : {}) },
+      // NOT filtered to courses with an hours target. A course without one still accrues
+      // absences, and filtering here made them invisible in By Course entirely — an admin
+      // could delete everything the view showed and still have absences on record, with no
+      // hint they existed. Untargeted courses are dropped again after the rows are built,
+      // but only when they have nothing recorded against them (see below), so the table
+      // stays about coverage rather than listing every course in the school.
+      where: { subject: { schoolId }, ...(teacherId ? { userId: teacherId } : {}) },
       include: { subject: true, user: { select: { id: true, name: true } } },
     }),
     prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
@@ -255,7 +261,16 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     }]
   })
 
+  // A course earns a row by having an hours target OR by having absences recorded against
+  // it. Without the second condition an absence on an untargeted course is invisible here —
+  // an admin could delete everything the view showed and still have absences on record.
+  //
+  // Gaps deliberately do NOT earn a row: almost every course has an uncovered stretch
+  // (assignments rarely start exactly at the term's first day), so including them listed all
+  // 112 courses in the school and buried the two that mattered. A gap is a warning ON a
+  // course you are already tracking, not a reason to start tracking one.
   return groupByCourse(parts, holidays)
+    .filter((r) => r.requiredHours != null || r.periodsMissed > 0)
 }
 
 /** "YYYY-MM-DD" for a Date, in whole calendar days like the rest of the hours maths. */
