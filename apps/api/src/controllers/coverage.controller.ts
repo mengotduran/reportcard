@@ -341,11 +341,18 @@ function groupByCourse(
  */
 function findGaps(terms: ScopeTerm[], windows: { startDate: Date; endDate: Date }[], now: Date): CoverageGap[] {
   const covered = mergeDateRanges(windows)
+  if (covered.length === 0) return []
+  // Nothing before the course's FIRST-EVER assignment counts as a gap. That stretch almost
+  // always means the record did not exist yet, not that a class went untaught — a school that
+  // sets the system up mid-term would otherwise see every course flagged for the weeks before
+  // anyone was entered. The real signal is a gap BETWEEN assignments (a handover with nobody
+  // in the middle) or after the last one ends, and both are still caught.
+  const firstHeld = covered[0].startDate.getTime()
   const gaps: CoverageGap[] = []
   const DAY = 86400000
 
   for (const term of terms) {
-    let cursor = term.startDate.getTime()
+    let cursor = Math.max(term.startDate.getTime(), firstHeld)
     const termEnd = term.endDate.getTime()
     for (const c of covered) {
       const start = c.startDate.getTime()
