@@ -192,16 +192,30 @@ Base URL: `http://localhost:5000/api`
 |--------|-------|-------|-------------|
 | GET | `/teacher-absences/me` | Any teacher | Own logged absences (optional `from`/`to`) |
 | GET | `/teacher-absences` | Admin, VP | A given `teacherId`'s absences |
-| POST | `/teacher-absences` | Any teacher (self), Admin/VP (on a teacher's behalf via `teacherId`) | Log an absence for a `date` — `wholeDay: true` (every real slot that weekday) or specific `timetableSlotIds` |
-| DELETE | `/teacher-absences/:id` | Own (teacher) or Admin/VP | Remove a logged absence |
+| POST | `/teacher-absences` | Any teacher (self), Admin/VP (on a teacher's behalf via `teacherId`) | Log an absence for a `date` — `wholeDay: true` (every real slot that weekday) or specific `timetableSlotIds`. Accepts a `days` array for a multi-day report |
+| DELETE | `/teacher-absences/:id` | Own (teacher) or Admin/VP | Remove a logged absence — clears **every period of that class on that date**, not just the row named |
+| GET | `/teacher-absences/counts` | Admin, VP | Every teacher's absence total in one query, for the By Teacher view |
+
+The list endpoints return **one entry per class per date**, not per period: a 07:30-09:10 double
+arrives as a single entry with `periods: 2`. Rows are still stored per period underneath — see
+§20 Absences for why both are true.
 
 ### Teaching Hours Coverage
 | Method | Route | Roles | Description |
 |--------|-------|-------|-------------|
 | GET | `/coverage/me` | Any teacher | Own coverage rows (per subject/course with a `requiredHours` target) for the active (or given `?session=`) academic session |
 | GET | `/coverage` | Admin, VP | School-wide coverage rows, optionally filtered by `?teacherId=` |
+| GET | `/coverage/hours-totals` | Admin, VP | Hours worked per teacher across every slot, for the By Teacher view |
 
-See §20 Teaching Hours Coverage for how the numbers are computed.
+A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[]` list. See §20.
+
+### Holidays
+| Method | Route | Roles | Description |
+|--------|-------|-------|-------------|
+| GET | `/holidays` | Any signed-in user | School closures (a teacher's own hours need them too) |
+| POST | `/holidays` | Admin, VP | Create — `name`, `startDate`, `endDate`, optional `programme` |
+| PUT | `/holidays/:id` | Admin, VP | Edit |
+| DELETE | `/holidays/:id` | Admin, VP | Remove — the teaching days go straight back into the hours count |
 
 ### Class Levels
 | Method | Route | Description |
@@ -825,17 +839,81 @@ Enforced server-side in `apps/api/src/config/demo.ts` (`demoLimitBlock`) — ret
 Tracks whether a teacher actually covers the hours a Subject/Course is supposed to take — per **semester** for universities, per **academic year** for primary/secondary — computed from the existing weekly timetable rather than a separate day-by-day attendance register.
 
 ### How the numbers are computed
-- `Subject.requiredHours` (optional Int) is the target. A university course row is already scoped to one semester via `Subject.term`, so the target naturally means "this semester"; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
-- A teacher's `TimetableSlot` rows recur every week, so **scheduled hours** = for each matching term, how many times that slot's weekday occurs between the term's start/end dates × the slot's duration. This is available the moment a timetable exists, even before the term starts.
+- `Subject.requiredHours` (optional Int) is the target, and it belongs to the **course**, not to a teacher. Two lecturers sharing a 30-hour course are at 30 between them, never 30 each. A university course row is already scoped to one semester via `Subject.term`; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
+- **A coverage row is one COURSE**, with a `contributors[]` breakdown naming who taught what and over which window, and a `gaps[]` list naming any stretch nobody held it. Status and `isFinal` are computed at course level, never taken from a contributor: each contributor measured its own slice against the full target, which is only right when there is exactly one of them.
+- **Scheduled hours** = for each term the course scopes to, how many times the slot's weekday occurs between the term's start/end dates × the slot's duration — **minus school closures** (see Holidays below), and **clamped to the window the teacher actually held the course**.
 - **Taught hours** = scheduled hours elapsed so far, minus any `TeacherAbsence` hours in that span.
-- **Projected/final hours** = full-period scheduled hours minus all logged absences (past + future planned ones). While the scope (term/year) is still open this is a live **projection**; once every scope term has ended it becomes the **final** total.
-- Status is `NO_TARGET` (no `requiredHours` set — excluded from the report), `UNDER`, `EXACT`, or `OVER`, compared against the projected/final total (0.5h tolerance for "exact").
-- All arithmetic lives in one place: `apps/api/src/utils/teachingHours.ts` (`computeCoverage`, `resolveScopeTerms`, `countWeekdayOccurrences`), shared by both the admin and teacher-facing endpoints so the numbers can never drift apart between the two views.
+- **Projected/final hours** = full-period scheduled hours minus all logged absences (past + future planned). While the scope is still open this is a live **projection**; once every scope term has ended it becomes the **final** total.
+- Status is `NO_TARGET`, `UNDER`, `EXACT`, or `OVER`, compared against the projected/final total (0.5h tolerance for "exact").
+- Counting runs **only inside real term dates**. The By Teacher totals used to collapse a whole session into one span, which counted the breaks *between* terms as teaching weeks; they now iterate the actual `Term` rows.
+- All arithmetic lives in one place: `apps/api/src/utils/teachingHours.ts` (`computeCoverage`, `resolveScopeTerms`, `countTeachingWeekdays`, `mergeDateRanges`), shared by both the admin and teacher-facing endpoints so the numbers can never drift apart between the two views.
+
+### Which courses appear
+A course earns a row by having an hours target **or** by having absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed.
+
+Gaps deliberately do **not** earn a row. Assignments rarely start on a term's first day, so nearly every course has an uncovered stretch; including them listed all 112 courses in one school and buried the two that mattered.
+
+### Holidays (`SchoolHoliday`)
+- A named, **inclusive** date range during which the school is closed — public holiday, mid-term break, anything that cancels teaching. Admin-managed on the Terms page, since it is the same academic calendar: terms say when teaching happens, holidays carve out the days inside them when it does not.
+- Ranges **may overlap** and are merged before subtracting, so "Easter 12-16 April" plus "Good Friday 14 April" removes that day once, not twice.
+- A period falling inside a closure is not counted as taught, and **an absence reported for such a period stops subtracting** — nobody missed a class that never ran. Without that, declaring a holiday after teachers had already reported would dock the hours twice.
+- `programme` (nullable) scopes a closure to one sitting. **NULL means the whole school**, which is what every holiday means by default. Only set it when one sitting runs through a closure the other observes. The picker is hidden for non-universities, since evening cohorts are a university concept for now.
+- Hours are **derived on read, never stored**, so declaring a closure after the fact retroactively corrects every total and deleting one puts those hours straight back. No backfill, nothing to repair.
+
+### Assignment history and mid-term handover (`TeacherSubject.startedAt` / `endedAt`)
+- An assignment records **when a teacher took a course and when they gave it up**. Hours only count inside that window, so a mid-term handover splits a course's hours between the two teachers at the date the admin recorded.
+- An ended assignment is **kept, never deleted** — it is the only record that the previous teacher ever taught it, and deleting it would erase the hours they are owed. Reassignment sets `endedAt`; it used to delete the row outright.
+- The handover date is set by the admin ("Effective from" on Assign Courses, defaulting to today), so recording a departure five days late still credits those five days to the right person. The outgoing teacher's timetable slots are archived **as of that date**, not "now".
+- Saving assignments is a **diff**, not delete-and-recreate. Re-saving an unchanged list must not reset anyone's `startedAt`, which would silently erase months of accrued hours.
+- **Deactivating a teacher closes their windows**, so a course they held immediately shows as an unstaffed gap rather than appearing covered forever. Reactivating deliberately does not reopen them.
+- `(userId, subjectId)` is no longer unique: a teacher may hold a course, hand it over, and take it back, which is two legitimate rows. "Only one ACTIVE assignment" is enforced in code.
+- Every read that means "currently holds this course" filters `endedAt: null` — marks access, dashboards, course lists, delete-warning counts. An ended row must never grant access or ownership.
+
+### Gap flagging
+A `gap` is a stretch of a term that no assignment window covers: nobody held the course, so nothing was taught and nothing accrued. Elapsed gaps are teaching already lost; upcoming ones are a staffing warning while there is still time to act.
+
+Anything **before a course's first-ever assignment is not a gap**. That stretch nearly always means the record did not exist yet, not that a class went untaught — a school setting the system up mid-term would otherwise see every course flagged. Gaps *between* assignments (a handover with nobody in the middle) and after the last one are still caught, which is the case that matters.
 
 ### Absences
-- `TeacherAbsence` — one row per missed period (`schoolId`, `teacherId`, `timetableSlotId`, `date` as `"YYYY-MM-DD"` text, `recordedById`). "Whole day absent" simply creates one of these for every slot the teacher has that weekday — not a separate kind of record.
-- A teacher can report their own absence; an admin/VP can log one on any teacher's behalf (e.g. informed some other way). Only real subject/course slots count — a private/personal timetable slot can't be marked absent since it isn't tied to any `requiredHours` target.
-- A teacher can plan ahead (a future date) as well as report after the fact — the projection accounts for both.
+- `TeacherAbsence` — one row per missed **period** (`schoolId`, `teacherId`, `timetableSlotId`, `date` as `"YYYY-MM-DD"` text, `periodIndex`, `recordedById`). Per period is what keeps the hours arithmetic and the "N periods missed" totals right.
+- **Reporting and deleting are atomic per SLOT.** The slot is the class the admin put on the timetable, so it is the smallest thing anyone can be absent from: a 07:30-09:10 double is one class of two periods, and "I will miss it" cannot mean half of it. Deleting one row therefore clears every period of that class on that date, and the list is grouped so it shows as a single entry with one delete button.
+- Only real subject/course slots count — a private/personal slot can't be marked absent.
+
+#### Who may report, and until when
+| | Teacher | Admin/VP |
+|---|---|---|
+| Report a class still to come | yes | yes |
+| Report a class already **started** | **no** | yes |
+| Report a class already **ended** | no | no |
+| Delete before an admin has reviewed | yes | yes |
+| Delete **after** an admin has reviewed | **no** | **yes** |
+| Delete once the class is **over** | no | **no** |
+
+The cutoff is judged on the whole class, not on each period inside it. "Whole day" quietly skips classes past the cutoff and reports the rest; explicitly-picked ones are rejected outright, naming the date.
+
+`seenByAdmin` is written when an admin **views** a teacher's list — a read, which writes no notification — so the teacher's screen is told over the realtime channel, or it would keep offering a delete the API now refuses.
+
+`School.absenceGraceMinutes` remains as a second cutoff on teacher retraction. It is null on every live school, so it has no effect today, and it is **not** part of the rules above.
+
+### Realtime
+Socket.IO runs on the same port as the REST API, so an offline install needs no extra host or firewall rule.
+
+- **Signals only, never data.** Every event is "something changed, refetch". All authorization stays in the REST controllers; pushing payloads through rooms would mean re-implementing school scoping in a second place, where the failure mode is silent cross-tenant leakage.
+- Rooms (`user:{id}`, `school:{id}`) are joined **server-side from the verified JWT**, never from client input.
+- Events: `notifications:changed` (including on **read**, or the bell badge sits stale while the list beside it shows everything read) and `absences:changed` (created, removed, **or locked** by an admin's review).
+- Polling is kept as a slow fallback (150s) so a dead socket degrades to stale rather than silently frozen. This is **not** push: nothing arrives while the app is closed.
+
+### Notifications (`Notification`)
+An in-app inbox, not OS push — nothing arrives while the app is closed. Fired on absence report/retraction, admin-logged/removed absences, and course reassignment. Admins see them in the sidebar bell; teachers on their mobile home header and the web sidebar.
+
+`Notification.data` stores **where tapping it leads**, captured when the notification is written rather than resolved on read. That is not an optimisation: a retraction DELETES the absence and a reassignment ARCHIVES the slots, so by the time anyone opens the message the state it describes is gone and nothing could look it up. Clients compare `data.teacherId` with their own id — their own timetable if it matches, the read-only view of that teacher's if not.
+
+Rows written before this exist have `data: null` and are simply not tappable. Admin-recipient ones can never be backfilled, because the teacher they concern is named only in the body prose.
+
+The timetable banner appears **only for things the grid cannot show** — a removed absence (the row is gone, so the week looks ordinary) or a reassigned course (its slots are archived, so they are absent entirely). A live absence is drawn on its own period from fetched data, never from route params, so it can never outlive the record.
+
+### Deleting a timetable version
+Refused when absences are recorded against it. `TeacherAbsence` cascades on `TimetableSlot`, so deleting those rows would destroy attendance history with no warning and silently rewrite the hours that subtract from it. The response names the count; the admin edits the current timetable instead, which archives rather than destroys.
 
 ### Day and Evening sections (`ClassLevel.programme`)
 - A class belongs to the **day section** or the **evening section**. This records which section/intake a class is, **not what time it is taught**. A university's Level 3 (Degree) is taught in the evening but follows the day curriculum and continues from Level 2 day, so it is a DAY class; only Level 1 and Level 2 Evening are the evening section.
@@ -862,5 +940,7 @@ A class is referenced **by name**, not by id: `Student.classLevel`, `Subject.cla
 - **A class may never run across a break.** A double period that reaches into one is really two blocks either side of it, and counting the break as taught time would inflate both hours totals and any absence logged against it. Enforced in the API (`saveTimetable`) as well as the builder. **Private/extra classes are exempt** — being off the period grid is what they are for — as are Saturday/Sunday classes, which already don't follow the grid.
 - Hours coverage above is counted in real 60-minute hours; **absences are counted in periods** (`slotPeriods`), so a missed 100-minute class is 2 periods missed. Until `periodMinutes` is set, that falls back to counting 1 per missed slot.
 
-### Known simplification
-`TimetableSlot` is versioned (`archivedAt`) but not session-scoped — if the timetable changes mid-term, the projection is computed off the *current* (non-archived) schedule applied across the whole period, not what was actually true before the change. Archived versions are kept for the History panel and never re-enter any hours calculation.
+### Timetable versions and the hours maths
+A coverage row uses the version of the timetable that was **live when the assignment window closed**: the current one (`archivedAt` null) for a teacher who still holds the course, and the rows archived *at* the handover for one who gave it up. Superseded versions — archived earlier because an admin re-saved — are excluded, so an old version is never counted alongside its replacement.
+
+This deliberately does **not** bound a slot by its `createdAt`. A timetable entered halfway through a term still describes the whole term, and counting only from the day it was typed in would rob teachers of hours they had already taught.
