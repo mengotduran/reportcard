@@ -47,7 +47,7 @@ const STATUS_STYLE: Record<CoverageStatus, string> = {
 
 export default function MyTeachingHoursPage() {
   const t = useT()
-  const { school } = useAuthStore()
+  const { school, user } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
 
@@ -164,6 +164,18 @@ export default function MyTeachingHoursPage() {
                       <td className="px-5 py-3">
                         <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
                         <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(r.classLevel)}{r.term ? ` · ${r.term}` : ''}</span>
+                        {/* The figures across this row are the COURSE's, which is what the
+                            target measures. When someone else also taught it, the teacher's
+                            own share is spelled out — otherwise a teacher who joined in
+                            November looks as though they missed everything before that. */}
+                        {r.contributors.length > 1 && (() => {
+                          const mine = r.contributors.find((c) => c.teacherId === user?.id)
+                          return mine ? (
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {r.contributors.length} {t('teachers on this course')}
+                            </p>
+                          ) : null
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
                       <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>

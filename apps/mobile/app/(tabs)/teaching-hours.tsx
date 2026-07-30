@@ -518,7 +518,7 @@ function TeacherAttendanceScreen() {
   const styles = makeStyles(colors)
   const t = useT()
   const router = useRouter()
-  const { school } = useAuthStore()
+  const { school, user } = useAuthStore()
   const graceMinutes = school?.absenceGraceMinutes ?? null
   const isUniversity = school?.type === 'UNIVERSITY'
 
@@ -532,6 +532,7 @@ function TeacherAttendanceScreen() {
   const [periodEnd, setPeriodEnd] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period missed') : t('periods missed')) : (n === 1 ? t('absence') : t('absences'))
 
@@ -545,7 +546,12 @@ function TeacherAttendanceScreen() {
     try {
       const [c, a, tt] = await Promise.all([getMyCoverage(), getMyAbsences(), getMyTimetable()])
       setRows(c.rows); setAbsences(a.absences); setSlots(tt.slots); setPeriodsMissed(a.periodsMissed); setPeriodMinutes(a.periodMinutes); setPeriodEnd(a.periodEnd)
-    } catch { /* keep last-known data on transient failure */ }
+      setLoadFailed(false)
+    } catch {
+      // Not silent: falling through would show "no required-hours target has been set",
+      // blaming the school's setup for what is a connection problem.
+      setLoadFailed(true)
+    }
     finally { setLoading(false); setRefreshing(false) }
   }, [])
 
@@ -645,7 +651,11 @@ function TeacherAttendanceScreen() {
         {rows.length === 0 ? (
           <View style={styles.center}>
             <Ionicons name="time-outline" size={36} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('No required-hours target has been set for any of your subjects yet.')}</Text>
+            <Text style={[styles.emptyText, loadFailed && { color: '#F03E2F' }]}>
+              {loadFailed
+                ? t('Could not reach the server. Check your connection and pull to refresh.')
+                : t('No required-hours target has been set for any of your subjects yet.')}
+            </Text>
           </View>
         ) : rows.map((r) => (
           <View key={r.subjectId} style={styles.card}>
@@ -659,6 +669,19 @@ function TeacherAttendanceScreen() {
             <View style={[styles.badge, { backgroundColor: STATUS_COLOR[r.status] }]}>
               <Text style={styles.badgeText}>{t(r.status)}</Text>
             </View>
+            {/* The figures above are the COURSE's, which is what the target measures. When
+                somebody else also taught it, this teacher's own share is called out — without
+                it a teacher who joined in November would look as though they had missed the
+                hours taught before they arrived. */}
+            {(() => {
+              const mine = r.contributors.find((c) => c.teacherId === user?.id)
+              if (!mine || r.contributors.length < 2) return null
+              return (
+                <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 8 }}>
+                  {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {r.contributors.length} {t('teachers on this course')}
+                </Text>
+              )
+            })()}
           </View>
         ))}
 

@@ -109,6 +109,7 @@ export default function TeachingHoursPage() {
   // Which course row is open. One at a time: the breakdown is for answering "who taught
   // this", not for scanning every course at once.
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [showAllTeachers, setShowAllTeachers] = useState(false)
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [absencesLoading, setAbsencesLoading] = useState(false)
 
@@ -230,10 +231,15 @@ export default function TeachingHoursPage() {
       .finally(() => setAbsencesLoading(false))
   }
 
+  // Default hides the teachers with nothing recorded. A school with 43 staff and two
+  // absences was a wall of empty cards to scan; the page is opened to find who HAS been
+  // absent. Searching by name always looks at everyone, or the search would appear broken.
   const teacherRows = teachers
     .map((tch) => ({ ...tch, count: absenceCounts[tch.id] ?? 0 }))
+    .filter((tch) => teacherSearch.trim() || showAllTeachers || tch.count > 0)
     .filter((tch) => !teacherSearch.trim() || tch.name.toLowerCase().includes(teacherSearch.toLowerCase()))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  const hiddenTeacherCount = teachers.filter((tch) => (absenceCounts[tch.id] ?? 0) === 0).length
 
   // 4 teachers per row, paginated once there are more than 7 rows' worth (28 teachers).
   const TEACHER_COLS = 4
@@ -326,6 +332,16 @@ export default function TeachingHoursPage() {
               </p>
             )
           })()}
+          {hiddenTeacherCount > 0 && !teacherSearch.trim() && (
+            <button
+              onClick={() => setShowAllTeachers((v) => !v)}
+              className="text-xs font-medium text-primary hover:underline mb-3 block"
+            >
+              {showAllTeachers
+                ? t('Hide teachers with no absences')
+                : `${t('Show all')} · ${hiddenTeacherCount} ${t('with none')}`}
+            </button>
+          )}
           <div className="relative mb-4">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input

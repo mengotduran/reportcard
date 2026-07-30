@@ -98,19 +98,6 @@ export default function TabsLayout() {
     </View>
   )
 
-  // Teachers/class masters have no "More" tab (admin-only menu), so this is
-  // their only way to reach Account — change password, mainly.
-  const teacherHeaderButtons = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
-      <ThemeToggle size="sm" />
-      <TouchableOpacity onPress={() => router.push('/account')} style={{ padding: 8 }} hitSlop={8}>
-        <Ionicons name="person-circle-outline" size={22} color={colors.textSecondary} />
-      </TouchableOpacity>
-      <TouchableOpacity onPress={handleLogout} style={{ padding: 8 }} hitSlop={8}>
-        <Ionicons name="log-out-outline" size={22} color="#ef4444" />
-      </TouchableOpacity>
-    </View>
-  )
 
   const logoutButtonWhite = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
