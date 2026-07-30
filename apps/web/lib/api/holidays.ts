@@ -11,6 +11,9 @@ import api from './client'
 export interface SchoolHoliday {
   id: string
   name: string
+  /** Which sitting is closed. null = the whole school, and the only value that exists for
+   *  non-universities, since evening cohorts are a university concept for now. */
+  programme: 'DAY' | 'EVENING' | null
   startDate: string
   endDate: string
   /** Inclusive day count, computed server-side. */
@@ -22,12 +25,12 @@ export const getHolidaysApi = async (): Promise<{ holidays: SchoolHoliday[] }> =
   return res.data
 }
 
-export const createHolidayApi = async (data: { name: string; startDate: string; endDate: string }) => {
+export const createHolidayApi = async (data: { name: string; startDate: string; endDate: string; programme?: 'DAY' | 'EVENING' | null }) => {
   const res = await api.post('/holidays', data)
   return res.data
 }
 
-export const updateHolidayApi = async (id: string, data: { name: string; startDate: string; endDate: string }) => {
+export const updateHolidayApi = async (id: string, data: { name: string; startDate: string; endDate: string; programme?: 'DAY' | 'EVENING' | null }) => {
   const res = await api.put(`/holidays/${id}`, data)
   return res.data
 }

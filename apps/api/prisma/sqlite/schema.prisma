@@ -454,6 +454,11 @@ model SchoolHoliday {
   id        String   @id @default(uuid())
   schoolId  String
   name      String
+  // Which sitting is closed. NULL = the whole school, which is what every existing holiday
+  // means and stays the default. Set it only when one sitting runs through a closure the
+  // other observes. Evening currently exists for universities only, so this is a no-op
+  // everywhere else.
+  programme Programme?
   startDate DateTime
   endDate   DateTime
   createdAt DateTime @default(now())

@@ -861,6 +861,10 @@ const FR: Record<string, string> = {
   'assign someone before this starts': 'affectez quelqu\'un avant cette date',
   'Effective from': 'À compter du',
   'Hours are counted from this date. Back-date it if the change already happened.': 'Les heures sont comptées à partir de cette date. Antidatez-la si le changement a déjà eu lieu.',
+  'Applies to': 'S\u2019applique à',
+  'Whole school': 'Toute l\u2019école',
+  'Day only': 'Jour uniquement',
+  'Evening only': 'Soir uniquement',
   // ── Holidays ──
   'Holidays': 'Jours fériés',
   'Add Holiday': 'Ajouter un jour férié',

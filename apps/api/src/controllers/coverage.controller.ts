@@ -43,11 +43,32 @@ function absenceCutoffForTerm(term: { startDate: Date }, allTerms: TermRow[]): D
 // fresh one, even for the same teacher. Used to scope both the admin's per-teacher
 // absence counts and a teacher's own "how many periods have I missed" view.
 /** Every school closure. Ranges may overlap; computeCoverage merges before subtracting. */
-async function getSchoolHolidays(schoolId: string): Promise<DateRange[]> {
+async function getSchoolHolidays(schoolId: string) {
   return prisma.schoolHoliday.findMany({
     where: { schoolId },
-    select: { startDate: true, endDate: true },
+    select: { startDate: true, endDate: true, programme: true },
   })
+}
+
+/**
+ * The closures that apply to one sitting.
+ *
+ * A holiday with no programme closes the whole school; one naming a programme closes only
+ * that sitting. Day and evening are separate ClassLevels, so their courses are separate
+ * Subject rows and each is measured against its own set. Evening currently exists for
+ * universities only, so for every other school type this is just "all of them".
+ */
+function holidaysFor(
+  holidays: { startDate: Date; endDate: Date; programme: string | null }[],
+  programme: string | null,
+): DateRange[] {
+  return holidays.filter((h) => h.programme == null || h.programme === programme)
+}
+
+/** classLevel name -> its programme, so a course can be matched to the right closures. */
+async function getProgrammeByClassLevel(schoolId: string): Promise<Map<string, string>> {
+  const levels = await prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, programme: true } })
+  return new Map(levels.map((l) => [l.name, l.programme as string]))
 }
 
 export async function getCurrentPeriodRange(schoolId: string): Promise<{ start: Date; end: Date } | null> {
@@ -182,7 +203,10 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     select: { teacherId: true, timetableSlotId: true, date: true, periodIndex: true },
   })
 
-  const holidays = await getSchoolHolidays(schoolId)
+  const [holidays, programmeByClassLevel] = await Promise.all([
+    getSchoolHolidays(schoolId),
+    getProgrammeByClassLevel(schoolId),
+  ])
   const asOfDate = new Date()
   const parts = teacherSubjects.flatMap((ts) => {
     const subject = ts.subject
@@ -240,7 +264,8 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       absences: teacherAbsences,
       asOfDate,
       periodMinutes,
-      holidays,
+      // This course's own sitting: an evening closure must not cancel day periods.
+      holidays: holidaysFor(holidays, programmeByClassLevel.get(subject.classLevel) ?? null),
     })
 
     return [{
@@ -447,12 +472,16 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
     select: { id: true, name: true, startDate: true, endDate: true },
   })).filter((t) => t.startDate <= range.end && t.endDate >= range.start)
   if (scopeTerms.length === 0) return []
-  const holidays = await getSchoolHolidays(schoolId)
+  const [holidays, programmeByClassLevel] = await Promise.all([
+    getSchoolHolidays(schoolId),
+    getProgrammeByClassLevel(schoolId),
+  ])
 
   const [slots, school] = await Promise.all([
     prisma.timetableSlot.findMany({
       where: { schoolId, archivedAt: null },
-      include: { teacher: { select: { id: true, name: true } } },
+      // subject.classLevel is what tells us which sitting a slot belongs to.
+      include: { teacher: { select: { id: true, name: true } }, subject: { select: { classLevel: true } } },
     }),
     prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
   ])
@@ -477,22 +506,37 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
   const asOfDate = new Date()
   return [...byTeacher.entries()].map(([teacherId, { teacherName, slots: teacherSlots }]) => {
     const teacherAbsences = absences.filter((a) => a.teacherId === teacherId)
-    const result = computeCoverage({
-      requiredHours: null,
-      slots: teacherSlots.map((s) => ({ id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime, specificDate: s.specificDate })),
-      terms: scopeTerms,
-      absences: teacherAbsences,
-      asOfDate,
-      periodMinutes,
-      holidays,
-    })
-    return {
-      teacherId, teacherName,
-      scheduledHours: result.scheduledHours,
-      taughtHours: result.taughtHours,
-      projectedFinalHours: result.projectedFinalHours,
-      isFinal: result.isFinal,
+
+    // A teacher can hold day AND evening courses, and a closure may apply to only one of
+    // them — so their slots are split by sitting and each half measured against its own
+    // holidays, then added back together. Computing them in one pass would apply an evening
+    // closure to their day periods.
+    const bySitting = new Map<string, typeof teacherSlots>()
+    for (const sl of teacherSlots) {
+      const key = (sl.subject ? programmeByClassLevel.get(sl.subject.classLevel) : null) ?? 'NONE'
+      const list = bySitting.get(key)
+      if (list) list.push(sl)
+      else bySitting.set(key, [sl])
     }
+
+    const totals = { scheduledHours: 0, taughtHours: 0, projectedFinalHours: 0, isFinal: true }
+    for (const [programme, sittingSlots] of bySitting) {
+      const result = computeCoverage({
+        requiredHours: null,
+        slots: sittingSlots.map((s) => ({ id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime, specificDate: s.specificDate })),
+        terms: scopeTerms,
+        absences: teacherAbsences,
+        asOfDate,
+        periodMinutes,
+        holidays: holidaysFor(holidays, programme === 'NONE' ? null : programme),
+      })
+      totals.scheduledHours += result.scheduledHours
+      totals.taughtHours += result.taughtHours
+      totals.projectedFinalHours += result.projectedFinalHours
+      totals.isFinal = totals.isFinal && result.isFinal
+    }
+
+    return { teacherId, teacherName, ...totals }
   })
 }
 

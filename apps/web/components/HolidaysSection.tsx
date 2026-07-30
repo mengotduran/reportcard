@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { CalendarOff, Plus, Pencil, Trash2, X } from 'lucide-react'
 import { getHolidaysApi, createHolidayApi, updateHolidayApi, deleteHolidayApi, SchoolHoliday } from '@/lib/api/holidays'
 import { useT } from '@/lib/i18n'
+import { useAuthStore } from '@/lib/store/auth.store'
 
 /**
  * Where an admin declares school closures.
@@ -15,6 +16,9 @@ import { useT } from '@/lib/i18n'
  */
 export default function HolidaysSection() {
   const t = useT()
+  // Evening cohorts only exist for universities today, so the sitting picker is hidden
+  // everywhere else rather than offering a choice with one real option.
+  const isUniversity = useAuthStore((s) => s.school?.type) === 'UNIVERSITY'
   const [holidays, setHolidays] = useState<SchoolHoliday[]>([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -26,6 +30,7 @@ export default function HolidaysSection() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<SchoolHoliday | null>(null)
+  const [programme, setProgramme] = useState<'DAY' | 'EVENING' | null>(null)
 
   const load = useCallback(() => {
     getHolidaysApi()
@@ -39,11 +44,11 @@ export default function HolidaysSection() {
 
   const openAdd = () => {
     setAdding(true); setEditing(null)
-    setName(''); setStartDate(''); setEndDate(''); setError('')
+    setName(''); setStartDate(''); setEndDate(''); setError(''); setProgramme(null)
   }
   const openEdit = (h: SchoolHoliday) => {
     setEditing(h); setAdding(false)
-    setName(h.name); setStartDate(h.startDate); setEndDate(h.endDate); setError('')
+    setName(h.name); setStartDate(h.startDate); setEndDate(h.endDate); setError(''); setProgramme(h.programme)
   }
   const close = () => { setAdding(false); setEditing(null); setError('') }
 
@@ -58,7 +63,7 @@ export default function HolidaysSection() {
 
     setSaving(true)
     try {
-      const payload = { name: name.trim(), startDate, endDate: end }
+      const payload = { name: name.trim(), startDate, endDate: end, programme }
       if (editing) await updateHolidayApi(editing.id, payload)
       else await createHolidayApi(payload)
       close()
@@ -119,6 +124,9 @@ export default function HolidaysSection() {
                 <p className="text-sm text-muted-foreground">
                   {range(h)}
                   <span className="text-xs"> · {h.days} {t(h.days === 1 ? 'day' : 'days')}</span>
+                  {h.programme && (
+                    <span className="ml-2 text-xs font-semibold text-primary">{t(h.programme === 'DAY' ? 'Day only' : 'Evening only')}</span>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
@@ -162,6 +170,25 @@ export default function HolidaysSection() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground mb-4">{t('Leave the end date blank for a single day. Both dates are included.')}</p>
+
+            {isUniversity && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-foreground mb-1">{t('Applies to')}</label>
+                <div className="flex gap-2">
+                  {([null, 'DAY', 'EVENING'] as const).map((opt) => (
+                    <button
+                      key={String(opt)}
+                      onClick={() => setProgramme(opt)}
+                      className={`flex-1 py-2 rounded-lg text-sm border transition ${
+                        programme === opt ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-foreground hover:bg-hover'
+                      }`}
+                    >
+                      {t(opt === null ? 'Whole school' : opt === 'DAY' ? 'Day only' : 'Evening only')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {error && <p className="text-sm text-destructive mb-3">{error}</p>}
 
