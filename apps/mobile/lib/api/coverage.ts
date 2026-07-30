@@ -6,9 +6,36 @@ export type CoverageStatus = 'NO_TARGET' | 'UNDER' | 'EXACT' | 'OVER'
  *  produce a coverage row. Returned only when the coverage list came back empty. */
 export interface UnassignedTarget { name: string; classLevel: string }
 
-export interface CoverageRow {
+/** One teacher's contribution to a course — the hours THEY taught, over the window they held
+ *  it. A course handed over mid-term has two of these. */
+export interface CoverageContributor {
   teacherId: string
   teacherName: string
+  /** The window they held it, "YYYY-MM-DD". endedAt null = still theirs. */
+  startedAt: string
+  endedAt: string | null
+  scheduledHours: number
+  taughtHours: number
+  projectedFinalHours: number
+  periodsMissed: number
+}
+
+/** A stretch of the term with NO teacher on the course. Elapsed = teaching already lost;
+ *  otherwise it is a staffing warning while there is still time to act. */
+export interface CoverageGap {
+  startDate: string
+  endDate: string
+  elapsed: boolean
+}
+
+/**
+ * One row per COURSE, not per teacher.
+ *
+ * requiredHours belongs to the course, so the totals here are everyone's work added together:
+ * two teachers sharing a 30-hour course are at 30 between them, never 30 each. `contributors`
+ * breaks it down by who taught what; `gaps` names any stretch nobody held it.
+ */
+export interface CoverageRow {
   subjectId: string
   subjectName: string
   classLevel: string
@@ -19,8 +46,11 @@ export interface CoverageRow {
   projectedFinalHours: number
   status: CoverageStatus
   isFinal: boolean
-  // Periods missed for this course (a 2-period class = 2); event count when periodMinutes null.
+  // Periods missed across the whole course (a 2-period class = 2); falls back to an event
+  // count when periodMinutes is null. See periodMinutes on the response.
   periodsMissed: number
+  contributors: CoverageContributor[]
+  gaps: CoverageGap[]
 }
 
 export const getMyCoverage = async (): Promise<{ session: string | null; rows: CoverageRow[]; periodMinutes: number | null }> => {

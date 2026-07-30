@@ -2,7 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
-import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, DayOfWeek, ScopeTerm, DateRange } from '../utils/teachingHours'
+import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, DayOfWeek, ScopeTerm, DateRange, mergeDateRanges } from '../utils/teachingHours'
 
 // Falls back to the most recently created session when no term is currently active —
 // same situation fees.controller's currentSession already leaves null; a school between
@@ -72,9 +72,44 @@ export async function getCurrentPeriodRange(schoolId: string): Promise<{ start: 
   return { start, end: absenceCutoffForTerm(latestSessionTerm, allTerms) }
 }
 
-interface CoverageRow {
+/** One teacher's contribution to a course — the hours THEY taught, over the window they
+ *  held it. A course handed over mid-term has two of these. */
+interface CoverageContributor {
   teacherId: string
   teacherName: string
+  /** The window they held it, "YYYY-MM-DD". endedAt null = still theirs. */
+  startedAt: string
+  endedAt: string | null
+  subjectId: string
+  subjectName: string
+  classLevel: string
+  term: string | null
+  scheduledHours: number
+  taughtHours: number
+  projectedFinalHours: number
+  // Periods missed for this course (a 2-period class counts as 2), falling back to a plain
+  // event count when the school hasn't set a period length. See slotPeriods.
+  periodsMissed: number
+}
+
+/** A stretch of a term during which the course had NO teacher at all, so nothing was taught
+ *  and nothing accrued. Elapsed gaps are teaching already lost; upcoming ones are a staffing
+ *  warning while there is still time to act. */
+interface CoverageGap {
+  startDate: string
+  endDate: string
+  elapsed: boolean
+}
+
+/**
+ * One row per COURSE, not per teacher.
+ *
+ * requiredHours belongs to the course, so it is stated once and compared against everything
+ * taught on it — two teachers sharing a 30-hour course are at 30 between them, never 30 each.
+ * `contributors` breaks that total down by who taught what, and `gaps` names any stretch when
+ * nobody held it.
+ */
+interface CoverageRow {
   subjectId: string
   subjectName: string
   classLevel: string
@@ -85,9 +120,9 @@ interface CoverageRow {
   projectedFinalHours: number
   status: string
   isFinal: boolean
-  // Periods missed for this course (a 2-period class counts as 2), falling back to a plain
-  // event count when the school hasn't set a period length. See slotPeriods.
   periodsMissed: number
+  contributors: CoverageContributor[]
+  gaps: CoverageGap[]
 }
 
 /** Each term narrowed to the part that falls inside the window, dropping those outside it. */
@@ -143,7 +178,7 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
 
   const holidays = await getSchoolHolidays(schoolId)
   const asOfDate = new Date()
-  return teacherSubjects.flatMap((ts) => {
+  const parts = teacherSubjects.flatMap((ts) => {
     const subject = ts.subject
     // Which VERSION of the timetable counts for this assignment: the one that was live when
     // the window closed. For a teacher who still holds the course that is the current
@@ -203,21 +238,115 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     })
 
     return [{
-      teacherId: ts.userId,
-      teacherName: ts.user.name,
+      subject,
+      scopeTerms: resolveScopeTerms(subject, terms),
+      contributor: {
+        teacherId: ts.userId,
+        teacherName: ts.user.name,
+        startedAt: iso(ts.startedAt),
+        endedAt: ts.endedAt ? iso(ts.endedAt) : null,
+        scheduledHours: result.scheduledHours,
+        taughtHours: result.taughtHours,
+        projectedFinalHours: result.projectedFinalHours,
+        periodsMissed,
+      } as CoverageContributor,
+      window: { startDate: ts.startedAt, endDate: ts.endedAt ?? FAR_FUTURE },
+      isFinal: result.isFinal,
+    }]
+  })
+
+  return groupByCourse(parts, holidays)
+}
+
+/** "YYYY-MM-DD" for a Date, in whole calendar days like the rest of the hours maths. */
+const iso = (d: Date) => d.toISOString().slice(0, 10)
+
+/**
+ * Per-assignment results folded into one row per course.
+ *
+ * The target is the course's, so it is compared against the SUM of what everyone taught on
+ * it. Status is recomputed here rather than taken from any contributor: each of them measured
+ * their own slice against the full target, which is only right when there is exactly one.
+ */
+function groupByCourse(
+  parts: {
+    subject: { id: string; name: string; classLevel: string; term: string | null; requiredHours: number | null }
+    scopeTerms: ScopeTerm[]
+    contributor: CoverageContributor
+    window: { startDate: Date; endDate: Date }
+    isFinal: boolean
+  }[],
+  holidays: DateRange[],
+): CoverageRow[] {
+  const byCourse = new Map<string, typeof parts>()
+  for (const p of parts) {
+    const list = byCourse.get(p.subject.id)
+    if (list) list.push(p)
+    else byCourse.set(p.subject.id, [p])
+  }
+
+  const now = new Date()
+  return [...byCourse.values()].map((group) => {
+    const { subject, scopeTerms } = group[0]
+    const sum = (pick: (c: CoverageContributor) => number) => group.reduce((t, g) => t + pick(g.contributor), 0)
+    const scheduledHours = sum((c) => c.scheduledHours)
+    const taughtHours = sum((c) => c.taughtHours)
+    const projectedFinalHours = sum((c) => c.projectedFinalHours)
+    // Final only once every contributor's slice is, i.e. the whole course is behind us.
+    const isFinal = group.every((g) => g.isFinal)
+    const finalHours = isFinal ? taughtHours : projectedFinalHours
+
+    let status = 'NO_TARGET'
+    if (subject.requiredHours != null) {
+      const diff = finalHours - subject.requiredHours
+      status = Math.abs(diff) <= 0.01 ? 'EXACT' : diff > 0 ? 'OVER' : 'UNDER'
+    }
+
+    return {
       subjectId: subject.id,
       subjectName: subject.name,
       classLevel: subject.classLevel,
       term: subject.term,
-      requiredHours: result.requiredHours,
-      scheduledHours: result.scheduledHours,
-      taughtHours: result.taughtHours,
-      projectedFinalHours: result.projectedFinalHours,
-      status: result.status,
-      isFinal: result.isFinal,
-      periodsMissed,
-    }]
+      requiredHours: subject.requiredHours,
+      scheduledHours, taughtHours, projectedFinalHours, status, isFinal,
+      periodsMissed: sum((c) => c.periodsMissed),
+      // Earliest window first, so the handover chain reads in order.
+      contributors: [...group].sort((a, b) => a.contributor.startedAt.localeCompare(b.contributor.startedAt)).map((g) => g.contributor),
+      gaps: findGaps(scopeTerms, group.map((g) => g.window), now),
+    }
   })
+}
+
+/**
+ * Stretches of the course's terms that no assignment window covers.
+ *
+ * This is the "nobody is teaching it" flag. Hours already stop accruing during a gap, because
+ * nothing is assigned — without this nothing would ever say so, and a course could quietly
+ * fall behind with no one accountable.
+ */
+function findGaps(terms: ScopeTerm[], windows: { startDate: Date; endDate: Date }[], now: Date): CoverageGap[] {
+  const covered = mergeDateRanges(windows)
+  const gaps: CoverageGap[] = []
+  const DAY = 86400000
+
+  for (const term of terms) {
+    let cursor = term.startDate.getTime()
+    const termEnd = term.endDate.getTime()
+    for (const c of covered) {
+      const start = c.startDate.getTime()
+      const end = c.endDate.getTime()
+      if (end < cursor || start > termEnd) continue
+      if (start > cursor) {
+        gaps.push({ startDate: iso(new Date(cursor)), endDate: iso(new Date(Math.min(start - DAY, termEnd))), elapsed: start - DAY <= now.getTime() })
+      }
+      cursor = Math.max(cursor, end + DAY)
+      if (cursor > termEnd) break
+    }
+    if (cursor <= termEnd) {
+      gaps.push({ startDate: iso(new Date(cursor)), endDate: iso(new Date(termEnd)), elapsed: termEnd <= now.getTime() })
+    }
+  }
+  return gaps
 }
 
 export const getMyCoverage = async (req: AuthRequest, res: Response) => {
@@ -226,7 +355,13 @@ export const getMyCoverage = async (req: AuthRequest, res: Response) => {
     const session = await resolveSession(schoolId, req.query.session ? String(req.query.session) : undefined)
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } })
     if (!session) { res.json({ session: null, rows: [], periodMinutes: school?.periodMinutes ?? null }); return }
-    res.json({ session, rows: await buildCoverageRows(schoolId, session, req.user!.id), periodMinutes: school?.periodMinutes ?? null })
+    // Built from ALL contributors, then narrowed to courses this teacher is on. Filtering
+    // earlier would make a shared course's total look like their share alone — "12 of 30"
+    // when the course is actually at 18 — so they could not tell whether it is on track.
+    // Their own contribution is still in `contributors`, tagged by teacherId.
+    const all = await buildCoverageRows(schoolId, session)
+    const mine = all.filter((r) => r.contributors.some((c) => c.teacherId === req.user!.id))
+    res.json({ session, rows: mine, periodMinutes: school?.periodMinutes ?? null })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -247,7 +382,9 @@ export const getCoverage = async (req: AuthRequest, res: Response) => {
     // tell the admin to go and set a target they had already set. Name the real gap.
     const unassignedTargets = rows.length === 0
       ? await prisma.subject.findMany({
-          where: { schoolId, requiredHours: { not: null }, teacherSubjects: { none: {} } },
+          // `none: { endedAt: null }` not `none: {}` — a course whose every assignment has
+          // ended is just as unstaffed as one that never had a teacher.
+          where: { schoolId, requiredHours: { not: null }, teacherSubjects: { none: { endedAt: null } } },
           select: { name: true, classLevel: true },
           orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
         })

@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Fragment} from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
@@ -15,7 +15,7 @@ import { useToast } from '@/lib/useToast'
 import { onRealtime } from '@/lib/socket'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { usePagination } from '@/lib/usePagination'
-import { Clock, CalendarOff, Search, X, Trash2, Users } from 'lucide-react'
+import { Clock, CalendarOff, Search, X, Trash2, Users, ChevronRight} from 'lucide-react'
 
 interface DrillTarget {
   teacherId: string
@@ -106,6 +106,9 @@ export default function TeachingHoursPage() {
   const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period') : t('periods')) : (n === 1 ? t('absence') : t('absences'))
 
   const [drillDown, setDrillDown] = useState<DrillTarget | null>(null)
+  // Which course row is open. One at a time: the breakdown is for answering "who taught
+  // this", not for scanning every course at once.
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [absencesLoading, setAbsencesLoading] = useState(false)
 
@@ -182,8 +185,10 @@ export default function TeachingHoursPage() {
       if (drillDown && drillDown.teacherId === reportTeacherId) {
         // Refresh whichever drill-down was open — course-scoped or the full teacher list.
         if (drillDown.subjectName) {
-          const row = rows.find((r) => r.teacherId === drillDown.teacherId && r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel)
-          if (row) openDrillDown(row)
+          const row = rows.find((r) => r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel
+            && r.contributors.some((c) => c.teacherId === drillDown.teacherId))
+          const contributor = row?.contributors.find((c) => c.teacherId === drillDown.teacherId)
+          if (row && contributor) openDrillDown(row, contributor)
         } else {
           openTeacherDrillDown(drillDown.teacherId, drillDown.teacherName)
         }
@@ -200,15 +205,18 @@ export default function TeachingHoursPage() {
     if (statusFilter !== 'ALL' && r.status !== statusFilter) return false
     if (!search.trim()) return true
     const q = search.toLowerCase()
-    return r.teacherName.toLowerCase().includes(q) || r.subjectName.toLowerCase().includes(q) || r.classLevel.toLowerCase().includes(q)
+    return r.subjectName.toLowerCase().includes(q) || r.classLevel.toLowerCase().includes(q)
+      || r.contributors.some((c) => c.teacherName.toLowerCase().includes(q))
   })
 
   const { page, setPage, pageItems, totalPages } = usePagination(filtered, 15, `${search}|${statusFilter}`)
 
-  const openDrillDown = (row: CoverageRow) => {
-    setDrillDown({ teacherId: row.teacherId, teacherName: row.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
+  // A course row has no single teacher, so drilling in is done per contributor — absences
+  // belong to a person, not to a course.
+  const openDrillDown = (row: CoverageRow, c: { teacherId: string; teacherName: string }) => {
+    setDrillDown({ teacherId: c.teacherId, teacherName: c.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
     setAbsencesLoading(true)
-    getTeacherAbsencesApi(row.teacherId)
+    getTeacherAbsencesApi(c.teacherId)
       .then((d) => setAbsences(d.absences.filter((a) => a.subjectName === row.subjectName && a.classLevel === row.classLevel)))
       .finally(() => setAbsencesLoading(false))
   }
@@ -426,11 +434,28 @@ export default function TeachingHoursPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {pageItems.map((r) => (
-                  <tr key={`${r.teacherId}-${r.subjectId}`} className="hover:bg-hover/40 transition cursor-pointer" onClick={() => openDrillDown(r)}>
+                  <Fragment key={r.subjectId}>
+                  {/* The COURSE is the row: its target is stated once and compared against
+                      everything taught on it. Who taught what is one level down, because two
+                      teachers sharing a 30-hour course are at 30 between them, not 30 each. */}
+                  <tr className="hover:bg-hover/40 transition cursor-pointer" onClick={() => setExpanded(expanded === r.subjectId ? null : r.subjectId)}>
                     <td className="px-5 py-3 text-sm font-medium text-foreground">
-                      {r.teacherName}
+                      <span className="inline-flex items-center gap-1.5">
+                        <ChevronRight size={14} className={`text-muted-foreground transition-transform ${expanded === r.subjectId ? 'rotate-90' : ''}`} />
+                        {r.contributors.length === 1
+                          ? r.contributors[0].teacherName
+                          : `${r.contributors.length} ${t('teachers')}`}
+                      </span>
                       {r.periodsMissed > 0 && (
                         <span className="ml-2 inline-block text-xs font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full" title={`${r.periodsMissed} ${unit(r.periodsMissed)} ${t('missed')}`}>{r.periodsMissed}</span>
+                      )}
+                      {r.gaps.length > 0 && (
+                        <span
+                          className={`ml-2 inline-block text-xs font-semibold px-1.5 py-0.5 rounded-full ${r.gaps.some((g) => g.elapsed) ? 'text-red-700 bg-red-100' : 'text-amber-700 bg-amber-100'}`}
+                          title={r.gaps.map((g) => `${g.startDate} → ${g.endDate}`).join(', ')}
+                        >
+                          {r.gaps.some((g) => g.elapsed) ? t('no teacher') : t('unstaffed ahead')}
+                        </span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -446,6 +471,35 @@ export default function TeachingHoursPage() {
                       </span>
                     </td>
                   </tr>
+                  {expanded === r.subjectId && r.contributors.map((c) => (
+                    <tr key={c.teacherId} className="bg-muted/30 cursor-pointer hover:bg-hover/40 transition" onClick={() => openDrillDown(r, c)}>
+                      <td className="px-5 py-2 pl-11 text-sm text-foreground">
+                        {c.teacherName}
+                        {c.periodsMissed > 0 && (
+                          <span className="ml-2 inline-block text-xs font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full">{c.periodsMissed}</span>
+                        )}
+                      </td>
+                      {/* The window they held it — what makes a mid-term handover legible. */}
+                      <td className="px-4 py-2 text-xs text-muted-foreground">
+                        {c.startedAt}{c.endedAt ? ` → ${c.endedAt}` : ` → ${t('present')}`}
+                      </td>
+                      <td className="px-4 py-2 text-center text-xs text-muted-foreground">—</td>
+                      <td className="px-4 py-2 text-center text-sm text-foreground">{formatHours(c.taughtHours)}</td>
+                      <td className="px-4 py-2 text-center text-sm text-foreground">{formatHours(c.projectedFinalHours)}</td>
+                      <td className="px-4 py-2 text-center text-xs text-muted-foreground">{t('click for absences')}</td>
+                    </tr>
+                  ))}
+                  {expanded === r.subjectId && r.gaps.map((g) => (
+                    <tr key={`${g.startDate}-${g.endDate}`} className="bg-muted/30">
+                      <td className="px-5 py-2 pl-11 text-sm text-muted-foreground italic" colSpan={2}>
+                        {g.elapsed ? t('No teacher held this course') : t('No teacher assigned from')} {g.startDate} → {g.endDate}
+                      </td>
+                      <td className="px-4 py-2 text-center text-xs text-muted-foreground" colSpan={4}>
+                        {g.elapsed ? t('these hours were not taught') : t('assign someone before this starts')}
+                      </td>
+                    </tr>
+                  ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table></div>

@@ -648,7 +648,7 @@ function TeacherAttendanceScreen() {
             <Text style={styles.emptyText}>{t('No required-hours target has been set for any of your subjects yet.')}</Text>
           </View>
         ) : rows.map((r) => (
-          <View key={`${r.teacherId}-${r.subjectId}`} style={styles.card}>
+          <View key={r.subjectId} style={styles.card}>
             <Text style={styles.subject}>{r.subjectName}</Text>
             <Text style={styles.meta}>{r.classLevel}{r.term ? ` · ${r.term}` : ''}</Text>
             <View style={styles.statsRow}>
@@ -919,13 +919,15 @@ function AdminAttendanceScreen() {
   const filtered = rows.filter((r) => {
     if (!search.trim()) return true
     const q = search.toLowerCase()
-    return r.teacherName.toLowerCase().includes(q) || r.subjectName.toLowerCase().includes(q) || r.classLevel.toLowerCase().includes(q)
+    return r.subjectName.toLowerCase().includes(q) || r.classLevel.toLowerCase().includes(q)
+      || r.contributors.some((c) => c.teacherName.toLowerCase().includes(q))
   })
 
-  const openDrillDown = (row: CoverageRow) => {
-    setDrillDown({ teacherId: row.teacherId, teacherName: row.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
+  // Absences belong to a person, not a course, so drilling in is per contributor.
+  const openDrillDown = (row: CoverageRow, c: { teacherId: string; teacherName: string }) => {
+    setDrillDown({ teacherId: c.teacherId, teacherName: c.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
     setAbsencesLoading(true)
-    getTeacherAbsences(row.teacherId)
+    getTeacherAbsences(c.teacherId)
       .then((d) => setAbsences(d.absences.filter((a) => a.subjectName === row.subjectName && a.classLevel === row.classLevel)))
       .catch(() => {})
       .finally(() => setAbsencesLoading(false))
@@ -1017,8 +1019,10 @@ function AdminAttendanceScreen() {
       if (drillDown && drillDown.teacherId === reportTeacher.id) {
         // Refresh whichever drill-down was open — course-scoped or the full teacher list.
         if (drillDown.subjectName) {
-          const row = rows.find((r) => r.teacherId === drillDown.teacherId && r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel)
-          if (row) openDrillDown(row)
+          const row = rows.find((r) => r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel
+            && r.contributors.some((c) => c.teacherId === drillDown.teacherId))
+          const contributor = row?.contributors.find((c) => c.teacherId === drillDown.teacherId)
+          if (row && contributor) openDrillDown(row, contributor)
         } else {
           openTeacherDrillDown(drillDown.teacherId, drillDown.teacherName)
         }
@@ -1154,7 +1158,7 @@ function AdminAttendanceScreen() {
           <FlatList
             style={{ flex: 1 }}
             data={filtered}
-            keyExtractor={(r) => `${r.teacherId}-${r.subjectId}`}
+            keyExtractor={(r) => r.subjectId}
             contentContainerStyle={{ padding: 16, paddingTop: 0, paddingBottom: 90 }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             ListEmptyComponent={
@@ -1183,13 +1187,25 @@ function AdminAttendanceScreen() {
                 )}
               </View>
             }
+            // The COURSE is the card: its target is stated once and measured against
+            // everything taught on it. Contributors are listed beneath, each tappable for
+            // their own absences, because absences belong to a person not a course.
             renderItem={({ item: r }) => (
-              <TouchableOpacity style={styles.coverageCard} onPress={() => openDrillDown(r)} activeOpacity={0.7}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Text style={styles.teacherNameText}>{r.teacherName}</Text>
+              <View style={styles.coverageCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Text style={styles.teacherNameText}>
+                    {r.contributors.length === 1 ? r.contributors[0].teacherName : `${r.contributors.length} ${t('teachers')}`}
+                  </Text>
                   {r.periodsMissed > 0 && (
                     <View style={{ backgroundColor: '#fed7aa', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2, marginLeft: 8 }}>
                       <Text style={{ fontSize: 11, fontWeight: '700', color: '#c2410c' }}>{r.periodsMissed}</Text>
+                    </View>
+                  )}
+                  {r.gaps.length > 0 && (
+                    <View style={{ backgroundColor: r.gaps.some((g) => g.elapsed) ? '#fecaca' : '#fde68a', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2, marginLeft: 8 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: r.gaps.some((g) => g.elapsed) ? '#b91c1c' : '#92400e' }}>
+                        {r.gaps.some((g) => g.elapsed) ? t('no teacher') : t('unstaffed ahead')}
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -1203,7 +1219,31 @@ function AdminAttendanceScreen() {
                 <View style={[styles.badge, { backgroundColor: STATUS_COLOR[r.status] }]}>
                   <Text style={styles.badgeText}>{t(r.status)}</Text>
                 </View>
-              </TouchableOpacity>
+                {r.contributors.map((c) => (
+                  <TouchableOpacity
+                    key={c.teacherId}
+                    onPress={() => openDrillDown(r, c)}
+                    activeOpacity={0.7}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>{c.teacherName}</Text>
+                      {/* The window they held it — what makes a mid-term handover legible. */}
+                      <Text style={{ fontSize: 11, color: colors.textMuted }}>
+                        {c.startedAt} → {c.endedAt ?? t('present')} · {formatHours(c.taughtHours)}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                  </TouchableOpacity>
+                ))}
+                {r.gaps.map((g) => (
+                  <View key={`${g.startDate}-${g.endDate}`} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border }}>
+                    <Text style={{ fontSize: 11, fontStyle: 'italic', color: colors.textMuted }}>
+                      {g.elapsed ? t('No teacher held this course') : t('No teacher assigned from')} {g.startDate} → {g.endDate}
+                    </Text>
+                  </View>
+                ))}
+              </View>
             )}
           />
         </>
