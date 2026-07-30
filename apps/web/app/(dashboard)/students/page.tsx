@@ -8,7 +8,7 @@ import {
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
-import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix, withProgrammeSuffix, PROGRAMME_LABELS } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
@@ -85,6 +85,9 @@ export default function StudentsPage() {
   const isSecondary = school?.type === 'SECONDARY'
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  // A university's year is split into semesters, not terms. Same Term rows either way, only
+  // the word changes, exactly as the sidebar relabels the nav.
+  const ts = (termStr: string, semesterStr: string) => t(isUniversity ? semesterStr : termStr)
   const [students, setStudents] = useState<Student[]>([])
   const [filterClasses, setFilterClasses] = useState<string[]>([])
   const [definedClasses, setDefinedClasses] = useState<ClassLevel[]>([])
@@ -464,7 +467,7 @@ export default function StudentsPage() {
     if (!file) return
     setImportPreviewing(true)
     try {
-      const result = await previewStudentImportApi(file)
+      const result = await previewStudentImportApi(file, programmeFilter.programme)
       setImportPreview(result)
     } catch (err: unknown) {
       const e2 = err as { response?: { data?: { message?: string } } }
@@ -518,7 +521,7 @@ export default function StudentsPage() {
   // roster + class chips are active-only.
   const handleExport = async () => {
     const targetTerms = activeTermId ? visibleTerms.filter((tm) => tm.id === activeTermId) : visibleTerms
-    if (targetTerms.length === 0) { showToast(t('No term selected'), 'error'); return }
+    if (targetTerms.length === 0) { showToast(ts('No term selected', 'No semester selected'), 'error'); return }
     const targetClasses = activeClass !== 'all'
       ? [activeClass]
       : (isSecondary && deptFilter !== 'all' ? filterClasses.filter((c) => deptIdOfClass(c) === deptFilter) : filterClasses)
@@ -621,16 +624,16 @@ export default function StudentsPage() {
             </button>
           )}
           <button onClick={handleExport} disabled={exporting}
-            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 transition">
             <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
           </button>
           <button onClick={openImportModal} disabled={!hasCurrentTerm}
-            title={hasCurrentTerm ? undefined : t('Set a current academic year/term before adding students.')}
-            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition">
+            title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
             <Upload size={16} /> {t('Import Students')}
           </button>
           <button onClick={openAdd} disabled={!hasCurrentTerm}
-            title={hasCurrentTerm ? undefined : t('Set a current academic year/term before adding students.')}
+            title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
             className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 disabled:cursor-not-allowed transition">
             <Plus size={16} /> {t('Add Student')}
           </button>
@@ -640,8 +643,8 @@ export default function StudentsPage() {
       {!hasCurrentTerm && (
         <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2">
           <Info size={15} className="flex-shrink-0" />
-          {t('No current academic year/term is set — set one before you can add students.')}{' '}
-          <button onClick={() => router.push('/terms')} className="font-semibold underline hover:no-underline">{t('Go to Terms')}</button>
+          {ts('No current academic year/term is set. Set one before you can add students.', 'No current academic year/semester is set. Set one before you can add students.')}{' '}
+          <button onClick={() => router.push('/terms')} className="font-semibold underline hover:no-underline">{ts('Go to Terms', 'Go to Semesters')}</button>
         </div>
       )}
 
@@ -691,7 +694,7 @@ export default function StudentsPage() {
         <span className="text-xs text-muted-foreground mr-1">{t('Status')}:</span>
         {STATUS_TABS.map((tab) => (
           <button key={tab.value} onClick={() => handleStatusFilter(tab.value)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${statusFilter === tab.value ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${statusFilter === tab.value ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-hover'}`}>
             {t(tab.label)}
           </button>
         ))}
@@ -699,14 +702,14 @@ export default function StudentsPage() {
 
       {visibleTerms.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 mb-4">
-          <span className="text-xs text-muted-foreground mr-1">{t('Export by term')}:</span>
+          <span className="text-xs text-muted-foreground mr-1">{ts('Export by term', 'Export by semester')}:</span>
           <button onClick={() => handleTermFilter('')}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!activeTermId ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
-            {t('All Terms')}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!activeTermId ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}>
+            {ts('All Terms', 'All Semesters')}
           </button>
           {visibleTerms.map((tm) => (
             <button key={tm.id} onClick={() => handleTermFilter(tm.id)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeTermId === tm.id ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeTermId === tm.id ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}>
               {tm.name}{tm.isCurrent ? ` (${t('Current')})` : ''}
             </button>
           ))}
@@ -747,7 +750,7 @@ export default function StudentsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {pageItems.map((s) => (
-                <tr key={s.id} className="hover:bg-muted dark:hover:bg-muted transition">
+                <tr key={s.id} className="hover:bg-hover transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 flex-shrink-0 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">
@@ -757,8 +760,15 @@ export default function StudentsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
+                  {/* The class name is stripped for display, so without the badge an evening
+                      student's row is character for character identical to a day student's in
+                      the same programme. This column is the only place that difference can
+                      show: the Level column beside it is the same for both. */}
                   <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {stripProgrammeSuffix(isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel)}
+                    <span className="inline-flex items-center gap-2 flex-wrap">
+                      {stripProgrammeSuffix(isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel)}
+                      {programmeFilter.programmeOf(s.classLevel) === 'EVENING' && <EveningBadge />}
+                    </span>
                   </td>
                   {isUniversity && (
                     <td className="px-4 py-3">
@@ -1076,7 +1086,7 @@ export default function StudentsPage() {
               ))}
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{t('Cancel')}</button>
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{t('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                   {saving ? t('Saving...') : editingId ? t('Save Changes') : t('Add Student')}
@@ -1175,7 +1185,7 @@ export default function StudentsPage() {
 
             <div className="flex gap-3 pt-5">
               <button type="button" onClick={closeImportModal}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleImportCommit}
@@ -1209,7 +1219,7 @@ export default function StudentsPage() {
             <p className="text-sm text-muted-foreground mb-4">{statusTarget.name}</p>
             <div className="space-y-2 mb-5">
               {STATUS_TABS.map((tab) => (
-                <label key={tab.value} className="flex items-center gap-3 cursor-pointer border border-border rounded-lg px-3 py-2.5 hover:bg-muted transition">
+                <label key={tab.value} className="flex items-center gap-3 cursor-pointer border border-border rounded-lg px-3 py-2.5 hover:bg-hover transition">
                   <input type="radio" name="status" value={tab.value}
                     checked={newStatus === tab.value}
                     onChange={() => setNewStatus(tab.value)}
@@ -1225,7 +1235,7 @@ export default function StudentsPage() {
             )}
             <div className="flex gap-3">
               <button type="button" onClick={closeStatusModal}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleStatusSave} disabled={statusSaving}
@@ -1290,7 +1300,7 @@ export default function StudentsPage() {
                   feeStatus === 'UNPAID' ? 'Unpaid' : ''
                 return (
                   <label key={s.id}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-muted transition border ${promoteSelected.has(s.id) ? 'border-indigo-200 bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-800' : 'border-transparent'}`}>
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-hover transition border ${promoteSelected.has(s.id) ? 'border-indigo-200 bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-800' : 'border-transparent'}`}>
                     <input
                       type="checkbox"
                       checked={promoteSelected.has(s.id)}
@@ -1328,7 +1338,7 @@ export default function StudentsPage() {
               </p>
               <div className="flex gap-3">
                 <button type="button" onClick={() => setPromoteModalOpen(false)}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   Cancel
                 </button>
                 <button

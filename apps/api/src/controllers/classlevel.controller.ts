@@ -131,6 +131,24 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
     }
 
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, acronym: true } })
+
+    // A programme is only ever taken one way, from the day section into a new evening intake,
+    // and that happens at creation. Switching an existing evening department back to day
+    // would move a whole cohort between sections behind the admin's back, so it is refused:
+    // one created in the wrong section is deleted and made again in the right one. The web
+    // form already shows the section as read-only here, this is the rule itself.
+    if (
+      school?.type === 'UNIVERSITY' &&
+      level.programme === 'EVENING' &&
+      programme !== undefined &&
+      resolveProgramme(programme) === 'DAY'
+    ) {
+      res.status(400).json({
+        message: 'An evening department cannot be moved to the day section. Create the department in the Day section instead.',
+      })
+      return
+    }
+
     const regEligible = isRegistrationClass(school?.type, name?.trim() || level.name)
 
     // A class is referenced BY NAME everywhere in this app (`Student.classLevel`,
@@ -201,9 +219,14 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
     // IDs in this class so the matricule always reflects the current abbreviation.
     if (abbreviation?.trim() && updated.abbreviation) {
       if (school?.type === 'UNIVERSITY' && school.acronym) {
-        const levelMatch = updated.name.match(/- Level (\d+)$/i)
+        // Normalised first. This pattern anchors at the END of the name, which is exactly
+        // where the "(Evening)" marker sits, so an evening department matched no level and
+        // every matricule it rebuilt lost its level digit (ACC instead of ACC1). Built the
+        // same way as `parseProgramAndDept` in student.controller.ts, which already strips.
+        const baseName = stripProgramme(updated.name)
+        const levelMatch = baseName.match(/- Level (\d+)$/i)
         const levelSuffix = levelMatch ? levelMatch[1] : ''
-        const progMatch = updated.name.match(/^(HND|Degree)\s/i)
+        const progMatch = baseName.match(/^(HND|Degree)\s/i)
         const prog = progMatch ? progMatch[1].toUpperCase() : ''
         const newAbbr = updated.abbreviation + levelSuffix
 
@@ -247,6 +270,58 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   }
 }
 
+/**
+ * What deleting this class would destroy, counted BEFORE anything is touched.
+ *
+ * Exists so the confirmation the admin sees is the truth from the database rather than the
+ * page's cached idea of it: the delete cascades through courses into marks, lecturer
+ * assignments and timetable slots, none of which the Classes page has loaded.
+ */
+export const getClassLevelDeleteImpact = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+
+    const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
+    if (!level) {
+      res.status(404).json({ message: 'Class not found' })
+      return
+    }
+
+    const subjects = await prisma.subject.findMany({
+      where: { schoolId, classLevel: level.name }, select: { id: true },
+    })
+    const subjectIds = subjects.map((s) => s.id)
+
+    const [students, marks, assignments, slots, classMasters] = await Promise.all([
+      prisma.student.count({ where: { schoolId, classLevel: level.name } }),
+      subjectIds.length ? prisma.reportEntry.count({ where: { subjectId: { in: subjectIds } } }) : 0,
+      subjectIds.length ? prisma.teacherSubject.count({ where: { subjectId: { in: subjectIds }, endedAt: null } }) : 0,
+      subjectIds.length ? prisma.timetableSlot.count({ where: { subjectId: { in: subjectIds } } }) : 0,
+      prisma.user.count({ where: { schoolId, masterClassLevel: level.name } }),
+    ])
+
+    res.json({
+      name: level.name,
+      programme: level.programme,
+      students,
+      subjects: subjects.length,
+      marks,
+      assignments,
+      slots,
+      classMasters,
+      // Students are a hard block, never deleted with the class.
+      blocked: students > 0,
+      // Always. Even an empty department is worth one deliberate act, because the thing most
+      // likely to go wrong here is deleting the right-looking wrong one.
+      requiresTypedName: true,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const deleteClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
@@ -271,19 +346,50 @@ export const deleteClassLevel = async (req: AuthRequest, res: Response) => {
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
     const courseWord = school?.type === 'UNIVERSITY' ? 'course' : 'subject'
 
-    const [studentCount, subjectCount] = await Promise.all([
-      prisma.student.count({ where: { schoolId, classLevel: level.name } }),
-      prisma.subject.count({ where: { schoolId, classLevel: level.name } }),
-    ])
+    // Students BLOCK, they are never deleted with the class. A student is a person, with a
+    // matricule issued, fees paid and marks earned across terms this class never saw, and
+    // none of that is the class's to destroy. Moving them to another class first is something
+    // the admin can actually do; undoing a deleted roster is not.
+    //
+    // Named IN FULL, marker and all. Stripping the section (as printing does) made this
+    // refusal read as if it were about the day class of the same name.
+    const studentCount = await prisma.student.count({ where: { schoolId, classLevel: level.name } })
+    if (studentCount > 0) {
+      res.status(400).json({
+        message: `"${level.name}" still has ${studentCount} student${studentCount === 1 ? '' : 's'}. Move or remove them first, then delete the class.`,
+        blockedBy: { students: studentCount },
+      })
+      return
+    }
 
-    if (studentCount > 0 || subjectCount > 0) {
-      const parts = [
-        studentCount && `${studentCount} student${studentCount === 1 ? '' : 's'}`,
-        subjectCount && `${subjectCount} ${courseWord}${subjectCount === 1 ? '' : 's'}`,
+    // Everything the courses carry goes with them. Prisma cascades TeacherSubject (the
+    // lecturers who take them), TimetableSlot (and TeacherAbsence through it, so the slots
+    // vanish off every teacher's timetable) and PastTermMarksGrant off `Subject`.
+    // ReportEntry does NOT cascade — its relation has no onDelete — so the marks are deleted
+    // by hand first, exactly as deleteSubject does, or the delete would fail on the FK.
+    const doomedSubjects = await prisma.subject.findMany({
+      where: { schoolId, classLevel: level.name }, select: { id: true },
+    })
+    const subjectIds = doomedSubjects.map((s) => s.id)
+
+    // The name must be typed for EVERY delete, not only the ones carrying marks. A day and an
+    // evening department differ by nothing but the marker at the end of the name, so "is this
+    // the one I meant" is the question worth forcing, and it is worth forcing before the
+    // department turns out to be the wrong one rather than after. Enforced here and not only
+    // in the modal, so no other caller can drop a department with a bare DELETE.
+    const markCount = subjectIds.length
+      ? await prisma.reportEntry.count({ where: { subjectId: { in: subjectIds } } })
+      : 0
+    if (String(req.body?.confirmName ?? '').trim() !== level.name) {
+      const holds = [
+        subjectIds.length && `${subjectIds.length} ${courseWord}${subjectIds.length === 1 ? '' : 's'}`,
+        markCount && `${markCount} mark${markCount === 1 ? '' : 's'}`,
       ].filter(Boolean).join(' and ')
       res.status(400).json({
-        message: `"${stripProgramme(level.name)}" still has ${parts}. Move or remove them first, then delete the class.`,
-        blockedBy: { students: studentCount, subjects: subjectCount },
+        message: holds
+          ? `Deleting "${level.name}" would delete its ${holds}. Confirm by typing the exact name.`
+          : `Confirm by typing the exact name of "${level.name}".`,
+        requiresTypedName: true,
       })
       return
     }
@@ -295,6 +401,14 @@ export const deleteClassLevel = async (req: AuthRequest, res: Response) => {
       .map((tpl) => ({ id: tpl.id, classLevels: tpl.list.filter((n) => n !== level.name) }))
 
     const cleared = await prisma.$transaction(async (tx) => {
+      let marks = 0, slots = 0, assignments = 0
+      if (subjectIds.length) {
+        marks = (await tx.reportEntry.deleteMany({ where: { subjectId: { in: subjectIds } } })).count
+        // Counted before the cascade takes them, so the message can say what went.
+        slots = await tx.timetableSlot.count({ where: { subjectId: { in: subjectIds } } })
+        assignments = await tx.teacherSubject.count({ where: { subjectId: { in: subjectIds }, endedAt: null } })
+        await tx.subject.deleteMany({ where: { schoolId, classLevel: level.name } })
+      }
       const masters = await tx.user.updateMany({
         where: { schoolId, masterClassLevel: level.name }, data: { masterClassLevel: null },
       })
@@ -302,10 +416,17 @@ export const deleteClassLevel = async (req: AuthRequest, res: Response) => {
         await tx.excelTemplate.update({ where: { id: tpl.id }, data: { classLevels: tpl.classLevels } })
       }
       await tx.classLevel.delete({ where: { id } })
-      return { classMasters: masters.count, templates: templateRewrites.length }
+      return {
+        subjects: subjectIds.length, marks, slots, assignments,
+        classMasters: masters.count, templates: templateRewrites.length,
+      }
     })
 
     const alsoCleared = [
+      cleared.subjects && `${cleared.subjects} ${courseWord}${cleared.subjects === 1 ? '' : 's'} deleted`,
+      cleared.marks && `${cleared.marks} mark${cleared.marks === 1 ? '' : 's'} deleted`,
+      cleared.assignments && `unassigned from ${cleared.assignments} lecturer slot${cleared.assignments === 1 ? '' : 's'}`,
+      cleared.slots && `${cleared.slots} timetable slot${cleared.slots === 1 ? '' : 's'} removed`,
       cleared.classMasters && `${cleared.classMasters} class master${cleared.classMasters === 1 ? '' : 's'} no longer assigned to it`,
       cleared.templates && `removed from ${cleared.templates} Excel template${cleared.templates === 1 ? '' : 's'}`,
     ].filter(Boolean).join(', ')

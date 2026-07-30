@@ -12,7 +12,8 @@ export const getSubjects = async (req: AuthRequest, res: Response) => {
 
     if (isTeacher) {
       const assigned = await prisma.teacherSubject.findMany({
-        where: { userId: req.user!.id },
+        // Current courses only: a teacher should stop seeing one they handed over.
+        where: { userId: req.user!.id, endedAt: null },
         select: { subjectId: true },
       })
       subjectIdFilter = assigned.map((a) => a.subjectId)
@@ -98,6 +99,52 @@ export const updateSubject = async (req: AuthRequest, res: Response) => {
   }
 }
 
+/**
+ * What deleting this course would destroy, counted before anything is touched.
+ *
+ * Same shape as the class-level one: the page cannot see marks, lecturer assignments or
+ * timetable slots, and those are exactly what makes the delete irreversible.
+ */
+export const getSubjectDeleteImpact = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+
+    const subject = await prisma.subject.findFirst({ where: { id, schoolId } })
+    if (!subject) {
+      res.status(404).json({ message: 'Subject not found' })
+      return
+    }
+
+    const [marks, students, assignments, slots] = await Promise.all([
+      prisma.reportEntry.count({ where: { subjectId: id } }),
+      // How many students would actually lose a mark, which is the number that means
+      // something to an admin. A count of entries alone reads as an abstraction.
+      prisma.reportEntry.findMany({
+        where: { subjectId: id }, select: { reportCard: { select: { studentId: true } } },
+      }).then((rows) => new Set(rows.map((r) => r.reportCard.studentId)).size),
+      prisma.teacherSubject.count({ where: { subjectId: id, endedAt: null } }),
+      prisma.timetableSlot.count({ where: { subjectId: id } }),
+    ])
+
+    res.json({
+      name: subject.name,
+      classLevel: subject.classLevel,
+      term: subject.term,
+      marks,
+      students,
+      assignments,
+      slots,
+      // A course nobody has been marked on yet is setup, and deleting it loses nothing that
+      // cannot be retyped. Once there are marks, the name has to be typed.
+      requiresTypedName: marks > 0,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const deleteSubject = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
@@ -106,6 +153,18 @@ export const deleteSubject = async (req: AuthRequest, res: Response) => {
     const subject = await prisma.subject.findFirst({ where: { id, schoolId } })
     if (!subject) {
       res.status(404).json({ message: 'Subject not found' })
+      return
+    }
+
+    // Marks make this irreversible, so the name has to be typed. Enforced here and not only
+    // in the modal: a day and an evening department hold same-named courses, and this is the
+    // last thing standing between deleting the one you meant and the one you did not.
+    const markCount = await prisma.reportEntry.count({ where: { subjectId: id } })
+    if (markCount > 0 && String(req.body?.confirmName ?? '').trim() !== subject.name.trim()) {
+      res.status(400).json({
+        message: `"${subject.name}" has ${markCount} mark${markCount === 1 ? '' : 's'} entered on it, in ${subject.classLevel}. Confirm by typing the exact course name.`,
+        requiresTypedName: true,
+      })
       return
     }
 
@@ -141,11 +200,16 @@ export const copySubjects = async (req: AuthRequest, res: Response) => {
     const source = await prisma.subject.findMany({
       where: { schoolId, classLevel: fromClassLevel, ...(subjectIds ? { id: { in: subjectIds } } : {}) },
     })
+    // Keyed on name AND term, not name alone. A university course belongs to one semester and
+    // the same course can run in both, so deduping on the name would silently refuse to copy
+    // a Second Semester course because a First Semester one shares its name. Primary and
+    // secondary subjects all carry a null term, so this stays a plain name match for them.
+    const key = (s: { name: string; term: string | null }) => `${s.name.trim().toLowerCase()}|${s.term ?? ''}`
     const existing = new Set(
-      (await prisma.subject.findMany({ where: { schoolId, classLevel: toClassLevel }, select: { name: true } }))
-        .map((s) => s.name.toLowerCase()),
+      (await prisma.subject.findMany({ where: { schoolId, classLevel: toClassLevel }, select: { name: true, term: true } }))
+        .map(key),
     )
-    const toCreate = source.filter((s) => !existing.has(s.name.toLowerCase()))
+    const toCreate = source.filter((s) => !existing.has(key(s)))
     if (toCreate.length) {
       await prisma.subject.createMany({
         data: toCreate.map((s) => ({

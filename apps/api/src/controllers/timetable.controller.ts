@@ -537,6 +537,32 @@ export const deleteTimetableHistoryVersion = async (req: AuthRequest, res: Respo
     if (!teacherId || !archivedAt || isNaN(archivedAt.getTime())) {
       res.status(400).json({ message: 'teacherId and archivedAt are required' }); return
     }
+    // Deleting is only safe while nothing is RECORDED against this version. TeacherAbsence
+    // cascades on TimetableSlot, so removing these rows would silently take every absence
+    // logged against them — and with them the teacher's missed-period counts and the hours
+    // arithmetic that subtracts from. That is unrecoverable, and the admin would never be
+    // told it happened.
+    //
+    // The version stays; an admin who wants a different schedule edits the CURRENT timetable
+    // instead, which archives rather than destroys.
+    const slots = await prisma.timetableSlot.findMany({
+      where: { schoolId, teacherId, archivedAt },
+      select: { id: true },
+    })
+    if (slots.length === 0) {
+      res.status(404).json({ message: 'Timetable version not found' }); return
+    }
+    const recorded = await prisma.teacherAbsence.count({
+      where: { timetableSlotId: { in: slots.map((s) => s.id) } },
+    })
+    if (recorded > 0) {
+      res.status(409).json({
+        message: `This version cannot be deleted: ${recorded} recorded ${recorded === 1 ? 'absence is' : 'absences are'} attached to it. Edit the current timetable instead — past versions are kept so those records stay valid.`,
+        recordedAbsences: recorded,
+      })
+      return
+    }
+
     await prisma.timetableSlot.deleteMany({ where: { schoolId, teacherId, archivedAt } })
     res.json({ message: 'Timetable version removed' })
   } catch (error) {

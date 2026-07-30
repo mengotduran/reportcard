@@ -5,6 +5,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Modal, FlatList, RefreshControl, TextInput,
 } from 'react-native'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
@@ -497,7 +498,8 @@ export default function AdminReportCardDetail() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.studentName}>{reportCard.student.name}</Text>
-            <Text style={styles.meta}>{reportCard.student.classLevel} · {reportCard.term.name} · {reportCard.term.session}</Text>
+            {/* Stripped: the section is an internal grouping and must never appear on a card. */}
+            <Text style={styles.meta}>{stripProgrammeSuffix(reportCard.student.classLevel)} · {reportCard.term.name} · {reportCard.term.session}</Text>
           </View>
         </View>
         <View style={[styles.statusBadge, isDraft ? styles.draftBadge : styles.publishedBadge]}>

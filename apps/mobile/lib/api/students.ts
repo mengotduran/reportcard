@@ -15,6 +15,8 @@ export interface Student {
 
 export const getStudents = async (params?: {
   classLevel?: string; search?: string; session?: string; status?: string
+  /** 'DAY' | 'EVENING'. Server-side because the roster is paginated. */
+  programme?: string
   page?: number; pageSize?: number
 }): Promise<{ students: Student[]; total: number; page?: number; pageSize?: number; hasMore?: boolean }> => {
   const res = await api.get('/students', { params })
@@ -85,9 +87,12 @@ export const downloadStudentImportTemplate = async (): Promise<string> => {
   return `${baseUrl}/students/import/template?token=${encodeURIComponent(String(token).replace('Bearer ', ''))}`
 }
 
-export const previewStudentImportApi = async (fileUri: string, fileName: string, mimeType: string): Promise<ImportPreviewResult> => {
+// `programme` is the Day/Evening filter the admin is on. The sheet has no column for the
+// sitting, so this is what tells a department that runs both which one to import into.
+export const previewStudentImportApi = async (fileUri: string, fileName: string, mimeType: string, programme?: string): Promise<ImportPreviewResult> => {
   const formData = new FormData()
   formData.append('file', { uri: fileUri, name: fileName, type: mimeType } as any)
+  if (programme) formData.append('programme', programme)
   const res = await api.post('/students/import/preview', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })

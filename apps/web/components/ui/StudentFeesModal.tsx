@@ -209,7 +209,7 @@ export default function StudentFeesModal({
                 <button
                   onClick={handleToggleRepeat}
                   disabled={togglingRepeat}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition disabled:opacity-50 ${data.isRepeatingYear ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-muted-foreground/15 text-foreground hover:bg-muted-foreground/25'}`}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition disabled:opacity-50 ${data.isRepeatingYear ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-muted-foreground/15 text-foreground hover:bg-hover-foreground/25'}`}
                 >
                   <RefreshCw size={12} className={togglingRepeat ? 'animate-spin' : ''} />
                   {data.isRepeatingYear ? 'Disable' : 'Enable'}
@@ -237,7 +237,7 @@ export default function StudentFeesModal({
                     cumulative += p.amount
                     const left = Math.max(0, data.due - cumulative)
                     return (
-                      <tr key={p.id} className="hover:bg-muted transition">
+                      <tr key={p.id} className="hover:bg-hover transition">
                         <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
                         <td className="px-3 py-2 text-foreground">{fmtDate(p.paidOn)}</td>
                         <td className="px-3 py-2 text-right font-medium text-emerald-600">{formatXAF(p.amount)}</td>

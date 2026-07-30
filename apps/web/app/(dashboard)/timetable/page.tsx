@@ -555,8 +555,12 @@ export default function TimetablePage() {
       await deleteTimetableHistoryVersionApi(activeTeacher.id, deleteVersionTarget)
       setHistoryVersions((prev) => prev.filter((v) => v.archivedAt !== deleteVersionTarget))
       showToast(tr('Timetable version removed'))
-    } catch {
-      showToast(tr('Failed to remove timetable version'), 'error')
+    } catch (err) {
+      // Surface the API's own reason. The common one is a refusal because absences are
+      // recorded against this version — "Failed to remove" alone would leave the admin
+      // retrying a delete that is deliberately blocked, with no idea why.
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || tr('Failed to remove timetable version'), 'error')
     } finally {
       setDeleteVersionTarget(null)
     }
@@ -712,7 +716,7 @@ export default function TimetablePage() {
                 <p className="text-muted-foreground text-sm mt-1">{tr('Pick a teacher to build their weekly schedule')}</p>
               </div>
               <button onClick={() => { resetPendingPeriodRow(periods); setShowPeriodsModal(true) }}
-                className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition flex-shrink-0">
+                className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition flex-shrink-0">
                 <Clock size={15} /> {tr('Set Up Periods')}
               </button>
             </div>
@@ -788,11 +792,11 @@ export default function TimetablePage() {
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={openHistory}
-                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition">
                   <Clock size={15} /> {tr('History')}
                 </button>
                 <button onClick={openAddSlot}
-                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition">
                   <Plus size={16} /> {tr('Add Slot')}
                 </button>
                 <button onClick={handleSaveTimetable} disabled={saving}
@@ -1038,7 +1042,7 @@ export default function TimetablePage() {
                                   if (!slotForm.dateInput || slotForm.specificDates.includes(slotForm.dateInput)) return
                                   setSlotForm({ ...slotForm, specificDates: [...slotForm.specificDates, slotForm.dateInput].sort(), dateInput: '' })
                                 }}
-                                className="px-3 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted transition">
+                                className="px-3 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-hover transition">
                                 {tr('Add')}
                               </button>
                             </div>
@@ -1090,7 +1094,7 @@ export default function TimetablePage() {
                   </button>
                 )}
                 <button onClick={() => setShowSlotModal(false)}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   {tr('Cancel')}
                 </button>
                 <button onClick={handleSlotSubmit} disabled={!!modalConflict}
@@ -1154,7 +1158,7 @@ export default function TimetablePage() {
               )}
               <div className="flex gap-3 mt-5">
                 <button onClick={() => setShowHistoryModal(false)}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   {tr('Close')}
                 </button>
               </div>
@@ -1270,12 +1274,12 @@ export default function TimetablePage() {
                 <div className="flex gap-2">
                   {editingPeriodId && (
                     <button onClick={cancelEditPeriod}
-                      className="border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+                      className="border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition">
                       {tr('Cancel')}
                     </button>
                   )}
                   <button onClick={submitPeriodRow}
-                    className="flex-1 flex items-center justify-center gap-2 border border-border text-foreground py-2 rounded-lg text-sm font-medium hover:bg-muted transition">
+                    className="flex-1 flex items-center justify-center gap-2 border border-border text-foreground py-2 rounded-lg text-sm font-medium hover:bg-hover transition">
                     {editingPeriodId ? tr('Save Changes') : <><Plus size={14} /> {tr('Add')}</>}
                   </button>
                 </div>
@@ -1286,7 +1290,7 @@ export default function TimetablePage() {
 
               <div className="flex gap-3 mt-5">
                 <button onClick={() => setShowPeriodsModal(false)}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   {tr('Cancel')}
                 </button>
                 <button onClick={handleSavePeriods} disabled={periodsSaving}

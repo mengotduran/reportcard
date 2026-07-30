@@ -2,7 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
-import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, DayOfWeek, ScopeTerm } from '../utils/teachingHours'
+import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, DayOfWeek, ScopeTerm, DateRange } from '../utils/teachingHours'
 
 // Falls back to the most recently created session when no term is currently active —
 // same situation fees.controller's currentSession already leaves null; a school between
@@ -42,6 +42,14 @@ function absenceCutoffForTerm(term: { startDate: Date }, allTerms: TermRow[]): D
 // is deleted), but it stops counting toward "current" — the next semester/year starts a
 // fresh one, even for the same teacher. Used to scope both the admin's per-teacher
 // absence counts and a teacher's own "how many periods have I missed" view.
+/** Every school closure. Ranges may overlap; computeCoverage merges before subtracting. */
+async function getSchoolHolidays(schoolId: string): Promise<DateRange[]> {
+  return prisma.schoolHoliday.findMany({
+    where: { schoolId },
+    select: { startDate: true, endDate: true },
+  })
+}
+
 export async function getCurrentPeriodRange(schoolId: string): Promise<{ start: Date; end: Date } | null> {
   const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
   const session = await resolveSession(schoolId)
@@ -82,8 +90,21 @@ interface CoverageRow {
   periodsMissed: number
 }
 
+/** Each term narrowed to the part that falls inside the window, dropping those outside it. */
+function clampTermsToWindow(terms: ScopeTerm[], window: { startDate: Date; endDate: Date }): ScopeTerm[] {
+  return terms
+    .map((t) => ({
+      ...t,
+      startDate: t.startDate > window.startDate ? t.startDate : window.startDate,
+      endDate: t.endDate < window.endDate ? t.endDate : window.endDate,
+    }))
+    .filter((t) => t.startDate <= t.endDate)
+}
+
 // Shared by both the admin-wide report and a teacher's own view — one (teacher, subject)
-// pair is one row, since the hours actually taught depend on THAT teacher's timetable.
+// ASSIGNMENT is one row, since the hours actually taught depend on THAT teacher's timetable
+// and on the window during which they held the course. A course handed over mid-term
+// therefore produces two rows, one per teacher, splitting the hours at the handover date.
 async function buildCoverageRows(schoolId: string, session: string, teacherId?: string): Promise<CoverageRow[]> {
   const [terms, allTerms, teacherSubjects, school] = await Promise.all([
     prisma.term.findMany({ where: { schoolId, session } }),
@@ -102,6 +123,13 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
   const teacherIds = [...new Set(teacherSubjects.map((ts) => ts.userId))]
   const subjectIds = [...new Set(teacherSubjects.map((ts) => ts.subjectId))]
 
+  // Archived rows are INCLUDED here, deliberately. They used to be filtered out to stop
+  // superseded timetable versions inflating the hours, but that also erased the hours of a
+  // teacher whose slots were archived when their course changed hands — their row showed 0.
+  // computeCoverage now bounds each slot by its own createdAt/archivedAt instead, so a
+  // superseded version counts only up to the moment it was replaced and its successor only
+  // from then on. The two halves add up to one timetable, and a departed teacher keeps what
+  // they actually taught.
   const slots = await prisma.timetableSlot.findMany({
     where: { schoolId, teacherId: { in: teacherIds }, subjectId: { in: subjectIds } },
   })
@@ -113,11 +141,33 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     select: { teacherId: true, timetableSlotId: true, date: true, periodIndex: true },
   })
 
+  const holidays = await getSchoolHolidays(schoolId)
   const asOfDate = new Date()
-  return teacherSubjects.map((ts) => {
+  return teacherSubjects.flatMap((ts) => {
     const subject = ts.subject
-    const teacherSlots = slots.filter((s) => s.teacherId === ts.userId && s.subjectId === subject.id)
-    const scopeTerms = resolveScopeTerms(subject, terms)
+    // Which VERSION of the timetable counts for this assignment: the one that was live when
+    // the window closed. For a teacher who still holds the course that is the current
+    // timetable (archivedAt null); for one who handed it over it is the rows archived AT the
+    // handover, which is exactly how takeCoursesFromOtherTeachers stamps them.
+    //
+    // Superseded versions — archived EARLIER, because the admin re-saved the timetable — are
+    // excluded, which is what stops an old version being counted alongside its replacement.
+    // Note this deliberately does NOT bound by the slot's createdAt: a timetable entered
+    // halfway through a term still describes the whole term, and counting only from the day
+    // it was typed in would rob teachers of hours they had already taught.
+    const teacherSlots = slots.filter((s) =>
+      s.teacherId === ts.userId && s.subjectId === subject.id &&
+      (s.archivedAt == null || (ts.endedAt != null && s.archivedAt >= ts.endedAt))
+    )
+    // Clamped to the ASSIGNMENT WINDOW: hours only count while this teacher actually held the
+    // course. A term that started before they took it contributes only from their start date,
+    // and one still running after they gave it up contributes only up to the handover. A
+    // teacher who left mid-term keeps exactly what they taught; their successor's own row
+    // picks up from the same date, so nothing is double-counted and nothing is lost.
+    const held = { startDate: ts.startedAt, endDate: ts.endedAt ?? FAR_FUTURE }
+    const scopeTerms = clampTermsToWindow(resolveScopeTerms(subject, terms), held)
+    // Entirely outside the window (a course ended before this term began) contributes nothing.
+    if (scopeTerms.length === 0) return []
     const teacherCourseAbsences = absences.filter((a) => a.teacherId === ts.userId && teacherSlots.some((s) => s.id === a.timetableSlotId))
 
     // For the HOURS math: strictly within the scope term's real start/end. The date check
@@ -149,9 +199,10 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       absences: teacherAbsences,
       asOfDate,
       periodMinutes,
+      holidays,
     })
 
-    return {
+    return [{
       teacherId: ts.userId,
       teacherName: ts.user.name,
       subjectId: subject.id,
@@ -165,7 +216,7 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       status: result.status,
       isFinal: result.isFinal,
       periodsMissed,
-    }
+    }]
   })
 }
 
@@ -227,7 +278,17 @@ export interface TeacherHoursTotal {
 async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTotal[]> {
   const range = await getCurrentPeriodRange(schoolId)
   if (!range) return []
-  const scopeTerm: ScopeTerm = { id: 'current', name: 'current', startDate: range.start, endDate: range.end }
+  // The REAL term rows inside the current period, not one span from the first term's start
+  // to the last term's end. Collapsing them counted the breaks BETWEEN terms as teaching
+  // weeks — a primary/secondary school was credited with hours over the December and April
+  // holidays. University is one term anyway, so only the multi-term types change.
+  const session = await resolveSession(schoolId)
+  const scopeTerms: ScopeTerm[] = (await prisma.term.findMany({
+    where: { schoolId, ...(session ? { session } : {}) },
+    select: { id: true, name: true, startDate: true, endDate: true },
+  })).filter((t) => t.startDate <= range.end && t.endDate >= range.start)
+  if (scopeTerms.length === 0) return []
+  const holidays = await getSchoolHolidays(schoolId)
 
   const [slots, school] = await Promise.all([
     prisma.timetableSlot.findMany({
@@ -260,10 +321,11 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
     const result = computeCoverage({
       requiredHours: null,
       slots: teacherSlots.map((s) => ({ id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime, specificDate: s.specificDate })),
-      terms: [scopeTerm],
+      terms: scopeTerms,
       absences: teacherAbsences,
       asOfDate,
       periodMinutes,
+      holidays,
     })
     return {
       teacherId, teacherName,

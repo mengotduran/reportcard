@@ -1,10 +1,11 @@
-import { useState, useCallback, useMemo } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getMyAbsences, deleteAbsence, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { onRealtime } from '@/lib/socket'
 
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 
@@ -31,6 +32,7 @@ export default function AbsencesScreen() {
   const { colors } = useTheme()
   const styles = useMemo(() => makeStyles(colors), [colors])
   const t = useT()
+  const router = useRouter()
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -44,6 +46,12 @@ export default function AbsencesScreen() {
   }, [])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
+
+  // An admin opening this teacher's list LOCKS these rows (seenByAdmin), which no longer
+  // permits a retraction. That is a read on the admin's side, so no notification fires and
+  // nothing else would tell this screen — without it the delete button lingers until the
+  // teacher happens to reload, and then fails.
+  useEffect(() => onRealtime('absences:changed', load), [load])
 
   const onRefresh = () => { setRefreshing(true); load() }
 
@@ -85,9 +93,17 @@ export default function AbsencesScreen() {
         renderItem={({ item: a }) => {
           // Same rule as the Attendance tab: locked once the period's actually over, or
           // once an admin has reviewed it in a prior visit to their list.
-          const locked = a.isFinal || a.seenByAdmin
+          const locked = a.isFinal || a.graceExpired || a.seenByAdmin
           return (
-            <View style={styles.row}>
+            <TouchableOpacity
+              style={styles.row}
+              activeOpacity={0.7}
+              // Same drill-down as the Attendance tab: open the timetable at this period.
+              onPress={() => router.push({
+                pathname: '/(tabs)/timetable',
+                params: { missedSlotId: a.timetableSlotId, missedDate: a.date, missedFrom: a.startTime, missedTo: a.endTime },
+              } as any)}
+            >
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowText}>{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</Text>
                 <Text style={styles.rowSub}>{a.subjectName} · {a.classLevel}</Text>
@@ -100,7 +116,7 @@ export default function AbsencesScreen() {
                   <Ionicons name="trash-outline" size={18} color="#ef4444" />
                 </TouchableOpacity>
               )}
-            </View>
+            </TouchableOpacity>
           )
         }}
       />

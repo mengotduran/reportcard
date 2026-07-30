@@ -168,7 +168,7 @@ export default function ClassMasterPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {students.map((s, i) => (
-                <tr key={s.id} className="hover:bg-muted dark:hover:bg-muted transition">
+                <tr key={s.id} className="hover:bg-hover transition">
                   <td className="px-4 py-3 text-xs text-muted-foreground">{i + 1}</td>
                   <td className="px-4 py-3">
                     <p className="text-sm font-medium text-foreground">{s.name}</p>
@@ -212,7 +212,7 @@ export default function ClassMasterPage() {
                         </span>
                       ) : (
                         <button onClick={() => openEdit(s)}
-                          className={`flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition ${isGranted ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                          className={`flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition ${isGranted ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-muted-foreground hover:bg-hover'}`}>
                           <MessageSquare size={12} />
                           {isGranted ? `✏️ ${t('Edit (permitted)')}` : activeRemark(s.reportCard).trim() ? t('Edit') : t('Add Remarks')}
                         </button>
@@ -261,7 +261,7 @@ export default function ClassMasterPage() {
             <p className="text-[11px] text-muted-foreground mt-2">{t('AI drafts are a starting point — review and edit before saving.')}</p>
             <div className="flex gap-3 mt-4">
               <button onClick={() => setEditTarget(null)}
-                className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button onClick={handleSaveRemarks} disabled={saving}

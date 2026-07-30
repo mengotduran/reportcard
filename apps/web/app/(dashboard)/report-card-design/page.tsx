@@ -756,7 +756,7 @@ function RenderStamp({ sec, schoolStamp, uploading, onUpload, update }: { sec: S
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap', justifyContent: 'center' }}>
         {onUpload && (
           <button onClick={() => fileRef.current?.click()} disabled={uploading}
-            className="text-[10px] border border-border rounded px-1.5 py-0.5 bg-card hover:bg-muted transition disabled:opacity-50">
+            className="text-[10px] border border-border rounded px-1.5 py-0.5 bg-card hover:bg-hover transition disabled:opacity-50">
             {uploading ? t('Uploading…') : schoolStamp ? t('Change stamp') : t('Upload stamp')}
           </button>
         )}
@@ -768,7 +768,7 @@ function RenderStamp({ sec, schoolStamp, uploading, onUpload, update }: { sec: S
         <div className="flex rounded border border-border overflow-hidden">
           {(['left', 'center', 'right'] as const).map(a => (
             <button key={a} onClick={() => update({ ...sec, align: a })}
-              className={`px-1.5 py-0.5 transition ${(sec.align ?? 'right') === a ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}>
+              className={`px-1.5 py-0.5 transition ${(sec.align ?? 'right') === a ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-hover'}`}>
               {t(a)}
             </button>
           ))}
@@ -1780,10 +1780,10 @@ export default function ReportCardDesignPage() {
               {/* Type toggle */}
               <div className="flex rounded border border-border overflow-hidden text-xs">
                 <button
-                  className={`px-2 py-1 transition ${(watermark.type ?? 'text') === 'text' ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}
+                  className={`px-2 py-1 transition ${(watermark.type ?? 'text') === 'text' ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-hover'}`}
                   onClick={() => setWatermark({ type: 'text' })}>{tr('Text')}</button>
                 <button
-                  className={`px-2 py-1 transition ${(watermark.type ?? 'text') === 'logo' ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted'}`}
+                  className={`px-2 py-1 transition ${(watermark.type ?? 'text') === 'logo' ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-hover'}`}
                   onClick={() => setWatermark({ type: 'logo' })}>{tr('Logo')}</button>
               </div>
 
@@ -1826,7 +1826,7 @@ export default function ReportCardDesignPage() {
                       className="w-20" />
                     <span className="text-xs text-muted-foreground w-8">{watermark.rotation ?? -45}°</span>
                     <button onClick={() => setWatermark({ x: 50, y: 50, rotation: 0 })}
-                      className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted transition">
+                      className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-hover transition">
                       {tr('Center')}
                     </button>
                   </div>
@@ -1841,14 +1841,14 @@ export default function ReportCardDesignPage() {
                   {/* Upload button */}
                   <input ref={wmUploadRef} type="file" accept="image/*" className="hidden" onChange={handleWmUpload} />
                   <button onClick={() => wmUploadRef.current?.click()}
-                    className="px-2 py-1 text-xs border border-border rounded hover:bg-muted transition">
+                    className="px-2 py-1 text-xs border border-border rounded hover:bg-hover transition">
                     {tr('Upload image')}
                   </button>
 
                   {/* Revert to school logo */}
                   {watermark.logoUrl && (
                     <button onClick={() => setWatermark({ logoUrl: null })}
-                      className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted transition">
+                      className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-hover transition">
                       {tr('Use school logo')}
                     </button>
                   )}
@@ -1884,7 +1884,7 @@ export default function ReportCardDesignPage() {
                       className="w-20" />
                     <span className="text-xs text-muted-foreground w-8">{watermark.rotation ?? -45}°</span>
                     <button onClick={() => setWatermark({ x: 50, y: 50, rotation: 0 })}
-                      className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted transition">
+                      className="px-2 py-1 text-xs border border-border rounded text-muted-foreground hover:bg-hover transition">
                       {tr('Center')}
                     </button>
                   </div>
@@ -1910,7 +1910,7 @@ export default function ReportCardDesignPage() {
             const r = addMenuBtnRef.current?.getBoundingClientRect()
             if (r) setAddMenuCoords({ top: r.bottom + 6, left: r.left })
           }}
-          className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-muted transition">
+          className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-hover transition">
           <Plus size={14} /> {tr('Add Section')}
         </button>
 
@@ -2236,7 +2236,7 @@ export default function ReportCardDesignPage() {
               .filter(o => !o.period || transcriptPeriodsFor(schoolType).includes(o.period))
               .map(o => (
               <button key={o.type} onClick={() => { addSection(o.type); setAddMenuCoords(null) }}
-                className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition whitespace-nowrap">
+                className="block w-full text-left px-3 py-1.5 text-sm hover:bg-hover transition whitespace-nowrap">
                 {o.period ? `📋 ${transcriptPeriodLabel(o.period, schoolType)} Table` : tr(o.label)}
               </button>
             ))}

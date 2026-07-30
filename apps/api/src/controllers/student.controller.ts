@@ -71,6 +71,13 @@ export const getStudents = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const { classLevel, search } = req.query
+    // Day/Evening. Resolved server-side and NOT on the client, because the roster is
+    // paginated: filtering a page would report "no evening students" whenever none happen
+    // to fall on the page being looked at, which is exactly what it did.
+    const programme = req.query.programme ? String(req.query.programme).toUpperCase() : null
+    const programmeNames = programme === 'DAY' || programme === 'EVENING'
+      ? (await prisma.classLevel.findMany({ where: { schoolId, programme }, select: { name: true } })).map((c) => c.name)
+      : null
     const session = req.query.session ? String(req.query.session) : null
 
     // Explicit status filter (e.g. "show me who's Disabled/Dismissed") bypasses
@@ -96,7 +103,12 @@ export const getStudents = async (req: AuthRequest, res: Response) => {
     const where = {
       schoolId,
       ...yearOrStatusScope,
-      ...(classLevel ? { classLevel: String(classLevel) } : {}),
+      // An explicit class already implies its section, so it wins over the programme filter.
+      ...(classLevel
+        ? { classLevel: String(classLevel) }
+        : programmeNames
+          ? { classLevel: { in: programmeNames } }
+          : {}),
       // Matches name, matricule OR class — the same three fields the clients were
       // filtering on locally, so moving search server-side (needed once the list is
       // paginated) doesn't quietly narrow what's searchable.
@@ -463,9 +475,15 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
 
     const [school, classes] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
-      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, departmentId: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, departmentId: true, programme: true } }),
     ])
     const departments = await ensureDepartments(schoolId, school?.type)
+
+    // Day/Evening comes from the filter the admin is on, sent alongside the file. The sheet
+    // has no column for it, and a department running both sittings cannot be resolved without
+    // it. Anything unrecognised means "not chosen", which only blocks the ambiguous rows.
+    const rawProgramme = String((req.body?.programme ?? 'ALL')).toUpperCase()
+    const programme = rawProgramme === 'DAY' || rawProgramme === 'EVENING' ? rawProgramme : 'ALL'
 
     let existingStudents: { name: string; studentId: string }[] | undefined
     if (school?.type === 'UNIVERSITY') {
@@ -475,7 +493,7 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
       })
     }
 
-    const result = await previewStudentRows(file.buffer, file.originalname, school?.type ?? 'PRIMARY', classes, departments, existingStudents)
+    const result = await previewStudentRows(file.buffer, file.originalname, school?.type ?? 'PRIMARY', classes, departments, existingStudents, programme)
     res.json(result)
   } catch (error) {
     console.error(error)

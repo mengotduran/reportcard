@@ -558,7 +558,7 @@ export default function MarksEntryPage() {
       {/* Header */}
       <div className="mb-0 pb-4">
         <button onClick={() => router.back()}
-          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition inline-flex">
+          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition inline-flex">
           <ArrowLeft size={20} />
         </button>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">

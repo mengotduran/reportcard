@@ -1100,7 +1100,9 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
       }),
       prisma.subject.count({ where: { schoolId, classLevel: String(classLevel), ...subjectTermFilter(term.name) } }),
       prisma.teacherSubject.findMany({
-        where: { userId: req.user!.id, subject: { classLevel: String(classLevel), ...subjectTermFilter(term.name) } },
+        // Ended assignments must not grant marks access to a teacher who no longer holds
+        // the course.
+        where: { userId: req.user!.id, endedAt: null, subject: { classLevel: String(classLevel), ...subjectTermFilter(term.name) } },
         select: { subjectId: true },
       }),
     ])
@@ -1491,7 +1493,8 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
     const [subjects, teacherSubjects, classMaster] = await Promise.all([
       prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, name: true, compulsory: true } }),
       prisma.teacherSubject.findMany({
-        where: { subject: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) } },
+        // Whoever holds each course NOW — a report card names the current teacher.
+        where: { endedAt: null, subject: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) } },
         include: { user: { select: { id: true, name: true } }, subject: { select: { id: true } } },
       }),
       prisma.user.findFirst({

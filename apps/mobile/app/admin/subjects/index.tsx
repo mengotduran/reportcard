@@ -3,10 +3,12 @@ import { useEffect, useState, useCallback } from 'react'
 import { useFocusEffect, useRouter } from 'expo-router'
 import {
   View, Text, SectionList, TouchableOpacity, StyleSheet,
-  ActivityIndicator, RefreshControl, Alert, Modal, TextInput,
-} from 'react-native'
+  ActivityIndicator, RefreshControl, Alert, Modal, TextInput, FlatList,} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getSubjects, createSubject, deleteSubject, Subject } from '@/lib/api/subjects'
+import { getSubjects, createSubject, deleteSubject, getSubjectDeleteImpact, Subject, SubjectDeleteImpact } from '@/lib/api/subjects'
+import { stripProgrammeSuffix } from '@/lib/programme'
+import { levelGroupOf, programmeOf as progNameOf, sortLevelGroups } from '@/lib/universityLevels'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { getDepartments, Department } from '@/lib/api/departments'
 import { getTerms, Term } from '@/lib/api/terms'
@@ -14,7 +16,10 @@ import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 import { useAuthStore } from '@/lib/store/auth.store'
 
-interface SectionData { title: string; data: Subject[] }
+// `classLevel` is carried alongside the composed title so the header can badge the sitting.
+// The GROUPING key stays the raw name: stripping the marker there would merge a day and an
+// evening department into one section and hide half the courses.
+interface SectionData { title: string; classLevel: string; data: Subject[] }
 
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
@@ -22,6 +27,10 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   list: { padding: 16, paddingBottom: 100 },
+  stepHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10 },
+  backBtn: { padding: 6, borderRadius: 8 },
+  stepTitle: { fontSize: 20, fontWeight: '800', color: colors.text },
+  stepSubtitle: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   sectionHeader: {
     paddingVertical: 6,
     paddingHorizontal: 4,
@@ -63,6 +72,19 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   subjectName: { fontSize: 14, fontWeight: '600', color: colors.text },
   meta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   deleteBtn: { padding: 7, backgroundColor: '#fee2e2', borderRadius: 9 },
+  delName: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 2 },
+  delMuted: { fontSize: 12, color: colors.textMuted, marginBottom: 12 },
+  delError: { fontSize: 13, color: '#ef4444', marginBottom: 12 },
+  delWarn: { backgroundColor: '#fee2e2', borderRadius: 10, padding: 12, marginBottom: 12 },
+  delWarnTitle: { fontSize: 13, fontWeight: '700', color: '#b91c1c' },
+  delWarnBody: { fontSize: 11, color: '#b91c1c', marginTop: 4 },
+  delTypeName: { fontSize: 13, fontWeight: '700', color: colors.text, marginBottom: 6 },
+  delActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  delCancel: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
+  delCancelText: { fontSize: 14, color: colors.textSecondary, fontWeight: '600' },
+  delConfirm: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#ef4444', alignItems: 'center' },
+  delConfirmOff: { opacity: 0.4 },
+  delConfirmText: { fontSize: 14, color: '#fff', fontWeight: '700' },
   empty: { flex: 1, alignItems: 'center', paddingTop: 80, gap: 8 },
   emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary },
   emptySubText: { fontSize: 13, color: colors.textMuted },
@@ -161,7 +183,30 @@ export default function SubjectsScreen() {
   const isSecondary = school?.type === 'SECONDARY'
   const tc = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [sections, setSections] = useState<SectionData[]>([])
+  // The raw list, so each step of the drill-down can count and filter from it. `sections`
+  // stays for the final course list.
+  const [allSubjects, setAllSubjects] = useState<Subject[]>([])
+  // Where you are in the drill-down, mirroring the web Courses page:
+  //   university  Level -> Department -> Semester -> Courses
+  //   secondary   Department -> Class -> Subjects
+  //   primary     Class -> Subjects
+  // A flat list of every course at once was unreadable on a phone, and on a university it
+  // showed each programme twice over once evening sections existed.
+  const [selectedLevel, setSelectedLevel] = useState<string | null>(null)
+  const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null)
+  const [selectedClass, setSelectedClass] = useState<string | null>(null)
+  const [selectedTerm, setSelectedTerm] = useState<string | null>(null)
+  // Deleting a course deletes every mark on it. Same gate as the web Courses page: the
+  // counts come from the server, and once marks exist the name has to be typed.
+  const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null)
+  const [deleteImpact, setDeleteImpact] = useState<SubjectDeleteImpact | null>(null)
+  const [impactError, setImpactError] = useState('')
+  const [typedName, setTypedName] = useState('')
+  const [deletingSubject, setDeletingSubject] = useState(false)
   const [classList, setClassList] = useState<ClassLevel[]>([])
+  // Day/Evening. A university keeps a separate copy of the curriculum per sitting, so an
+  // unfiltered list shows every course twice under two identical-looking headings.
+  const programmeFilter = useProgrammeFilter(classList)
   const [departments, setDepartments] = useState<Department[]>([])
   const [termList, setTermList] = useState<Term[]>([])
   const [loading, setLoading] = useState(true)
@@ -191,7 +236,13 @@ export default function SubjectsScreen() {
       if (!map[key]) map[key] = []
       map[key].push(s)
     }
-    return Object.keys(map).sort().map((key) => ({ title: key, data: map[key] }))
+    return Object.keys(map).sort().map((key) => ({
+      // Stripped for display only. The key it was built from keeps the marker, so the two
+      // sittings stay separate sections even though they now read the same.
+      title: stripProgrammeSuffix(key),
+      classLevel: map[key][0]?.classLevel ?? '',
+      data: map[key],
+    }))
   }
 
   const fetchData = useCallback(async () => {
@@ -212,6 +263,7 @@ export default function SubjectsScreen() {
         const id = deptIdByClass.get(name)
         return id ? (deptById.get(id) ?? '') : ''
       }
+      setAllSubjects(subData.subjects)
       setSections(buildSections(subData.subjects, deptOfClass))
     } catch {
       Alert.alert(t('Error'), tt('Failed to load subjects.', 'Failed to load courses.'))
@@ -259,26 +311,32 @@ export default function SubjectsScreen() {
     }
   }
 
-  const handleDelete = (subject: Subject) => {
-    Alert.alert(
-      tt('Delete Subject', 'Delete Course'),
-      `${t('Delete')} "${subject.name}"?`,
-      [
-        { text: t('Cancel'), style: 'cancel' },
-        {
-          text: t('Delete'),
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteSubject(subject.id)
-              await fetchData()
-            } catch {
-              Alert.alert(t('Error'), tt('Failed to delete subject.', 'Failed to delete course.'))
-            }
-          },
-        },
-      ]
-    )
+  const openDelete = async (subject: Subject) => {
+    setDeleteTarget(subject)
+    setDeleteImpact(null)
+    setImpactError('')
+    setTypedName('')
+    try {
+      setDeleteImpact(await getSubjectDeleteImpact(subject.id))
+    } catch {
+      setImpactError(t('Could not check what deleting this would remove. Try again.'))
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeletingSubject(true)
+    try {
+      await deleteSubject(deleteTarget.id, deleteTarget.name)
+      setDeleteTarget(null)
+      setDeleteImpact(null)
+      setTypedName('')
+      await fetchData()
+    } catch (err: any) {
+      // The refusal names the marks and the class it is in. A fixed string here would leave
+      // the admin guessing at a rule they cannot see.
+      setImpactError(err?.response?.data?.message ?? tt('Failed to delete subject.', 'Failed to delete course.'))
+    } finally { setDeletingSubject(false) }
   }
 
   // Label a class in the picker: strip the department suffix and tag its
@@ -291,6 +349,163 @@ export default function SubjectsScreen() {
     return dep ? `${stripDeptSuffix(name)} · ${dep}` : stripDeptSuffix(name)
   }
 
+  // ── Drill-down steps ───────────────────────────────────────────────────────
+  // Mirrors the web Courses page exactly, so the mental model is the same on both.
+  const countFor = (pred: (s: Subject) => boolean) => allSubjects.filter(pred).length
+
+  const StepHeader = ({ title, subtitle, onBack }: { title: string; subtitle: string; onBack?: () => void }) => (
+    <View style={styles.stepHeader}>
+      {onBack && (
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+          <Ionicons name="arrow-back" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+      )}
+      <View style={{ flex: 1 }}>
+        <Text style={styles.stepTitle}>{title}</Text>
+        <Text style={styles.stepSubtitle}>{subtitle}</Text>
+      </View>
+    </View>
+  )
+
+  const StepCard = ({ label, meta, badge, onPress }: { label: string; meta: string; badge?: boolean; onPress: () => void }) => (
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
+      <View style={styles.iconBox}>
+        <Ionicons name="layers-outline" size={18} color="#F03E2F" />
+      </View>
+      <View style={styles.info}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Text style={styles.subjectName}>{label}</Text>
+          {badge && <EveningBadge />}
+        </View>
+        <Text style={styles.meta}>{meta}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+    </TouchableOpacity>
+  )
+
+  // 1. Level (university only)
+  if (!loading && isUniversity && !selectedLevel) {
+    const sittingClasses = classList.filter((c) => programmeFilter.matches(c.name))
+    const groups = Array.from(new Set(sittingClasses.map((c) => levelGroupOf(c.name)))).sort(sortLevelGroups)
+    return (
+      <View style={styles.container}>
+        <StepHeader title={t('Courses')} subtitle={t('Select a level, then a department, to manage its courses')} />
+        {programmeFilter.hasEvening && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
+            <ProgrammeChips value={programmeFilter.programme} onChange={programmeFilter.setProgramme} />
+          </View>
+        )}
+        <FlatList
+          data={groups}
+          keyExtractor={(g) => g}
+          contentContainerStyle={styles.list}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListEmptyComponent={<View style={styles.empty}><Ionicons name="layers-outline" size={48} color="#d1d5db" /><Text style={styles.emptyText}>{t('No departments found.')}</Text></View>}
+          renderItem={({ item: g }) => {
+            const inGroup = sittingClasses.filter((c) => levelGroupOf(c.name) === g)
+            const n = countFor((s) => inGroup.some((c) => c.name === s.classLevel))
+            return <StepCard label={t(g)} meta={`${inGroup.length} ${t('departments')} · ${n} ${t('courses')}`} onPress={() => setSelectedLevel(g)} />
+          }}
+        />
+      </View>
+    )
+  }
+
+  // 2. Department (secondary only)
+  if (!loading && isSecondary && !selectedDeptId) {
+    return (
+      <View style={styles.container}>
+        <StepHeader title={tt('Subjects', 'Courses')} subtitle={t('Select a department, then a class, to manage its subjects')} />
+        <FlatList
+          data={departments}
+          keyExtractor={(d) => d.id}
+          contentContainerStyle={styles.list}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListEmptyComponent={<View style={styles.empty}><Ionicons name="layers-outline" size={48} color="#d1d5db" /><Text style={styles.emptyText}>{t('No departments found.')}</Text></View>}
+          renderItem={({ item: d }) => {
+            const depClasses = classList.filter((c) => c.departmentId === d.id)
+            const n = countFor((s) => depClasses.some((c) => c.name === s.classLevel))
+            return <StepCard label={d.name} meta={`${depClasses.length} ${t('classes')} · ${n} ${tt('subjects', 'courses')}`} onPress={() => setSelectedDeptId(d.id)} />
+          }}
+        />
+      </View>
+    )
+  }
+
+  // 3. Class / department
+  if (!loading && !selectedClass) {
+    const pickerClasses = (isSecondary
+      ? classList.filter((c) => c.departmentId === selectedDeptId)
+      : isUniversity
+        ? classList.filter((c) => levelGroupOf(c.name) === selectedLevel)
+        : classList
+    // The sitting filter belongs on THIS step as much as the level one: without it the
+    // Evening chip listed every day department too, and the card label strips the marker,
+    // so the same programme appeared twice with nothing to tell the two apart.
+    ).filter((c) => programmeFilter.matches(c.name))
+    return (
+      <View style={styles.container}>
+        <StepHeader
+          title={isSecondary ? (departments.find((d) => d.id === selectedDeptId)?.name ?? '') : isUniversity ? t(selectedLevel ?? 'Courses') : tt('Subjects', 'Courses')}
+          subtitle={isUniversity ? t('Select a department to manage its courses') : t('Select a class to manage its subjects')}
+          onBack={isSecondary ? () => setSelectedDeptId(null) : isUniversity ? () => setSelectedLevel(null) : undefined}
+        />
+        {programmeFilter.hasEvening && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
+            <ProgrammeChips value={programmeFilter.programme} onChange={programmeFilter.setProgramme} />
+          </View>
+        )}
+        <FlatList
+          data={pickerClasses}
+          keyExtractor={(c) => c.id}
+          contentContainerStyle={styles.list}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListEmptyComponent={<View style={styles.empty}><Ionicons name="book-outline" size={48} color="#d1d5db" /><Text style={styles.emptyText}>{tc('No classes found.', 'No departments found.')}</Text></View>}
+          renderItem={({ item: c }) => {
+            const n = countFor((s) => s.classLevel === c.name)
+            return (
+              <StepCard
+                label={stripProgrammeSuffix(isSecondary ? stripDeptSuffix(c.name) : isUniversity ? progNameOf(c.name) : c.name)}
+                meta={n === 0 ? tt('No subjects yet', 'No courses yet') : `${n} ${n === 1 ? tt('subject', 'course') : tt('subjects', 'courses')}`}
+                badge={programmeFilter.programmeOf(c.name) === 'EVENING'}
+                onPress={() => { setSelectedClass(c.name); setSelectedTerm(null) }}
+              />
+            )
+          }}
+        />
+      </View>
+    )
+  }
+
+  // 4. Semester (university only)
+  if (!loading && isUniversity && !selectedTerm) {
+    return (
+      <View style={styles.container}>
+        <StepHeader
+          title={stripProgrammeSuffix(progNameOf(selectedClass ?? ''))}
+          subtitle={t('Select a semester to manage its courses')}
+          onBack={() => setSelectedClass(null)}
+        />
+        <FlatList
+          data={termList}
+          keyExtractor={(tm) => tm.id}
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={<View style={styles.empty}><Ionicons name="calendar-outline" size={48} color="#d1d5db" /><Text style={styles.emptyText}>{t('No semesters found for the active academic year.')}</Text></View>}
+          renderItem={({ item: tm }) => {
+            const n = countFor((s) => s.classLevel === selectedClass && s.term === tm.name)
+            return (
+              <StepCard
+                label={`${tm.name}${tm.isCurrent ? ` (${t('Current')})` : ''}`}
+                meta={n === 0 ? t('No courses yet') : `${n} ${n === 1 ? t('course') : t('courses')}`}
+                onPress={() => setSelectedTerm(tm.name)}
+              />
+            )
+          }}
+        />
+      </View>
+    )
+  }
+
   return (
     <View style={styles.container}>
       {loading ? (
@@ -298,8 +513,22 @@ export default function SubjectsScreen() {
           <ActivityIndicator size="large" color="#F03E2F" />
         </View>
       ) : (
+      <>
+      <StepHeader
+        title={stripProgrammeSuffix(isUniversity ? progNameOf(selectedClass ?? '') : isSecondary ? stripDeptSuffix(selectedClass ?? '') : (selectedClass ?? ''))}
+        subtitle={[
+          isUniversity && selectedTerm ? selectedTerm : '',
+          programmeFilter.programmeOf(selectedClass ?? '') === 'EVENING' ? t('Evening') : '',
+        ].filter(Boolean).join(' · ') || tt('Subjects', 'Courses')}
+        onBack={() => { if (isUniversity) setSelectedTerm(null); else setSelectedClass(null) }}
+      />
       <SectionList
-        sections={sections}
+        // Only the class and semester chosen in the steps above, so the header is the
+        // answer to "which sitting am I editing" rather than a list of every one at once.
+        sections={sections.filter((sec) =>
+          sec.classLevel === selectedClass
+          && (!isUniversity || !selectedTerm || sec.data.some((sub) => sub.term === selectedTerm)))
+          .map((sec) => ({ ...sec, data: isUniversity && selectedTerm ? sec.data.filter((sub) => sub.term === selectedTerm) : sec.data }))}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -316,8 +545,9 @@ export default function SubjectsScreen() {
           const activeName = termList.find(tm => tm.isCurrent)?.name
           const isActive = !!activeName && section.title.endsWith(`— ${activeName}`)
           return (
-            <View style={[styles.sectionHeader, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+            <View style={[styles.sectionHeader, { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }]}>
               <Text style={styles.sectionTitle}>{section.title}</Text>
+              {programmeFilter.programmeOf(section.classLevel) === 'EVENING' && <EveningBadge />}
               {isActive && (
                 <View style={{ backgroundColor: '#FEF2F1', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(240,62,47,0.25)' }}>
                   <Text style={{ fontSize: 9, fontWeight: '700', color: '#F03E2F' }}>{t('ACTIVE')}</Text>
@@ -348,17 +578,118 @@ export default function SubjectsScreen() {
                 <Ionicons name="create-outline" size={18} color="#F03E2F" />
               </TouchableOpacity>
             )}
-            <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
+            <TouchableOpacity style={styles.deleteBtn} onPress={() => openDelete(item)}>
               <Ionicons name="trash-outline" size={17} color="#ef4444" />
             </TouchableOpacity>
           </View>
         )}
       />
+      </>
       )}
 
-      <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)} activeOpacity={0.85}>
+      {/* Pre-filled from the steps already walked, so the class and semester are not asked
+          for twice. Both stay editable in the modal. */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => {
+          if (selectedClass) setClassLevel(selectedClass)
+          if (isUniversity && selectedTerm) setTerm(selectedTerm)
+          setModalVisible(true)
+        }}
+        activeOpacity={0.85}>
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
+
+      {/* Course delete. Not an Alert: it states what it destroys and takes a typed name once
+          marks exist, and Alert.prompt is iOS only. */}
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{tt('Delete Subject', 'Delete Course')}</Text>
+              <TouchableOpacity onPress={() => { setDeleteTarget(null); setTypedName('') }}>
+                <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.delName}>{deleteTarget?.name}</Text>
+            {/* Names the class it is being deleted FROM, marker and all. A day and an evening
+                department hold same-named courses, and this is the last screen before the
+                other sitting's marks are gone. */}
+            <Text style={styles.delMuted}>
+              {tc('In class', 'In department')}: {deleteTarget?.classLevel}
+              {deleteTarget?.term ? ` · ${deleteTarget.term}` : ''}
+            </Text>
+
+            {impactError ? (
+              <Text style={styles.delError}>{impactError}</Text>
+            ) : !deleteImpact ? (
+              <Text style={styles.delMuted}>{t('Checking what this would remove…')}</Text>
+            ) : (
+              <>
+                {deleteImpact.marks > 0 ? (
+                  <View style={styles.delWarn}>
+                    <Text style={styles.delWarnTitle}>
+                      {deleteImpact.marks} {t(deleteImpact.marks === 1 ? 'mark' : 'marks')}
+                      {deleteImpact.students > 0 ? `, ${deleteImpact.students} ${t(deleteImpact.students === 1 ? 'student' : 'students')}` : ''}
+                    </Text>
+                    <Text style={styles.delWarnBody}>
+                      {t('Deleting this course deletes every mark entered on it. Those students lose it from their report cards and it cannot be brought back.')}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.delMuted}>
+                    {t('No marks have been entered on it yet, so nothing is lost but the course itself.')}
+                  </Text>
+                )}
+
+                {(deleteImpact.assignments > 0 || deleteImpact.slots > 0) && (
+                  <Text style={styles.delMuted}>
+                    {t('It also comes off')}{' '}
+                    {deleteImpact.assignments > 0 ? `${deleteImpact.assignments} ${t('lecturer assignments')}` : ''}
+                    {deleteImpact.assignments > 0 && deleteImpact.slots > 0 ? ` ${t('and')} ` : ''}
+                    {deleteImpact.slots > 0 ? `${deleteImpact.slots} ${t('timetable slots')}` : ''}.
+                  </Text>
+                )}
+
+                {/* Typing is required only once marks exist. A course added by mistake a
+                    minute ago stays a single tap. */}
+                {deleteImpact.requiresTypedName && (
+                  <>
+                    <Text style={styles.label}>{t('Type the exact name to confirm')}</Text>
+                    <Text style={styles.delTypeName}>{deleteTarget?.name}</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={typedName}
+                      onChangeText={setTypedName}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      placeholderTextColor={colors.textMuted}
+                    />
+                  </>
+                )}
+              </>
+            )}
+
+            <View style={styles.delActions}>
+              <TouchableOpacity
+                style={styles.delCancel}
+                onPress={() => { setDeleteTarget(null); setDeleteImpact(null); setImpactError(''); setTypedName('') }}
+                disabled={deletingSubject}>
+                <Text style={styles.delCancelText}>{impactError ? t('Close') : t('Cancel')}</Text>
+              </TouchableOpacity>
+              {!impactError && (
+                <TouchableOpacity
+                  style={[styles.delConfirm, (!deleteImpact || deletingSubject || (deleteImpact.requiresTypedName && typedName.trim() !== (deleteTarget?.name ?? '').trim())) && styles.delConfirmOff]}
+                  onPress={confirmDelete}
+                  disabled={!deleteImpact || deletingSubject || (deleteImpact.requiresTypedName && typedName.trim() !== (deleteTarget?.name ?? '').trim())}>
+                  <Text style={styles.delConfirmText}>{deletingSubject ? t('Deleting…') : t('Delete')}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>

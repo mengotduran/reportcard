@@ -215,7 +215,7 @@ export default function AnnualTranscriptPage() {
             <button
               onClick={() => handlePrint('student')}
               disabled={printing}
-              className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition disabled:opacity-50"
+              className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition disabled:opacity-50"
               title="The copy handed to students at the end of the term"
             >
               <Printer size={15} />

@@ -10,10 +10,13 @@ import { useT } from '@/lib/i18n'
 import { getMeApi, updateLanguagePreferenceApi } from '@/lib/api/auth'
 import { getAcademicYearsApi } from '@/lib/api/dashboard'
 import { getMyNotificationsApi } from '@/lib/api/notifications'
+import { connectSocket, disconnectSocket, onRealtime } from '@/lib/socket'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 
 const NOTIFICATION_ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
-const NOTIFICATION_POLL_MS = 30000
+// Fallback interval only — the socket is the primary path now, so this is deliberately
+// slow. It exists so a dead socket degrades to stale rather than frozen.
+const NOTIFICATION_POLL_MS = 150000
 
 const ADMIN_NAV = [
   { icon: LayoutDashboard, label: 'Dashboard',    href: '/dashboard' },
@@ -60,7 +63,7 @@ const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, school, logout, updateSchool, updateUser, activeSession, setActiveSession } = useAuthStore()
+  const { user, school, token, logout, updateSchool, updateUser, activeSession, setActiveSession } = useAuthStore()
   const t = useT()
 
   // Refresh user+school once per session (login / hard reload) so a persisted session
@@ -134,16 +137,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useBodyScrollLock(mobileNavOpen)
   const currentLang = (user?.preferredLanguage ?? school?.language ?? 'EN') === 'FR' ? 'FR' : 'EN'
 
-  // Polled, not true push (see the mobile TabsLayout for the same pattern/reasoning).
+  // Real-time via socket, with the poll kept as a slower SAFETY NET rather than the primary
+  // mechanism. If the socket fails to reconnect (dropped Wi-Fi, server restart, a proxy that
+  // kills idle connections) the bell goes stale by a couple of minutes instead of silently
+  // freezing forever, which is a failure mode that looks exactly like "no new notifications".
+  // Still not true push: nothing arrives while the tab is closed.
   const [unreadCount, setUnreadCount] = useState(0)
   useEffect(() => {
-    if (!user || !receivesNotifications) return
+    if (!user || !receivesNotifications || !token) return
     let cancelled = false
-    const poll = () => getMyNotificationsApi().then((r) => { if (!cancelled) setUnreadCount(r.unreadCount) }).catch(() => {})
-    poll()
-    const interval = setInterval(poll, NOTIFICATION_POLL_MS)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [user, receivesNotifications])
+    const refresh = () => getMyNotificationsApi().then((r) => { if (!cancelled) setUnreadCount(r.unreadCount) }).catch(() => {})
+
+    refresh()
+    connectSocket(token)
+    // The signal carries nothing, so this is the same fetch the poll makes — one code path
+    // for both, which means the socket can't drift from what polling would have shown.
+    const off = onRealtime('notifications:changed', refresh)
+    const interval = setInterval(refresh, NOTIFICATION_POLL_MS)
+    return () => { cancelled = true; off(); clearInterval(interval) }
+  }, [user, receivesNotifications, token])
 
   const handleLangToggle = async (lang: 'EN' | 'FR') => {
     updateUser({ preferredLanguage: lang })
@@ -236,7 +248,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   className={`w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition-colors ${
                     isActive
                       ? 'bg-muted text-foreground font-medium'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      : 'text-muted-foreground hover:bg-hover hover:text-foreground'
                   }`}
                 >
                   <item.icon size={14} className={isActive ? 'text-primary' : ''} />
@@ -264,7 +276,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 className={`w-full flex items-center justify-between px-3 py-[7px] rounded-md text-[13px] transition-colors ${
                   pathname === '/notifications'
                     ? 'bg-muted text-foreground font-medium'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    : 'text-muted-foreground hover:bg-hover hover:text-foreground'
                 }`}
               >
                 <span className="flex items-center gap-2.5">
@@ -279,13 +291,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </button>
             )}
 
-            <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
+            <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-hover transition-colors">
               <span className="text-[13px] text-muted-foreground">{t('Appearance')}</span>
               <ThemeToggle compact />
             </div>
 
             {!isSuperAdmin && (
-              <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-muted transition-colors">
+              <div className="flex items-center justify-between px-3 py-[7px] rounded-md hover:bg-hover transition-colors">
                 <span className="text-[13px] text-muted-foreground">{t('Language')}</span>
                 <div className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
                   {(['EN', 'FR'] as const).map((lang) => (
@@ -306,8 +318,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             )}
 
             <button
-              onClick={() => { logout(); router.push('/login') }}
-              className="w-full flex items-center gap-2 px-3 py-[7px] text-[13px] text-muted-foreground hover:text-destructive hover:bg-muted rounded-md transition-colors"
+              // Drop the socket before clearing the session: it is still joined to this
+              // user's rooms, and reusing it after a different login would deliver their
+              // signals to the wrong person's screen.
+              onClick={() => { disconnectSocket(); logout(); router.push('/login') }}
+              className="w-full flex items-center gap-2 px-3 py-[7px] text-[13px] text-muted-foreground hover:text-destructive hover:bg-hover rounded-md transition-colors"
             >
               <LogOut size={13} /> {t('Logout')}
             </button>

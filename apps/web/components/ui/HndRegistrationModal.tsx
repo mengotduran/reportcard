@@ -178,7 +178,7 @@ export default function HndRegistrationModal({
                     cumulative += p.amount
                     const left = Math.max(0, data.fee - cumulative)
                     return (
-                      <tr key={p.id} className="hover:bg-muted transition">
+                      <tr key={p.id} className="hover:bg-hover transition">
                         <td className="px-3 py-2 text-muted-foreground">{i + 1}</td>
                         <td className="px-3 py-2 text-foreground">{fmtDate(p.paidOn)}</td>
                         <td className="px-3 py-2 text-right font-medium text-emerald-600">{formatXAF(p.amount)}</td>

@@ -173,7 +173,7 @@ export default function HndRegistrationPage() {
                     </span>
                     <button
                       onClick={() => handleEditFee(dept)}
-                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition">
+                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition">
                       <Pencil size={13} />
                     </button>
                   </div>
@@ -195,7 +195,7 @@ export default function HndRegistrationPage() {
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 activeDept === dept
                   ? 'bg-primary text-white'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  : 'bg-muted text-muted-foreground hover:bg-hover/80'
               }`}>
               {dept === 'ALL' ? 'All departments' : dept}
             </button>
@@ -249,7 +249,7 @@ export default function HndRegistrationPage() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {pageItems.map((s, i) => (
-                    <tr key={s.studentId} className="hover:bg-muted/40 transition-colors">
+                    <tr key={s.studentId} className="hover:bg-hover/40 transition-colors">
                       <td className="px-4 py-3 text-muted-foreground text-xs">{(page - 1) * pageSize + i + 1}</td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-foreground">{s.name}</p>

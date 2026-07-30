@@ -170,7 +170,7 @@ export default function CustomSelect({
                   disabled={opt.disabled}
                   onClick={() => { if (opt.disabled) return; onChange(opt.value); setOpen(false); setSearch('') }}
                   className={`w-full flex items-center justify-between px-3 py-2.5 text-left transition
-                    ${opt.disabled ? 'opacity-50 cursor-not-allowed' : opt.value === value ? 'bg-primary/10' : 'hover:bg-muted'}`}
+                    ${opt.disabled ? 'opacity-50 cursor-not-allowed' : opt.value === value ? 'bg-primary/10' : 'hover:bg-hover'}`}
                 >
                   <div className="min-w-0 flex-1">
                     <p className={`text-sm font-medium leading-tight truncate ${opt.disabled ? 'text-muted-foreground' : opt.value === value ? 'text-primary' : 'text-foreground'}`}>

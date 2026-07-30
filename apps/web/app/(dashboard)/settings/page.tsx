@@ -523,7 +523,7 @@ export default function SettingsPage() {
                       className={`px-5 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                         active
                           ? 'bg-primary text-white border-primary'
-                          : 'border-border text-muted-foreground hover:bg-muted'
+                          : 'border-border text-muted-foreground hover:bg-hover'
                       }`}
                     >
                       {lang === 'EN' ? 'English' : 'Français'}
@@ -844,7 +844,7 @@ export default function SettingsPage() {
                     { value: 'ADMIN_ONLY' as const, label: t('Administration only'), hint: t('Teachers can enter CA marks only. Exam and Resit marks are the administration\'s. Administrators can enter all three. You can still grant one teacher full access to one class when you need to.') },
                   ]).map(opt => (
                     <label key={opt.value}
-                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-hover/50'}`}>
                       <input type="radio" name="marksEntryMode" value={opt.value}
                         checked={marksMode === opt.value}
                         // Cap reached: the unselected option is disabled rather than
@@ -1004,7 +1004,7 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={() => downloadExampleTemplateApi().catch(() => showToast(t('Download failed'), 'error'))}
-                    className="flex items-center gap-1.5 text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-lg hover:bg-muted transition flex-shrink-0 ml-4"
+                    className="flex items-center gap-1.5 text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-lg hover:bg-hover transition flex-shrink-0 ml-4"
                   >
                     <Download size={13} /> {t('Example template')}
                   </button>

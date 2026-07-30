@@ -341,7 +341,7 @@ export default function ReportCardDetailPage() {
 <div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => router.push('/report-cards')}
-          className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition"
+          className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-hover rounded-lg transition"
         >
           <ArrowLeft size={20} />
         </button>
@@ -362,7 +362,7 @@ export default function ReportCardDetailPage() {
                   <button
                     onClick={() => setShowUnpublishModal(true)}
                     disabled={unpublishing}
-                    className="text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-md hover:bg-muted hover:text-foreground disabled:opacity-50 transition-colors"
+                    className="text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-md hover:bg-hover hover:text-foreground disabled:opacity-50 transition-colors"
                   >
                     {unpublishing ? tr('Unpublishing…') : tr('Unpublish')}
                   </button>
@@ -436,14 +436,14 @@ export default function ReportCardDetailPage() {
                       the official is sealed and sent by the school itself. */}
                   <button
                     onClick={() => handlePrint('student')}
-                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover transition"
                     title={tr('The copy handed to students at the end of the term')}
                   >
                     <Printer size={14} /> {tr('Print Student Copy')}
                   </button>
                   <button
                     onClick={() => handlePrint('official')}
-                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover transition"
                     title={tr('The sealed copy the school sends out itself')}
                   >
                     <Printer size={14} /> {tr('Print Official')}
@@ -457,7 +457,7 @@ export default function ReportCardDetailPage() {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted disabled:opacity-50 transition"
+                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover disabled:opacity-50 transition"
                 >
                   <Save size={14} />
                   {saving ? tr('Saving...') : tr('Save Remarks')}
@@ -588,7 +588,7 @@ export default function ReportCardDetailPage() {
               {canEditMarks && (
                 <button
                   onClick={() => router.push(`/report-cards/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}`)}
-                  className="text-xs font-medium border border-border bg-card text-foreground px-3 py-1.5 rounded-md hover:bg-muted transition-colors whitespace-nowrap"
+                  className="text-xs font-medium border border-border bg-card text-foreground px-3 py-1.5 rounded-md hover:bg-hover transition-colors whitespace-nowrap"
                   title={tr('Marks are entered on the class sheet')}
                 >
                   {tr('Edit marks')}
@@ -618,7 +618,7 @@ export default function ReportCardDetailPage() {
                   const entry = entries.find(e => e.subjectId === subject.id)
                   const bothFilled = entry?.seq1Score != null && entry?.seq2Score != null
                   return (
-                    <tr key={subject.id} className="hover:bg-muted dark:hover:bg-muted">
+                    <tr key={subject.id} className="hover:bg-hover">
                       <td className="px-4 py-3 text-sm font-medium text-foreground">{subject.name}</td>
                       {isUniversity ? (
                         <>

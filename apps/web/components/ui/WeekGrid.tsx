@@ -19,6 +19,14 @@ export interface WeekGridSlot {
   // A one-off slot (a specific calendar date, not a weekly recurrence) — shown with a
   // dashed border so it reads as "just this once" rather than part of the standing schedule.
   isOneOff?: boolean
+  /** Reported absent and ALREADY past: greyed and struck through, it was not taught. */
+  missed?: boolean
+  /** Reported absent but STILL TO COME. Marked distinctly from a lost period, because
+   *  nothing has been lost yet and the report can still be retracted. */
+  reportedAbsent?: boolean
+  /** Short note under the subtitle, e.g. the dates reported. The grid is a recurring week
+   *  with no dates of its own, so without this "absent" would not say WHICH week. */
+  note?: string | null
 }
 
 export interface WeekGridBreak {
@@ -105,14 +113,19 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
                       onClick={() => onSlotClick?.(s)}
                       disabled={!onSlotClick}
                       className={`absolute left-1 right-1 rounded-md px-1.5 py-1 text-left overflow-hidden border transition ${
-                        s.isPrivate
-                          ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-400'
-                          : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/15'
-                      } ${s.isOneOff ? 'border-dashed' : ''} ${onSlotClick ? 'cursor-pointer' : 'cursor-default'}`}
+                        s.missed
+                          ? 'bg-muted border-border text-muted-foreground opacity-75'
+                          : s.reportedAbsent
+                            ? 'bg-slate-100 border-slate-300 text-slate-600 dark:bg-slate-500/15 dark:border-slate-500/40 dark:text-slate-300'
+                            : s.isPrivate
+                              ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-400'
+                              : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/15'
+                      } ${s.isOneOff || s.reportedAbsent ? 'border-dashed' : ''} ${onSlotClick ? 'cursor-pointer' : 'cursor-default'}`}
                       style={{ top, height, zIndex: 1 }}
                     >
-                      <div className="text-[11px] font-semibold leading-tight truncate">{s.title}</div>
+                      <div className={`text-[11px] font-semibold leading-tight truncate ${s.missed ? 'line-through' : ''}`}>{s.title}</div>
                       {s.subtitle && <div className="text-[10px] leading-tight opacity-80 truncate">{s.subtitle}</div>}
+                      {s.note && <div className="text-[9px] font-bold leading-tight truncate mt-0.5">{s.note}</div>}
                     </button>
                   )
                 })}

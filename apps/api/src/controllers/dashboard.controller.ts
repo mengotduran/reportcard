@@ -91,7 +91,8 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
     cutoff.setDate(cutoff.getDate() - WEEKS * 7)
 
     const teacherSubjects = await prisma.teacherSubject.findMany({
-      where: { userId },
+      // Current courses only — the dashboard shows what they teach now, not what they used to.
+      where: { userId, endedAt: null },
       include: { subject: { select: { classLevel: true, name: true } } },
     })
 

@@ -2,9 +2,11 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import {
-  dateStringToDayOfWeek, slotHasPassed, slotPeriods, periodWindows, absenceIsFinal, PeriodWindow,
+  dateStringToDayOfWeek, slotHasPassed, slotPeriods, periodWindows, graceHasExpired, periodHasEnded, PeriodWindow,
 } from '../utils/teachingHours'
 import { getCurrentPeriodRange } from './coverage.controller'
+import { NotificationLink } from '../utils/notificationLink'
+import { emitToUser, emitToUsers, emitToSchool } from '../config/socket'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -39,6 +41,11 @@ function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodInde
   graceMinutes: number | null,
 ) {
   const { window, periods } = windowForAbsence(a.periodIndex, slot, periodMinutes)
+  // Times shown are this row's own period, so a double period still reads as two 50-minute
+  // records. The GATES below are judged on the whole class instead, because deleting is atomic
+  // per slot (see deleteAbsence) — judging them per window would grey out one half's button
+  // while the endpoint happily cleared both.
+  const classWindow: PeriodWindow = { index: 0, startTime: slot.startTime, endTime: slot.endTime }
   return {
     ...a,
     dayOfWeek: slot.dayOfWeek,
@@ -46,16 +53,59 @@ function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodInde
     endTime: window.endTime,
     subjectName: slot.subject?.name ?? null,
     classLevel: slot.subject?.classLevel ?? null,
-    // Past this point the record is final and nobody can mark the teacher present again:
-    // start + the school's grace period, or the period's end when no grace is configured.
-    // Both clients use it to decide whether to offer a delete button at all — the DELETE
+    // Two separate gates, because they apply to different people (see deleteAbsence):
+    //   isFinal      the CLASS is over — nobody, admin included, can change it
+    //   graceExpired the arrival window has closed — the teacher can no longer retract,
+    //                and an admin who deletes it is warned the class was lost
+    // Clients use these to grey the button and to word the confirmation; the DELETE
     // endpoint is the real gate either way.
-    isFinal: absenceIsFinal(a.date, window, graceMinutes),
+    isFinal: periodHasEnded(a.date, classWindow),
+    graceExpired: graceHasExpired(a.date, classWindow, graceMinutes),
     // How many periods this row is worth: 1 for a per-period row, the whole block for a
     // legacy one. null if the school hasn't set a period length yet, so clients fall back
     // to counting events.
     periods,
   }
+}
+
+/**
+ * Collapses the per-period rows of one class on one date into a SINGLE entry.
+ *
+ * Rows are stored per period because that is what keeps the hours arithmetic and the
+ * "N periods missed" totals right. But nobody acts on a period: reporting and deleting are
+ * both atomic per slot, so a 07:30-09:10 double shown as two rows with two delete buttons
+ * invites you to remove "one" and then watch both disappear.
+ *
+ * The entry spans the whole class (earliest start to latest end) and carries the period count,
+ * so it reads "07:30-09:10 with 2 periods" behind one button. Its `id` is one of the underlying
+ * rows, which is all the DELETE endpoint needs — it clears every sibling anyway.
+ */
+function groupByClass<T extends {
+  id: string; date: string; timetableSlotId: string; startTime: string; endTime: string
+  seenByAdmin: boolean; periods: number | null; periodIndex: number | null
+}>(rows: T[]): T[] {
+  const byClass = new Map<string, T[]>()
+  for (const r of rows) {
+    const key = `${r.date}|${r.timetableSlotId}`
+    const list = byClass.get(key)
+    if (list) list.push(r)
+    else byClass.set(key, [r])
+  }
+  // Map preserves insertion order, so the caller's date/period ordering survives.
+  return [...byClass.values()].map((group) => ({
+    ...group[0],
+    startTime: group.reduce((min, r) => (r.startTime < min ? r.startTime : min), group[0].startTime),
+    endTime: group.reduce((max, r) => (r.endTime > max ? r.endTime : max), group[0].endTime),
+    // Null only when the school has set no period length at all, in which case it stays null
+    // and clients fall back to counting events.
+    periods: group.every((r) => r.periods == null)
+      ? null
+      : group.reduce((sum, r) => sum + (r.periods ?? 1), 0),
+    // Reviewed if ANY period of the class was: the lock is on the class, like everything else.
+    seenByAdmin: group.some((r) => r.seenByAdmin),
+    // The entry is the whole class, not one period inside it.
+    periodIndex: null,
+  }))
 }
 
 // One day of a report: whole-day, or a specific set of that day's periods.
@@ -113,7 +163,12 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
     const daysOfWeek = [...new Set(days.map((d) => dateStringToDayOfWeek(d.date)))]
     const [allSlots, school] = await Promise.all([
       prisma.timetableSlot.findMany({
-        where: { schoolId, teacherId, dayOfWeek: { in: daysOfWeek }, subjectId: { not: null } },
+        // archivedAt: null is essential, not a refinement. Re-saving a teacher's timetable
+        // archives the old rows rather than deleting them (absences already logged against
+        // them must keep working), so without this a "whole day" report books the CURRENT
+        // timetable plus every superseded version of it. One teacher with two archived
+        // Thursday slots got 7 periods for a day that has 2.
+        where: { schoolId, teacherId, dayOfWeek: { in: daysOfWeek }, subjectId: { not: null }, archivedAt: null },
         include: { subject: { select: { name: true } } },
       }),
       prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
@@ -138,30 +193,47 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
       const daySlots = allSlots.filter((s) => s.dayOfWeek === dateStringToDayOfWeek(d.date))
       const slotsToMark = d.wholeDay ? daySlots : daySlots.filter((s) => d.timetableSlotIds.includes(s.id))
 
-      // Nobody — teacher OR admin — can report an absence for a period that has already
-      // ENDED. An absence is a statement about a class that is still to happen; once it's
-      // over there's nothing left to report, and backdating one silently rewrites hours
-      // already counted as taught. Note this is the period's END, not the grace cutoff:
-      // the grace period governs when a record becomes FINAL, deliberately not when one
-      // can still be filed, so a teacher taken ill mid-morning can still report that class.
+      // Reporting is ATOMIC PER SLOT. The slot is the class the admin put on the timetable,
+      // so it is also the smallest thing anyone can be absent from: a 07:30-09:10 block is
+      // one class of two periods, and "I will miss it" cannot mean half of it. Counting stays
+      // per period — one row per periodIndex below — which is what keeps the hours arithmetic
+      // right and still lets an admin cancel one period of a double afterwards.
       //
-      // "Whole day" quietly drops any already-elapsed period and reports the rest, so
-      // reporting absent partway through a day still works. Explicitly-picked slots are
-      // rejected outright if one has wholly passed, since those exact ones were chosen —
-      // and the date is named, because in a multi-day report it is not obvious which day
-      // is the problem. Reachable when a long report is filled in slowly and a period
-      // ticked at the start has elapsed by the time it is submitted.
-      if (!d.wholeDay && slotsToMark.some((s) => slotHasPassed(d.date, s.endTime))) {
-        res.status(400).json({ message: `One or more of the periods selected for ${d.date} has already passed and can no longer be reported` })
+      // The cutoff is therefore judged on the SLOT, not on each 50-minute window, and differs
+      // by who is reporting:
+      //   teacher  the slot's START. Once their class has begun, saying "I will be absent" is
+      //            no longer a statement about a class still to come; whether it was taught is
+      //            now a matter of record for the administration to settle.
+      //   admin    the slot's END. They are often recording after the fact, having been told
+      //            some other way, so they need the class itself.
+      // Neither may report once the slot is over: backdating silently rewrites hours already
+      // counted as taught.
+      //
+      // Judging per window was a real bug: at 08:00 a teacher's whole-day report on a
+      // 07:30-09:10 double dropped the first period and booked only the second, leaving them
+      // absent for half a class they cannot be half-absent from.
+      const slotPastCutoff = (s: { startTime: string; endTime: string }) =>
+        slotHasPassed(d.date, isAdmin ? s.endTime : s.startTime)
+
+      // "Whole day" quietly skips slots past the cutoff and reports the rest, so reporting
+      // absent partway through a day still works. Explicitly-picked slots are rejected
+      // outright, since those exact ones were chosen — and the date is named, because in a
+      // multi-day report it is not obvious which day is the problem.
+      if (!d.wholeDay && slotsToMark.some(slotPastCutoff)) {
+        res.status(400).json({
+          message: isAdmin
+            ? `One or more of the classes selected for ${d.date} has already ended and can no longer be reported`
+            : `One or more of the classes selected for ${d.date} has already started and can no longer be reported. Ask an admin to record it.`,
+        })
         return
       }
 
       for (const slot of slotsToMark) {
         if (legacyWholeSlot.has(`${d.date}|${slot.id}`)) continue
-        // One row per period, so a double period can later be half-cancelled: the teacher
-        // who turns up twenty minutes late keeps the second period.
+        if (slotPastCutoff(slot)) continue
+        // Every period of the slot, all or nothing. One row each so the count and the hours
+        // stay per period, and so an admin can later cancel just one of them.
         for (const window of periodWindows(slot.startTime, slot.endTime, periodMinutes)) {
-          if (slotHasPassed(d.date, window.endTime)) continue
           toMark.push({ date: d.date, slot, window })
         }
       }
@@ -173,7 +245,9 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
     if (toMark.length === 0) {
       res.status(400).json({
         message: days.length === 1 && days[0].wholeDay
-          ? 'All periods for this day have already passed and can no longer be reported'
+          ? (isAdmin
+              ? 'Every period for this day has already ended and can no longer be reported'
+              : 'Every period for this day has already started and can no longer be reported. Ask an admin to record it.')
           : 'No reportable periods on the selected day(s) for this teacher',
       })
       return
@@ -211,6 +285,32 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
         ? `the whole day on ${markedDates[0]}`
         : `${toMark.length} ${periodWord} on ${markedDates[0]}${subjectNames.length ? ` (${subjectNames.join(', ')})` : ''}`
 
+    // Where the notification leads. The grid highlights whole SLOTS, not periods, so the
+    // test is one slot on one date — not one period. A double period reported as a single
+    // class writes two rows and must still point at that class, which is the commonest
+    // report there is. Anything wider carries the span instead, since the grid already
+    // marks every slot the teacher has a live absence on.
+    const slotIds = new Set(toMark.map((m) => m.slot.id))
+    const singleSlot = slotIds.size === 1 && markedDates.length === 1 ? toMark[0].slot : null
+    const link: NotificationLink = {
+      teacherId,
+      teacherName: teacher.name,
+      ...(singleSlot
+        ? {
+            timetableSlotId: singleSlot.id,
+            date: markedDates[0],
+            // The span of what was actually booked, which on a part-reported double period
+            // is narrower than the slot's own times.
+            startTime: toMark.reduce((min, m) => (m.window.startTime < min ? m.window.startTime : min), toMark[0].window.startTime),
+            endTime: toMark.reduce((max, m) => (m.window.endTime > max ? m.window.endTime : max), toMark[0].window.endTime),
+          }
+        : {
+            dateFrom: markedDates[0],
+            dateTo: markedDates[markedDates.length - 1],
+            periods: toMark.length,
+          }),
+    }
+
     if (!isAdmin) {
       // Admins get an in-app notification when a teacher reports their OWN absence.
       const admins = await prisma.user.findMany({
@@ -222,8 +322,14 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
           data: admins.map((a) => ({
             schoolId, recipientId: a.id, type: 'TEACHER_ABSENCE',
             title: 'Teacher absence reported', body: `${teacher.name} reported absent for ${scope}.`,
+            data: link as any,
           })),
         })
+        // After the write, never before: the signal tells clients to refetch, so the rows
+        // have to be readable by the time it lands. Targeted at the admins who actually got
+        // a notification rather than the whole school room, so a teacher's client isn't
+        // woken to refetch a list that didn't change.
+        emitToUsers(admins.map((a) => a.id), 'notifications:changed')
       }
     } else {
       // An admin logged it on the teacher's behalf (they didn't report it themselves) —
@@ -232,9 +338,18 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
         data: {
           schoolId, recipientId: teacherId, type: 'TEACHER_ABSENCE_LOGGED_BY_ADMIN',
           title: 'Absence recorded', body: `An admin recorded you as absent for ${scope}.`,
+          data: link as any,
         },
       })
+      emitToUser(teacherId, 'notifications:changed')
     }
+
+    // The absence lists changed for BOTH sides regardless of who filed it: the teacher's own
+    // list and every admin's coverage/absence view. Sent to the school room here rather than
+    // to each admin, because this is about a shared view of the school rather than one
+    // person's inbox — the teacher's own client gets it via their user room.
+    emitToUser(teacherId, 'absences:changed')
+    emitToSchool(schoolId, 'absences:changed')
 
     res.status(201).json({ message: 'Absence recorded', count: created, days: markedDates.length })
   } catch (error) {
@@ -267,28 +382,59 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
       res.status(403).json({ message: 'This absence has already been reviewed by an admin and can no longer be removed' })
       return
     }
-    // Nobody — teacher or admin — can remove an absence once THAT PERIOD is final. Final
-    // means start + the school's grace period ("how late can a teacher turn up and still
-    // count as having taught it"), or the period's end when no grace is configured. Up to
-    // that moment there's still a real possibility the teacher shows up after all, which is
-    // exactly the window an admin needs to mark them present again; past it the record
-    // stands. Because each period is judged on its own window, cancelling one period of a
-    // double period leaves the other alone.
+    // Deletion is ATOMIC PER SLOT, mirroring reporting: the slot is the class the admin put
+    // on the timetable, so it is the unit anyone acts on. Removing an absence therefore clears
+    // EVERY period of that class on that date, and the cutoff is judged on the whole class,
+    // not on each 50-minute window inside it.
+    //
+    // Counting stays per period — the rows are still one per periodIndex, which is what keeps
+    // the hours arithmetic and the "N periods missed" totals right.
+    //
+    // Nobody, teacher or admin, can remove it once the CLASS is over: up to that moment there
+    // is still a real possibility the teacher shows up, which is exactly the window an admin
+    // needs to mark them present again; past it the record stands.
     const school = await prisma.school.findUnique({
       where: { id: schoolId },
       select: { periodMinutes: true, absenceGraceMinutes: true },
     })
-    const { window } = windowForAbsence(absence.periodIndex, absence.slot, school?.periodMinutes ?? null)
-    if (absenceIsFinal(absence.date, window, school?.absenceGraceMinutes ?? null)) {
+    // The whole class, not this row's own 50 minutes — see the atomicity note above.
+    const window: PeriodWindow = { index: 0, startTime: absence.slot.startTime, endTime: absence.slot.endTime }
+
+    // The hard stop, for everyone including admins: once the period itself is over there
+    // is nothing left to correct.
+    if (periodHasEnded(absence.date, window)) {
+      res.status(403).json({ message: 'This class has already ended and can no longer be changed' })
+      return
+    }
+    // Past the arrival window the period is lost, so the teacher can no longer retract
+    // their own report — only an admin can, and the client warns them before they do.
+    if (!isAdmin && graceHasExpired(absence.date, window, school?.absenceGraceMinutes ?? null)) {
       res.status(403).json({
         message: school?.absenceGraceMinutes != null
-          ? `This period was missed more than ${school.absenceGraceMinutes} minutes ago and can no longer be changed`
+          ? `The ${school.absenceGraceMinutes}-minute arrival window for this period has passed. Ask an admin if this needs correcting.`
           : 'This period has already passed and can no longer be removed',
       })
       return
     }
 
-    await prisma.teacherAbsence.delete({ where: { id } })
+    // Every period of this class on this date, not just the row that was clicked. Deleting one
+    // and leaving its sibling would say the teacher missed half a class they cannot be
+    // half-absent from.
+    const { count: removed } = await prisma.teacherAbsence.deleteMany({
+      where: { schoolId, teacherId: absence.teacherId, timetableSlotId: absence.timetableSlotId, date: absence.date },
+    })
+
+    // Captured from the row we just deleted — this is the only moment the period is still
+    // knowable, which is the whole reason the link is stored rather than resolved on read.
+    const link: NotificationLink = {
+      teacherId: absence.teacherId,
+      teacherName: absence.teacher.name,
+      timetableSlotId: absence.timetableSlotId,
+      date: absence.date,
+      startTime: window.startTime,
+      endTime: window.endTime,
+      retracted: true,
+    }
 
     if (!isAdmin) {
       // Mirrors createAbsence's notification — the TEACHER retracted their own report,
@@ -304,9 +450,10 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
         await prisma.notification.createMany({
           data: admins.map((a) => ({
             schoolId, recipientId: a.id, type: 'TEACHER_ABSENCE_RETRACTED',
-            title: 'Absence report retracted', body,
+            title: 'Absence report retracted', body, data: link as any,
           })),
         })
+        emitToUsers(admins.map((a) => a.id), 'notifications:changed')
       }
     } else {
       // An ADMIN removed it instead — e.g. deciding to mark the teacher present after
@@ -316,10 +463,14 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
       await prisma.notification.create({
         data: {
           schoolId, recipientId: absence.teacherId, type: 'TEACHER_ABSENCE_REMOVED_BY_ADMIN',
-          title: 'Absence report removed', body,
+          title: 'Absence report removed', body, data: link as any,
         },
       })
+      emitToUser(absence.teacherId, 'notifications:changed')
     }
+
+    emitToUser(absence.teacherId, 'absences:changed')
+    emitToSchool(schoolId, 'absences:changed')
 
     res.json({ message: 'Absence removed' })
   } catch (error) {
@@ -363,8 +514,9 @@ async function listAbsences(schoolId: string, teacherId: string, from?: string, 
   const shaped = absences.map((a) => shapeAbsence(a, periodMinutes, school?.absenceGraceMinutes ?? null))
   // Total periods missed: 1 per per-period row, the whole block for a legacy one. Falls
   // back to the plain event count when no period length is set yet.
+  // Counted on the UNGROUPED rows: the total is per period even though the list is per class.
   const periodsMissed = shaped.reduce((sum, a) => sum + (a.periods ?? 1), 0)
-  return { absences: shaped, periodMinutes, periodsMissed, periodEnd }
+  return { absences: groupByClass(shaped), periodMinutes, periodsMissed, periodEnd }
 }
 
 export const getMyAbsences = async (req: AuthRequest, res: Response) => {
@@ -443,6 +595,11 @@ export const getTeacherAbsences = async (req: AuthRequest, res: Response) => {
     const unseenIds = shaped.filter((a) => !a.seenByAdmin).map((a) => a.id)
     if (unseenIds.length > 0) {
       await prisma.teacherAbsence.updateMany({ where: { id: { in: unseenIds } }, data: { seenByAdmin: true } })
+      // The teacher just lost the ability to retract these, and nothing else would tell them:
+      // this is a READ by the admin, so it writes no notification. Without the signal their
+      // screen keeps showing a delete button until they happen to reload, which is exactly
+      // the stale bin icon that reads as a bug.
+      emitToUser(teacherId, 'absences:changed')
     }
 
     res.json({ absences: shaped, periodMinutes, periodsMissed, periodEnd })

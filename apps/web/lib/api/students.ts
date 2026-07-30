@@ -99,9 +99,12 @@ export const downloadStudentImportTemplateApi = async (): Promise<Blob> => {
   return res.data
 }
 
-export const previewStudentImportApi = async (file: File): Promise<ImportPreviewResult> => {
+// `programme` is the Day/Evening filter the admin is on. The sheet has no column for the
+// sitting, so this is what tells a department that runs both which one to import into.
+export const previewStudentImportApi = async (file: File, programme?: string): Promise<ImportPreviewResult> => {
   const formData = new FormData()
   formData.append('file', file)
+  if (programme) formData.append('programme', programme)
   const res = await api.post('/students/import/preview', formData)
   return res.data
 }

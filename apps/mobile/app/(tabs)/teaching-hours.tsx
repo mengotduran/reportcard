@@ -10,8 +10,10 @@ import { getMyTimetable, getTeacherTimetable, MyTimetableSlot } from '@/lib/api/
 import { getMyAbsences, getTeacherAbsences, getAbsenceCounts, reportAbsence, deleteAbsence, TeacherAbsence, AbsenceDay } from '@/lib/api/teacherAbsence'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import { formatHours } from '@/lib/formatHours'
+import { onRealtime } from '@/lib/socket'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { hasPassed } from '@/lib/schoolTime'
 import { useAuthStore } from '@/lib/store/auth.store'
 
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
@@ -26,13 +28,17 @@ function dayOfWeekFor(dateStr: string): string {
   return ['SUNDAY', ...DAY_ORDER.slice(0, 6)][jsDay]
 }
 
-// Mirrors the API's slotHasPassed (Cameroon is UTC+1/WAT, no DST) — lets the UI grey
-// these out up front instead of only finding out after a rejected request.
-function slotHasPassed(dateStr: string, endTime: string): boolean {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const [hh, mm] = endTime.split(':').map(Number)
-  return Date.UTC(y, m - 1, d, hh - 1, mm || 0) <= Date.now()
-}
+// Same cutoff the API applies, so the UI greys a period out up front instead of only
+// finding out after a rejected request. See lib/schoolTime.
+/**
+ * Past the point where this slot can still be REPORTED absent, which depends on who is
+ * reporting (mirrors createAbsence):
+ *   teacher  the period's START — once their class has begun it is no longer theirs to file
+ *   admin    the period's END   — they are often recording after the fact
+ * Kept in one place so the greyed-out checkboxes can never offer something the API refuses.
+ */
+const pastReportCutoff = (dateStr: string, slot: { startTime: string; endTime: string }, asAdmin: boolean) =>
+  hasPassed(dateStr, asAdmin ? slot.endTime : slot.startTime)
 
 const toDateStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const todayStr = () => toDateStr(new Date())
@@ -267,7 +273,7 @@ type Selections = Record<string, DaySelection>
  * apart again — they had already grown two copies of the old single-day chip row.
  */
 function AbsenceDayPicker({
-  slots, reportedPeriods, periodMinutes, periodEnd, selections, onChange, date, onDateChange, colors, t, noDaysMessage,
+  slots, reportedPeriods, periodMinutes, periodEnd, selections, onChange, date, onDateChange, colors, t, noDaysMessage, asAdmin = false,
 }: {
   slots: MyTimetableSlot[]
   /** `${date}|${slotId}` for periods already on record, which can't be reported twice. */
@@ -282,6 +288,8 @@ function AbsenceDayPicker({
   colors: Colors
   t: (s: string) => string
   noDaysMessage: string
+  /** An admin may still file for a period already in progress; a teacher may not. */
+  asAdmin?: boolean
 }) {
   const styles = makeStyles(colors)
   // Which preset was applied, and from WHICH day. The anchor is part of it: "2 weeks" only
@@ -306,7 +314,7 @@ function AbsenceDayPicker({
     (reportedPeriods.get(`${d}|${s.id}`) ?? 0) >= periodCountOf(s)
   // What can still be reported on a given day: not already elapsed, not already on record.
   const bookableSlotsFor = (d: string) =>
-    daySlotsFor(d).filter((s) => !slotHasPassed(d, s.endTime) && !isFullyReported(d, s))
+    daySlotsFor(d).filter((s) => !pastReportCutoff(d, s, asAdmin) && !isFullyReported(d, s))
 
   // A preset that's been manually adjusted is no longer that preset.
   useEffect(() => {
@@ -434,7 +442,7 @@ function AbsenceDayPicker({
           <Text style={[styles.emptyText, { marginBottom: 12 }]}>
             {daySlots.every((s) => isFullyReported(date, s))
               ? t('Every period for this day has already been reported.')
-              : t('All periods for this day have already passed. Ask an admin if this needs correcting.')}
+              : t('Every period for this day has already started. Ask an admin to record it.')}
           </Text>
         ) : (
           <ScrollView style={{ maxHeight: 220 }}>
@@ -449,9 +457,9 @@ function AbsenceDayPicker({
                 rather than disappearing entirely. Periods already elapsed or already on
                 record are locked out regardless. */}
             {daySlots.map((s) => {
-              const passed = slotHasPassed(date, s.endTime)
+              const passed = pastReportCutoff(date, s, asAdmin)
               const reported = isFullyReported(date, s)
-              const note = passed ? ` (${t('already passed')})` : reported ? ` (${t('already reported')})` : ''
+              const note = passed ? ` (${t(asAdmin ? 'already passed' : 'already started')})` : reported ? ` (${t('already reported')})` : ''
               return (
                 <Checkbox
                   key={s.id}
@@ -485,14 +493,14 @@ function AbsenceDayPicker({
  * submission over one stale tick. Whole-day entries need no filtering: the server drops
  * elapsed periods from those by design.
  */
-function selectionsToDays(selections: Selections, slots: MyTimetableSlot[]): AbsenceDay[] {
-  const endTimeById = new Map(slots.map((s) => [s.id, s.endTime]))
+function selectionsToDays(selections: Selections, slots: MyTimetableSlot[], asAdmin = false): AbsenceDay[] {
+  const slotById = new Map(slots.map((s) => [s.id, s]))
   return Object.keys(selections).sort().flatMap((date): AbsenceDay[] => {
     const sel = selections[date]
     if (sel.wholeDay) return [{ date, wholeDay: true }]
     const slotIds = sel.slotIds.filter((id) => {
-      const endTime = endTimeById.get(id)
-      return endTime != null && !slotHasPassed(date, endTime)
+      const slot = slotById.get(id)
+      return slot != null && !pastReportCutoff(date, slot, asAdmin)
     })
     return slotIds.length > 0 ? [{ date, wholeDay: false, timetableSlotIds: slotIds }] : []
   })
@@ -511,6 +519,7 @@ function TeacherAttendanceScreen() {
   const t = useT()
   const router = useRouter()
   const { school } = useAuthStore()
+  const graceMinutes = school?.absenceGraceMinutes ?? null
   const isUniversity = school?.type === 'UNIVERSITY'
 
   const [rows, setRows] = useState<CoverageRow[]>([])
@@ -541,6 +550,10 @@ function TeacherAttendanceScreen() {
   }, [])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
+
+  // Covers the case an admin locks or removes one of these while the screen is open — the
+  // delete button has to stop being offered the moment that happens, not on next focus.
+  useEffect(() => onRealtime('absences:changed', load), [load])
 
   const onRefresh = () => { setRefreshing(true); load() }
 
@@ -595,8 +608,17 @@ function TeacherAttendanceScreen() {
     }
   }
 
-  const handleDeleteAbsence = (id: string) => {
-    Alert.alert(t('Remove absence?'), t('This cannot be undone.'), [
+  const handleDeleteAbsence = (id: string, graceExpired = false) => {
+    // Past the arrival window the school already counts this period as lost, so removing
+    // the record is marking the teacher present after the fact. Say so plainly rather than
+    // asking the same neutral "remove?" as an ordinary correction.
+    const title = graceExpired ? t('This period was already lost') : t('Remove absence?')
+    const body = graceExpired
+      ? (periodMinutes != null && graceMinutes != null
+          ? `${t('The')} ${graceMinutes}${t('-minute window to arrive has passed, so this period counts as missed and not taught. Removing it marks them present anyway.')}`
+          : t('The window to arrive has passed, so this period counts as missed and not taught. Removing it marks them present anyway.'))
+      : t('This cannot be undone.')
+    Alert.alert(title, body, [
       { text: t('Cancel'), style: 'cancel' },
       {
         text: t('Remove'), style: 'destructive', onPress: async () => {
@@ -667,9 +689,19 @@ function TeacherAttendanceScreen() {
               // Once the period's happened, only an admin can remove it (they may want to
               // mark the teacher present after all); once an admin has reviewed it in a PRIOR
               // visit to their list, it's locked for everyone.
-              const locked = a.isFinal || a.seenByAdmin
+              const locked = a.isFinal || a.graceExpired || a.seenByAdmin
               return (
-                <View key={a.id} style={styles.absenceRow}>
+                <TouchableOpacity
+                  key={a.id}
+                  style={styles.absenceRow}
+                  activeOpacity={0.7}
+                  // Opens the timetable at the period this absence refers to, greyed out.
+                  // Only that one slot is marked; a normal visit is unchanged.
+                  onPress={() => router.push({
+                    pathname: '/(tabs)/timetable',
+                    params: { missedSlotId: a.timetableSlotId, missedDate: a.date, missedFrom: a.startTime, missedTo: a.endTime },
+                  } as any)}
+                >
                   <Text style={styles.absenceText}>
                     {a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}
                     {a.seenByAdmin ? ` (${t('reviewed')})` : ''}{'\n'}
@@ -682,7 +714,7 @@ function TeacherAttendanceScreen() {
                       <Ionicons name="trash-outline" size={18} color="#ef4444" />
                     </TouchableOpacity>
                   )}
-                </View>
+                </TouchableOpacity>
               )
             })}
             {absences.length > ABSENCES_PREVIEW_LIMIT && (
@@ -808,6 +840,7 @@ function AdminAttendanceScreen() {
   const styles = makeStyles(colors)
   const t = useT()
   const { school } = useAuthStore()
+  const graceMinutes = school?.absenceGraceMinutes ?? null
   const isUniversity = school?.type === 'UNIVERSITY'
 
   const [rows, setRows] = useState<CoverageRow[]>([])
@@ -818,7 +851,12 @@ function AdminAttendanceScreen() {
 
   // By Course (existing coverage cards, only courses with an hours target) vs By Teacher
   // (every teacher, every absence — a course with no target set is otherwise invisible).
-  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('course')
+  // Defaults to By Teacher, not By Course. A coverage row only exists for a course with a
+  // required-hours target, so By Course structurally CANNOT show an absence on any untargeted
+  // course — a school with 43 teachers and one target showed an admin a near-empty table
+  // while the teacher's own screen listed four absences. "Who has been absent" is what this
+  // page is opened for; hours-coverage tracking is one click away under By Course.
+  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('teacher')
   const [teacherSearch, setTeacherSearch] = useState('')
   // Value stored is PERIODS missed per teacher; periodMinutes null → numbers are event
   // counts, labelled "absences" rather than "periods".
@@ -831,6 +869,7 @@ function AdminAttendanceScreen() {
   const [hoursTotals, setHoursTotals] = useState<Record<string, TeacherHoursTotal>>({})
   const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period') : t('periods')) : (n === 1 ? t('absence') : t('absences'))
 
+  const router = useRouter()
   const [drillDown, setDrillDown] = useState<DrillTarget | null>(null)
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [absencesLoading, setAbsencesLoading] = useState(false)
@@ -865,6 +904,9 @@ function AdminAttendanceScreen() {
   }, [])
 
   useFocusEffect(useCallback(() => { load(); loadCounts(); loadHoursTotals() }, [load, loadCounts, loadHoursTotals]))
+  // A teacher anywhere in the school reporting or retracting changes coverage and the counts
+  // shown here, so the admin's view keeps up without a manual refresh.
+  useEffect(() => onRealtime('absences:changed', () => { load(); loadCounts() }), [load, loadCounts])
   useEffect(() => { getTeachers().then((d) => setTeachers(d.teachers)).catch(() => {}) }, [])
 
   const onRefresh = () => { setRefreshing(true); load(); loadCounts() }
@@ -899,11 +941,20 @@ function AdminAttendanceScreen() {
       .finally(() => setAbsencesLoading(false))
   }
 
-  const handleDeleteAbsence = (id: string) => {
-    Alert.alert(t('Remove absence?'), t('This cannot be undone.'), [
+  const handleDeleteAbsence = (id: string, graceExpired = false) => {
+    // Past the arrival window the school already counts this period as lost, so removing
+    // the record is marking the teacher present after the fact. Say so plainly rather than
+    // asking the same neutral "remove?" as an ordinary correction.
+    const title = graceExpired ? t('This period was already lost') : t('Remove absence?')
+    const body = graceExpired
+      ? (periodMinutes != null && graceMinutes != null
+          ? `${t('The')} ${graceMinutes}${t('-minute window to arrive has passed, so this period counts as missed and not taught. Removing it marks them present anyway.')}`
+          : t('The window to arrive has passed, so this period counts as missed and not taught. Removing it marks them present anyway.'))
+      : t('This cannot be undone.')
+    Alert.alert(title, body, [
       { text: t('Cancel'), style: 'cancel' },
       {
-        text: t('Remove'), style: 'destructive', onPress: async () => {
+        text: graceExpired ? t('Mark present anyway') : t('Remove'), style: 'destructive', onPress: async () => {
           try {
             await deleteAbsence(id)
             setAbsences((prev) => prev.filter((a) => a.id !== id))
@@ -946,7 +997,7 @@ function AdminAttendanceScreen() {
   // flow — just against the SELECTED teacher's timetable rather than the admin's own. Kept
   // deliberately identical: an admin logging it on their behalf shouldn't have a narrower
   // reach than the teacher, and the API applies the same rules to both.
-  const pendingDays = selectionsToDays(selections, teacherSlots)
+  const pendingDays = selectionsToDays(selections, teacherSlots, true)
 
   const handleSubmit = async () => {
     if (!reportTeacher) {
@@ -1019,6 +1070,19 @@ function AdminAttendanceScreen() {
               ? t('Counts are for the current semester — next semester starts a fresh record.')
               : t('Counts are for the current academic year — next year starts a fresh record.')}
           </Text>
+          {/* A total, so absences are legible at a glance instead of hidden in a long list
+              of teachers who have none. */}
+          {(() => {
+            const withAbsences = teacherRows.filter((r) => r.count > 0)
+            const totalPeriods = withAbsences.reduce((sum, r) => sum + r.count, 0)
+            return (
+              <Text style={{ paddingHorizontal: 16, paddingTop: 8, fontSize: 14, fontWeight: '700', color: colors.text }}>
+                {totalPeriods === 0
+                  ? t('No absences recorded yet.')
+                  : `${totalPeriods} ${t(totalPeriods === 1 ? 'period missed' : 'periods missed')} · ${withAbsences.length} ${t(withAbsences.length === 1 ? 'teacher' : 'teachers')}`}
+              </Text>
+            )
+          })()}
           <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
             <View style={styles.searchBox}>
               <Ionicons name="search-outline" size={16} color={colors.textMuted} />
@@ -1176,7 +1240,28 @@ function AdminAttendanceScreen() {
               // for everyone, since there's no more chance the teacher shows up.
               <ScrollView style={{ maxHeight: 320 }}>
                 {absences.map((a) => (
-                  <View key={a.id} style={styles.absenceRow}>
+                  <TouchableOpacity
+                    key={a.id}
+                    style={styles.absenceRow}
+                    activeOpacity={0.7}
+                    // Opens THAT teacher's timetable (not the admin's own) at the period
+                    // this absence refers to. The drill-down is a <Modal>, which sits ABOVE
+                    // the navigator — pushing without closing it first navigates underneath
+                    // and looks like nothing happened. Closed first, then pushed on the next
+                    // frame so iOS has finished dismissing before the navigation starts.
+                    onPress={() => {
+                      const target = {
+                        teacherId: drillDown?.teacherId ?? '',
+                        teacherName: drillDown?.teacherName ?? '',
+                        missedSlotId: a.timetableSlotId,
+                        missedDate: a.date,
+                        missedFrom: a.startTime,
+                        missedTo: a.endTime,
+                      }
+                      setDrillDown(null)
+                      requestAnimationFrame(() => router.push({ pathname: '/teacher-timetable', params: target } as any))
+                    }}
+                  >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.absenceText}>{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</Text>
                       {/* Only shown in the unscoped "By Teacher" view — the "By Course"
@@ -1187,13 +1272,18 @@ function AdminAttendanceScreen() {
                       {a.seenByAdmin && <Text style={styles.absenceHint}>{t('reviewed')}</Text>}
                     </View>
                     {a.isFinal ? (
-                      <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
+                      // A bare padlock reads as "deleting is not allowed here". Naming the
+                      // reason makes it clear the rule is about THIS period being over.
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Text style={styles.absenceHint}>{t('period over')}</Text>
+                        <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
+                      </View>
                     ) : (
-                      <TouchableOpacity onPress={() => handleDeleteAbsence(a.id)}>
+                      <TouchableOpacity onPress={() => handleDeleteAbsence(a.id, a.graceExpired)}>
                         <Ionicons name="trash-outline" size={18} color="#ef4444" />
                       </TouchableOpacity>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 ))}
               </ScrollView>
             )}
@@ -1236,6 +1326,7 @@ function AdminAttendanceScreen() {
                 <>
                   <Text style={styles.label}>{t('Days')} <Text style={styles.required}>*</Text></Text>
                   <AbsenceDayPicker
+                    asAdmin
                     slots={teacherSlots}
                     // Empty: the admin has no copy of this teacher's absences here, and
                     // fetching them would mark every one of their records as reviewed as a

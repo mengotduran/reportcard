@@ -10,7 +10,9 @@ import { formatHours } from '@/lib/formatHours'
 import CustomSelect from '@/components/ui/CustomSelect'
 import Pagination from '@/components/ui/Pagination'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
+import { onRealtime } from '@/lib/socket'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { usePagination } from '@/lib/usePagination'
 import { Clock, CalendarOff, Search, X, Trash2, Users } from 'lucide-react'
@@ -72,6 +74,8 @@ function todayInSchoolTime(): string {
 export default function TeachingHoursPage() {
   const t = useT()
   const { school } = useAuthStore()
+  // Only used to word the "period was lost" warning; the API is the real gate.
+  const graceMinutes = school?.absenceGraceMinutes ?? null
   const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
 
@@ -86,7 +90,12 @@ export default function TeachingHoursPage() {
 
   // By Course (existing coverage table, only courses with an hours target) vs By Teacher
   // (every teacher, every absence — a course with no target set is otherwise invisible).
-  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('course')
+  // Defaults to By Teacher, not By Course. A coverage row only exists for a course with a
+  // required-hours target, so By Course structurally CANNOT show an absence on any untargeted
+  // course — a school with 43 teachers and one target showed an admin a near-empty table
+  // while the teacher's own screen listed four absences. "Who has been absent" is what this
+  // page is opened for; hours-coverage tracking is one click away under By Course.
+  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('teacher')
   const [teacherSearch, setTeacherSearch] = useState('')
   // Value stored is PERIODS missed per teacher. periodMinutes null = school hasn't set a
   // period length, so the numbers are event counts and we label them "absences" instead.
@@ -118,13 +127,23 @@ export default function TeachingHoursPage() {
   }
 
   useEffect(load, [])
-  useEffect(() => { getTeachersApi().then((d) => setTeachers(d.teachers)).catch(() => {}) }, [])
+  // Not a silent catch: if this fails the By Teacher view has nothing to list and would
+  // otherwise say "No teachers found", blaming the data for a network problem.
+  const [teachersFailed, setTeachersFailed] = useState(false)
+  useEffect(() => {
+    getTeachersApi()
+      .then((d) => { setTeachers(d.teachers); setTeachersFailed(false) })
+      .catch(() => setTeachersFailed(true))
+  }, [])
   const refreshCounts = () => {
     getAbsenceCountsApi()
       .then((d) => { setAbsenceCounts(Object.fromEntries(d.counts.map((c) => [c.teacherId, c.periods]))); setPeriodMinutes(d.periodMinutes) })
       .catch(() => {})
   }
   useEffect(refreshCounts, [])
+  // A teacher anywhere in the school reporting or retracting changes both the coverage rows
+  // and the per-teacher counts shown here.
+  useEffect(() => onRealtime('absences:changed', () => { load(); refreshCounts() }), [])
   useEffect(() => {
     getTeacherHoursTotalsApi()
       .then((d) => setHoursTotals(Object.fromEntries(d.totals.map((t) => [t.teacherId, t]))))
@@ -214,7 +233,16 @@ export default function TeachingHoursPage() {
   const { page: teacherPage, setPage: setTeacherPage, pageItems: teacherPageItems, totalPages: teacherTotalPages } =
     usePagination(teacherRows, TEACHER_COLS * TEACHER_ROWS_PER_PAGE, teacherSearch)
 
-  const handleDeleteAbsence = async (id: string) => {
+  // Deleting after the arrival window has closed means overriding a period the school
+  // counts as lost, so it is confirmed rather than done on one click. Before the window
+  // closes there is nothing to override and it stays a single click.
+  const [confirmLost, setConfirmLost] = useState<TeacherAbsence | null>(null)
+
+  const handleDeleteAbsence = async (id: string, graceExpired = false) => {
+    if (graceExpired) {
+      const target = absences.find((a) => a.id === id)
+      if (target) { setConfirmLost(target); return }
+    }
     try {
       await deleteAbsenceApi(id)
       setAbsences((prev) => prev.filter((a) => a.id !== id))
@@ -224,8 +252,13 @@ export default function TeachingHoursPage() {
       // refetch here so that's visible immediately rather than only on next page load.
       load()
       refreshCounts()
-    } catch {
-      showToast(t('Failed to remove absence'), 'error')
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to remove absence'), 'error')
+      // Could simply be a stale list: the period may have ended while it sat open.
+      load()
+    } finally {
+      setConfirmLost(null)
     }
   }
 
@@ -274,6 +307,17 @@ export default function TeachingHoursPage() {
               ? t('Counts are for the current semester — once it ends, next semester starts a fresh record.')
               : t('Counts are for the current academic year — once it ends, next year starts a fresh record.')}
           </p>
+          {(() => {
+            const withAbsences = teacherRows.filter((r) => r.count > 0)
+            const totalPeriods = withAbsences.reduce((sum, r) => sum + r.count, 0)
+            return (
+              <p className="text-sm font-semibold text-foreground mb-3">
+                {totalPeriods === 0
+                  ? t('No absences recorded yet.')
+                  : `${totalPeriods} ${t(totalPeriods === 1 ? 'period missed' : 'periods missed')} · ${withAbsences.length} ${t(withAbsences.length === 1 ? 'teacher' : 'teachers')}`}
+              </p>
+            )
+          })()}
           <div className="relative mb-4">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -285,7 +329,9 @@ export default function TeachingHoursPage() {
           {teacherRows.length === 0 ? (
             <div className="bg-card rounded-xl border border-border text-center py-14">
               <Users size={32} className="mx-auto mb-3 text-muted-foreground" />
-              <p className="text-muted-foreground text-sm">{t('No teachers found.')}</p>
+              <p className={`text-sm ${teachersFailed ? 'text-destructive' : 'text-muted-foreground'}`}>
+                {teachersFailed ? t('Could not load teachers. Check your connection and reload.') : t('No teachers found.')}
+              </p>
             </div>
           ) : (
             <>
@@ -296,7 +342,7 @@ export default function TeachingHoursPage() {
                     <button
                       key={tch.id}
                       onClick={() => openTeacherDrillDown(tch.id, tch.name)}
-                      className="bg-card border border-border rounded-xl px-4 py-3.5 hover:bg-muted/40 hover:border-primary/30 transition text-left"
+                      className="bg-card border border-border rounded-xl px-4 py-3.5 hover:bg-hover/40 hover:border-primary/30 transition text-left"
                     >
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className="text-sm font-medium text-foreground truncate">{tch.name}</span>
@@ -380,7 +426,7 @@ export default function TeachingHoursPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {pageItems.map((r) => (
-                  <tr key={`${r.teacherId}-${r.subjectId}`} className="hover:bg-muted/40 transition cursor-pointer" onClick={() => openDrillDown(r)}>
+                  <tr key={`${r.teacherId}-${r.subjectId}`} className="hover:bg-hover/40 transition cursor-pointer" onClick={() => openDrillDown(r)}>
                     <td className="px-5 py-3 text-sm font-medium text-foreground">
                       {r.teacherName}
                       {r.periodsMissed > 0 && (
@@ -448,11 +494,21 @@ export default function TeachingHoursPage() {
                         <p className="text-xs text-muted-foreground mt-0.5">{a.subjectName} · {a.classLevel}</p>
                       )}
                     </div>
+                    {/* The REASON has to be on screen, not only in a title tooltip: a
+                        greyed-out bin with no explanation reads as "admin cannot delete
+                        absences", when the actual rule is that this one period is over. */}
+                    {a.isFinal && (
+                      <span className="text-xs text-muted-foreground italic mr-2 whitespace-nowrap">{t('period over')}</span>
+                    )}
                     <button
-                      onClick={() => handleDeleteAbsence(a.id)}
+                      onClick={() => handleDeleteAbsence(a.id, a.graceExpired)}
                       disabled={a.isFinal}
                       className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
-                      title={a.isFinal ? t('This period can no longer be changed') : t('Remove')}
+                      title={a.isFinal
+                        ? t('This period has already ended and can no longer be changed')
+                        : a.graceExpired
+                          ? t('This period was lost. You can still mark them present, with a warning.')
+                          : t('Remove')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -547,7 +603,7 @@ export default function TeachingHoursPage() {
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowReportModal(false)}
-                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button
@@ -562,6 +618,24 @@ export default function TeachingHoursPage() {
           </div>
         </div>
       )}
+
+      {/* Spells out what is being overridden: the period is already counted as lost, and
+          deleting the record marks the teacher present for it after the fact. */}
+      <ConfirmModal
+        isOpen={confirmLost != null}
+        title={t('This period was already lost')}
+        message={confirmLost
+          ? `${confirmLost.subjectName ?? t('This class')} · ${confirmLost.date} ${confirmLost.startTime}–${confirmLost.endTime}. ${
+              graceMinutes != null
+                ? `${t('The')} ${graceMinutes}${t('-minute window to arrive has passed, so this period counts as missed and not taught.')}`
+                : t('The window to arrive has passed, so this period counts as missed and not taught.')
+            } ${t('Removing it marks them present for the period anyway. Continue?')}`
+          : ''}
+        confirmLabel={t('Mark present anyway')}
+        confirmColor="red"
+        onConfirm={() => { if (confirmLost) handleDeleteAbsence(confirmLost.id) }}
+        onCancel={() => setConfirmLost(null)}
+      />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

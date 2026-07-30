@@ -5,6 +5,7 @@ import {
   StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView,
   Platform, Keyboard, TouchableWithoutFeedback,
 } from 'react-native'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
@@ -330,7 +331,7 @@ export default function ReportCardDetailScreen() {
       <View style={styles.infoCard}>
         <Text style={styles.studentName}>{reportCard.student.name}</Text>
         <Text style={styles.meta}>
-          {reportCard.term.name} · {reportCard.term.session} · {reportCard.student.classLevel}
+          {reportCard.term.name} · {reportCard.term.session} · {stripProgrammeSuffix(reportCard.student.classLevel)}
         </Text>
         <View style={[styles.statusBadge, isDraft ? styles.draftBadge : styles.publishedBadge]}>
           <Ionicons

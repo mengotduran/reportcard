@@ -2,11 +2,12 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, ClassLevel } from '@/lib/api/classLevels'
+import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, ClassLevel, DeleteImpact } from '@/lib/api/classLevels'
 import { getDepartmentsApi, createDepartmentApi, updateDepartmentApi, deleteDepartmentApi, Department } from '@/lib/api/departments'
 import { copySubjectsApi, getSubjectsApi } from '@/lib/api/subjects'
-import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers } from 'lucide-react'
-import ConfirmModal from '@/components/ui/ConfirmModal'
+import { getStudentsApi } from '@/lib/api/students'
+import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers, AlertTriangle } from 'lucide-react'
+import { EveningBadge } from '@/components/ui/ProgrammeFilter'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import { useToast } from '@/lib/useToast'
@@ -14,6 +15,7 @@ import { Programme, PROGRAMME_LABELS, stripProgrammeSuffix, withProgrammeSuffix 
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 import { formatXAF } from '@/lib/api/fees'
+import { getCurrentTermApi } from '@/lib/api/terms'
 
 // ── University class-name helpers ────────────────────────────────────────────
 type UniLevel = 'Level 1' | 'Level 2' | 'Level 3'
@@ -112,10 +114,18 @@ export default function ClassesPage() {
   const [saving, setSaving]           = useState(false)
   const [error, setError]             = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ClassLevel | null>(null)
+  const [deleteImpact, setDeleteImpact] = useState<DeleteImpact | null>(null)
+  const [impactError, setImpactError] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [typedName, setTypedName] = useState('')
+  // How many students the department being edited holds. null while unknown, so the matricule
+  // warning never flashes on before the answer arrives. Fetched per open rather than for every
+  // class up front: it is one small request, only when the modal is actually opened.
+  const [editingStudentCount, setEditingStudentCount] = useState<number | null>(null)
   const [activeLevel, setActiveLevel] = useState<UniLevel>('Level 1')
   // Day/Evening filter. 'ALL' by default so a school with no evening programme sees no
   // change at all, and the chips only earn their place once an evening class exists.
-  const [activeProgramme, setActiveProgramme] = useState<Programme | 'ALL'>('ALL')
+  const [programmeFilter, setProgrammeFilter] = useState<Programme | 'ALL'>('ALL')
 
   // ── Secondary departments ──
   const [departments, setDepartments]   = useState<Department[]>([])
@@ -126,6 +136,7 @@ export default function ClassesPage() {
   const [deptSaving, setDeptSaving]     = useState(false)
   const [deptError, setDeptError]       = useState('')
   const [deleteDeptTarget, setDeleteDeptTarget] = useState<Department | null>(null)
+  const [typedDeptName, setTypedDeptName] = useState('')
   const activeDept = departments.find(d => d.id === activeDeptId)
 
   // ── Secondary class sections (A/B/C…) ── Optional: a school with one stream per
@@ -142,12 +153,19 @@ export default function ClassesPage() {
   const [baseClass, setBaseClass] = useState<string>('')
   const [pickedCourses, setPickedCourses] = useState<Set<string>>(new Set())
   const [allSubjects, setAllSubjects] = useState<{ id: string; name: string; classLevel: string; term?: string | null }[]>([])
+  // A course belongs to one semester. Taking a day department into the evening brings over
+  // the CURRENT semester only, never both at once: the other semester's courses are copied
+  // when that semester comes round, so the evening intake is never set up months ahead of
+  // itself. Non-university schools leave `Subject.term` null, so this never applies to them.
+  const [currentTermName, setCurrentTermName] = useState<string | null>(null)
 
   useEffect(() => {
     if (!isAuthenticated) router.push('/login')
     else {
       fetchClasses()
       fetchSubjects()
+      // No current semester set just means the picker falls back to the whole course list.
+      getCurrentTermApi().then((tm) => setCurrentTermName(tm?.name ?? null)).catch(() => {})
       if (isSecondary) fetchDepartments()
     }
   }, [isAuthenticated])
@@ -179,6 +197,15 @@ export default function ClassesPage() {
     } catch { /* ignore */ }
   }
 
+  // The chips only appear once the school actually runs an evening sitting, so nothing
+  // changes for the schools that don't.
+  const hasEveningClasses = classes.some((c) => (c.programme ?? 'DAY') === 'EVENING')
+
+  // Derived, not the raw filter state: deleting the last evening department takes the chips
+  // away, and a stored 'EVENING' would then leave the page filtered to a section with no way
+  // back, since the tab that would clear it is the one that just disappeared.
+  const activeProgramme: Programme | 'ALL' = hasEveningClasses ? programmeFilter : 'ALL'
+
   // Which classes to show for the active tab / department
   const displayedClasses = useMemo(() => {
     const bySitting = activeProgramme === 'ALL'
@@ -189,10 +216,10 @@ export default function ClassesPage() {
     return bySitting
   }, [isUniversity, isSecondary, classes, activeLevel, activeDeptId, activeProgramme])
 
-  // The chips only appear once the school actually runs an evening sitting, so nothing
-  // changes for the schools that don't.
-  const hasEveningClasses = classes.some((c) => (c.programme ?? 'DAY') === 'EVENING')
-
+  // Creation only. Basing an existing department on a day one meant a checkbox that could add
+  // or remove courses in bulk, next to fields that only rename things, and every subtle bug in
+  // it cost real data. Adding a course to a department that already exists belongs on the
+  // Courses page, one course at a time, where the delete says what it would destroy.
   const baseClassOptions = useMemo(() => {
     if (form.programme !== 'EVENING' || editing) return []
     return classes
@@ -201,10 +228,56 @@ export default function ClassesPage() {
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [classes, form.programme, form.uniLevel, editing, isUniversity])
 
-  const baseClassCourses = useMemo(
-    () => allSubjects.filter((s) => s.classLevel === baseClass).sort((a, b) => a.name.localeCompare(b.name)),
-    [allSubjects, baseClass],
+  // The evening name a day option would produce. Two evening intakes of the same department
+  // at the same level would collide on (schoolId, name), so the option is offered but
+  // disabled with the reason rather than failing at save.
+  const takenEveningNames = useMemo(
+    () => new Set(classes.filter((c) => (c.programme ?? 'DAY') === 'EVENING').map((c) => c.name)),
+    [classes],
   )
+  const eveningNameFor = (dayClass: ClassLevel) => withProgrammeSuffix(stripProgrammeSuffix(dayClass.name), 'EVENING')
+
+  // Scoped to the current semester, so taking a day department into the evening never drags
+  // the whole year across. Only university courses carry a semester, and a school with no
+  // current semester set falls back to the full list rather than an empty picker.
+  const inCurrentTerm = (s: { term?: string | null }) =>
+    !isUniversity || !currentTermName || s.term === currentTermName
+
+  // The new department is empty, so every one of these is a plain addition.
+  const baseClassCourses = allSubjects
+    .filter((s) => s.classLevel === baseClass && inCurrentTerm(s))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  // The section is a fact about where you already are, not a question, in two cases: editing
+  // (it was fixed at creation) and adding while filtered to one section (the chip you are on
+  // is the answer). It stays a real choice only on the All tab, which is also the ONLY place
+  // the very first evening department can be created from: the chips do not render until an
+  // evening class exists, so locking the section there would make one impossible to add.
+  const sectionLocked = isUniversity && (!!editing || activeProgramme !== 'ALL')
+
+  // A university department is stored under its composed name, so editing the name or the
+  // level is a rename, not a label change.
+  // Is there a DAY department of this exact name at this level? Drives the spelling hint that
+  // replaced the locked name field on edit.
+  const dayTwinExists = isUniversity && !!form.deptName.trim() && classes.some(
+    (c) => (c.programme ?? 'DAY') === 'DAY'
+      && c.name === buildClassName(form.deptName.trim(), form.uniLevel),
+  )
+
+  const renamesOnSave = !!editing && isUniversity && !!form.deptName.trim()
+    && withProgrammeSuffix(buildClassName(form.deptName.trim(), form.uniLevel), form.programme) !== editing.name
+  // Three things must all hold before warning about matricules:
+  //   1. the department HAD an abbreviation, so there is an old one to change FROM. Setting
+  //      the first one is not a change, it is filling in a blank.
+  //   2. the new one actually differs.
+  //   3. someone is enrolled. A matricule only exists on a student, so a department with
+  //      nobody in it has none to rebuild and the warning would be about nothing.
+  const priorAbbr = (editing?.abbreviation ?? '').trim()
+  const abbrChangesOnSave = !!editing && isUniversity
+    && priorAbbr !== ''
+    && form.abbreviation.trim() !== ''
+    && form.abbreviation.trim() !== priorAbbr
+    && (editingStudentCount ?? 0) > 0
 
   // Taking a day department as the base fills in everything that must match for the two
   // sittings to stay one programme: the name (never retyped, so it cannot be misspelled into
@@ -221,7 +294,11 @@ export default function ClassesPage() {
       maxScore: String(src.maxScore ?? (isUniversity ? 100 : 20)),
       feeAmount: String(src.feeAmount ?? 0),
     }))
-    setPickedCourses(new Set(allSubjects.filter((s) => s.classLevel === name).map((s) => s.id)))
+    // The whole of the day department's current semester by default, since an evening intake
+    // usually runs the same programme. Untick the ones it does not take.
+    setPickedCourses(new Set(
+      allSubjects.filter((s) => s.classLevel === name && inCurrentTerm(s)).map((s) => s.id),
+    ))
   }
 
   const composeClassName = (base: string): string => {
@@ -255,6 +332,19 @@ export default function ClassesPage() {
 
   const openEdit = (cls: ClassLevel) => {
     setEditing(cls)
+    setEditingStudentCount(null)
+    // Only the count matters, and only for the matricule warning, so a failure just leaves it
+    // unknown and the warning stays hidden rather than claiming something it cannot back up.
+    getStudentsApi({ classLevel: cls.name })
+      .then((d) => setEditingStudentCount(d.students?.length ?? 0))
+      .catch(() => setEditingStudentCount(0))
+    // The base-department picker is per-open state. Without this, ticking it on an Add that
+    // was then cancelled left the next Edit with a locked name field and a queued copy.
+    setBaseClass('')
+    setPickedCourses(new Set())
+    setTakeFromDay(false)
+    setSections([])
+    setCopyFrom('')
     if (isUniversity) {
       setForm({
         name: cls.name,
@@ -288,6 +378,9 @@ export default function ClassesPage() {
     setShowModal(false)
     setEditing(null)
     setForm(isUniversity ? UNI_EMPTY : STD_EMPTY)
+    setBaseClass('')
+    setPickedCourses(new Set())
+    setTakeFromDay(false)
     setError('')
   }
 
@@ -346,8 +439,17 @@ export default function ClassesPage() {
     setSaving(true)
     try {
       if (editing) {
-        await updateClassLevelApi(editing.id, buildPayload(finalNames[0]))
-        showToast(tt('Class updated', 'Department updated'))
+        const result = await updateClassLevelApi(editing.id, buildPayload(finalNames[0]))
+        // Copied AFTER the update so they land on the new name (the update also carries this
+        // department's existing courses across to it). Copies, never a share: the day
+        // department keeps its own, and neither its students nor its lecturers come over.
+        // Editing never touches courses: it renames the department and edits its numbers,
+        // nothing more. The API's own message names what the rename carried with it ("22
+        // students, 6 courses"); a fixed string here would throw that away. Only its leading
+        // label is swapped, so a university reads "Department" for what it calls a department.
+        showToast(result?.message
+          ? String(result.message).replace(/^Class updated/, tt('Class updated', 'Department updated'))
+          : tt('Class updated', 'Department updated'))
       } else {
         // Skip any sections that already exist so a duplicate doesn't abort the batch.
         const existingNames = new Set(classes.map((c) => c.name))
@@ -377,18 +479,42 @@ export default function ClassesPage() {
       }
       closeModal()
       fetchClasses()
+      // A rename moves this department's courses onto the new name and a copy adds more, so
+      // the cached list the picker reads from is stale either way.
+      fetchSubjects()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
       setError(e.response?.data?.message || tt('Failed to save class', 'Failed to save department'))
     } finally { setSaving(false) }
   }
 
+  // Deleting a class now takes its courses, their marks, the lecturers' assignments to them
+  // and every timetable slot they sit in. That is far more than the page can see, so the
+  // warning is built from a server count taken before anything is touched.
+  const openDelete = async (cls: ClassLevel) => {
+    setDeleteTarget(cls)
+    setDeleteImpact(null)
+    setImpactError('')
+    setTypedName('')
+    try {
+      setDeleteImpact(await getClassLevelDeleteImpactApi(cls.id))
+    } catch {
+      // Without real counts there is nothing honest to warn about, so the delete is refused
+      // rather than shown with a blank or guessed list.
+      setImpactError(t('Could not check what deleting this would remove. Try again.'))
+    }
+  }
+
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return
+    setDeleting(true)
     try {
-      const result = await deleteClassLevelApi(deleteTarget.id)
+      const result = await deleteClassLevelApi(deleteTarget.id, deleteTarget.name)
       setDeleteTarget(null)
+      setDeleteImpact(null)
+      setTypedName('')
       fetchClasses()
+      fetchSubjects()
       // The API's own message names what it also cleaned up (a class master who was
       // assigned to it, say), which a fixed string here would throw away.
       showToast(result?.message || tt('Class deleted', 'Department deleted'))
@@ -397,7 +523,7 @@ export default function ClassesPage() {
       // with "Failed to delete" would leave the admin guessing at a rule they can't see.
       const e = err as { response?: { data?: { message?: string } } }
       showToast(e.response?.data?.message || tt('Failed to delete class', 'Failed to delete department'), 'error')
-    }
+    } finally { setDeleting(false) }
   }
 
   // Reorder within the currently displayed list by swapping the two classes' order values.
@@ -449,6 +575,7 @@ export default function ClassesPage() {
       await deleteDepartmentApi(deleteDeptTarget.id)
       if (activeDeptId === deleteDeptTarget.id) setActiveDeptId('')
       setDeleteDeptTarget(null)
+      setTypedDeptName('')
       fetchDepartments()
       showToast(t('Department deleted'))
     } catch (err: unknown) {
@@ -491,11 +618,11 @@ export default function ClassesPage() {
             const active = activeProgramme === p
             return (
               <button key={p} onClick={() => {
-                setActiveProgramme(p)
+                setProgrammeFilter(p)
                 if (p === 'EVENING' && activeLevel === 'Level 3') setActiveLevel('Level 1')
               }}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
-                  active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                  active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-hover/70'
                 }`}>
                 {t(p === 'ALL' ? 'All' : PROGRAMME_LABELS[p])}
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${active ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
@@ -516,7 +643,7 @@ export default function ClassesPage() {
             return (
               <button key={d.id} onClick={() => setActiveDeptId(d.id)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
-                  active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                  active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-hover/70'
                 }`}>
                 <Layers size={14} className={active ? 'text-white' : 'text-muted-foreground'} />
                 {d.name}
@@ -563,7 +690,7 @@ export default function ClassesPage() {
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
                   activeLevel === lv
                     ? 'bg-primary text-white'
-                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    : 'bg-muted text-muted-foreground hover:bg-hover/80'
                 }`}>
                 {lv}
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeLevel === lv ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
@@ -617,7 +744,7 @@ export default function ClassesPage() {
                 {pageItems.map((cls, idx) => {
                   const i = start + idx
                   return (
-                    <tr key={cls.id} className="hover:bg-muted dark:hover:bg-muted transition">
+                    <tr key={cls.id} className="hover:bg-hover transition">
                       {!isUniversity && (
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
@@ -643,9 +770,7 @@ export default function ClassesPage() {
                           {/* The sitting is shown as a tag rather than left in the name,
                               so the name reads the same as it does on a report card. */}
                           {(cls.programme ?? 'DAY') === 'EVENING' && (
-                            <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                              {t('Evening')}
-                            </span>
+                            <EveningBadge />
                           )}
                         </div>
                       </td>
@@ -693,7 +818,7 @@ export default function ClassesPage() {
                             className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
                             <Pencil size={14} />
                           </button>
-                          <button onClick={() => setDeleteTarget(cls)}
+                          <button onClick={() => openDelete(cls)}
                             className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition">
                             <Trash2 size={14} />
                           </button>
@@ -734,34 +859,57 @@ export default function ClassesPage() {
                   Day class. The word never reaches a printed report card. */}
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('Section')}</label>
-                <div className="flex gap-2">
-                  {(['DAY', 'EVENING'] as const).map((p) => (
-                    <button key={p} type="button" onClick={() => setForm({
-                      ...form,
-                      programme: p,
-                      // Level 3 exists only in the day section, so a switch to Evening has to
-                      // move off it rather than leave an invalid choice selected but hidden.
-                      uniLevel: p === 'EVENING' && form.uniLevel === 'Level 3' ? 'Level 1' : form.uniLevel,
-                    })}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition active:scale-95 ${
-                        form.programme === p ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'
-                      }`}>
-                      {t(PROGRAMME_LABELS[p])}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {form.programme === 'EVENING'
-                    ? t('A separate intake following the evening programme, with its own students, marks and fees. Used to group and filter inside the app only, it never appears on a printed report card.')
-                    : t('Follows the day curriculum. Choose this even for a class taught in the evening, if it follows the day programme.')}
-                </p>
+                {/* Fixed once the department exists, so editing shows which section you are in
+                    rather than offering a move. The section is only ever taken one way, from
+                    day into a new evening intake, and that happens at creation. Adding while
+                    filtered to a section inherits that section for the same reason. */}
+                {sectionLocked ? (
+                  <>
+                    <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-muted/40">
+                      <span className="text-sm font-medium text-foreground">{t(PROGRAMME_LABELS[form.programme])}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {editing
+                        ? (form.programme === 'EVENING'
+                          ? t('Chosen when this department was created. An evening department stays in the evening section. If it was created here by mistake, delete it and create it in the Day section instead.')
+                          : t('Chosen when this department was created. To run the same programme in the evening, add a department in the Evening section and base it on this one.'))
+                        : (form.programme === 'EVENING'
+                          ? t('Added to the Evening section, the one you are filtered to. Switch to the All tab if you want to pick the section here instead.')
+                          : t('Added to the Day section, the one you are filtered to. Switch to the All tab if you want to pick the section here instead.'))}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      {(['DAY', 'EVENING'] as const).map((p) => (
+                        <button key={p} type="button" onClick={() => setForm({
+                          ...form,
+                          programme: p,
+                          // Level 3 exists only in the day section, so a switch to Evening has to
+                          // move off it rather than leave an invalid choice selected but hidden.
+                          uniLevel: p === 'EVENING' && form.uniLevel === 'Level 3' ? 'Level 1' : form.uniLevel,
+                        })}
+                          className={`flex-1 py-2 rounded-lg text-sm font-medium border transition active:scale-95 ${
+                            form.programme === p ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'
+                          }`}>
+                          {t(PROGRAMME_LABELS[p])}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {form.programme === 'EVENING'
+                        ? t('A separate intake following the evening programme, with its own students, marks and fees. Used to group and filter inside the app only, it never appears on a printed report card.')
+                        : t('Follows the day curriculum. Choose this even for a class taught in the evening, if it follows the day programme.')}
+                    </p>
+                  </>
+                )}
 
                 {/* Evening intakes are almost always the same programme run again, so the
                     department is TAKEN from the day one rather than retyped. The courses are
                     then copied, and copied is the point: the evening cohort may edit theirs
                     without touching the day class. Which ones to bring is a choice, since an
                     evening intake need not take every course the day one does. */}
-                {form.programme === 'EVENING' && !editing && baseClassOptions.length > 0 && (
+                {form.programme === 'EVENING' && baseClassOptions.length > 0 && (
                   <div className="mt-3 rounded-lg border border-border p-3 space-y-3">
                     <label className="flex items-start gap-2.5 cursor-pointer">
                       <input type="checkbox" checked={takeFromDay}
@@ -790,9 +938,17 @@ export default function ClassesPage() {
                       <select value={baseClass} onChange={(e) => applyBaseClass(e.target.value)}
                         className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
                         <option value="">{t('Select a department...')}</option>
-                        {baseClassOptions.map((c) => (
-                          <option key={c.id} value={c.name}>{displayClassName(c)}</option>
-                        ))}
+                        {baseClassOptions.map((c) => {
+                          // Already has its own evening intake at this level. Offered but not
+                          // selectable, so the reason is visible here instead of surfacing as
+                          // a duplicate-name error after the form is filled in.
+                          const taken = takenEveningNames.has(eveningNameFor(c))
+                          return (
+                            <option key={c.id} value={c.name} disabled={taken}>
+                              {displayClassName(c)}{taken ? ` (${t('already has an evening intake')})` : ''}
+                            </option>
+                          )
+                        })}
                       </select>
                       <p className="text-xs text-muted-foreground mt-1">
                         {baseClass
@@ -807,6 +963,9 @@ export default function ClassesPage() {
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="block text-xs font-medium text-foreground">
                             {t(isUniversity ? 'Courses to copy' : 'Subjects to copy')}
+                            {isUniversity && currentTermName && (
+                              <span className="text-muted-foreground font-normal"> ({currentTermName})</span>
+                            )}
                             <span className="text-muted-foreground font-normal"> ({pickedCourses.size}/{baseClassCourses.length})</span>
                           </label>
                           {baseClassCourses.length > 0 && (
@@ -818,11 +977,15 @@ export default function ClassesPage() {
                           )}
                         </div>
                         {baseClassCourses.length === 0 ? (
-                          <p className="text-xs text-muted-foreground">{t('That class has no courses yet, so there is nothing to copy.')}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {isUniversity && currentTermName
+                              ? `${t('That department has no courses in')} ${currentTermName}, ${t('so there is nothing to copy for this semester.')}`
+                              : t('That class has no courses yet, so there is nothing to copy.')}
+                          </p>
                         ) : (
                           <div className="max-h-44 overflow-y-auto border border-border rounded-lg divide-y divide-border">
                             {baseClassCourses.map((c) => (
-                              <label key={c.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/40">
+                              <label key={c.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-hover/40">
                                 <input type="checkbox" checked={pickedCourses.has(c.id)}
                                   onChange={(e) => {
                                     const next = new Set(pickedCourses)
@@ -837,7 +1000,13 @@ export default function ClassesPage() {
                           </div>
                         )}
                         <p className="text-xs text-muted-foreground mt-1">
-                          {t('Copies, not shared: editing an evening course never changes the day one. Lecturers are not copied, assign the evening teachers yourself.')}
+                          {isUniversity && currentTermName && (
+                            <span className="block">
+                              {t('Only')} {currentTermName} {t('courses are listed. The other semester is copied over when it becomes the current one.')}
+                            </span>
+                          )}
+                          {t('Copies, not shared: editing an evening course never changes the day one. Students and lecturers never come across, assign the evening teachers yourself.')}
+                          {' '}{t('Anything you leave out can be added later from the Courses page.')}
                         </p>
                       </div>
                     )}
@@ -869,6 +1038,34 @@ export default function ClassesPage() {
                     {form.deptName.trim() && (
                       <p className="text-xs text-muted-foreground mt-1">
                         Will be saved as: <span className="font-medium text-foreground">{buildClassName(form.deptName.trim(), form.uniLevel)}</span>
+                      </p>
+                    )}
+                    {/* Classes are referenced by name, so a rename is a real move. The API
+                        carries this department's own students, courses, class master and
+                        Excel template lists with it in one transaction, and says what moved. */}
+                    {/* The two sittings are one department only while their names agree
+                        exactly, and nothing here locks the name any more. A hint, not a gate:
+                        a school may genuinely run an evening programme the day side does not.
+                        This is how "Software Enginering" became a second department once. */}
+                    {editing && form.programme === 'EVENING' && form.deptName.trim() && !dayTwinExists && (
+                      <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                        {t('No day department at this level is called this. If it should be the same programme, check the spelling, otherwise the two count as separate departments.')}
+                      </p>
+                    )}
+                    {(renamesOnSave || abbrChangesOnSave) && (
+                      <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                        {renamesOnSave && (
+                          <span className="block">{t('This renames the department. Its own students, courses and class master move with it, and they keep their marks.')}</span>
+                        )}
+                        {/* One key, not a sentence stitched from fragments: tiny generic keys
+                            like "to" collide across the app and translate badly. The count is
+                            the point anyway, it says whether the warning is about anything. */}
+                        {abbrChangesOnSave && (
+                          <span className="block">
+                            {t('Changing the abbreviation rebuilds the matricule of every student in this department')}
+                            {' ('}{editingStudentCount}{').'}
+                          </span>
+                        )}
                       </p>
                     )}
                   </div>
@@ -1086,7 +1283,7 @@ export default function ClassesPage() {
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">{t('Cancel')}</button>
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{t('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition active:scale-95">
                   {saving ? t('Saving...') : editing ? t('Save Changes') : tt('Add Class', 'Add Department')}
@@ -1129,7 +1326,7 @@ export default function ClassesPage() {
               </div>
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowDeptModal(false)}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">{t('Cancel')}</button>
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{t('Cancel')}</button>
                 <button type="submit" disabled={deptSaving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition active:scale-95">
                   {deptSaving ? t('Saving...') : editingDept ? t('Save Changes') : t('Add Department')}
@@ -1140,25 +1337,162 @@ export default function ClassesPage() {
         </div>
       )}
 
-      <ConfirmModal
-        isOpen={!!deleteTarget}
-        title={tt('Delete Class', 'Delete Department')}
-        message={`${t('Are you sure you want to delete')} "${deleteTarget ? displayClassName(deleteTarget) : ''}"? ${t('This cannot be undone.')}`}
-        confirmLabel={t('Delete')}
-        confirmColor="red"
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteTarget(null)}
-      />
+      {/* Not a plain confirm: the delete reaches through the courses into marks, lecturer
+          assignments and timetable slots, so it says exactly what it is about to destroy,
+          counted from the database rather than from anything this page had loaded. */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-xl w-full max-w-sm p-6 animate-scale-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-destructive/10 rounded-full flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={20} className="text-destructive" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-foreground">{tt('Delete Class', 'Delete Department')}</h3>
+                <p className="text-xs text-muted-foreground truncate">
+                  {displayClassName(deleteTarget)}
+                  {(deleteTarget.programme ?? 'DAY') === 'EVENING' && ` (${t('Evening')})`}
+                </p>
+              </div>
+            </div>
 
-      <ConfirmModal
-        isOpen={!!deleteDeptTarget}
-        title={t('Delete Department')}
-        message={`${t('Are you sure you want to delete')} "${deleteDeptTarget?.name ?? ''}"? ${t('This cannot be undone.')}`}
-        confirmLabel={t('Delete')}
-        confirmColor="red"
-        onConfirm={handleDeptDelete}
-        onCancel={() => setDeleteDeptTarget(null)}
-      />
+            {impactError ? (
+              <p className="text-sm text-destructive mb-5">{impactError}</p>
+            ) : !deleteImpact ? (
+              <p className="text-sm text-muted-foreground mb-5">{t('Checking what this would remove…')}</p>
+            ) : deleteImpact.blocked ? (
+              /* Students are never deleted with a class, so this is a dead end by design and
+                 says what to do instead rather than offering a button that cannot work. */
+              <div className="mb-5">
+                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 mb-3">
+                  <p className="text-sm font-semibold text-destructive">
+                    {deleteImpact.students} {t(deleteImpact.students === 1 ? 'student is still in this department' : 'students are still in this department')}
+                  </p>
+                </div>
+                <p className="text-sm text-foreground">
+                  {t('A department holding students cannot be deleted. Move them to another department first, or set them as dismissed, then delete it.')}
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Courses lead, in red, because they are the part an admin does not picture
+                    when they think "remove this department": every course in it goes, and the
+                    marks on those courses go with them. */}
+                {deleteImpact.subjects > 0 && (
+                  <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+                    <p className="text-sm font-semibold text-destructive">
+                      {t('All')} {deleteImpact.subjects} {tt(deleteImpact.subjects === 1 ? 'subject' : 'subjects', deleteImpact.subjects === 1 ? 'course' : 'courses')}
+                      {' '}{tt(deleteImpact.subjects === 1 ? 'in this class will be deleted' : 'in this class will be deleted', deleteImpact.subjects === 1 ? 'in this department will be deleted' : 'in this department will be deleted')}
+                    </p>
+                    <p className="text-xs text-destructive/90 mt-1">
+                      {deleteImpact.marks > 0
+                        ? `${t('Every mark entered on them goes too')} (${deleteImpact.marks}). ${t('The day department, if there is one, keeps its own.')}`
+                        : t('The day department, if there is one, keeps its own.')}
+                    </p>
+                  </div>
+                )}
+
+                <p className="text-sm text-foreground mb-3">{t('This deletes the following for good:')}</p>
+                <ul className="text-sm text-foreground mb-4 space-y-1">
+                  {[
+                    [deleteImpact.marks, t('marks'), t('mark')],
+                    [deleteImpact.subjects, tt('subjects', 'courses'), tt('subject', 'course')],
+                    [deleteImpact.assignments, t('lecturer assignments'), t('lecturer assignment')],
+                    [deleteImpact.slots, t('timetable slots'), t('timetable slot')],
+                    [deleteImpact.classMasters, t('class master assignments'), t('class master assignment')],
+                  ].filter(([n]) => (n as number) > 0).map(([n, plural, singular]) => (
+                    <li key={String(plural)} className="flex items-baseline gap-2">
+                      <span className="text-destructive">•</span>
+                      <span><span className="font-semibold">{n as number}</span> {(n as number) === 1 ? singular : plural}</span>
+                    </li>
+                  ))}
+                  {deleteImpact.subjects === 0 && deleteImpact.classMasters === 0 && (
+                    <li className="text-muted-foreground">{tt('It holds no students or subjects.', 'It holds no students or courses.')}</li>
+                  )}
+                </ul>
+
+                <p className="text-xs text-muted-foreground mb-4">
+                  {deleteImpact.marks > 0
+                    ? t('Those marks belong to students who have since moved on. There is no undo and no backup.')
+                    : deleteImpact.slots > 0 || deleteImpact.assignments > 0
+                      ? t('The courses come off every teacher’s timetable and off the list of courses they take. There is no undo.')
+                      : t('This cannot be undone.')}
+                </p>
+
+                {/* A click is too cheap for something with no undo behind it. Typing the exact
+                    name is also what the API demands, so this is the real gate, not decoration. */}
+                {deleteImpact.requiresTypedName && (
+                  <div className="mb-5">
+                    <label className="block text-xs font-medium text-foreground mb-1">
+                      {t('Type the exact name to confirm')}: <span className="font-semibold">{deleteTarget.name}</span>
+                    </label>
+                    <input type="text" value={typedName} onChange={(e) => setTypedName(e.target.value)}
+                      autoComplete="off" spellCheck={false}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-destructive/50" />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex gap-3">
+              <button onClick={() => { setDeleteTarget(null); setDeleteImpact(null); setImpactError(''); setTypedName('') }} disabled={deleting}
+                className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-hover transition disabled:opacity-50">
+                {impactError || deleteImpact?.blocked ? t('Close') : t('Cancel')}
+              </button>
+              {!impactError && !deleteImpact?.blocked && (
+                <button onClick={handleDeleteConfirm}
+                  disabled={!deleteImpact || deleting || (deleteImpact.requiresTypedName && typedName.trim() !== deleteTarget.name)}
+                  className="flex-1 bg-destructive text-white py-2 rounded-lg text-sm font-medium hover:bg-destructive/90 transition disabled:opacity-50">
+                  {deleting ? t('Deleting…') : t('Delete')}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Secondary department grouping. The API refuses to delete one that still holds
+          classes, so nothing can be destroyed here, but deleting a department is a deleting a
+          department: it asks for the name like every other one does. */}
+      {deleteDeptTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-xl w-full max-w-sm p-6 animate-scale-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-destructive/10 rounded-full flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={20} className="text-destructive" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-foreground">{t('Delete Department')}</h3>
+                <p className="text-xs text-muted-foreground truncate">{deleteDeptTarget.name}</p>
+              </div>
+            </div>
+            <p className="text-sm text-foreground mb-2">
+              {classes.filter((c) => c.departmentId === deleteDeptTarget.id).length > 0
+                ? t('This department still holds classes. Move or delete them first, then it can be removed.')
+                : t('This department holds no classes, so nothing else is removed with it.')}
+            </p>
+            <p className="text-xs text-muted-foreground mb-4">{t('This cannot be undone.')}</p>
+            <div className="mb-5">
+              <label className="block text-xs font-medium text-foreground mb-1">
+                {t('Type the exact name to confirm')}: <span className="font-semibold">{deleteDeptTarget.name}</span>
+              </label>
+              <input type="text" value={typedDeptName} onChange={(e) => setTypedDeptName(e.target.value)}
+                autoComplete="off" spellCheck={false}
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-destructive/50" />
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setDeleteDeptTarget(null); setTypedDeptName('') }}
+                className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
+                {t('Cancel')}
+              </button>
+              <button onClick={handleDeptDelete} disabled={typedDeptName.trim() !== deleteDeptTarget.name.trim()}
+                className="flex-1 bg-destructive text-white py-2 rounded-lg text-sm font-medium hover:bg-destructive/90 transition disabled:opacity-50">
+                {t('Delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

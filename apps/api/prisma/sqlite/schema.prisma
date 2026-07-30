@@ -130,6 +130,7 @@ model School {
   teacherAbsences          TeacherAbsence[]
   notifications            Notification[]
   pastTermMarksGrants      PastTermMarksGrant[]
+  holidays                 SchoolHoliday[]
 }
 
 model GradingScale {
@@ -394,6 +395,7 @@ model Notification {
   type        String
   title       String
   body        String
+  data        Json?
   readAt      DateTime?
   createdAt   DateTime  @default(now())
   school      School    @relation(fields: [schoolId], references: [id])
@@ -419,11 +421,45 @@ model TeacherSubject {
   userId    String
   subjectId String
   createdAt DateTime @default(now())
+  // When this teacher actually took the course, and when they gave it up. Hours are only
+  // counted inside this window, so a mid-term handover splits the course's hours between
+  // the two teachers at the exact date the admin recorded.
+  //
+  // endedAt null = they still hold it. An ENDED row is deliberately kept rather than deleted:
+  // it is the only record that the previous teacher ever taught it, and deleting it would
+  // erase the hours they are owed.
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  // NOT unique on (userId, subjectId) any more: a teacher can hold a course, hand it over,
+  // and take it back later, which is two legitimate rows. "Only one ACTIVE assignment per
+  // teacher+course" is enforced in code instead (see assignSubjects), because a partial
+  // unique index on endedAt IS NULL cannot be expressed in the Prisma schema and would show
+  // as permanent drift.
+  @@index([userId, subjectId])
+  @@index([subjectId, endedAt])
+}
 
-  @@unique([userId, subjectId])
+// A school closure — public holiday, mid-term break, anything that cancels teaching. Stored
+// as a NAMED RANGE rather than one row per day, because schools close for stretches and a
+// row per day would be tedious to enter and easy to get half-wrong.
+//
+// Ranges are INCLUSIVE of both ends and may overlap each other; the hours maths merges them
+// before subtracting, so an overlap can never remove the same day twice. Any scheduled period
+// falling inside one is not counted as taught, and an absence reported for such a period stops
+// subtracting too — nobody missed a class that never happened.
+model SchoolHoliday {
+  id        String   @id @default(uuid())
+  schoolId  String
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime @default(now())
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId, startDate])
 }
 
 model Term {

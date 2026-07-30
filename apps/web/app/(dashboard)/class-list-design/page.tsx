@@ -134,7 +134,7 @@ export default function ClassListDesignPage() {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setPrintData([{ students: SAMPLE, classLevel: 'Form 1', schoolName: school?.name ?? 'School', schoolType: school?.type ?? '', logoUrl, config }])}
-              className="flex items-center gap-1.5 border border-border text-muted-foreground px-3 py-2 rounded-lg text-sm hover:bg-muted transition-colors">
+              className="flex items-center gap-1.5 border border-border text-muted-foreground px-3 py-2 rounded-lg text-sm hover:bg-hover transition-colors">
               <Printer size={14} /> {t('Test print')}
             </button>
             <button onClick={handleSave} disabled={saving || loading}

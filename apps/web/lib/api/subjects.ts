@@ -15,6 +15,31 @@ export const updateSubjectApi = async (id: string, data: { name?: string; classL
   return res.data
 }
 
+// What deleting this course would destroy, counted server-side before anything is touched.
+export interface SubjectDeleteImpact {
+  name: string
+  classLevel: string
+  term?: string | null
+  marks: number
+  /** How many distinct students would lose a mark. */
+  students: number
+  assignments: number
+  slots: number
+  /** True once marks exist, which is what makes the admin type the course name. */
+  requiresTypedName: boolean
+}
+
+export const getSubjectDeleteImpactApi = async (id: string): Promise<SubjectDeleteImpact> => {
+  const res = await api.get(`/subjects/${id}/delete-impact`)
+  return res.data
+}
+
+// `confirmName` is demanded by the API once the course has marks on it.
+export const deleteSubjectApiWithConfirm = async (id: string, confirmName?: string) => {
+  const res = await api.delete(`/subjects/${id}`, confirmName ? { data: { confirmName } } : undefined)
+  return res.data
+}
+
 export const deleteSubjectApi = async (id: string) => {
   const res = await api.delete(`/subjects/${id}`)
   return res.data

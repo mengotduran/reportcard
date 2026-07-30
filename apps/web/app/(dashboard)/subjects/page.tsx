@@ -2,9 +2,9 @@
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getSubjectsApi, createSubjectApi, deleteSubjectApi, updateSubjectApi } from '@/lib/api/subjects'
+import { getSubjectsApi, createSubjectApi, updateSubjectApi, deleteSubjectApiWithConfirm, getSubjectDeleteImpactApi, SubjectDeleteImpact } from '@/lib/api/subjects'
 import { getClassLevelsApi, ClassLevel as ClassLevelOption } from '@/lib/api/classLevels'
-import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
@@ -75,6 +75,9 @@ export default function SubjectsPage() {
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteImpact, setDeleteImpact] = useState<SubjectDeleteImpact | null>(null)
+  const [impactError, setImpactError] = useState('')
+  const [typedName, setTypedName] = useState('')
 
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
@@ -191,14 +194,36 @@ export default function SubjectsPage() {
     } catch { /* silently ignore */ }
   }
 
+  // A course with marks on it cannot be deleted on a single click: the marks go with it and
+  // there is no undo. The counts come from the server, since this page cannot see how many
+  // students have been marked on a course.
+  const openDelete = async (s: Subject) => {
+    setDeleteTarget(s)
+    setDeleteImpact(null)
+    setImpactError('')
+    setTypedName('')
+    try {
+      setDeleteImpact(await getSubjectDeleteImpactApi(s.id))
+    } catch {
+      setImpactError(t('Could not check what deleting this would remove. Try again.'))
+    }
+  }
+
   const handleDelete = async () => {
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      await deleteSubjectApi(deleteTarget.id)
+      await deleteSubjectApiWithConfirm(deleteTarget.id, deleteTarget.name)
       setDeleteTarget(null)
+      setDeleteImpact(null)
+      setTypedName('')
       fetchSubjects()
-    } catch { /* silently ignore */ }
+    } catch (err: unknown) {
+      // The refusal explains itself (how many marks, in which class). Swallowing it, as this
+      // used to, left the admin clicking Delete on a modal that never closed.
+      const e = err as { response?: { data?: { message?: string } } }
+      setImpactError(e.response?.data?.message || tt('Failed to delete subject', 'Failed to delete course'))
+    }
     finally { setDeleting(false) }
   }
 
@@ -317,19 +342,25 @@ export default function SubjectsPage() {
 
   // ── Class picker ─────────────────────────────────────────────────────────
   if (!selectedClass) {
-    const pickerClasses = isSecondary
+    // The sitting filter belongs on THIS step as much as the level one. Without it the
+    // Evening chip listed every day department too, and since the card label strips the
+    // marker, "Accountancy" appeared twice with nothing to tell the two apart. Picking the
+    // wrong one is unrecoverable in the worst way: deleting a course there deletes the DAY
+    // course and its marks, while the admin believes they are in the evening intake.
+    const pickerClasses = (isSecondary
       ? classLevels.filter(cl => cl.departmentId === selectedDeptId)
       : isUniversity
         // Only the departments that exist at the chosen level.
         ? classLevels.filter(cl => levelGroupOf(cl.name) === selectedLevel)
         : classLevels
+    ).filter(cl => programmeFilter.matches(cl.name))
     const activeDept = departments.find(d => d.id === selectedDeptId)
     return (
       <div>
         <div className="flex items-center gap-3 mb-6">
           {(isSecondary || isUniversity) && (
             <button onClick={() => isSecondary ? setSelectedDeptId(null) : setSelectedLevel(null)}
-              className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition">
+              className="p-2 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition">
               <ArrowLeft size={18} />
             </button>
           )}
@@ -340,6 +371,17 @@ export default function SubjectsPage() {
             <p className="text-muted-foreground text-sm mt-0.5">{isUniversity ? t('Select a department to manage its courses') : t('Select a class to manage its subjects')}</p>
           </div>
         </div>
+
+        {/* Kept on this step too. It used to disappear after the level was chosen, so the
+            one screen where picking the wrong sitting destroys the other one's courses was
+            also the screen that never said which sitting you were in. */}
+        {programmeFilter.hasEvening && (
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={programmeFilter.setProgramme}
+            className="mb-4"
+          />
+        )}
 
         {pickerClasses.length === 0 ? (
           <div className="bg-card rounded-xl border border-border text-center py-12">
@@ -366,7 +408,15 @@ export default function SubjectsPage() {
                     </div>
                     <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition" />
                   </div>
-                  <p className="font-semibold text-foreground">{label}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold text-foreground">{label}</p>
+                    {/* The label strips the sitting marker, so on the All chip a day and an
+                        evening department read identically. This is the only thing on the
+                        card that tells them apart. */}
+                    {programmeFilter.programmeOf(cl.name) === 'EVENING' && (
+                      <EveningBadge />
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {count === 0 ? tt('No subjects yet', 'No courses yet') : `${count} ${count !== 1 ? tt('subjects', 'courses') : tt('subject', 'course')}`}
                   </p>
@@ -387,7 +437,7 @@ export default function SubjectsPage() {
         <div className="flex items-center gap-3 mb-6">
           <button
             onClick={() => setSelectedClass(null)}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition"
           >
             <ArrowLeft size={18} />
           </button>
@@ -451,14 +501,20 @@ export default function SubjectsPage() {
       <div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => { if (isUniversity) setSelectedTerm(null); else setSelectedClass(null); setEditingId(null) }}
-          className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition"
+          className="p-2 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition"
         >
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold text-foreground">{selectedClassLabel}{isUniversity && <span className="text-muted-foreground font-normal"> · {selectedTerm}</span>}</h2>
+          {/* Max score belongs here, not in a column. It is set once on the class level and
+              every course inherits it, so a per-row cell had nothing to say and rendered a
+              dash on every line. Saying where it comes from stops it reading as missing. */}
           <p className="text-muted-foreground text-sm mt-0.5">
             {classSubjects.length} {classSubjects.length !== 1 ? tt('subjects', 'courses') : tt('subject', 'course')}
+            <span className="mx-1.5">·</span>
+            {t('marked out of')} <span className="font-semibold text-primary">{classMaxScore}</span>
+            <span className="text-xs"> ({tc('set on the class', 'set on the department')})</span>
           </p>
         </div>
         <button
@@ -481,13 +537,12 @@ export default function SubjectsPage() {
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
+          {/* 512, not 640: the w-32 Max Score column is gone, so the old floor forced a
+              horizontal scrollbar on narrow screens for space nothing occupies. */}
+          <div className="overflow-x-auto"><table className="w-full min-w-[512px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{tt('Subject', 'Course')}</th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32">
-                  {t('Max Score')} <span className="font-bold text-primary normal-case">/ {classMaxScore}</span>
-                </th>
                 {!isUniversity && <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28">{t('Coefficient')}</th>}
                 {isUniversity && <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-24">{t('Credit')}</th>}
                 {isUniversity && <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-28">{t('Code')}</th>}
@@ -499,7 +554,7 @@ export default function SubjectsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {classSubjects.map((s) => (
-                <tr key={s.id} className="hover:bg-muted/40 transition">
+                <tr key={s.id} className="hover:bg-hover/40 transition">
                   {/* Subject name */}
                   <td className="px-5 py-3">
                     {editingId === s.id ? (
@@ -517,11 +572,6 @@ export default function SubjectsPage() {
                         <span className="text-sm font-medium text-foreground">{s.name}</span>
                       </div>
                     )}
-                  </td>
-
-                  {/* Max score — same for all subjects, shown once in the header */}
-                  <td className="px-4 py-3 text-center">
-                    <span className="text-sm text-muted-foreground">—</span>
                   </td>
 
                   {/* Coefficient (not university) */}
@@ -599,7 +649,7 @@ export default function SubjectsPage() {
                             <Check size={15} />
                           </button>
                           <button onClick={() => setEditingId(null)}
-                            className="p-1.5 text-muted-foreground hover:bg-muted rounded-lg transition" title={t('Cancel')}>
+                            className="p-1.5 text-muted-foreground hover:bg-hover rounded-lg transition" title={t('Cancel')}>
                             <X size={15} />
                           </button>
                         </>
@@ -619,7 +669,7 @@ export default function SubjectsPage() {
                             className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition" title={t('Edit')}>
                             <Pencil size={14} />
                           </button>
-                          <button onClick={() => setDeleteTarget(s)}
+                          <button onClick={() => openDelete(s)}
                             className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition" title={t('Delete')}>
                             <Trash2 size={14} />
                           </button>
@@ -724,7 +774,7 @@ export default function SubjectsPage() {
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowModal(false)}
-                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
@@ -750,18 +800,74 @@ export default function SubjectsPage() {
                 <p className="text-xs text-muted-foreground">{t('This cannot be undone.')}</p>
               </div>
             </div>
-            <p className="text-sm text-foreground mb-5">
-              {t('Are you sure you want to delete')} <span className="font-semibold">"{deleteTarget.name}"</span>? {tt('All report entries for this subject will also be removed.', 'All report entries for this course will also be removed.')}
+            <p className="text-sm text-foreground mb-2">
+              {t('Are you sure you want to delete')} <span className="font-semibold">"{deleteTarget.name}"</span>?
             </p>
+            {/* Names the class being deleted FROM, marker and all. A day and an evening
+                department read alike everywhere else, and this is the last screen before
+                the other sitting's courses and marks are gone. */}
+            <p className="text-xs text-muted-foreground mb-4">
+              {tt('In class', 'In department')}: <span className="font-medium text-foreground">{deleteTarget.classLevel}</span>
+              {deleteTarget.term && <> · <span className="font-medium text-foreground">{deleteTarget.term}</span></>}
+            </p>
+
+            {impactError ? (
+              <p className="text-sm text-destructive mb-5">{impactError}</p>
+            ) : !deleteImpact ? (
+              <p className="text-sm text-muted-foreground mb-5">{t('Checking what this would remove…')}</p>
+            ) : (
+              <>
+                {deleteImpact.marks > 0 ? (
+                  <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+                    <p className="text-sm font-semibold text-destructive">
+                      {deleteImpact.marks} {t(deleteImpact.marks === 1 ? 'mark' : 'marks')}
+                      {deleteImpact.students > 0 && <>, {deleteImpact.students} {t(deleteImpact.students === 1 ? 'student' : 'students')}</>}
+                    </p>
+                    <p className="text-xs text-destructive/90 mt-1">
+                      {t('Deleting this course deletes every mark entered on it. Those students lose it from their report cards and it cannot be brought back.')}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {t('No marks have been entered on it yet, so nothing is lost but the course itself.')}
+                  </p>
+                )}
+
+                {(deleteImpact.assignments > 0 || deleteImpact.slots > 0) && (
+                  <p className="text-xs text-muted-foreground mb-4">
+                    {t('It also comes off')} {deleteImpact.assignments > 0 && <>{deleteImpact.assignments} {t(deleteImpact.assignments === 1 ? 'lecturer assignment' : 'lecturer assignments')}</>}
+                    {deleteImpact.assignments > 0 && deleteImpact.slots > 0 && ` ${t('and')} `}
+                    {deleteImpact.slots > 0 && <>{deleteImpact.slots} {t(deleteImpact.slots === 1 ? 'timetable slot' : 'timetable slots')}</>}.
+                  </p>
+                )}
+
+                {/* Typing is required only once marks exist. Deleting a course added by
+                    mistake a minute ago stays one click. */}
+                {deleteImpact.requiresTypedName && (
+                  <div className="mb-5">
+                    <label className="block text-xs font-medium text-foreground mb-1">
+                      {t('Type the exact name to confirm')}: <span className="font-semibold">{deleteTarget.name}</span>
+                    </label>
+                    <input type="text" value={typedName} onChange={(e) => setTypedName(e.target.value)}
+                      autoComplete="off" spellCheck={false}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-destructive/50" />
+                  </div>
+                )}
+              </>
+            )}
+
             <div className="flex gap-3">
-              <button onClick={() => setDeleteTarget(null)} disabled={deleting}
-                className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition disabled:opacity-50">
-                {t('Cancel')}
+              <button onClick={() => { setDeleteTarget(null); setDeleteImpact(null); setImpactError(''); setTypedName('') }} disabled={deleting}
+                className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition disabled:opacity-50">
+                {impactError ? t('Close') : t('Cancel')}
               </button>
-              <button onClick={handleDelete} disabled={deleting}
-                className="flex-1 bg-destructive text-white py-2.5 rounded-lg text-sm font-medium hover:bg-red-700 transition disabled:opacity-50">
-                {deleting ? t('Deleting…') : t('Delete')}
-              </button>
+              {!impactError && (
+                <button onClick={handleDelete}
+                  disabled={!deleteImpact || deleting || (deleteImpact.requiresTypedName && typedName.trim() !== deleteTarget.name.trim())}
+                  className="flex-1 bg-destructive text-white py-2.5 rounded-lg text-sm font-medium hover:bg-red-700 transition disabled:opacity-50">
+                  {deleting ? t('Deleting…') : t('Delete')}
+                </button>
+              )}
             </div>
           </div>
         </div>

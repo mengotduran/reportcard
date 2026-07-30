@@ -69,6 +69,9 @@ export default function RootLayout() {
       <Stack.Screen name="account/index" options={{ title: t('My Account'), headerBackTitle: '' }} />
       <Stack.Screen name="notifications" options={{ title: t('Notifications'), headerBackTitle: '' }} />
       <Stack.Screen name="absences" options={{ title: t('Absences'), headerBackTitle: '' }} />
+      {/* Read-only view of another teacher's timetable, opened from an absence. Its own
+          header is rendered in-screen, so the stack header is hidden. */}
+      <Stack.Screen name="teacher-timetable" options={{ headerShown: false }} />
       <Stack.Screen name="my-courses" options={{ headerBackTitle: '' }} />
       <Stack.Screen name="class/[classLevel]" options={{ headerBackTitle: '' }} />
       <Stack.Screen

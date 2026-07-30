@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import path from 'path'
+import http from 'http'
 import authRoutes from './routes/auth.routes'
 import passwordResetRoutes from './routes/passwordReset.routes'
 import studentRoutes from './routes/student.routes'
@@ -27,7 +28,9 @@ import pastTermGrantRoutes from './routes/pastTermGrant.routes'
 import teacherAbsenceRoutes from './routes/teacherAbsence.routes'
 import coverageRoutes from './routes/coverage.routes'
 import notificationRoutes from './routes/notification.routes'
+import holidayRoutes from './routes/holiday.routes'
 import { UPLOAD_DIR } from './config/uploads'
+import { initSocket } from './config/socket'
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') })
 
@@ -67,9 +70,16 @@ app.use('/api/past-term-grants', pastTermGrantRoutes)
 app.use('/api/teacher-absences', teacherAbsenceRoutes)
 app.use('/api/coverage', coverageRoutes)
 app.use('/api/notifications', notificationRoutes)
+app.use('/api/holidays', holidayRoutes)
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
+// Socket.IO needs the underlying HTTP server, not the Express app, so the listen call moves
+// onto an explicit server. Same port: real-time shares the API's origin, which keeps the
+// offline install working (one host, one port) and means no extra firewall rule anywhere.
+const httpServer = http.createServer(app)
+initSocket(httpServer)
+
+httpServer.listen(PORT, () => {
+  console.log(`Server running on port ${PORT} (REST + realtime)`)
 })
 
 export default app

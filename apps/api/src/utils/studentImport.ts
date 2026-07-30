@@ -70,7 +70,12 @@ const normalize = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '
 const normalizeName = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim()
 
 export type ImportSchoolType = 'PRIMARY' | 'SECONDARY' | 'UNIVERSITY'
-export interface ImportClassInfo { name: string; departmentId: string | null }
+export interface ImportClassInfo { name: string; departmentId: string | null; programme?: 'DAY' | 'EVENING' }
+/** Which sitting the import is for. Taken from the Day/Evening filter the admin is on, not
+ *  from the file: the sheet has no column for it, and a department that runs both sittings
+ *  is otherwise unresolvable. 'ALL' means the admin has not chosen, which is only a problem
+ *  for the departments that actually have both. */
+export type ImportProgramme = 'DAY' | 'EVENING' | 'ALL'
 export interface ImportDepartmentInfo { id: string; name: string; isDefault: boolean }
 
 // Secondary class-name convention: bare ("Form 1") for the default department,
@@ -113,33 +118,60 @@ function makeClassResolver(
   schoolType: ImportSchoolType,
   classes: ImportClassInfo[],
   departments: ImportDepartmentInfo[],
+  programme: ImportProgramme = 'ALL',
 ): (deptRaw: string, classOrLevelRaw: string) => { name: string } | { error: string } {
+  const sittingOf = (c: ImportClassInfo) => c.programme ?? 'DAY'
+  const label = (p: 'DAY' | 'EVENING') => (p === 'EVENING' ? 'evening' : 'day')
+
+  // A key can hold BOTH sittings of the same programme, because the marker that separates
+  // them is stripped for matching. Keeping every candidate (rather than letting the last one
+  // overwrite) is what makes the ambiguity visible instead of silently resolved: before this,
+  // importing day students into a department that also ran in the evening put every one of
+  // them in the evening class, with no error.
+  const pick = (candidates: ImportClassInfo[], what: string): { name: string } | { error: string } => {
+    if (candidates.length === 0) return { error: `${what} not found` }
+    if (programme !== 'ALL') {
+      const match = candidates.find((c) => sittingOf(c) === programme)
+      return match
+        ? { name: match.name }
+        : { error: `${what} has no ${label(programme)} section` }
+    }
+    if (candidates.length === 1) return { name: candidates[0].name }
+    return {
+      error: `${what} runs in both the day and the evening section. Choose Day or Evening in the filter above before importing, so the students land in the right one.`,
+    }
+  }
+
+  const group = <T>(items: T[], keyOf: (item: T) => string) => {
+    const map = new Map<string, T[]>()
+    for (const it of items) {
+      const k = keyOf(it)
+      if (!map.has(k)) map.set(k, [])
+      map.get(k)!.push(it)
+    }
+    return map
+  }
+
   if (schoolType === 'SECONDARY') {
     const deptByNorm = new Map(departments.map((d) => [normalize(d.name), d]))
-    const classByDeptAndBase = new Map(
-      classes.map((c) => [`${c.departmentId ?? ''}|${normalize(stripDeptSuffix(c.name))}`, c.name])
-    )
+    // stripDeptSuffix also removes a trailing "(Evening)", so the two sittings of one class
+    // collapse to the same key here exactly as they do for a university.
+    const byDeptAndBase = group(classes, (c) => `${c.departmentId ?? ''}|${normalize(stripDeptSuffix(c.name))}`)
     return (deptRaw, classRaw) => {
       const dept = deptByNorm.get(normalize(deptRaw))
       if (!dept) return { error: `Department "${deptRaw}" not found` }
-      const full = classByDeptAndBase.get(`${dept.id}|${normalize(classRaw)}`)
-      if (!full) return { error: `Class "${classRaw}" not found in department "${dept.name}"` }
-      return { name: full }
+      const candidates = byDeptAndBase.get(`${dept.id}|${normalize(classRaw)}`) ?? []
+      return pick(candidates, `Class "${classRaw}" in department "${dept.name}"`)
     }
   }
   if (schoolType === 'UNIVERSITY') {
-    const classByDeptAndLevel = new Map<string, string>()
-    for (const c of classes) {
-      const level = univLevelFromClassName(c.name)
-      if (!level) continue
-      classByDeptAndLevel.set(`${normalize(univDeptFromClassName(c.name))}|${level}`, c.name)
-    }
+    const levelled = classes.filter((c) => univLevelFromClassName(c.name))
+    const byDeptAndLevel = group(levelled, (c) => `${normalize(univDeptFromClassName(c.name))}|${univLevelFromClassName(c.name)}`)
     return (deptRaw, levelRaw) => {
       const level = normalizeLevelInput(levelRaw)
       if (!level) return { error: `Level must be Level 1, Level 2, or Level 3 (got "${levelRaw}")` }
-      const full = classByDeptAndLevel.get(`${normalize(deptRaw)}|${level}`)
-      if (!full) return { error: `No ${level} class found for department "${deptRaw}"` }
-      return { name: full }
+      const candidates = byDeptAndLevel.get(`${normalize(deptRaw)}|${level}`) ?? []
+      return pick(candidates, `${level} for department "${deptRaw}"`)
     }
   }
   // PRIMARY — unchanged single-column matching, no department concept.
@@ -263,6 +295,7 @@ export async function previewStudentRows(
   classes: ImportClassInfo[],
   departments: ImportDepartmentInfo[],
   existingStudents?: { name: string; studentId: string }[],
+  programme: ImportProgramme = 'ALL',
 ): Promise<ImportPreviewResult> {
   const ext = filename.toLowerCase().split('.').pop()
   const rawRows = ext === 'csv' ? parseCsv(buffer.toString('utf-8')) : await parseXlsx(buffer)
@@ -282,7 +315,7 @@ export async function previewStudentRows(
     return { valid: [], errors: [], headerError: 'Could not find a Department column in this file. Download the template and use the same column headers.' }
   }
 
-  const resolveClass = makeClassResolver(schoolType, classes, departments)
+  const resolveClass = makeClassResolver(schoolType, classes, departments, programme)
 
   const valid: ParsedStudentRow[] = []
   const errors: ImportRowError[] = []

@@ -383,7 +383,7 @@ export default function SuperAdminPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => { setShowStandalone(true); setFormError('') }}
-            className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition">
+            className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover transition">
             <Plus size={15} /> Standalone School
           </button>
           <button onClick={() => { setShowMulti(true); setFormError('') }}
@@ -414,7 +414,7 @@ export default function SuperAdminPage() {
             {data!.parentSchools.map((parent) => (
               <div key={parent.id} className="bg-card rounded-xl border border-border overflow-hidden">
                 {/* Parent header */}
-                <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-muted transition"
+                <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-hover transition"
                   onClick={() => setExpanded((prev) => ({ ...prev, [parent.id]: !prev[parent.id] }))}>
                   <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
                     {parent.name.charAt(0)}
@@ -446,7 +446,7 @@ export default function SuperAdminPage() {
                 {expanded[parent.id] && (
                   <div className="border-t border-gray-100">
                     {parent.sections.map((section, i) => (
-                      <div key={section.id} className={`flex items-center gap-3 px-4 py-3 ${i < parent.sections.length - 1 ? 'border-b border-gray-100' : ''} hover:bg-muted`}>
+                      <div key={section.id} className={`flex items-center gap-3 px-4 py-3 ${i < parent.sections.length - 1 ? 'border-b border-gray-100' : ''} hover:bg-hover`}>
                         <div className="w-6 ml-3 text-muted-foreground text-xs font-mono flex-shrink-0">└</div>
                         <span className={`text-xs font-bold px-2 py-1 rounded-full flex-shrink-0 ${TYPE_COLORS[section.type] ?? 'bg-muted text-muted-foreground'}`}>
                           {section.type} · {section.language === 'FR' ? 'FR' : 'EN'}
@@ -528,7 +528,7 @@ export default function SuperAdminPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {data!.standaloneSchools.map((school) => (
-                  <tr key={school.id} className="hover:bg-muted dark:hover:bg-muted">
+                  <tr key={school.id} className="hover:bg-hover">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 flex-shrink-0 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">{school.name.charAt(0)}</div>
@@ -666,7 +666,7 @@ export default function SuperAdminPage() {
                 </div>
               </div>
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowStandalone(false)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
+                <button type="button" onClick={() => setShowStandalone(false)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50">
                   {saving ? 'Creating...' : 'Create School'}
                 </button>
@@ -726,7 +726,7 @@ export default function SuperAdminPage() {
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowMulti(false)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
+                <button type="button" onClick={() => setShowMulti(false)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50">
                   {saving ? 'Creating...' : `Create School + ${sections.length} Section${sections.length > 1 ? 's' : ''}`}
                 </button>
@@ -753,7 +753,7 @@ export default function SuperAdminPage() {
                 usedTypes={addSectionParent.sections.map((s) => s.type)}
                 isOfflineInstall={isOfflineInstall} />
               <div className="flex gap-3 mt-4">
-                <button type="button" onClick={() => setAddSectionParent(null)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
+                <button type="button" onClick={() => setAddSectionParent(null)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50">
                   {saving ? 'Adding...' : 'Add Section'}
                 </button>
@@ -811,7 +811,7 @@ export default function SuperAdminPage() {
                 </div>
               </div>
               <div className="flex gap-3 pt-1">
-                <button type="button" onClick={() => setEditTarget(null)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
+                <button type="button" onClick={() => setEditTarget(null)} className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50">
                   {saving ? 'Saving...' : 'Save Changes'}
                 </button>
@@ -989,7 +989,7 @@ export default function SuperAdminPage() {
                 <p className="text-xs text-muted-foreground mb-3">This only changes their login email. Use "Reset Password" next to send them a fresh setup link once this is corrected.</p>
                 <div className="flex gap-2">
                   <button onClick={() => setEditEmailTarget(null)}
-                    className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                    className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                     Cancel
                   </button>
                   <button onClick={handleChangeAdminEmail} disabled={editEmailSaving}
@@ -1027,7 +1027,7 @@ export default function SuperAdminPage() {
                 )}
                 <div className="flex gap-2">
                   <button onClick={() => setResetAdminTarget(null)}
-                    className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                    className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                     Cancel
                   </button>
                   <button onClick={handleResetAdminPassword} disabled={resetAdminSaving}

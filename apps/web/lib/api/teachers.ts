@@ -40,7 +40,16 @@ export const getTeacherSubjectsApi = async (id: string) => {
 
 // `term` scopes the replace to one semester (universities). Without it the whole set is
 // replaced, which is right for primary/secondary where subjects run the full year.
-export const assignTeacherSubjectsApi = async (id: string, subjectIds: string[], term?: string) => {
-  const res = await api.put(`/teachers/${id}/subjects`, { subjectIds, ...(term ? { term } : {}) })
+/**
+ * `effectiveAt` ("YYYY-MM-DD") is the date the change takes effect, and it is what splits a
+ * course's hours between the outgoing and incoming teacher. Omit it and the API uses today,
+ * which is right whenever the admin is recording the change as it happens.
+ */
+export const assignTeacherSubjectsApi = async (id: string, subjectIds: string[], term?: string, effectiveAt?: string) => {
+  const res = await api.put(`/teachers/${id}/subjects`, {
+    subjectIds,
+    ...(term ? { term } : {}),
+    ...(effectiveAt ? { effectiveAt } : {}),
+  })
   return res.data
 }

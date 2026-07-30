@@ -11,6 +11,7 @@ import { useToast } from '@/lib/useToast'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { CalendarOff, Trash2, X } from 'lucide-react'
 import { stripProgrammeSuffix } from '@/lib/programme'
+import { onRealtime } from '@/lib/socket'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
@@ -26,6 +27,11 @@ function dayOfWeekFor(dateStr: string): string {
 
 // Mirrors the API's slotHasPassed (Cameroon is UTC+1/WAT, no DST) — lets the UI grey
 // these out up front instead of only finding out after a rejected request.
+//
+// This is the TEACHER's page, so every caller passes the period's START, not its end: once
+// their class has begun it is no longer theirs to file, and only an admin can record it
+// (see the cutoff comment in createAbsence). Passing endTime here would offer periods the
+// API now refuses.
 function slotHasPassed(dateStr: string, endTime: string): boolean {
   const [y, m, d] = dateStr.split('-').map(Number)
   const [hh, mm] = endTime.split(':').map(Number)
@@ -70,6 +76,11 @@ export default function MyTeachingHoursPage() {
       .finally(() => setLoading(false))
   }
 
+  // An admin opening this teacher's list LOCKS these rows (seenByAdmin), which no longer
+  // permits a retraction. That is a read on the admin's side, so no notification fires and
+  // nothing else would tell this page — without it the delete button lingers, then fails.
+  useEffect(() => onRealtime('absences:changed', load), [])
+
   useEffect(load, [])
 
   const openReportModal = () => {
@@ -80,7 +91,7 @@ export default function MyTeachingHoursPage() {
   }
 
   const daySlots = date ? slots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
-  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
+  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.startTime))
 
   const handleReport = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -149,7 +160,7 @@ export default function MyTeachingHoursPage() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {rows.map((r) => (
-                    <tr key={r.subjectId} className="hover:bg-muted/40 transition">
+                    <tr key={r.subjectId} className="hover:bg-hover/40 transition">
                       <td className="px-5 py-3">
                         <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
                         <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(r.classLevel)}{r.term ? ` · ${r.term}` : ''}</span>
@@ -204,12 +215,12 @@ export default function MyTeachingHoursPage() {
                     // Once the period's happened, only an admin can remove it (they may
                     // want to mark the teacher present after all); once an admin has
                     // reviewed it in a PRIOR visit to their list, it's locked for everyone.
-                    const locked = a.isFinal || a.seenByAdmin
+                    const locked = a.isFinal || a.graceExpired || a.seenByAdmin
                     const lockedReason = a.seenByAdmin
                       ? t('Already reviewed by an admin — ask them to remove it if needed')
                       : t('This period has already passed — ask an admin to remove it if needed')
                     return (
-                      <tr key={a.id} className="hover:bg-muted/40 transition">
+                      <tr key={a.id} className="hover:bg-hover/40 transition">
                         <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(a.classLevel)}</span></td>
                         <td className="px-4 py-3 text-sm text-muted-foreground">{t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</td>
@@ -255,7 +266,7 @@ export default function MyTeachingHoursPage() {
                 daySlots.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{t('No periods on your timetable for this day.')}</p>
                 ) : reportableSlots.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{t('All periods for this day have already passed — ask an admin if this needs correcting.')}</p>
+                  <p className="text-xs text-muted-foreground">{t('Every period for this day has already started. Ask an admin to record it.')}</p>
                 ) : (
                   <div>
                     <label className="flex items-center gap-2 text-sm text-foreground mb-3">
@@ -269,7 +280,7 @@ export default function MyTeachingHoursPage() {
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-foreground mb-1">{t('Which periods?')}</p>
                       {daySlots.map((s) => {
-                        const passed = slotHasPassed(date, s.endTime)
+                        const passed = slotHasPassed(date, s.startTime)
                         const locked = wholeDay || passed
                         return (
                           <label key={s.id} className={`flex items-center gap-2 text-sm text-foreground ${locked ? 'opacity-50' : ''}`}>
@@ -280,7 +291,7 @@ export default function MyTeachingHoursPage() {
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
                             {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(s.classLevel)}</span>
-                            {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
+                            {passed && <span className="text-xs text-muted-foreground italic">({t('already started')})</span>}
                           </label>
                         )
                       })}
@@ -291,7 +302,7 @@ export default function MyTeachingHoursPage() {
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowReportModal(false)}
-                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button

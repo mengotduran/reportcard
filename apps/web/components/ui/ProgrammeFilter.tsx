@@ -32,6 +32,23 @@ export function useProgrammeFilter(classLevels: { name: string; programme?: Prog
   return { programme, setProgramme, hasEvening, programmeOf, matches }
 }
 
+/**
+ * Marks a row or card as belonging to the evening section.
+ *
+ * Shared rather than repeated because it is the ONLY thing distinguishing two cohorts that
+ * are otherwise identical on screen: same programme name, same level, same course names. Any
+ * list that strips the "(Evening)" marker for display, as most do, needs this in its place or
+ * the two sittings become one undifferentiated list.
+ */
+export function EveningBadge({ className = '' }: { className?: string }) {
+  const t = useT()
+  return (
+    <span className={`inline-flex items-center text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 ${className}`}>
+      {t('Evening')}
+    </span>
+  )
+}
+
 export function ProgrammeChips({
   value,
   onChange,
@@ -54,7 +71,7 @@ export function ProgrammeChips({
             key={p}
             onClick={() => onChange(p)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 active:scale-95 ${
-              active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted/70'
+              active ? 'bg-primary text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-hover/70'
             }`}
           >
             {t(p === 'ALL' ? 'All' : PROGRAMME_LABELS[p])}

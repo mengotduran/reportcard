@@ -1,11 +1,16 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { Bell, Check } from 'lucide-react'
-import { getMyNotificationsApi, markNotificationReadApi, markAllNotificationsReadApi, AppNotification } from '@/lib/api/notifications'
+import { useRouter } from 'next/navigation'
+import { Bell, Check, CalendarClock, ChevronRight } from 'lucide-react'
+import { getMyNotificationsApi, markNotificationReadApi, markAllNotificationsReadApi, notificationHref, AppNotification } from '@/lib/api/notifications'
+import { useAuthStore } from '@/lib/store/auth.store'
+import { onRealtime } from '@/lib/socket'
 import { useT } from '@/lib/i18n'
 
 export default function NotificationsPage() {
   const t = useT()
+  const router = useRouter()
+  const { user } = useAuthStore()
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -15,10 +20,19 @@ export default function NotificationsPage() {
 
   useEffect(() => { load() }, [load])
 
-  const handleRead = async (n: AppNotification) => {
-    if (n.readAt) return
-    setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x))
-    try { await markNotificationReadApi(n.id) } catch { /* local state already updated; next load reconciles */ }
+  // The bell in the layout was already live, but this LIST was not — so a new notification
+  // bumped the badge while the page beside it still showed the old messages until a manual
+  // reload. Same signal, same refetch.
+  useEffect(() => onRealtime('notifications:changed', load), [load])
+
+  const handleClick = (n: AppNotification) => {
+    // Marking read is fire-and-forget so the navigation is never waiting on the network.
+    if (!n.readAt) {
+      setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x))
+      markNotificationReadApi(n.id).catch(() => { /* local state already updated; next load reconciles */ })
+    }
+    const href = notificationHref(n.data, user?.id)
+    if (href) router.push(href)
   }
 
   const handleMarkAll = async () => {
@@ -60,20 +74,34 @@ export default function NotificationsPage() {
         <div className="space-y-2 max-w-2xl">
           {notifications.map((n) => {
             const unread = !n.readAt
+            // A read notification with somewhere to go stays clickable — the timetable is
+            // worth reopening long after the message itself has been seen.
+            const canOpen = !!notificationHref(n.data, user?.id)
             return (
               <button
                 key={n.id}
-                onClick={() => handleRead(n)}
+                onClick={() => handleClick(n)}
+                // Unread rows need their own hover, or the row you most want to click is the
+                // one that does not respond. Reads use the shared --hover token (see
+                // globals.css) rather than bg-muted, which is invisible on a dark card.
                 className={`w-full text-left flex items-start gap-3 rounded-xl border p-4 transition ${
-                  unread ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted/50'
-                }`}
+                  unread
+                    ? 'border-primary bg-primary/5 hover:bg-primary/10 dark:hover:bg-primary/15'
+                    : 'border-border bg-card hover:bg-hover'
+                } ${canOpen ? 'cursor-pointer' : ''}`}
               >
                 <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${unread ? 'bg-primary' : 'bg-transparent'}`} />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-foreground">{t(n.title)}</p>
                   <p className="text-sm text-muted-foreground mt-0.5">{n.body}</p>
                   <p className="text-xs text-muted-foreground/70 mt-2">{formatTime(n.createdAt)}</p>
+                  {canOpen && (
+                    <p className="text-xs font-semibold text-primary mt-1.5 flex items-center gap-1">
+                      <CalendarClock size={12} /> {t('Click to view the timetable')}
+                    </p>
+                  )}
                 </div>
+                {canOpen && <ChevronRight size={16} className="text-muted-foreground self-center flex-shrink-0" />}
               </button>
             )
           })}

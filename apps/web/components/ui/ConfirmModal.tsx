@@ -40,7 +40,7 @@ export default function ConfirmModal({
           <button
             onClick={onCancel}
             disabled={confirming}
-            className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-hover transition-colors disabled:opacity-50"
           >
             Cancel
           </button>

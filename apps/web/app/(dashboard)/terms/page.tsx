@@ -11,6 +11,7 @@ import Pagination from '@/components/ui/Pagination'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import HolidaysSection from '@/components/HolidaysSection'
 import { usePagination } from '@/lib/usePagination'
 
 interface Term {
@@ -324,6 +325,10 @@ export default function TermsPage() {
         </div>
       )}
 
+      {/* Holidays sit with Terms because they are the same calendar: terms say when
+          teaching happens, holidays carve out the days inside them when it does not. */}
+      <HolidaysSection />
+
       {/* ── Add / Edit modal ──────────────────────────────────────────── */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
@@ -367,7 +372,7 @@ export default function TermsPage() {
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
@@ -414,7 +419,7 @@ export default function TermsPage() {
             <p className="text-xs text-muted-foreground mb-5">{tt('You can still view and edit report cards after closing. Individual term records stay intact.', 'You can still view and edit report cards after closing. Individual semester records stay intact.')}</p>
             <div className="flex gap-3">
               <button type="button" onClick={() => setShowEndYear(false)}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleEndYear} disabled={endingYear}
@@ -459,13 +464,13 @@ export default function TermsPage() {
                     <button type="button"
                       onClick={() => setNyTerms((prev) => prev.slice(0, -1))}
                       disabled={nyTerms.length <= 1}
-                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted disabled:opacity-30 transition">
+                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-hover disabled:opacity-30 transition">
                       {t('– Remove')}
                     </button>
                     <button type="button"
                       onClick={() => setNyTerms((prev) => [...prev, { name: `${tt('Term', 'Semester')} ${prev.length + 1}`, startDate: '', endDate: '' }])}
                       disabled={nyTerms.length >= 4}
-                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted disabled:opacity-30 transition">
+                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-hover disabled:opacity-30 transition">
                       {t('+ Add')}
                     </button>
                   </div>
@@ -505,7 +510,7 @@ export default function TermsPage() {
 
             <div className="p-6 pt-4 border-t border-border flex gap-3">
               <button type="button" onClick={() => setShowNewYear(false)}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleStartYear} disabled={startingYear || !nySession.trim()}

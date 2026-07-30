@@ -260,6 +260,14 @@ export default function TeachersPage() {
     setAssignedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
   }
 
+  // The date the assignment change takes effect — what splits a course's hours between the
+  // outgoing and incoming teacher. Defaults to today, so an admin recording a change as it
+  // happens never has to think about it; back-dating is for "she actually left on the 10th".
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const [effectiveAt, setEffectiveAt] = useState(todayIso)
+
+  useEffect(() => { if (assignTarget) setEffectiveAt(new Date().toISOString().slice(0, 10)) }, [assignTarget])
+
   const handleAssignSave = async () => {
     if (!assignTarget) return
     setAssigning(true)
@@ -269,6 +277,7 @@ export default function TeachersPage() {
         assignTarget.id,
         idsToSave,
         termScopedAssign ? selectedTerm : undefined,
+        effectiveAt,
       )
       if (result.reassigned?.length) {
         setReassignedInfo(result.reassigned)
@@ -441,7 +450,7 @@ export default function TeachersPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {pageItems.map((t) => (
-                <tr key={t.id} className="hover:bg-muted dark:hover:bg-muted transition">
+                <tr key={t.id} className="hover:bg-hover transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 flex-shrink-0 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">
@@ -577,7 +586,7 @@ export default function TeachersPage() {
               )}
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => { setShowModal(false); setError('') }}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{tr('Cancel')}</button>
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{tr('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                   {saving ? tr('Adding...') : tr('Add Teacher')}
@@ -636,7 +645,7 @@ export default function TeachersPage() {
                         className={`flex items-center gap-2 p-2.5 rounded-lg border text-sm text-left transition ${
                           assignedIds.includes(s.id)
                             ? 'bg-primary/10 border-primary/30 text-primary'
-                            : 'bg-muted border-border text-foreground hover:bg-muted'
+                            : 'bg-muted border-border text-foreground hover:bg-hover'
                         }`}>
                         <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${assignedIds.includes(s.id) ? 'bg-primary' : 'border border-border bg-background'}`}>
                           {assignedIds.includes(s.id) && <span className="text-white text-xs font-bold">✓</span>}
@@ -657,9 +666,21 @@ export default function TeachersPage() {
                 {visibleSelectedCount} {tr('selected here')} · {hiddenSelectedCount} {tr('in another department (kept on save)')}
               </p>
             )}
+            {/* Only shown once something is actually selected — an empty modal has no
+                handover to date. */}
+            <div className="mt-4 pt-4 border-t border-border">
+              <label className="block text-sm font-medium text-foreground mb-1">{tr('Effective from')}</label>
+              <input
+                type="date" value={effectiveAt} onChange={(e) => setEffectiveAt(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                {tr('Hours are counted from this date. Back-date it if the change already happened.')}
+              </p>
+            </div>
             <div className="flex gap-3 pt-4 border-t border-gray-100 mt-4">
               <button onClick={() => setAssignTarget(null)}
-                className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{tr('Cancel')}</button>
+                className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{tr('Cancel')}</button>
               <button onClick={handleAssignSave} disabled={assigning || assignedLoading || reassignedInfo.length > 0}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                 {/* Counts what will actually be saved for THIS semester, not every
@@ -729,7 +750,7 @@ export default function TeachersPage() {
               )}
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setEditTarget(null)}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{tr('Cancel')}</button>
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{tr('Cancel')}</button>
                 <button onClick={handleEditSave} disabled={editSaving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                   {editSaving ? tr('Saving...') : tr('Save Changes')}
@@ -779,7 +800,7 @@ export default function TeachersPage() {
             )}
             <div className="flex gap-3">
               <button onClick={() => setResetTarget(null)}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {tr('Cancel')}
               </button>
               <button onClick={handleResetPassword} disabled={resetSaving}

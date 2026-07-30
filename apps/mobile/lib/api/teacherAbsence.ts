@@ -1,5 +1,13 @@
 import api from './client'
 
+/**
+ * ONE CLASS on one date, not one period.
+ *
+ * Rows are stored per period (that is what makes the hours and "N periods missed" totals
+ * right), but reporting and deleting are both atomic per slot, so the API collapses them:
+ * a 07:30-09:10 double arrives as a single entry with `periods: 2`. Deleting it clears every
+ * period behind it. See groupByClass in the API's teacherAbsence controller.
+ */
 export interface TeacherAbsence {
   id: string
   teacherId: string
@@ -11,18 +19,20 @@ export interface TeacherAbsence {
   endTime: string
   subjectName: string | null
   classLevel: string | null
-  /** True once this period can no longer be changed by anyone: its start plus the school's
-   *  grace period, or its end when no grace is configured. The API is the real gate on
-   *  delete either way, this is just enough for the UI to grey the button out. */
+  /** True once the period itself is OVER: nobody, admin included, can change it. */
   isFinal: boolean
+  /** True once the arrival window has closed (period start + the school's grace minutes).
+   *  The teacher can no longer retract; an admin still can, but should be warned that the
+   *  period was lost. Equals isFinal when the school has set no grace. */
+  graceExpired: boolean
   /** True once an admin has reviewed this in the per-teacher list on a PRIOR visit — from
    *  then on it's locked for everyone, admin included. See getTeacherAbsences below. */
   seenByAdmin: boolean
-  /** Which period of the slot this row is, 0-based. null on a legacy row that still stands
-   *  for the whole slot. startTime/endTime above are already this period's own. */
+  /** Always null now: the API returns ONE entry per class, not per period, so an entry never
+   *  stands for a single period inside a block. Kept for wire compatibility. */
   periodIndex: number | null
-  /** What this row is worth: 1 for a per-period row, the whole block for a legacy one.
-   *  null when the school hasn't set a period length yet. */
+  /** How many periods the class is worth — 2 for a 07:30-09:10 double. null when the school
+   *  hasn't set a period length yet, so clients fall back to counting entries. */
   periods: number | null
 }
 

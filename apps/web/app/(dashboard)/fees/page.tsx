@@ -238,7 +238,7 @@ export default function FeesPage() {
               return (
                 <button key={lv} onClick={() => handleLevelTab(lv)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ${
-                    activeUniLevel === lv ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    activeUniLevel === lv ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-hover/80'
                   }`}>
                   {lv}
                   {lv !== 'Level 3' && (
@@ -281,7 +281,7 @@ export default function FeesPage() {
               return (
                 <button key={d.id} onClick={() => handleDeptTab(d.id)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
-                    activeDeptId === d.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    activeDeptId === d.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-hover/80'
                   }`}>
                   {d.name}
                   <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeDeptId === d.id ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
@@ -387,9 +387,9 @@ export default function FeesPage() {
                       const disabled = rowFee === 0 || s.balance === 0
                       const hasEntry = Number(r.amount) > 0
                       return (
-                        <tr key={s.studentId} className={`group transition ${hasEntry ? 'bg-primary/5' : 'hover:bg-muted/60'}`}>
-                          <td className={`sticky left-0 z-10 w-12 px-4 py-2.5 text-muted-foreground text-sm border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-muted/60'}`}>{start + i + 1}</td>
-                          <td className={`sticky left-12 z-10 px-4 py-2.5 border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-muted/60'}`}>
+                        <tr key={s.studentId} className={`group transition ${hasEntry ? 'bg-primary/5' : 'hover:bg-hover/60'}`}>
+                          <td className={`sticky left-0 z-10 w-12 px-4 py-2.5 text-muted-foreground text-sm border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-hover/60'}`}>{start + i + 1}</td>
+                          <td className={`sticky left-12 z-10 px-4 py-2.5 border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-hover/60'}`}>
                             <span className="text-sm font-medium text-foreground whitespace-nowrap">{s.name}</span>
                             {isHnd && s.directLevel2Entry && (
                               <span className="ml-1.5 inline-flex px-1.5 py-0.5 bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-400 rounded-full text-[10px] font-semibold whitespace-nowrap align-middle">

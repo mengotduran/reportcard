@@ -37,9 +37,9 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
         ...(term
           ? {
               OR: [
-                { teacherSubjects: { some: { subject: { term } } } },
-                { teacherSubjects: { none: {} }, createdForTerm: null },
-                { teacherSubjects: { none: {} }, createdForTerm: term },
+                { teacherSubjects: { some: { endedAt: null, subject: { term } } } },
+                { teacherSubjects: { none: { endedAt: null } }, createdForTerm: null },
+                { teacherSubjects: { none: { endedAt: null } }, createdForTerm: term },
               ],
             }
           : {}),
@@ -47,7 +47,8 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
       select: {
         id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true,
         passwordSetAt: true,
-        teacherSubjects: { select: { subject: { select: { classLevel: true } } } },
+        // Active only: a course handed over should stop appearing against this teacher.
+        teacherSubjects: { where: { endedAt: null }, select: { subject: { select: { classLevel: true } } } },
       },
       orderBy: { name: 'asc' }
     })
@@ -227,8 +228,27 @@ export const deleteTeacher = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    // Deactivating is how a teacher leaves, so their course windows close with them. Without
+    // this they would keep accruing hours forever and every course they held would still look
+    // staffed — which would hide exactly the unstaffed gap the coverage view is meant to
+    // surface. Ended, never deleted: the hours they already taught remain on record.
+    //
+    // Reactivating deliberately does NOT reopen them. Coming back is not the same as being
+    // given the same courses again, and silently restoring assignments would hand someone a
+    // class the school may have already given to somebody else.
+    const closedAt = new Date()
+    const { count: closed } = await prisma.teacherSubject.updateMany({
+      where: { userId: id, endedAt: null },
+      data: { endedAt: closedAt },
+    })
+
     await prisma.user.update({ where: { id }, data: { isActive: false } })
-    res.json({ message: 'Teacher removed' })
+    res.json({
+      message: 'Teacher removed',
+      // Named so the admin learns their courses are now unstaffed rather than discovering it
+      // from a coverage gap weeks later.
+      closedAssignments: closed,
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -239,7 +259,9 @@ export const getTeacherSubjects = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const assigned = await prisma.teacherSubject.findMany({
-      where: { userId: id },
+      // Only current assignments: an ended one is history for the hours record, not a course
+      // this teacher still teaches.
+      where: { userId: id, endedAt: null },
       include: { subject: true },
     })
     res.json({ subjects: assigned.map((a) => a.subject) })
@@ -247,6 +269,17 @@ export const getTeacherSubjects = async (req: AuthRequest, res: Response) => {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
   }
+}
+
+/** "YYYY-MM-DD" as a UTC calendar day, or now when omitted. 'invalid' is a rejection.
+ *  Parsed as UTC deliberately: the school year has no timezone of its own, and local parsing
+ *  would shift a handover a day either side of the boundary. */
+function parseEffectiveAt(value: unknown): Date | 'invalid' {
+  if (value == null || value === '') return new Date()
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'invalid'
+  const [y, m, d] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d))
+  return Number.isNaN(date.getTime()) ? 'invalid' : date
 }
 
 export const assignTeacherSubjects = async (req: AuthRequest, res: Response) => {
@@ -282,18 +315,41 @@ export const assignTeacherSubjects = async (req: AuthRequest, res: Response) => 
     // while the teacher who lost the course was never told and just found it gone. The
     // shared helper now also removes their timetable periods for it and notifies them by
     // name (see utils/courseAssignment.ts).
-    const reassigned = await takeCoursesFromOtherTeachers({ schoolId, subjectIds, newTeacherId: id })
+    // The date the change takes effect, which is what splits hours between the outgoing and
+    // incoming teacher. Defaults to now, so an admin who does not care never sees it.
+    const effectiveAt = parseEffectiveAt(req.body?.effectiveAt)
+    if (effectiveAt === 'invalid') {
+      res.status(400).json({ message: 'A valid effective date (YYYY-MM-DD) is required' })
+      return
+    }
 
-    // Replace this teacher's assignments — but only WITHIN the scope being edited. With
-    // a `term`, courses from other semesters are left exactly as they were; without one
-    // (primary/secondary, whose subjects span the year) it stays a full replace.
-    await prisma.teacherSubject.deleteMany({
-      where: { userId: id, ...(term ? { subject: { term } } : {}) },
+    const reassigned = await takeCoursesFromOtherTeachers({ schoolId, subjectIds, newTeacherId: id, effectiveAt })
+
+    // A DIFF, not a replace. The old code deleted every assignment in scope and recreated
+    // them, which under assignment history would reset startedAt on every save — re-saving an
+    // unchanged list would silently erase months of accrued hours for every course.
+    //
+    // Scope is unchanged: with a `term`, other semesters are left alone; without one
+    // (primary/secondary, whose subjects span the year) the whole set is in scope.
+    const active = await prisma.teacherSubject.findMany({
+      where: { userId: id, endedAt: null, ...(term ? { subject: { term } } : {}) },
+      select: { id: true, subjectId: true },
     })
-    if (subjectIds.length > 0) {
+    const activeIds = new Set(active.map((a) => a.subjectId))
+    const wanted = new Set(subjectIds)
+
+    // Dropped: ended as of the effective date, never deleted — the hours already taught
+    // against them still belong to this teacher.
+    const toEnd = active.filter((a) => !wanted.has(a.subjectId)).map((a) => a.id)
+    if (toEnd.length > 0) {
+      await prisma.teacherSubject.updateMany({ where: { id: { in: toEnd } }, data: { endedAt: effectiveAt } })
+    }
+    // Added: a fresh window starting at the effective date. Courses already held are left
+    // untouched, so their original startedAt survives.
+    const toAdd = subjectIds.filter((sid) => !activeIds.has(sid))
+    if (toAdd.length > 0) {
       await prisma.teacherSubject.createMany({
-        data: subjectIds.map((sid) => ({ userId: id, subjectId: sid })),
-        skipDuplicates: true,
+        data: toAdd.map((sid) => ({ userId: id, subjectId: sid, startedAt: effectiveAt })),
       })
     }
 

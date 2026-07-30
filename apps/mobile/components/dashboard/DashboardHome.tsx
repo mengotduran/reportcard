@@ -11,6 +11,7 @@ import { getDashboardStats, getWeeklyStats, getTeacherClasses, WeeklyStats, Teac
 import { getCurrentTerm, CurrentTerm } from '@/lib/api/terms'
 import { getMyTimetable, MyTimetableSlot } from '@/lib/api/timetable'
 import { getMyNotifications } from '@/lib/api/notifications'
+import { onRealtime } from '@/lib/socket'
 import { useTheme, Colors, type, space, radius, font, hairlineWidth } from '@/lib/useTheme'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import { API_BASE } from '@/lib/config'
@@ -97,6 +98,7 @@ function TeacherHome() {
   const pagerRef = useRef<ScrollView>(null)
   const [classes, setClasses] = useState<TeacherClassRow[]>([])
   const [classesLoading, setClassesLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [panel, setPanel] = useState(0)
   const [term, setTerm] = useState<CurrentTerm | null>(null)
   const [todaySlots, setTodaySlots] = useState<MyTimetableSlot[]>([])
@@ -109,8 +111,19 @@ function TeacherHome() {
   const isUniversity = school?.type === 'UNIVERSITY'
   const levelWord = isUniversity ? 'university school' : `${(school?.type ?? '').toLowerCase()} school`
 
+  const refreshUnread = useCallback(() => {
+    getMyNotifications().then((r) => setUnreadCount(r.unreadCount)).catch(() => {})
+  }, [])
+
   const fetchAll = useCallback(() => {
-    getTeacherClasses().then((r) => setClasses(r.classes)).catch(() => {}).finally(() => setClassesLoading(false))
+    // A failed request must NOT fall through to "you haven't been assigned any classes yet".
+    // That sentence is a claim about the data, and it reads as "my courses vanished" when the
+    // real problem is that the API is unreachable — which is exactly what a dead dev tunnel
+    // or a lost Wi-Fi connection looks like, since the persisted login still shows the name.
+    getTeacherClasses()
+      .then((r) => { setClasses(r.classes); setLoadFailed(false) })
+      .catch(() => setLoadFailed(true))
+      .finally(() => setClassesLoading(false))
     getCurrentTerm().then(setTerm).catch(() => {})
     getMyTimetable().then((r) => {
       const todayName = DAY_ORDER[new Date().getDay()]
@@ -119,11 +132,17 @@ function TeacherHome() {
     // Unread notifications (e.g. an admin logged/removed an absence for this teacher) —
     // the whole point is the teacher sees it on landing here, not only if they dig into
     // Attendance. Refreshed on every focus, same as the rest.
-    getMyNotifications().then((r) => setUnreadCount(r.unreadCount)).catch(() => {})
-  }, [])
+    refreshUnread()
+  }, [refreshUnread])
 
   useEffect(() => { fetchAll() }, [fetchAll])
   useFocusEffect(useCallback(() => { fetchAll() }, [fetchAll]))
+
+  // This badge is the teacher's only notification indicator on mobile — the tab layout's bell
+  // is admin-only, and their Home tab renders its own header. So it has to react to the
+  // realtime signal itself; the socket is connected by the tab layout. Only the count is
+  // refetched, not the whole dashboard, since that is all the signal says changed.
+  useEffect(() => onRealtime('notifications:changed', refreshUnread), [refreshUnread])
 
   // Ends-in copy fix (spec §3.3): "ends today" at 0, "ends in N days" ahead, "ended" past.
   const daysLeft = term ? Math.ceil((new Date(term.endDate).getTime() - now.getTime()) / 86400000) : null
@@ -252,6 +271,10 @@ function TeacherHome() {
         <View style={{ width: CARD_W, minHeight: PANEL_MIN_H, backgroundColor: colors.surface, borderRadius: radius.card, paddingVertical: space.xs, paddingHorizontal: space.lg }}>
           {classesLoading ? (
             <View style={{ height: 40, marginVertical: space.md, backgroundColor: colors.line, borderRadius: radius.chip }} />
+          ) : loadFailed ? (
+            <Text style={[type.bodySmall, { color: '#F03E2F', textAlign: 'center', paddingVertical: space.xl }]}>
+              {t("Could not reach the server. Check your connection and pull to refresh.")}
+            </Text>
           ) : shown.length === 0 ? (
             <Text style={[type.bodySmall, { color: colors.textDim, textAlign: 'center', paddingVertical: space.xl }]}>
               {t("You haven't been assigned any classes yet.")}

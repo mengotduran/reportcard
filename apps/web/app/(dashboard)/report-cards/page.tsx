@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
 import { getClassLevelsApi as getClassLevelsFullApi, ClassLevel as ClassLevelDef } from '@/lib/api/classLevels'
-import { useProgrammeFilter, ProgrammeChips } from '@/components/ui/ProgrammeFilter'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getStudentsApi } from '@/lib/api/students'
@@ -107,6 +107,8 @@ function TeacherClassesView() {
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isSecondary = school?.type === 'SECONDARY'
+  // A university's year is split into semesters, not terms. Same rows, different word.
+  const ts = (termStr: string, semesterStr: string) => tr(school?.type === 'UNIVERSITY' ? semesterStr : termStr)
   const [term, setTerm] = useState<{ id: string; name: string; session: string } | null>(null)
   const [classes, setClasses] = useState<{ classLevel: string; total: number; filled: number; published: number; hasSubjects: boolean }[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
@@ -212,7 +214,7 @@ function TeacherClassesView() {
           setActiveDeptId((deptRes.departments.find((d) => d.isDefault) ?? deptRes.departments[0])?.id ?? '')
         }
       } catch (err: any) {
-        if (err?.response?.status === 404) setError(tr('No active term set. Please set a current term first.'))
+        if (err?.response?.status === 404) setError(ts('No active term set. Please set a current term first.', 'No active semester set. Please set a current semester first.'))
         else setError(tr('Failed to load classes.'))
       } finally { setLoading(false) }
     }
@@ -236,7 +238,7 @@ function TeacherClassesView() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-foreground">{tr('Classes')}</h2>
-          {term && <p className="text-muted-foreground text-sm mt-1">{term.name} — {term.session}</p>}
+          {term && <p className="text-muted-foreground text-sm mt-1">{term.name}, {term.session}</p>}
         </div>
       </div>
 
@@ -257,7 +259,7 @@ function TeacherClassesView() {
             return (
               <button key={d.id} onClick={() => setActiveDeptId(d.id)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 active:scale-95 ${
-                  activeDeptId === d.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  activeDeptId === d.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-hover/80'
                 }`}>
                 {d.name}
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeDeptId === d.id ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'}`}>
@@ -288,9 +290,7 @@ function TeacherClassesView() {
                     <p className="font-bold text-foreground">
                       {stripProgrammeSuffix(isSecondary ? stripDeptSuffix(c.classLevel) : c.classLevel)}
                       {programmeFilter.programmeOf(c.classLevel) === 'EVENING' && (
-                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 align-middle">
-                          {tr('Evening')}
-                        </span>
+                        <EveningBadge className="align-middle" />
                       )}
                     </p>
                     <p className="text-xs text-muted-foreground">{c.total} {tr('students')}{isClassMaster ? ` · ${c.published} ${tr('published')}` : ''}</p>
@@ -309,7 +309,7 @@ function TeacherClassesView() {
                 )}
                 <div className="flex gap-2 flex-wrap">
                   <button onClick={() => router.push(`/report-cards/class/${encodeURIComponent(c.classLevel)}?termId=${term?.id}&termName=${encodeURIComponent(term?.name ?? '')}`)}
-                    className="flex-1 text-xs border border-border text-muted-foreground py-1.5 rounded-lg hover:bg-muted transition">
+                    className="flex-1 text-xs border border-border text-muted-foreground py-1.5 rounded-lg hover:bg-hover transition">
                     {tr('View Class')}
                   </button>
                   {isAdmin && c.filled > c.published && (
@@ -324,7 +324,7 @@ function TeacherClassesView() {
                   )}
                   {isAdmin && c.published > 0 && (
                     <button onClick={() => handleClassPrint(c.classLevel, term?.id ?? '')} disabled={printing}
-                      className="flex items-center gap-1.5 text-xs border border-border text-foreground px-3 py-1.5 rounded-lg hover:bg-muted transition disabled:opacity-50"
+                      className="flex items-center gap-1.5 text-xs border border-border text-foreground px-3 py-1.5 rounded-lg hover:bg-hover transition disabled:opacity-50"
                       title={`${tr('Print all')} ${c.published} ${tr('published cards')}`}>
                       <Printer size={12} /> {printing ? tr('Loading...') : `${tr('Print')} (${c.published})`}
                     </button>
@@ -413,8 +413,11 @@ export default function ReportCardsPage() {
   const tr = useT()
   const router = useRouter()
   const { isAuthenticated, user, school, activeSession } = useAuthStore()
-  // A university teaches courses, not subjects.
+  // A university teaches courses, not subjects, and its year is split into semesters.
   const isUniversity = school?.type === 'UNIVERSITY'
+  // Same relabelling the sidebar does (UNIVERSITY_NAV_LABELS in the dashboard layout): the
+  // data is a Term either way, only the word the school uses for it changes.
+  const ts = (termStr: string, semesterStr: string) => tr(isUniversity ? semesterStr : termStr)
 
   if (TEACHER_ROLES.includes(user?.role ?? '') || user?.role === 'CLASS_MASTER') return <TeacherClassesView />
   const { toast, showToast, hideToast } = useToast()
@@ -437,6 +440,12 @@ export default function ReportCardsPage() {
     if (typeof window !== 'undefined') sessionStorage.setItem(FILTER_TERM_STORAGE_KEY, termId)
   }
   const [searchQuery, setSearchQuery] = useState('')
+  // Day/Evening. This list is flat, one row per student across every class, so without it the
+  // two sittings are interleaved and the only thing telling them apart is reading the marker
+  // at the end of the Class column. The teacher view has had these chips all along; this one
+  // was missed because it filters by term and name, never by class.
+  const [classDefs, setClassDefs] = useState<ClassLevelDef[]>([])
+  const programmeFilter = useProgrammeFilter(classDefs)
   const [form, setForm] = useState({ studentId: '', termId: '' })
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
@@ -458,6 +467,8 @@ export default function ReportCardsPage() {
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
   useEffect(() => { getGradingScaleApi().then(d => setGradeBands(d.ranges)).catch(() => {}) }, [])
+  // The class row is the source of truth for the sitting; this table only holds name strings.
+  useEffect(() => { getClassLevelsFullApi().then(d => setClassDefs(d.classLevels)).catch(() => {}) }, [])
   useEffect(() => {
     if (school?.type !== 'UNIVERSITY') return
     listExcelTemplatesApi().then(d => setExcelTemplates(d.templates)).catch(() => {})
@@ -654,9 +665,9 @@ export default function ReportCardsPage() {
   // Active term chip, or every term of the active year when "All Terms" is selected.
   const exportTargetTerms = () => (filterTermId ? visibleTerms.filter((t) => t.id === filterTermId) : visibleTerms)
 
-  const filteredCards = searchQuery
-    ? reportCards.filter(rc => rc.student.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : reportCards
+  const filteredCards = reportCards
+    .filter(rc => programmeFilter.matches(rc.student.classLevel))
+    .filter(rc => !searchQuery || rc.student.name.toLowerCase().includes(searchQuery.toLowerCase()))
 
   // Paginate the table; reset to page 1 when the year or search changes. Term
   // filter is deliberately NOT in this key — fetchAll() re-asserts filterTermId
@@ -675,7 +686,7 @@ export default function ReportCardsPage() {
   // term — i.e. exactly what the table shows when filtered to that term. One file per term.
   const handleExportSchool = async () => {
     const targets = exportTargetTerms()
-    if (targets.length === 0) { showToast(tr('No current term set'), 'error'); return }
+    if (targets.length === 0) { showToast(ts('No current term set', 'No current semester set'), 'error'); return }
     setExporting(true)
     try {
       const subData = await getSubjectsApi()
@@ -722,7 +733,7 @@ export default function ReportCardsPage() {
   // Whole-school master sheet WITH marks, one file per target term.
   const handleExportSchoolMarks = async () => {
     const targets = exportTargetTerms()
-    if (targets.length === 0) { showToast(tr('No current term set'), 'error'); return }
+    if (targets.length === 0) { showToast(ts('No current term set', 'No current semester set'), 'error'); return }
     setExporting(true)
     try {
       const files: { name: string; content: string }[] = []
@@ -767,7 +778,7 @@ export default function ReportCardsPage() {
         <div>
           <h2 className="text-2xl font-bold text-foreground">{tr('Report Cards')}</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {currentTerm ? `${tr('Current term:')} ${currentTerm.name} — ${currentTerm.session}` : tr('No current term set')}
+            {currentTerm ? `${ts('Current term:', 'Current semester:')} ${currentTerm.name}, ${currentTerm.session}` : ts('No current term set', 'No current semester set')}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -788,7 +799,7 @@ export default function ReportCardsPage() {
             <button
               disabled={printing || pickerBusy}
               onClick={() => setClassPicker('classList')}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border border-border text-foreground hover:bg-muted">
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border border-border text-foreground hover:bg-hover">
               <List size={14} />
               {printing ? tr('Loading…') : tr('Class List')}
             </button>
@@ -799,7 +810,7 @@ export default function ReportCardsPage() {
             <button
               disabled={printing || pickerBusy}
               onClick={() => setClassPicker('printClass')}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border border-border text-foreground hover:bg-muted">
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 border border-border text-foreground hover:bg-hover">
               <Printer size={14} />
               {printing ? tr('Loading…') : tr('Print Class')}
             </button>
@@ -817,16 +828,31 @@ export default function ReportCardsPage() {
       <div className="flex gap-2 mb-4 flex-wrap">
         <button
           onClick={() => handleFilterChange('')}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!filterTermId ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}
-        >{tr('All Terms')}</button>
+          className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!filterTermId ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
+        >{ts('All Terms', 'All Semesters')}</button>
         {visibleTerms.map(term => (
           <button key={term.id} onClick={() => handleFilterChange(term.id)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filterTermId === term.id ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filterTermId === term.id ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
           >
             {term.name} {term.isCurrent ? tr('(Current)') : ''}
           </button>
         ))}
       </div>
+
+      {/* Day/Evening, on its own row under the terms so the two filters read as separate
+          questions. Only appears once the school actually runs an evening sitting. */}
+      {programmeFilter.hasEvening && (
+        <ProgrammeChips
+          value={programmeFilter.programme}
+          onChange={(p) => { programmeFilter.setProgramme(p); setPage(1) }}
+          counts={{
+            ALL: reportCards.length,
+            DAY: reportCards.filter(rc => programmeFilter.programmeOf(rc.student.classLevel) === 'DAY').length,
+            EVENING: reportCards.filter(rc => programmeFilter.programmeOf(rc.student.classLevel) === 'EVENING').length,
+          }}
+          className="mb-4"
+        />
+      )}
 
       <div className="relative mb-4 max-w-sm">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
@@ -847,14 +873,14 @@ export default function ReportCardsPage() {
       {isAdmin && (
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <span className="text-xs text-muted-foreground">
-            {tr('Export')} · {filterTermId && activeTerm ? `${activeTerm.name} ${activeTerm.session}` : `${tr('All Terms')} — ${tr('one file each')}`}:
+            {tr('Export')} · {filterTermId && activeTerm ? `${activeTerm.name} ${activeTerm.session}` : `${ts('All Terms', 'All Semesters')}, ${tr('one file each')}`}:
           </span>
           <button onClick={handleExportSchool} disabled={exporting || terms.length === 0}
-            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-muted disabled:opacity-50 transition">
+            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-hover disabled:opacity-50 transition">
             <Download size={14} /> {tr('Export school data')}
           </button>
           <button onClick={handleExportSchoolMarks} disabled={exporting || terms.length === 0}
-            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-muted disabled:opacity-50 transition">
+            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-hover disabled:opacity-50 transition">
             <Download size={14} /> {tr('Export school data (with marks)')}
           </button>
         </div>
@@ -879,7 +905,7 @@ export default function ReportCardsPage() {
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Student')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Class')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Term')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{ts('Term', 'Semester')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr(isUniversity ? 'Courses' : 'Subjects')}</th>
                 {/* A university's `average` is a weighted mark out of 100, which reads as
                     a broken /20 average here — GPA is the metric that means something for
@@ -892,7 +918,7 @@ export default function ReportCardsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {pageItems.map((rc) => (
-                <tr key={rc.id} className="hover:bg-muted dark:hover:bg-muted transition">
+                <tr key={rc.id} className="hover:bg-hover transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 flex-shrink-0 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center text-xs font-bold">
@@ -904,8 +930,15 @@ export default function ReportCardsPage() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{rc.student.classLevel}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{rc.term.name} — {rc.term.session}</td>
+                  {/* Name shown stripped with a badge, not raw: "(Evening)" trailing a long
+                      department name wrapped onto its own line and read as part of the name. */}
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2 flex-wrap">
+                      {stripProgrammeSuffix(rc.student.classLevel)}
+                      {programmeFilter.programmeOf(rc.student.classLevel) === 'EVENING' && <EveningBadge />}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">{rc.term.name}, {rc.term.session}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.entries.length} {tr('subjects')}</td>
                   <td className="px-4 py-3 text-sm font-medium text-foreground">
                     {isUniversity
@@ -1014,16 +1047,16 @@ export default function ReportCardsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Term')} <span className="text-destructive">*</span></label>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{ts('Term', 'Semester')} <span className="text-destructive">*</span></label>
                 <select value={form.termId} onChange={(e) => setForm({ ...form, termId: e.target.value })} required
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="">{tr('Select term...')}</option>
+                  <option value="">{ts('Select term...', 'Select semester...')}</option>
                   {visibleTerms.map(t => <option key={t.id} value={t.id}>{t.name} — {t.session}</option>)}
                 </select>
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => { setShowModal(false); setError('') }}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   {tr('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
@@ -1062,7 +1095,7 @@ export default function ReportCardsPage() {
                   className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-1.5 rounded-lg transition disabled:opacity-50">
                   <FileSpreadsheet size={14} /> {tr('Download Excel')}
                 </button>
-                <button onClick={() => setExcelPreview(null)} className="p-1.5 rounded-lg hover:bg-muted transition text-muted-foreground">
+                <button onClick={() => setExcelPreview(null)} className="p-1.5 rounded-lg hover:bg-hover transition text-muted-foreground">
                   <X size={16} />
                 </button>
               </div>
@@ -1079,7 +1112,7 @@ export default function ReportCardsPage() {
       <ClassPickerModal
         open={classPicker === 'publish'}
         title={tr('Publish report cards')}
-        subtitle={tr('Select the class(es) to publish for this term.')}
+        subtitle={ts('Select the class(es) to publish for this term.', 'Select the department(s) to publish for this semester.')}
         options={unpublishedClasses.map((cl): ClassOption => ({ classLevel: cl, readiness: classReadiness[cl] }))}
         showReadiness
         confirmLabel={tr('Publish')}
@@ -1136,7 +1169,7 @@ export default function ReportCardsPage() {
                 ))}
               </div>
             )}
-            <button onClick={() => setBulkResult(null)} className="w-full bg-muted hover:bg-muted/80 text-white py-2.5 rounded-xl text-sm font-medium transition">{tr('Close')}</button>
+            <button onClick={() => setBulkResult(null)} className="w-full bg-muted hover:bg-hover/80 text-white py-2.5 rounded-xl text-sm font-medium transition">{tr('Close')}</button>
           </div>
         </div>
       )}

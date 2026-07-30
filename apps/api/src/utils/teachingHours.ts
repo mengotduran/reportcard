@@ -104,19 +104,23 @@ export function periodWindows(
 }
 
 /**
- * The moment an absence against `window` becomes FINAL: from then on nobody, admin
- * included, can mark the teacher present for it again.
+ * The two moments that govern an absence record, in order:
  *
- * With a grace period configured this is `startTime + graceMinutes` — the school's answer
- * to "how late can a teacher turn up and still count as having taught this period". With
- * none set it falls back to the period's END, which is the rule that applied before the
- * setting existed, so a school that never configures it sees no change.
+ *   period start ──── grace expires ──────────── period ends
+ *        teacher may delete │ admin only, warned │ nobody
+ *
+ * `graceExpiresAtMs` is `startTime + graceMinutes`: the school's answer to "how late can a
+ * teacher turn up and still count as having taught this period". Past it the period is
+ * lost, so the teacher can no longer retract their own report and an admin who deletes it
+ * is told what they are overriding. With no grace configured it collapses onto the period's
+ * end, which is the rule that applied before the setting existed, so a school that never
+ * configures one sees no warning window at all.
  */
-export function absenceFinalAtMs(
+export function graceExpiresAtMs(
   date: string,
   window: { startTime: string; endTime: string },
   graceMinutes: number | null | undefined,
-  ): number {
+): number {
   const useGrace = graceMinutes != null && graceMinutes >= 0
   const [hh, mm] = (useGrace ? window.startTime : window.endTime).split(':').map(Number)
   const [y, m, d] = date.split('-').map(Number)
@@ -124,14 +128,24 @@ export function absenceFinalAtMs(
   return base + (useGrace ? graceMinutes * 60_000 : 0)
 }
 
-/** True once that moment has passed. */
-export function absenceIsFinal(
+/** Past this the period is lost: the teacher can't retract, an admin can but is warned. */
+export function graceHasExpired(
   date: string,
   window: { startTime: string; endTime: string },
   graceMinutes: number | null | undefined,
   now: Date = new Date(),
 ): boolean {
-  return absenceFinalAtMs(date, window, graceMinutes) <= now.getTime()
+  return graceExpiresAtMs(date, window, graceMinutes) <= now.getTime()
+}
+
+/** The hard stop. Once the period itself is over the record is history for EVERYONE —
+ *  there is nothing left to correct, so not even an admin can change it. */
+export function periodHasEnded(
+  date: string,
+  window: { endTime: string },
+  now: Date = new Date(),
+): boolean {
+  return slotHasPassed(date, window.endTime, now)
 }
 
 /** Which weekday a "YYYY-MM-DD" string falls on, so an absence report ("I'll be out on
@@ -162,6 +176,72 @@ export function countWeekdayOccurrences(dayOfWeek: DayOfWeek, rangeStart: Date, 
   if (firstOccurrence > end) return 0
 
   return Math.floor((end - firstOccurrence) / (7 * MS_PER_DAY)) + 1
+}
+
+/** An inclusive calendar-day range. Holidays and term spans are both this shape. */
+export interface DateRange {
+  startDate: Date
+  endDate: Date
+}
+
+/**
+ * Overlapping/adjacent ranges collapsed into a disjoint, sorted set.
+ *
+ * Essential before subtracting holidays: two entries that overlap (an admin adds "Easter"
+ * 12-16 April and "Good Friday" 14 April) would otherwise each remove the same day, silently
+ * deleting more teaching hours than the school actually lost.
+ */
+export function mergeDateRanges(ranges: DateRange[]): DateRange[] {
+  if (ranges.length === 0) return []
+  const sorted = [...ranges]
+    .map((r) => ({ start: toUtcMidnight(r.startDate), end: toUtcMidnight(r.endDate) }))
+    .filter((r) => r.end >= r.start)
+    .sort((a, b) => a.start - b.start)
+  if (sorted.length === 0) return []
+
+  const merged: { start: number; end: number }[] = [sorted[0]]
+  for (const r of sorted.slice(1)) {
+    const last = merged[merged.length - 1]
+    // +1 day: ranges that merely touch (ends Fri, next starts Sat) are one closure.
+    if (r.start <= last.end + MS_PER_DAY) last.end = Math.max(last.end, r.end)
+    else merged.push(r)
+  }
+  return merged.map((r) => ({ startDate: new Date(r.start), endDate: new Date(r.end) }))
+}
+
+/** True if a "YYYY-MM-DD" falls inside any of the ranges. */
+export function dateStringInAnyRange(dateStr: string, ranges: DateRange[]): boolean {
+  return ranges.some((r) => dateStringWithinRange(dateStr, r.startDate, r.endDate))
+}
+
+/**
+ * How many times `dayOfWeek` occurs in [rangeStart, rangeEnd], NOT counting days that fall
+ * inside a holiday. `upTo` caps it at "so far" for elapsed-hours figures.
+ *
+ * Holidays are intersected with the range before subtracting, so a closure that starts before
+ * the term or runs past its end only removes the days actually inside it.
+ */
+export function countTeachingWeekdays(
+  dayOfWeek: DayOfWeek,
+  rangeStart: Date,
+  rangeEnd: Date,
+  holidays: DateRange[] = [],
+  upTo?: Date,
+): number {
+  const total = countWeekdayOccurrences(dayOfWeek, rangeStart, rangeEnd, upTo)
+  if (total === 0 || holidays.length === 0) return total
+
+  const windowStart = toUtcMidnight(rangeStart)
+  const windowEnd = Math.min(toUtcMidnight(rangeEnd), upTo ? toUtcMidnight(upTo) : Infinity)
+  let lost = 0
+  for (const h of mergeDateRanges(holidays)) {
+    const start = Math.max(toUtcMidnight(h.startDate), windowStart)
+    const end = Math.min(toUtcMidnight(h.endDate), windowEnd)
+    if (end < start) continue
+    lost += countWeekdayOccurrences(dayOfWeek, new Date(start), new Date(end))
+  }
+  // Cannot go below zero even if the ranges are odd; a term fully inside a closure is 0.
+  return Math.max(0, total - lost)
 }
 
 export interface ScopeTerm {
@@ -235,8 +315,12 @@ export function computeCoverage(params: {
   asOfDate: Date
   /** Needed to work out what one period of a multi-period slot is worth. */
   periodMinutes?: number | null
+  /** School closures. Periods falling inside one were never taught, so they are neither
+   *  scheduled nor missable. Safe to omit — an empty list behaves exactly as before. */
+  holidays?: DateRange[]
 }): CoverageResult {
   const { requiredHours, slots, terms, absences, asOfDate, periodMinutes } = params
+  const holidays = mergeDateRanges(params.holidays ?? [])
   const asOfDay = toUtcMidnight(asOfDate)
 
   let scheduledHours = 0
@@ -248,14 +332,16 @@ export function computeCoverage(params: {
     // regardless of whether that date actually falls inside any scope term: it's tied to
     // a real date, not a recurring weekday pattern the term range is measuring.
     if (slot.specificDate) {
+      // A one-off that lands on a closure simply did not happen.
+      if (dateStringInAnyRange(slot.specificDate, holidays)) continue
       scheduledHours += hours
       const [y, m, d] = slot.specificDate.split('-').map(Number)
       if (Date.UTC(y, m - 1, d) <= asOfDay) elapsedScheduledHours += hours
       continue
     }
     for (const term of terms) {
-      scheduledHours += countWeekdayOccurrences(slot.dayOfWeek, term.startDate, term.endDate) * hours
-      elapsedScheduledHours += countWeekdayOccurrences(slot.dayOfWeek, term.startDate, term.endDate, asOfDate) * hours
+      scheduledHours += countTeachingWeekdays(slot.dayOfWeek, term.startDate, term.endDate, holidays) * hours
+      elapsedScheduledHours += countTeachingWeekdays(slot.dayOfWeek, term.startDate, term.endDate, holidays, asOfDate) * hours
     }
   }
 
@@ -265,6 +351,11 @@ export function computeCoverage(params: {
   for (const a of absences) {
     const slot = slotById.get(a.timetableSlotId)
     if (slot == null) continue
+    // An absence on a closure subtracts nothing: nobody missed a class that never ran. This
+    // matters when a holiday is declared AFTER teachers have already reported for those days
+    // — without it the hours would be docked twice, once for the closure and once for the
+    // absence.
+    if (dateStringInAnyRange(a.date, holidays)) continue
     const slotHours = slotDurationHours(slot)
     // A per-period row costs ONE period's share of the block, not the whole block: a double
     // period that's been split into two rows must still subtract the same total as the one

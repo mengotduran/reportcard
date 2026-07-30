@@ -15,6 +15,16 @@ export interface WeekGridSlot {
   title: string
   subtitle?: string | null
   isPrivate?: boolean
+  /** The class has been reported absent and has ALREADY happened: greyed out and struck
+   *  through, it was not taught. */
+  missed?: boolean
+  /** Reported absent but STILL TO COME. Marked in amber rather than grey, because nothing
+   *  has been lost yet and the teacher may still retract it. */
+  reportedAbsent?: boolean
+  /** Short note shown under the subtitle, e.g. the dates it was reported for. The weekly
+   *  grid repeats every week and carries no dates of its own, so without this "absent"
+   *  on a recurring slot would not say WHICH week. */
+  note?: string | null
 }
 
 export interface WeekGridBreak {
@@ -61,6 +71,11 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
   const privateBg = isDark ? 'rgba(245,158,11,0.12)' : '#fffbeb'
   const privateBorder = isDark ? 'rgba(245,158,11,0.35)' : '#fde68a'
   const privateText = isDark ? '#fbbf24' : '#92400e'
+  // Reported-but-upcoming is deliberately NOT the grey of a lost period: nothing has been
+  // missed yet, and the teacher can still retract it.
+  const absentBg = isDark ? 'rgba(148,163,184,0.16)' : '#f1f5f9'
+  const absentBorder = isDark ? 'rgba(148,163,184,0.5)' : '#cbd5e1'
+  const absentText = isDark ? '#cbd5e1' : '#475569'
   const slotBg = isDark ? 'rgba(240,62,47,0.14)' : '#FEF2F1'
   const slotBorder = isDark ? 'rgba(240,62,47,0.35)' : '#fecaca'
 
@@ -117,16 +132,30 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
                         style={{
                           position: 'absolute', left: 3, right: 3, top, height,
                           borderRadius: 8, borderWidth: 1, padding: 5, overflow: 'hidden',
-                          backgroundColor: s.isPrivate ? privateBg : slotBg,
-                          borderColor: s.isPrivate ? privateBorder : slotBorder,
+                          backgroundColor: s.missed ? colors.bgSecondary : s.reportedAbsent ? absentBg : s.isPrivate ? privateBg : slotBg,
+                          borderColor: s.missed ? colors.border : s.reportedAbsent ? absentBorder : s.isPrivate ? privateBorder : slotBorder,
+                          borderStyle: s.reportedAbsent ? 'dashed' : 'solid',
+                          opacity: s.missed ? 0.75 : 1,
                         }}
                       >
-                        <Text numberOfLines={1} style={{ fontSize: 10, fontWeight: '700', color: s.isPrivate ? privateText : colors.primary }}>
+                        <Text
+                          numberOfLines={1}
+                          style={{
+                            fontSize: 10, fontWeight: '700',
+                            color: s.missed ? colors.textMuted : s.reportedAbsent ? absentText : s.isPrivate ? privateText : colors.primary,
+                            textDecorationLine: s.missed ? 'line-through' : 'none',
+                          }}
+                        >
                           {s.title}
                         </Text>
                         {!!s.subtitle && (
-                          <Text numberOfLines={1} style={{ fontSize: 9, color: s.isPrivate ? privateText : colors.primary, opacity: 0.8 }}>
+                          <Text numberOfLines={1} style={{ fontSize: 9, color: s.missed ? colors.textMuted : s.reportedAbsent ? absentText : s.isPrivate ? privateText : colors.primary, opacity: 0.8 }}>
                             {s.subtitle}
+                          </Text>
+                        )}
+                        {!!s.note && (
+                          <Text numberOfLines={1} style={{ fontSize: 8, fontWeight: '700', color: s.missed ? colors.textMuted : absentText, marginTop: 1 }}>
+                            {s.note}
                           </Text>
                         )}
                       </TouchableOpacity>

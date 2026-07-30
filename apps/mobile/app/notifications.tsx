@@ -1,10 +1,40 @@
-import { useState, useCallback, useMemo } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getMyNotifications, markNotificationRead, markAllNotificationsRead, AppNotification } from '@/lib/api/notifications'
+import { getMyNotifications, markNotificationRead, markAllNotificationsRead, AppNotification, NotificationLink } from '@/lib/api/notifications'
+import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { onRealtime } from '@/lib/socket'
 import { useT, useLocaleCode } from '@/lib/i18n'
+
+/**
+ * The `missed*` route params both timetable screens read, built from a notification's stored
+ * link. Returns null when there is nothing to point at, which is what makes a row tappable
+ * or not.
+ */
+function missedParamsFor(link: NotificationLink | null): Record<string, string> | null {
+  if (!link?.teacherId) return null
+  const params: Record<string, string> = {}
+  if (link.timetableSlotId) {
+    params.missedSlotId = link.timetableSlotId
+    if (link.date) params.missedDate = link.date
+    if (link.startTime) params.missedFrom = link.startTime
+    if (link.endTime) params.missedTo = link.endTime
+  } else if (link.periods && link.dateFrom && link.dateTo) {
+    params.missedPeriods = String(link.periods)
+    params.missedDateFrom = link.dateFrom
+    params.missedDateTo = link.dateTo
+  } else if (link.reassignedCourses) {
+    params.reassignedCourses = link.reassignedCourses
+    if (link.reassignedTo) params.reassignedTo = link.reassignedTo
+  } else {
+    // A link with no period, span or reassignment has nothing to say on the grid.
+    return null
+  }
+  if (link.retracted) params.missedRetracted = '1'
+  return params
+}
 
 const makeStyles = (colors: Colors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
@@ -23,6 +53,8 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   rowTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
   rowBody: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
   rowTime: { fontSize: 11, color: colors.textMuted, marginTop: 6 },
+  openHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+  openHintText: { fontSize: 11, fontWeight: '600', color: colors.primary },
 })
 
 export default function NotificationsScreen() {
@@ -30,6 +62,8 @@ export default function NotificationsScreen() {
   const styles = useMemo(() => makeStyles(colors), [colors])
   const t = useT()
   const locale = useLocaleCode()
+  const router = useRouter()
+  const { user } = useAuthStore()
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -44,12 +78,34 @@ export default function NotificationsScreen() {
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
+  // Without this the list only refreshed on focus, so a notification arriving while this
+  // screen was already open stayed invisible until you navigated away and back.
+  useEffect(() => onRealtime('notifications:changed', load), [load])
+
   const onRefresh = () => { setRefreshing(true); load() }
 
-  const handlePress = async (n: AppNotification) => {
-    if (n.readAt) return
-    setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x))
-    try { await markNotificationRead(n.id) } catch { /* local state already updated; next load reconciles */ }
+  const handlePress = (n: AppNotification) => {
+    // Marking read is fire-and-forget so the navigation is never waiting on the network.
+    if (!n.readAt) {
+      setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x))
+      markNotificationRead(n.id).catch(() => { /* local state already updated; next load reconciles */ })
+    }
+
+    const params = missedParamsFor(n.data)
+    if (!params) return
+    // The teacher's own timetable when the absence is theirs (an admin logged or removed it
+    // for them), the read-only view of that teacher's when it isn't. Sending someone to the
+    // teacher-timetable screen for themselves would show the same grid with a needless
+    // header, and the tab is only ever the viewer's own.
+    const isOwn = n.data?.teacherId === user?.id
+    if (isOwn) {
+      router.push({ pathname: '/(tabs)/timetable', params } as any)
+    } else {
+      router.push({
+        pathname: '/teacher-timetable',
+        params: { ...params, teacherId: n.data!.teacherId!, teacherName: n.data?.teacherName ?? '' },
+      } as any)
+    }
   }
 
   const handleMarkAll = async () => {
@@ -87,18 +143,28 @@ export default function NotificationsScreen() {
         }
         renderItem={({ item: n }) => {
           const unread = !n.readAt
+          // A read notification with somewhere to go stays tappable — the timetable is
+          // worth reopening long after the message itself has been seen.
+          const canOpen = !!missedParamsFor(n.data)
           return (
             <TouchableOpacity
               style={[styles.row, unread && styles.rowUnread]}
               onPress={() => handlePress(n)}
-              activeOpacity={unread ? 0.7 : 1}
+              activeOpacity={unread || canOpen ? 0.7 : 1}
             >
               <View style={[styles.dot, !unread && styles.dotRead]} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowTitle}>{t(n.title)}</Text>
                 <Text style={styles.rowBody}>{n.body}</Text>
                 <Text style={styles.rowTime}>{formatTime(n.createdAt)}</Text>
+                {canOpen && (
+                  <View style={styles.openHintRow}>
+                    <Ionicons name="calendar-outline" size={12} color={colors.primary} />
+                    <Text style={styles.openHintText}>{t('Tap to view the timetable')}</Text>
+                  </View>
+                )}
               </View>
+              {canOpen && <Ionicons name="chevron-forward" size={16} color={colors.textMuted} style={{ alignSelf: 'center' }} />}
             </TouchableOpacity>
           )
         }}
