@@ -8,7 +8,7 @@ import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/u
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
-import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar, Layers } from 'lucide-react'
+import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar, Layers, Search } from 'lucide-react'
 import { useT } from '@/lib/i18n'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -83,15 +83,26 @@ export default function SubjectsPage() {
   const [exclusionData, setExclusionData] = useState<SubjectExclusions | null>(null)
   const [exclusionPicked, setExclusionPicked] = useState<Set<string>>(new Set())
   const [exclusionSaving, setExclusionSaving] = useState(false)
+  const [exclusionSearch, setExclusionSearch] = useState('')
   const [exclusionError, setExclusionError] = useState('')
 
   useEffect(() => {
-    if (!exclusionsFor) { setExclusionData(null); setExclusionError(''); return }
+    if (!exclusionsFor) { setExclusionData(null); setExclusionError(''); setExclusionSearch(''); return }
+    setExclusionSearch('')
     setExclusionData(null)
     getSubjectExclusionsApi(exclusionsFor.id)
       .then((d) => { setExclusionData(d); setExclusionPicked(new Set(d.excludedStudentIds)) })
       .catch(() => setExclusionError(t('Could not load the class list.')))
   }, [exclusionsFor])
+
+  /** The checklist, narrowed by the search box. Name or matricule, either order, so
+   *  "ndip" and "HWM1/15" both land. Ticks live in `exclusionPicked`, not here, so a
+   *  student filtered out of view stays selected. */
+  const visibleExclusionStudents = (exclusionData?.students ?? []).filter((st) => {
+    const q = exclusionSearch.trim().toLowerCase()
+    if (!q) return true
+    return st.name.toLowerCase().includes(q) || st.studentId.toLowerCase().includes(q)
+  })
 
   const saveExclusions = async () => {
     if (!exclusionsFor || !exclusionData) return
@@ -209,7 +220,7 @@ export default function SubjectsPage() {
       await createSubjectApi({
         name: form.name.trim(),
         classLevel: selectedClass,
-        ...(isUniversity && form.code.trim() ? { code: form.code.trim().toUpperCase() } : {}),
+        ...(isUniversity ? { code: form.code.trim().toUpperCase() } : {}),
         // Universities don't enter a separate coefficient — credit hours double as
         // the weight in the average, same value the seed already uses for this.
         coefficient: isUniversity ? (Number(form.credit) || 1) : Number(form.coefficient),
@@ -860,12 +871,15 @@ export default function SubjectsPage() {
 
                   {isUniversity && (
                     <div>
-                      <label className="block text-sm font-semibold text-foreground mb-2">{t('Course Code')}</label>
+                      <label className="block text-sm font-semibold text-foreground mb-2">
+                        {t('Course Code')} <span className="text-destructive">*</span>
+                      </label>
                       <input
                         type="text" placeholder="CS101"
                         value={form.code}
                         onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
                         maxLength={12}
+                        required
                         className="w-full border border-border rounded-xl px-3.5 py-3 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring font-mono"
                       />
                       <p className="text-xs text-muted-foreground mt-2">{t('Shown on the transcript.')}</p>
@@ -874,7 +888,7 @@ export default function SubjectsPage() {
 
                   {isUniversity && (
                     <div>
-                      <label className="block text-sm font-semibold text-foreground mb-2">{t('Credit hours')} <span className="text-destructive">*</span></label>
+                      <label className="block text-sm font-semibold text-foreground mb-2">{t('Credit')} <span className="text-destructive">*</span></label>
                       <input
                         type="number" min="0" step="1" placeholder="3"
                         value={form.credit}
@@ -953,6 +967,19 @@ export default function SubjectsPage() {
               <p className="text-sm text-muted-foreground mt-1">
                 {exclusionsFor.name} · {stripProgrammeSuffix(stripDeptSuffix(exclusionsFor.classLevel))}
               </p>
+              {/* Outside the scroll area on purpose: a class of 40 puts the box out of sight
+                  exactly when you start needing it. Filtering never changes what is TICKED,
+                  only what is shown, so a search cannot quietly drop somebody's selection. */}
+              <div className="relative mt-3">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={exclusionSearch}
+                  onChange={(e) => setExclusionSearch(e.target.value)}
+                  placeholder={t('Search by name or matricule…')}
+                  className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -965,7 +992,10 @@ export default function SubjectsPage() {
                 <p className="text-sm text-muted-foreground py-6 text-center">{t('No students in this department yet.')}</p>
               ) : (
                 <div className="divide-y divide-border">
-                  {exclusionData.students.map((st) => {
+                  {visibleExclusionStudents.length === 0 && (
+                    <p className="text-sm text-muted-foreground py-6 text-center">{t('No student matches that search.')}</p>
+                  )}
+                  {visibleExclusionStudents.map((st) => {
                     // Has marks THIS session. Still tickable — the marks are deleted on save
                     // — so the row warns rather than blocking, and only once actually ticked,
                     // when the consequence becomes real.

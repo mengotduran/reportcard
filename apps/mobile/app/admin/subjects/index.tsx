@@ -3,9 +3,9 @@ import { useEffect, useState, useCallback } from 'react'
 import { useFocusEffect, useRouter } from 'expo-router'
 import {
   View, Text, SectionList, TouchableOpacity, StyleSheet,
-  ActivityIndicator, RefreshControl, Alert, Modal, TextInput, FlatList,} from 'react-native'
+  ActivityIndicator, RefreshControl, Alert, Modal, TextInput, FlatList, ScrollView,} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getSubjects, createSubject, deleteSubject, getSubjectDeleteImpact, Subject, SubjectDeleteImpact } from '@/lib/api/subjects'
+import { getSubjects, createSubject, deleteSubject, getSubjectDeleteImpact, getSubjectExclusions, setSubjectExclusions, Subject, SubjectDeleteImpact, SubjectExclusions } from '@/lib/api/subjects'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { levelGroupOf, programmeOf as progNameOf, sortLevelGroups } from '@/lib/universityLevels'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
@@ -125,6 +125,19 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   label: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
   required: { color: '#ef4444' },
+  hint: { fontSize: 11, color: colors.textMuted, marginTop: 4 },
+  optionalChip: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 5, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(240,62,47,0.25)', backgroundColor: '#FEF2F1' },
+  optionalChipText: { fontSize: 10, fontWeight: '700', color: '#F03E2F' },
+  exclRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.border },
+  exclName: { fontSize: 14, fontWeight: '600', color: colors.text },
+  exclId: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
+  // Compulsory toggle: a row you tap anywhere on, since a bare RN checkbox has no label
+  // hit area of its own.
+  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 4 },
+  checkBox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
+  checkBoxOn: { backgroundColor: '#F03E2F', borderColor: '#F03E2F' },
+  checkTitle: { fontSize: 13, fontWeight: '700', color: colors.text },
+  checkSub: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -216,8 +229,19 @@ export default function SubjectsScreen() {
   const [classLevel, setClassLevel] = useState('')
   const [term, setTerm] = useState('')
   const [coefficient, setCoefficient] = useState('1')
+  const [code, setCode] = useState('')
+  // A department is a fixed course list, so this starts ticked; unticking is the
+  // deliberate exception. See SubjectExclusion on the API side.
+  const [compulsory, setCompulsory] = useState(true)
   const [credit, setCredit] = useState('')
   const [requiredHours, setRequiredHours] = useState('')
+
+  // "Students not taking this course" sheet. University + optional courses only.
+  const [exclFor, setExclFor] = useState<Subject | null>(null)
+  const [exclData, setExclData] = useState<SubjectExclusions | null>(null)
+  const [exclPicked, setExclPicked] = useState<Set<string>>(new Set())
+  const [exclSearch, setExclSearch] = useState('')
+  const [exclSaving, setExclSaving] = useState(false)
   const [creating, setCreating] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
   const [termPickerOpen, setTermPickerOpen] = useState(false)
@@ -280,9 +304,57 @@ export default function SubjectsScreen() {
     setRefreshing(false)
   }
 
+  useEffect(() => {
+    if (!exclFor) { setExclData(null); setExclSearch(''); return }
+    setExclData(null)
+    setExclSearch('')
+    getSubjectExclusions(exclFor.id)
+      .then((d) => { setExclData(d); setExclPicked(new Set(d.excludedStudentIds)) })
+      .catch(() => Alert.alert(t('Error'), t('Could not load the class list.')))
+  }, [exclFor])
+
+  /** The checklist, narrowed by the search box. Ticks live in `exclPicked`, not here, so a
+   *  student filtered out of view stays selected. */
+  const visibleExclStudents = (exclData?.students ?? []).filter((st) => {
+    const q = exclSearch.trim().toLowerCase()
+    if (!q) return true
+    return st.name.toLowerCase().includes(q) || st.studentId.toLowerCase().includes(q)
+  })
+
+  const saveExclusions = async () => {
+    if (!exclFor || !exclData) return
+    // Ticking a student who has marks DELETES those marks. Say so plainly first — this is
+    // the only warning before they are gone.
+    const losing = exclData.students.filter(
+      (st) => exclPicked.has(st.id) && exclData.markedStudentIds.includes(st.id),
+    )
+    const commit = async () => {
+      setExclSaving(true)
+      try {
+        const r = await setSubjectExclusions(exclFor.id, [...exclPicked])
+        setExclFor(null)
+        await fetchData()
+        if (r.deletedMarks > 0) Alert.alert(t('Saved'), `${r.deletedMarks} ${t('mark(s) deleted.')}`)
+      } catch (err: any) {
+        Alert.alert(t('Error'), err?.response?.data?.message ?? t('Could not save.'))
+      } finally {
+        setExclSaving(false)
+      }
+    }
+    if (losing.length > 0) {
+      Alert.alert(
+        t('Delete their marks?'),
+        `${t('This will permanently delete this course\'s marks for')} ${losing.map((x) => x.name).join(', ')}. ${t('This cannot be undone.')}`,
+        [{ text: t('Cancel'), style: 'cancel' }, { text: t('Delete'), style: 'destructive', onPress: commit }],
+      )
+      return
+    }
+    commit()
+  }
+
   const handleCreate = async () => {
-    if (!subjectName.trim() || !classLevel || (isUniversity ? (!term || !credit) : false)) {
-      Alert.alert(t('Validation'), isUniversity ? t('Course name, department, semester, and credit are required.') : t('Subject name and class level are required.'))
+    if (!subjectName.trim() || !classLevel || (isUniversity ? (!term || !credit || !code.trim()) : false)) {
+      Alert.alert(t('Validation'), isUniversity ? t('Course name, code, department, semester and credit are required.') : t('Subject name and class level are required.'))
       return
     }
     setCreating(true)
@@ -293,7 +365,7 @@ export default function SubjectsScreen() {
         // Universities don't enter a separate coefficient — credit hours double as
         // the weight in the average, same value the seed already uses for this.
         coefficient: isUniversity ? (Number(credit) || 1) : (Number(coefficient) || 1),
-        ...(isUniversity ? { term, credit: Number(credit) } : {}),
+        ...(isUniversity ? { term, credit: Number(credit), code: code.trim().toUpperCase(), compulsory } : {}),
         requiredHours: requiredHours === '' ? null : Number(requiredHours),
       })
       setModalVisible(false)
@@ -302,6 +374,8 @@ export default function SubjectsScreen() {
       setTerm('')
       setCoefficient('1')
       setCredit('')
+      setCode('')
+      setCompulsory(true)
       setRequiredHours('')
       await fetchData()
     } catch (err: any) {
@@ -567,6 +641,18 @@ export default function SubjectsScreen() {
                 {t('Max:')} {item.maxScore} · {isUniversity ? `${t('Credit:')} ${item.credit ?? '—'}` : `${t('Coeff:')} ${item.coefficient}`}
                 {item.requiredHours != null ? ` · ${t('Hours:')} ${item.requiredHours}` : ''}
               </Text>
+              {/* Only an optional course can have anyone ticked off it, so the affordance
+                  only exists where it means something. */}
+              {isUniversity && item.compulsory === false && (
+                <TouchableOpacity style={styles.optionalChip} activeOpacity={0.7} onPress={() => setExclFor(item)}>
+                  <Ionicons name="people-outline" size={12} color="#F03E2F" />
+                  <Text style={styles.optionalChipText}>
+                    {(item.excludedCount ?? 0) > 0
+                      ? `${item.excludedCount} ${t('not taking')}`
+                      : t('Optional')}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
             {canEnterMarksHere && item.term && termList.some(tm => tm.name === item.term) && (
               <TouchableOpacity
@@ -776,7 +862,23 @@ export default function SubjectsScreen() {
 
             {isUniversity && (
               <View>
-                <Text style={styles.label}>{t('Credit hours')} <Text style={styles.required}>*</Text></Text>
+                <Text style={styles.label}>{t('Course Code')} <Text style={styles.required}>*</Text></Text>
+                <TextInput
+                  style={[styles.input, { fontFamily: 'monospace' }]}
+                  value={code}
+                  onChangeText={(v) => setCode(v.toUpperCase())}
+                  placeholder="CS101"
+                  maxLength={12}
+                  autoCapitalize="characters"
+                  placeholderTextColor="#9ca3af"
+                />
+                <Text style={styles.hint}>{t('Shown on the transcript.')}</Text>
+              </View>
+            )}
+
+            {isUniversity && (
+              <View>
+                <Text style={styles.label}>{t('Credit')} <Text style={styles.required}>*</Text></Text>
                 <TextInput
                   style={styles.input}
                   value={credit}
@@ -798,6 +900,18 @@ export default function SubjectsScreen() {
               placeholderTextColor="#9ca3af"
             />
 
+            {isUniversity && (
+              <TouchableOpacity style={styles.checkRow} activeOpacity={0.7} onPress={() => setCompulsory((v) => !v)}>
+                <View style={[styles.checkBox, compulsory && styles.checkBoxOn]}>
+                  {compulsory && <Ionicons name="checkmark" size={15} color="#fff" />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkTitle}>{t('Every student in this department takes it')}</Text>
+                  <Text style={styles.checkSub}>{t('Untick to choose which students are not taking it.')}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
             <TouchableOpacity
               style={[styles.createBtn, creating && styles.disabled]}
               onPress={handleCreate}
@@ -807,6 +921,92 @@ export default function SubjectsScreen() {
                 ? <ActivityIndicator color="#fff" size="small" />
                 : <Text style={styles.createBtnText}>{tt('Add Subject', 'Add Course')}</Text>}
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Who is NOT taking an optional course. Ticking a student removes the course from
+          their report card entirely and deletes any marks they have for it this session. */}
+      <Modal visible={!!exclFor} animationType="slide" transparent onRequestClose={() => setExclFor(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { maxHeight: '85%' }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>{t('Students not taking this course')}</Text>
+                {exclFor && <Text style={styles.hint}>{exclFor.name}</Text>}
+              </View>
+              <TouchableOpacity onPress={() => setExclFor(null)}>
+                <Ionicons name="close" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Outside the list on purpose: a class of 40 puts the box out of reach exactly
+                when it starts being needed. Filtering never changes what is ticked. */}
+            <TextInput
+              style={styles.input}
+              value={exclSearch}
+              onChangeText={setExclSearch}
+              placeholder={t('Search by name or matricule…')}
+              placeholderTextColor="#9ca3af"
+              autoCorrect={false}
+            />
+
+            {!exclData ? (
+              <ActivityIndicator style={{ marginVertical: 24 }} color="#F03E2F" />
+            ) : (
+              <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
+                {visibleExclStudents.length === 0 && (
+                  <Text style={[styles.hint, { textAlign: 'center', marginVertical: 20 }]}>
+                    {exclData.students.length === 0
+                      ? t('No students in this department yet.')
+                      : t('No student matches that search.')}
+                  </Text>
+                )}
+                {visibleExclStudents.map((st) => {
+                  const picked = exclPicked.has(st.id)
+                  const hasMarks = exclData.markedStudentIds.includes(st.id)
+                  return (
+                    <TouchableOpacity
+                      key={st.id}
+                      style={styles.exclRow}
+                      activeOpacity={0.7}
+                      onPress={() => setExclPicked((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(st.id)) next.delete(st.id); else next.add(st.id)
+                        return next
+                      })}
+                    >
+                      <View style={[styles.checkBox, picked && styles.checkBoxOn]}>
+                        {picked && <Ionicons name="checkmark" size={15} color="#fff" />}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.exclName} numberOfLines={1}>{st.name}</Text>
+                        <Text style={styles.exclId} numberOfLines={1}>{st.studentId}</Text>
+                      </View>
+                      {/* Warns only once ticked, when the consequence becomes real. */}
+                      {hasMarks && (
+                        <Text style={{ fontSize: 10, fontWeight: picked ? '700' : '400', color: picked ? '#ef4444' : colors.textMuted }}>
+                          {picked ? t('marks will be deleted') : t('has marks')}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )
+                })}
+              </ScrollView>
+            )}
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 }}>
+              <Text style={[styles.hint, { flex: 1, marginTop: 0 }]}>
+                {exclPicked.size} {t('of')} {exclData?.students.length ?? 0} {t('not taking it')}
+              </Text>
+              <TouchableOpacity
+                style={[styles.createBtn, { flex: 0, paddingHorizontal: 20, marginTop: 0 }, exclSaving && styles.disabled]}
+                onPress={saveExclusions}
+                disabled={exclSaving || !exclData}
+              >
+                <Text style={styles.createBtnText}>{exclSaving ? t('Saving…') : t('Save')}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

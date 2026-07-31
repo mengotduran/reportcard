@@ -925,6 +925,8 @@ const FR: Record<string, string> = {
   'Search by name, ID or guardian...': 'Rechercher par nom, matricule ou tuteur…',
   'Fees due': 'Frais dus',
   'settled': 'soldé',
+  'Search by name or matricule…': 'Rechercher par nom ou matricule…',
+  'No student matches that search.': 'Aucun étudiant ne correspond à cette recherche.',
   "This will permanently delete this course's marks for": 'Cela supprimera définitivement les notes de ce cours pour',
   'They already have marks for this course. Removing them from it deletes those marks for this session. This cannot be undone.':
     "Ils ont déjà des notes pour ce cours. Les en retirer supprime ces notes pour cette session. Cette action est irréversible.",

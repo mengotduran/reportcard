@@ -48,6 +48,19 @@ export const createSubject = async (req: AuthRequest, res: Response) => {
     const limit = await demoLimitBlock(schoolId, 'subjects')
     if (limit) { res.status(403).json({ message: limit }); return }
 
+    // Course code is required for a university, where it prints on the transcript and is
+    // how a course is referred to. Enforced here and not only in the form, so the asterisk
+    // on the field is backed by something.
+    //
+    // CREATE only, deliberately. 236 of CITEC's 246 existing courses predate the code
+    // field, and requiring it on update would lock every one of them out of being renamed
+    // or re-credited until somebody invented a code for it.
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    if (school?.type === 'UNIVERSITY' && !String(code ?? '').trim()) {
+      res.status(400).json({ message: 'A course code is required (e.g. CS101).' })
+      return
+    }
+
     const existing = await prisma.subject.findFirst({
       where: { schoolId, name, classLevel, term: termValue }
     })
@@ -64,7 +77,7 @@ export const createSubject = async (req: AuthRequest, res: Response) => {
 
     const subject = await prisma.subject.create({
       data: { schoolId, name, classLevel, maxScore, coefficient: coefficient ? Number(coefficient) : 1,
-        code: code?.trim() || null,
+        code: code?.trim().toUpperCase() || null,
         credit: credit != null && credit !== '' ? Number(credit) : null, term: termValue,
         requiredHours: requiredHours != null && requiredHours !== '' ? Number(requiredHours) : null,
         // Compulsory unless explicitly told otherwise. A university department is a fixed
