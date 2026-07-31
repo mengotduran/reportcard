@@ -6,7 +6,10 @@ import { translate } from '@/lib/i18n'
 
 export interface PrintEntry {
   subjectId: string
-  score: number
+  /** null when the course has NO mark recorded, which is not the same as a mark of 0.
+   *  Every GPA sum here skips nulls: a course whose marks simply have not been entered
+   *  yet must not drag the average down by contributing its credits with zero points. */
+  score: number | null
   seq1Score?: number | null
   seq2Score?: number | null
   resitScore?: number | null
@@ -163,7 +166,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
-  const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
+  const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
   const sigLabels = [
     cfg.showTeacherSig && "Class Teacher's Signature",
     cfg.showPrincipalSig && `${cfg.principalTitle}'s Signature`,
@@ -206,7 +209,7 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
                 <td style={cell()}>{s.name}</td>
                 {cfg.showSeq1 && <td style={cell({ textAlign: 'center' })}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={cell({ textAlign: 'center' })}>{e?.seq2Score ?? '—'}</td>}
-                <td style={cell({ textAlign: 'center', fontWeight: 'bold' })}>{e?.score ?? 0}</td>
+                <td style={cell({ textAlign: 'center', fontWeight: 'bold' })}>{e?.score ?? '—'}</td>
                 {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{entryGrade(e, bands)}</td>}
                 {cfg.showRemarks && <td style={cell({ color: '#555' })}>{entryRemark(e, bands)}</td>}
               </tr>
@@ -272,7 +275,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
-  const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
+  const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
   const sigLabels = [
     cfg.showTeacherSig && ['Maître de Classe', 'Class Teacher'],
     cfg.showPrincipalSig && [cfg.principalTitle, cfg.principalTitle],
@@ -317,7 +320,7 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
                 <td style={{ padding: '6px 10px', borderRight: '1px solid #e5e7eb' }}>{s.name}</td>
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq2Score ?? '—'}</td>}
-                <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', borderRight: '1px solid #e5e7eb' }}>{e?.score ?? 0}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', borderRight: '1px solid #e5e7eb' }}>{e?.score ?? '—'}</td>
                 {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{entryGrade(e, bands)}</td>}
                 {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{entryRemark(e, bands)}</td>}
               </tr>
@@ -385,7 +388,7 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
-  const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
+  const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
   const sigLabels = [
     cfg.showTeacherSig && "Class Teacher",
     cfg.showPrincipalSig && cfg.principalTitle,
@@ -440,7 +443,7 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
                   <td style={{ padding: '9px 0', fontWeight: '500' }}>{s.name}</td>
                   {cfg.showSeq1 && <td style={{ padding: '9px 8px', textAlign: 'center', color: '#6b7280' }}>{e?.seq1Score ?? '—'}</td>}
                   {cfg.showSeq2 && <td style={{ padding: '9px 8px', textAlign: 'center', color: '#6b7280' }}>{e?.seq2Score ?? '—'}</td>}
-                  <td style={{ padding: '9px 8px', textAlign: 'center', fontWeight: '700', color: cfg.primaryColor }}>{e?.score ?? 0}</td>
+                  <td style={{ padding: '9px 8px', textAlign: 'center', fontWeight: '700', color: cfg.primaryColor }}>{e?.score ?? '—'}</td>
                   {cfg.showGrade && <td style={{ padding: '9px 8px', textAlign: 'center' }}>
                     <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{entryGrade(e, bands)}</span>
                   </td>}
@@ -509,7 +512,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
   const bands: GradeRange[] = gradeBands ?? []
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
-  const total = entries.reduce((s: number, e: PrintEntry) => s + e.score, 0)
+  const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
   const border = `2px solid ${cfg.primaryColor}`
   const sigLabels = [
     cfg.showTeacherSig && "Class Teacher's Signature",
@@ -566,7 +569,7 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
                 <td style={{ padding: '6px 10px', border }}>{s.name}</td>
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq2Score ?? '—'}</td>}
-                <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.score ?? 0}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.score ?? '—'}</td>
                 {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{entryGrade(e, bands)}</td>}
                 {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{entryRemark(e, bands)}</td>}
               </tr>
@@ -682,7 +685,14 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     }
     return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
   })()
-  const cgpa = props.cgpa ?? gpaInfo.gpa
+  /**
+   * Cumulative GPA, or null on a semester that does not close the academic year.
+   *
+   * NOT defaulted to this semester's own GPA. The fallback used to make a first-semester
+   * card print its semester figure under a "CGPA" heading, which reads as a cumulative
+   * standing the student does not have yet. A card that has no cumulative prints a dash.
+   */
+  const cgpa = props.cgpa ?? null
 
   // ── Failing marks in red ─────────────────────────────────────────────────────
   // When the admin turns it on (school-wide — see TemplateConfig.highlightFailingRed),
@@ -706,16 +716,19 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const FAIL_RED_COLS = new Set(['seq1', 'seq2', 'score', 'grade', 'coef', 'credit', 'gradePoint', 'weighted'])
 
   const resolveStat = (field: string) => {
-    const total = entries.reduce((s, e) => s + e.score, 0)
+    const total = entries.reduce((s, e) => s + (e.score ?? 0), 0)
     if (field === 'total')          return String(total)
     if (field === 'average')        return average.toFixed(1)
     if (field === 'position')       return position != null ? `${ordinalPos(position)}${classSize ? `/${classSize}` : ''}` : '—'
     if (field === 'classAverage')   return classAverage != null ? classAverage.toFixed(1) : '—'
     if (field === 'grade')          return calculateGrade((average / 20) * 100)
     if (field === 'gpa')            return gpaInfo.gpa.toFixed(2)
-    if (field === 'cgpa')           return cgpa.toFixed(2)
+    // Dash, not this semester's GPA: a card that closes no year has no cumulative.
+    if (field === 'cgpa')           return cgpa == null ? '—' : cgpa.toFixed(2)
     if (field === 'credits')        return String(gpaInfo.credits)
-    if (field === 'classification') return classificationForGpa(cgpa, classBands)
+    // Bands the cumulative once there is one, otherwise this semester's own GPA, so it
+    // always describes a figure that appears on the card. Only 'cgpa' itself dashes out.
+    if (field === 'classification') return classificationForGpa(cgpa ?? gpaInfo.gpa, classBands)
     // General (non-stat) keys the sheet field picker offers — used by banner
     // rows like the Ledger's full-width term strip. Term is uppercased because
     // these always render as headings ("FIRST TERM"), never inline prose.
@@ -867,17 +880,25 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       // band on coefficients and the term's own coefficient-weighted average — hence
       // both sets are computed here regardless of school type.
       const scopedAgg = s.transcriptSemester ? (() => {
-        let credit = 0, mark = 0, gp = 0, wp = 0, coef = 0, weightedMark = 0
+        let credit = 0, gpaCredit = 0, mark = 0, gp = 0, wp = 0, coef = 0, weightedMark = 0
         for (const subj of scopedSubjects) {
           const e = scopedEntries.find(x => x.subjectId === subj.id)
           const c = subj.credit ?? 0
           const cf = subj.coefficient ?? 1
           const g = e?.score == null ? null : gradePointForScore20(e.score, bands)
-          credit += c; mark += e?.score ?? 0
-          if (g != null) { gp += g; wp += g * c }
+          mark += e?.score ?? 0
+          // Two different credit totals on purpose (DOCUMENTATION.md steps 3 and 5):
+          //   credit    every course REGISTERED this semester, which is what the printed
+          //             "Credits" statistic reports, marked or not.
+          //   gpaCredit only courses that actually carry a mark, which is the GPA's
+          //             denominator. Using the registered total there made the semester
+          //             GPA understate itself by exactly the credits of any course whose
+          //             marks had not been entered yet.
+          credit += c
+          if (g != null) { gpaCredit += c; gp += g; wp += g * c }
           if (e?.score != null) { coef += cf; weightedMark += e.score * cf }
         }
-        return { credit, mark, gp, wp, coef, weightedMark }
+        return { credit, gpaCredit, mark, gp, wp, coef, weightedMark }
       })() : null
       const statResolver = (field: string): React.ReactNode => {
         if (scopedAgg) {
@@ -885,7 +906,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           if (field === 'total')     return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
           if (field === 'gpTotal')   return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
           if (field === 'wpTotal')   return scopedAgg.wp.toFixed(2)
-          if (field === 'gpa')       return (scopedAgg.credit > 0 ? scopedAgg.wp / scopedAgg.credit : 0).toFixed(2)
+          if (field === 'gpa')       return (scopedAgg.gpaCredit > 0 ? scopedAgg.wp / scopedAgg.gpaCredit : 0).toFixed(2)
           if (field === 'coefTotal') return String(scopedAgg.coef)
           // Scoped to this period — the document-level 'average' is the ANNUAL one.
           if (field === 'average')   return (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(2)
@@ -922,8 +943,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       // University only: a resat exam mark shows with an asterisk (* = mark obtained after resit).
       const renderSeq2 = (e?: PrintEntry): React.ReactNode =>
         e?.resitScore != null ? <>{e.resitScore}<sup>*</sup></> : (e?.seq2Score ?? '—')
+      // Dash, not 0, when nothing was marked: a printed 0 is a mark the student scored, and
+      // this row is a course they did not sit. Matches the CA/Exam cells beside it.
       const renderScore = (e?: PrintEntry): React.ReactNode =>
-        <>{e?.score ?? 0}{e?.resitScore != null ? <sup>*</sup> : null}</>
+        e?.score == null ? <>—</> : <>{e.score}{e.resitScore != null ? <sup>*</sup> : null}</>
 
       const paintFail = (k: string, e: PrintEntry | undefined, node: React.ReactNode): React.ReactNode =>
         FAIL_RED_COLS.has(k) && isFailedEntry(e) ? <span style={{ color: FAIL_RED }}>{node}</span> : node
@@ -942,7 +965,11 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
           case 'weighted':     { const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1) }
           case 'evaluation':   { const gp = gradePointOf(e); return gp == null ? '—' : evalForGpa(gp) }
-          case 'juryDecision': return !e ? 'FAIL' : juryDecisionForScore(e.score, bands)
+          // A course with NO marks gets a dash, not FAIL. The student did not sit it, so
+          // there is no decision to report, and printing FAIL beside a row of dashes read
+          // as a verdict on an exam nobody took. A course with even one component marked
+          // does get a real decision, because it now has a real total.
+          case 'juryDecision': return !e || e.score == null ? '—' : juryDecisionForScore(e.score, bands)
           case 'min':          { const st = subjectStats[subj.id]; return st != null ? st.min.toFixed(1) : '—' }
           case 'avg':          { const st = subjectStats[subj.id]; return st != null ? st.avg.toFixed(1) : '—' }
           case 'max':          { const st = subjectStats[subj.id]; return st != null ? st.max.toFixed(1) : '—' }

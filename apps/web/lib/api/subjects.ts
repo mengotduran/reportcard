@@ -5,12 +5,12 @@ export const getSubjectsApi = async () => {
   return res.data
 }
 
-export const createSubjectApi = async (data: { name: string; classLevel: string; code?: string | null; coefficient?: number; credit?: number | null; term?: string | null; requiredHours?: number | null }) => {
+export const createSubjectApi = async (data: { name: string; classLevel: string; code?: string | null; coefficient?: number; credit?: number | null; term?: string | null; requiredHours?: number | null; compulsory?: boolean }) => {
   const res = await api.post('/subjects', data)
   return res.data
 }
 
-export const updateSubjectApi = async (id: string, data: { name?: string; classLevel?: string; code?: string | null; coefficient?: number; credit?: number | null; term?: string | null; requiredHours?: number | null }) => {
+export const updateSubjectApi = async (id: string, data: { name?: string; classLevel?: string; code?: string | null; coefficient?: number; credit?: number | null; term?: string | null; requiredHours?: number | null; compulsory?: boolean }) => {
   const res = await api.put(`/subjects/${id}`, data)
   return res.data
 }
@@ -48,5 +48,24 @@ export const deleteSubjectApi = async (id: string) => {
 // `subjectIds` copies only those courses; omitted copies the whole class's list.
 export const copySubjectsApi = async (fromClassLevel: string, toClassLevel: string, subjectIds?: string[]): Promise<{ copied: number }> => {
   const res = await api.post('/subjects/copy', { fromClassLevel, toClassLevel, ...(subjectIds ? { subjectIds } : {}) })
+  return res.data
+}
+
+/** Who in a course's class is NOT taking it. Optional courses only — see SubjectExclusion. */
+export interface SubjectExclusions {
+  subject: { id: string; name: string; classLevel: string; compulsory: boolean }
+  students: { id: string; name: string; studentId: string }[]
+  excludedStudentIds: string[]
+  /** Students who already have a mark for it, so they cannot be ticked off. */
+  markedStudentIds: string[]
+}
+
+export const getSubjectExclusionsApi = async (id: string): Promise<SubjectExclusions> => {
+  const res = await api.get(`/subjects/${id}/exclusions`)
+  return res.data
+}
+
+export const setSubjectExclusionsApi = async (id: string, studentIds: string[]) => {
+  const res = await api.put(`/subjects/${id}/exclusions`, { studentIds })
   return res.data
 }

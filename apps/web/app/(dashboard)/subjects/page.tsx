@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getSubjectsApi, createSubjectApi, updateSubjectApi, deleteSubjectApiWithConfirm, getSubjectDeleteImpactApi, SubjectDeleteImpact } from '@/lib/api/subjects'
+import { getSubjectsApi, createSubjectApi, updateSubjectApi, deleteSubjectApiWithConfirm, getSubjectDeleteImpactApi, SubjectDeleteImpact, getSubjectExclusionsApi, setSubjectExclusionsApi, SubjectExclusions } from '@/lib/api/subjects'
 import { getClassLevelsApi, ClassLevel as ClassLevelOption } from '@/lib/api/classLevels'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix } from '@/lib/programme'
@@ -10,6 +10,8 @@ import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
 import { BookOpen, Plus, Trash2, Pencil, X, Check, AlertTriangle, ArrowLeft, ChevronRight, Calendar, Layers } from 'lucide-react'
 import { useT } from '@/lib/i18n'
+import Toast from '@/components/ui/Toast'
+import { useToast } from '@/lib/useToast'
 import { levelGroupOf, programmeOf, sortLevelGroups } from '@/lib/universityLevels'
 
 // Non-default departments store classes with a " (Department)" suffix; strip it
@@ -26,6 +28,10 @@ interface Subject {
   credit?: number | null
   term?: string | null
   requiredHours?: number | null
+  /** False = optional: students can be ticked off it individually. Defaults true. */
+  compulsory?: boolean
+  /** How many students are ticked off this course. Always 0 while compulsory. */
+  excludedCount?: number
 }
 
 interface TermOption { id: string; name: string; session: string; startDate: string; isCurrent?: boolean }
@@ -38,6 +44,7 @@ export default function SubjectsPage() {
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
   const t = useT()
+  const { toast, showToast, hideToast } = useToast()
   // Universities call subjects "courses" and classes "departments" — same data/routes, just different wording.
   const tt = (subjectStr: string, courseStr: string) => t(isUniversity ? courseStr : subjectStr)
   const tc = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
@@ -64,13 +71,56 @@ export default function SubjectsPage() {
 
   // Create modal
   const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '' })
+  const [form, setForm] = useState({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '', compulsory: true })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
 
   // Inline edit
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '' })
+  const [editForm, setEditForm] = useState({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '', compulsory: true })
+  // Which course's "not taking this" checklist is open, if any. University only.
+  const [exclusionsFor, setExclusionsFor] = useState<Subject | null>(null)
+  const [exclusionData, setExclusionData] = useState<SubjectExclusions | null>(null)
+  const [exclusionPicked, setExclusionPicked] = useState<Set<string>>(new Set())
+  const [exclusionSaving, setExclusionSaving] = useState(false)
+  const [exclusionError, setExclusionError] = useState('')
+
+  useEffect(() => {
+    if (!exclusionsFor) { setExclusionData(null); setExclusionError(''); return }
+    setExclusionData(null)
+    getSubjectExclusionsApi(exclusionsFor.id)
+      .then((d) => { setExclusionData(d); setExclusionPicked(new Set(d.excludedStudentIds)) })
+      .catch(() => setExclusionError(t('Could not load the class list.')))
+  }, [exclusionsFor])
+
+  const saveExclusions = async () => {
+    if (!exclusionsFor || !exclusionData) return
+    // Ticking a student who has marks DELETES those marks. Name them and say plainly that
+    // it cannot be undone — this is the only warning before the marks are gone.
+    const losingMarks = exclusionData.students.filter(
+      (st) => exclusionPicked.has(st.id) && exclusionData.markedStudentIds.includes(st.id),
+    )
+    if (losingMarks.length > 0) {
+      const names = losingMarks.map((st) => st.name).join(', ')
+      const ok = confirm(
+        `${t('This will permanently delete this course\'s marks for')} ${names}.\n\n` +
+        `${t('They already have marks for this course. Removing them from it deletes those marks for this session. This cannot be undone.')}`,
+      )
+      if (!ok) return
+    }
+    setExclusionSaving(true)
+    setExclusionError('')
+    try {
+      const r = await setSubjectExclusionsApi(exclusionsFor.id, [...exclusionPicked])
+      setExclusionsFor(null)
+      fetchSubjects()
+      if (r?.deletedMarks > 0) showToast(`${t('Saved.')} ${r.deletedMarks} ${t('mark(s) deleted.')}`)
+    } catch (err: any) {
+      setExclusionError(err.response?.data?.message || t('Could not save.'))
+    } finally {
+      setExclusionSaving(false)
+    }
+  }
 
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null)
@@ -145,7 +195,7 @@ export default function SubjectsPage() {
   }, {} as Record<string, number>)
 
   const openModal = () => {
-    setForm({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '' })
+    setForm({ name: '', code: '', coefficient: '1', credit: '', requiredHours: '', compulsory: true })
     setFormError('')
     setShowModal(true)
   }
@@ -165,6 +215,9 @@ export default function SubjectsPage() {
         coefficient: isUniversity ? (Number(form.credit) || 1) : Number(form.coefficient),
         ...(isUniversity ? { credit: form.credit === '' ? null : Number(form.credit), term: selectedTerm } : {}),
         requiredHours: form.requiredHours === '' ? null : Number(form.requiredHours),
+        // Compulsory unless the admin says otherwise, and only offered at a university
+        // for now — secondary keeps its existing optional-subject behaviour untouched.
+        ...(isUniversity ? { compulsory: form.compulsory } : {}),
       })
       setShowModal(false)
       fetchSubjects()
@@ -177,10 +230,20 @@ export default function SubjectsPage() {
 
   const openEdit = (s: Subject) => {
     setEditingId(s.id)
-    setEditForm({ name: s.name, code: s.code ?? '', coefficient: String(s.coefficient ?? 1), credit: s.credit != null ? String(s.credit) : '', requiredHours: s.requiredHours != null ? String(s.requiredHours) : '' })
+    setEditForm({ name: s.name, code: s.code ?? '', coefficient: String(s.coefficient ?? 1), credit: s.credit != null ? String(s.credit) : '', requiredHours: s.requiredHours != null ? String(s.requiredHours) : '', compulsory: s.compulsory !== false })
   }
 
   const handleEdit = async (id: string) => {
+    // Turning an optional course compulsory throws away its "not taking" list, because a
+    // compulsory course cannot have one. Silently discarding it would be the kind of loss
+    // nobody notices until a report card gains a course again.
+    const before = subjects.find((x) => x.id === id)
+    if (before?.compulsory === false && editForm.compulsory && (before.excludedCount ?? 0) > 0) {
+      const ok = confirm(
+        `${t('This will put all students back on this course and clear the list of')} ${before.excludedCount} ${t('student(s) marked as not taking it. Continue?')}`,
+      )
+      if (!ok) return
+    }
     try {
       await updateSubjectApi(id, {
         name: editForm.name.trim(),
@@ -188,6 +251,7 @@ export default function SubjectsPage() {
         coefficient: isUniversity ? (Number(editForm.credit) || 1) : Number(editForm.coefficient),
         ...(isUniversity ? { credit: editForm.credit === '' ? null : Number(editForm.credit) } : {}),
         requiredHours: editForm.requiredHours === '' ? null : Number(editForm.requiredHours),
+        ...(isUniversity ? { compulsory: editForm.compulsory } : {}),
       })
       setEditingId(null)
       fetchSubjects()
@@ -549,6 +613,9 @@ export default function SubjectsPage() {
                 <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-32">
                   {isUniversity ? t('Hours/Semester') : t('Hours/Year')}
                 </th>
+                {isUniversity && (
+                  <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide w-36">{t('Taken by')}</th>
+                )}
                 <th className="px-4 py-3 w-24"></th>
               </tr>
             </thead>
@@ -639,6 +706,35 @@ export default function SubjectsPage() {
                     )}
                   </td>
 
+                  {/* Compulsory, and how many are ticked off it. Editable in place, because
+                      "is this course optional" is exactly the kind of thing you change while
+                      looking at the list rather than by opening a form. */}
+                  {isUniversity && (
+                    <td className="px-4 py-3 text-center">
+                      {editingId === s.id ? (
+                        <label className="inline-flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editForm.compulsory}
+                            onChange={(e) => setEditForm({ ...editForm, compulsory: e.target.checked })}
+                            className="accent-primary"
+                          />
+                          <span className="text-xs text-muted-foreground">{t('Everyone')}</span>
+                        </label>
+                      ) : s.compulsory === false ? (
+                        <button onClick={() => setExclusionsFor(s)}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-primary hover:border-primary/40 transition"
+                          title={t('Pick the students who are not taking this course')}>
+                          {(s.excludedCount ?? 0) > 0
+                            ? <>{s.excludedCount} {t('not taking')}</>
+                            : t('Optional')}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{t('All students')}</span>
+                      )}
+                    </td>
+                  )}
+
                   {/* Actions */}
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1.5">
@@ -665,6 +761,15 @@ export default function SubjectsPage() {
                               {t('Enter marks')}
                             </button>
                           )}
+                          {/* Only an optional course can have anyone ticked off it, so the
+                              action only exists where it means something. */}
+                          {isUniversity && s.compulsory === false && (
+                            <button onClick={() => setExclusionsFor(s)}
+                              className="px-2 py-1 mr-1 text-xs font-medium border border-border rounded-lg text-muted-foreground hover:text-primary hover:border-primary/40 transition whitespace-nowrap"
+                              title={t('Pick the students who are not taking this course')}>
+                              {t('Not taking')}
+                            </button>
+                          )}
                           <button onClick={() => openEdit(s)}
                             className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition" title={t('Edit')}>
                             <Pencil size={14} />
@@ -687,102 +792,228 @@ export default function SubjectsPage() {
       {/* Add subject modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-card rounded-2xl border border-border w-full max-w-sm p-6">
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <h3 className="font-semibold text-foreground text-lg">{tt('Add Subject', 'Add Course')}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {tc('Class:', 'Department:')} <span className="font-semibold text-foreground">{selectedClassLabel}</span>
-                  {isUniversity && <> · {t('Semester:')} <span className="font-semibold text-foreground">{selectedTerm}</span></>}
-                </p>
+          {/* Wider than a plain form column so the three numeric fields sit on one row: they
+              are read together (code, weight, hours) and stacking them buried the checkbox
+              below the fold. Column layout keeps the header and actions fixed while a long
+              form scrolls between them. */}
+          <div className="bg-card rounded-2xl border border-border w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex-shrink-0 flex items-start justify-between gap-4 px-6 py-5 border-b border-border">
+              <div className="min-w-0">
+                <h3 className="font-bold text-foreground text-xl leading-tight">{tt('Add Subject', 'Add Course')}</h3>
+                {/* Where this course is about to land, as chips rather than a sentence: it is
+                    the context you check before typing, not prose. */}
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <span className="inline-flex items-center gap-2 rounded-lg border border-border bg-hover px-3 py-1.5">
+                    <span className="text-xs text-muted-foreground">{tc('Class', 'Class')}</span>
+                    <span className="text-sm font-semibold text-foreground">{selectedClassLabel}</span>
+                  </span>
+                  {isUniversity && selectedTerm && (
+                    <span className="inline-flex items-center gap-2 rounded-lg border border-border bg-hover px-3 py-1.5">
+                      <span className="text-xs text-muted-foreground">{t('Term')}</span>
+                      <span className="text-sm font-semibold text-foreground">{selectedTerm}</span>
+                    </span>
+                  )}
+                </div>
               </div>
-              <button onClick={() => setShowModal(false)} className="text-muted-foreground hover:text-foreground">
-                <X size={20} />
+              <button onClick={() => setShowModal(false)} aria-label={t('Close')}
+                className="flex-shrink-0 w-9 h-9 rounded-xl bg-hover flex items-center justify-center text-muted-foreground hover:text-foreground transition">
+                <X size={18} />
               </button>
             </div>
 
-            {formError && (
-              <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{formError}</div>
-            )}
+            <form onSubmit={handleCreate} className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+                {formError && (
+                  <div className="p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{formError}</div>
+                )}
 
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">{tt('Subject Name', 'Course Name')} <span className="text-destructive">*</span></label>
-                <input
-                  type="text" placeholder={isUniversity ? 'e.g. Calculus I' : 'e.g. Mathematics'}
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  required autoFocus
-                  className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                />
+                <div>
+                  <label className="block text-sm font-semibold text-foreground mb-2">
+                    {tt('Subject Name', 'Course Name')} <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    type="text" placeholder={isUniversity ? 'e.g. Calculus I' : 'e.g. Mathematics'}
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    required autoFocus
+                    className="w-full border border-border rounded-xl px-3.5 py-3 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+
+                {/* The short fields share a row, each carrying its own one-line explanation
+                    instead of a paragraph — at this width the helper text is what tells them
+                    apart at a glance. */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {!isUniversity && (
+                    <div>
+                      <label className="block text-sm font-semibold text-foreground mb-2">{t('Coefficient')} <span className="text-destructive">*</span></label>
+                      <input
+                        type="number" min="1" max="10" placeholder="1"
+                        value={form.coefficient}
+                        onChange={(e) => setForm({ ...form, coefficient: e.target.value })}
+                        required
+                        className="w-full border border-border rounded-xl px-3.5 py-3 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <p className="text-xs text-muted-foreground mt-2">{t('Weights the final average. Max score comes from the class.')}</p>
+                    </div>
+                  )}
+
+                  {isUniversity && (
+                    <div>
+                      <label className="block text-sm font-semibold text-foreground mb-2">{t('Course Code')}</label>
+                      <input
+                        type="text" placeholder="CS101"
+                        value={form.code}
+                        onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+                        maxLength={12}
+                        className="w-full border border-border rounded-xl px-3.5 py-3 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                      />
+                      <p className="text-xs text-muted-foreground mt-2">{t('Shown on the transcript.')}</p>
+                    </div>
+                  )}
+
+                  {isUniversity && (
+                    <div>
+                      <label className="block text-sm font-semibold text-foreground mb-2">{t('Credit hours')} <span className="text-destructive">*</span></label>
+                      <input
+                        type="number" min="0" step="1" placeholder="3"
+                        value={form.credit}
+                        onChange={(e) => setForm({ ...form, credit: e.target.value })}
+                        required
+                        className="w-full border border-border rounded-xl px-3.5 py-3 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <p className="text-xs text-muted-foreground mt-2">{t('Weights the GPA average.')}</p>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-semibold text-foreground mb-2">{t('Required hours')}</label>
+                    <input
+                      type="number" min="0" step="1" placeholder="45"
+                      value={form.requiredHours}
+                      onChange={(e) => setForm({ ...form, requiredHours: e.target.value })}
+                      className="w-full border border-border rounded-xl px-3.5 py-3 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <p className="text-xs text-muted-foreground mt-2">
+                      {isUniversity
+                        ? t('Optional. Checks teaching coverage this semester.')
+                        : t('Optional. Checks teaching coverage this academic year.')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* University only. A department is normally a fixed course list, so this
+                    starts ticked and unticking it is the deliberate exception. */}
+                {isUniversity && (
+                  <div className="border-t border-border pt-5">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={form.compulsory}
+                        onChange={(e) => setForm({ ...form, compulsory: e.target.checked })}
+                        className="mt-0.5 w-5 h-5 rounded accent-primary flex-shrink-0"
+                      />
+                      <span>
+                        <span className="block text-sm font-bold text-foreground">{t('Every student in this department takes it')}</span>
+                        {/* Says what unticking actually does. The list is an EXCLUSION list,
+                            so the wording must not imply opting students in one by one. */}
+                        <span className="block text-sm text-muted-foreground mt-0.5">
+                          {t('Untick to choose which students are not taking it.')}
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                )}
               </div>
 
-              {!isUniversity && (
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Coefficient')} <span className="text-destructive">*</span></label>
-                  <input
-                    type="number" min="1" max="10" placeholder="1"
-                    value={form.coefficient}
-                    onChange={(e) => setForm({ ...form, coefficient: e.target.value })}
-                    required
-                    className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">{t('Weight of this subject in the final average. Max score is inherited from the class.')}</p>
-                </div>
-              )}
-
-              {isUniversity && (
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Course Code')}</label>
-                  <input
-                    type="text" placeholder="e.g. CS101"
-                    value={form.code}
-                    onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-                    maxLength={12}
-                    className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring font-mono"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">{t('Short identifier shown in the transcript (e.g. MATH201).')}</p>
-                </div>
-              )}
-
-              {isUniversity && (
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t('Credit hours')} <span className="text-destructive">*</span></label>
-                  <input
-                    type="number" min="0" step="1" placeholder="e.g. 3"
-                    value={form.credit}
-                    onChange={(e) => setForm({ ...form, credit: e.target.value })}
-                    required
-                    className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">{t('Credit value of this course — drives the GPA on the transcript and its weight in the average.')}</p>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">
-                  {isUniversity ? t('Required hours (this semester)') : t('Required hours (this academic year)')}
-                </label>
-                <input
-                  type="number" min="0" step="1" placeholder="e.g. 45"
-                  value={form.requiredHours}
-                  onChange={(e) => setForm({ ...form, requiredHours: e.target.value })}
-                  className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <p className="text-xs text-muted-foreground mt-1">{t('Optional. Used by Teaching Hours Coverage to check the assigned teacher covers this much. Leave blank to skip tracking it.')}</p>
-              </div>
-
-              <div className="flex gap-3 pt-1">
+              <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
                 <button type="button" onClick={() => setShowModal(false)}
-                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition">
+                  className="border border-border text-foreground px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
-                  className="flex-1 bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                  {saving ? t('Saving…') : tt('Add Subject', 'Add Course')}
+                  className="flex items-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-[#d63429] disabled:opacity-50 transition">
+                  <Plus size={16} /> {saving ? t('Saving…') : tt('Add Subject', 'Add Course')}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+
+      {/* Who is NOT taking an optional course. Ticking a student removes the course from
+          their report card entirely: it stops being listed, stops blocking publishing, and
+          stops carrying credits into their GPA. */}
+      {exclusionsFor && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl border border-border w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-5 border-b border-border">
+              <h3 className="font-bold text-foreground text-lg leading-tight">{t('Students not taking this course')}</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                {exclusionsFor.name} · {stripProgrammeSuffix(stripDeptSuffix(exclusionsFor.classLevel))}
+              </p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {exclusionError && (
+                <div className="mb-3 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{exclusionError}</div>
+              )}
+              {!exclusionData ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">{t('Loading…')}</p>
+              ) : exclusionData.students.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">{t('No students in this department yet.')}</p>
+              ) : (
+                <div className="divide-y divide-border">
+                  {exclusionData.students.map((st) => {
+                    // Has marks THIS session. Still tickable — the marks are deleted on save
+                    // — so the row warns rather than blocking, and only once actually ticked,
+                    // when the consequence becomes real.
+                    const hasMarks = exclusionData.markedStudentIds.includes(st.id)
+                    const picked = exclusionPicked.has(st.id)
+                    return (
+                      <label key={st.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={picked}
+                          onChange={(e) => setExclusionPicked((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(st.id); else next.delete(st.id)
+                            return next
+                          })}
+                          className="accent-primary flex-shrink-0"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-foreground truncate">{st.name}</span>
+                          <span className="block text-xs text-muted-foreground tabular-nums truncate">{st.studentId}</span>
+                        </span>
+                        {hasMarks && (
+                          <span className={`text-xs flex-shrink-0 ${picked ? 'font-semibold text-destructive' : 'text-muted-foreground'}`}>
+                            {picked ? t('marks will be deleted') : t('has marks')}
+                          </span>
+                        )}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-border flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">
+                {exclusionPicked.size} {t('of')} {exclusionData?.students.length ?? 0} {t('not taking it')}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => setExclusionsFor(null)}
+                  className="border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover transition">
+                  {t('Cancel')}
+                </button>
+                <button onClick={saveExclusions} disabled={exclusionSaving || !exclusionData}
+                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
+                  {exclusionSaving ? t('Saving…') : t('Save')}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -872,6 +1103,8 @@ export default function SubjectsPage() {
           </div>
         </div>
       )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>
   )
 }

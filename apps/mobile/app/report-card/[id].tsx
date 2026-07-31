@@ -346,8 +346,12 @@ export default function ReportCardDetailScreen() {
     }
     return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
   })()
-  const cgpa = reportCard.cgpa ?? semGpaInfo.gpa
-  const classification = classificationForGpa(cgpa, classificationBands)
+  // Null on any semester that does not close the academic year (the API only sends it
+  // on the last one). Not defaulted to the semester GPA, which is a different figure.
+  const cgpa: number | null = reportCard.cgpa ?? null
+  // Classification bands the cumulative once the year has one, otherwise this
+  // semester's own GPA, so it always describes a figure shown on this card.
+  const classification = classificationForGpa(cgpa ?? semGpaInfo.gpa, classificationBands)
 
   return (
     <KeyboardAvoidingView
@@ -396,7 +400,9 @@ export default function ReportCardDetailScreen() {
         {(isUniversity
           ? [
               { label: t('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
-              { label: t('Cumulative GPA'), value: cgpa.toFixed(2) },
+              // CGPA is the year-end figure, so only the closing semester carries it.
+              // Never fall back to the semester GPA under a cumulative label.
+              ...(cgpa != null ? [{ label: t('Cumulative GPA'), value: cgpa.toFixed(2) }] : []),
               { label: t('Classification'), value: classification, color: classification === 'Fail' ? '#dc2626' : undefined },
             ]
           : [

@@ -51,6 +51,32 @@ const subjectTermFilter = (termName: string) => ({ OR: [{ term: null }, { term: 
 // all of which are computed from that ONE student's own courses and can't be
 // changed by whether a classmate has been marked yet. Holding a finished
 // semester result hostage to the rest of the cohort would be a rule with no
+
+/**
+ * Optional courses this student has been ticked off — courses in their class that they do
+ * NOT take. See SubjectExclusion: a university department is otherwise a fixed course list,
+ * so this is the only reason a course can be missing from one student's card and not their
+ * classmates'.
+ *
+ * An excluded course is invisible everywhere at once: it is not listed on the report card,
+ * it does not block publishing, and it contributes neither points nor credits to the GPA.
+ * Anything that answers "which subjects does this student offer" has to consult this, or
+ * two screens will disagree about the same student.
+ */
+async function excludedSubjectIdsFor(studentIds: string[]): Promise<Map<string, Set<string>>> {
+  const byStudent = new Map<string, Set<string>>()
+  if (studentIds.length === 0) return byStudent
+  const rows = await prisma.subjectExclusion.findMany({
+    where: { studentId: { in: studentIds } },
+    select: { studentId: true, subjectId: true },
+  })
+  for (const r of rows) {
+    let set = byStudent.get(r.studentId)
+    if (!set) { set = new Set(); byStudent.set(r.studentId, set) }
+    set.add(r.subjectId)
+  }
+  return byStudent
+}
 // purpose behind it. Returning [] here (rather than at each call site) keeps
 // single publish, bulk publish and the readiness report from drifting apart.
 async function findPublishBlockers(
@@ -189,53 +215,102 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
         : []
       const uniRanges = rawRanges.filter((r: any) => r.gradePoint != null)
 
-      const studentIds = [...new Set(reportCards.map(rc => rc.studentId))]
-      const allEntries = await prisma.reportEntry.findMany({
-        where: {
-          reportCard: { studentId: { in: studentIds }, schoolId, status: 'PUBLISHED' },
-          score: { not: null },
+      const sortedUniRanges = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
+      // Lower-bound match, per DOCUMENTATION.md §7: integer bands (0-44, 45-49, …) leave
+      // gaps a fractional mark falls straight through, and min..max containment then matched
+      // nothing, silently dropping that course from the total.
+      const gpFor = (score: number): number | null =>
+        sortedUniRanges.find((r: any) => score >= r.minScore)?.gradePoint ?? null
+
+      /**
+       * Courses the student is DOWN FOR but has no entry against, as credits.
+       *
+       * A university department is a fixed course list: everyone in it sits every course,
+       * no exceptions. So a compulsory course with no marks means the student did not sit
+       * it, which is a zero — it carries its credits into the GPA at 0 grade points, the
+       * same as any other failure. Reading only `reportCard.entries` cannot see such a
+       * course at all, which is precisely how the list and the detail page came to disagree.
+       *
+       * Optional courses are excluded: those genuinely may not have been taken.
+       */
+      const studentIdsForGpa = [...new Set(reportCards.map(rc => rc.studentId))]
+      const uniSubjectsByKey = new Map<string, { id: string; credit: number | null; compulsory: boolean | null }[]>()
+      const loadSubjectsFor = async (classLevel: string, termName: string) => {
+        const key = `${classLevel}::${termName}`
+        if (!uniSubjectsByKey.has(key)) {
+          uniSubjectsByKey.set(key, await prisma.subject.findMany({
+            where: { schoolId, classLevel, ...subjectTermFilter(termName) },
+            select: { id: true, credit: true, compulsory: true },
+          }))
+        }
+        return uniSubjectsByKey.get(key)!
+      }
+      const unsatCreditsFor = async (
+        classLevel: string, termName: string, markedSubjectIds: Set<string>, excluded: Set<string>,
+      ): Promise<number> => {
+        const subjects = await loadSubjectsFor(classLevel, termName)
+        return subjects
+          // Exclusion is the ONLY reason a course is not this student's to sit. A
+          // department is a fixed course list, so "optional" alone does not excuse a
+          // course — it merely means somebody COULD be ticked off it. Testing
+          // `compulsory !== false` here instead made every optional course vanish from
+          // the GPA for students who do take it.
+          .filter((s) => !excluded.has(s.id) && !markedSubjectIds.has(s.id))
+          .reduce((sum, s) => sum + (s.credit ?? 0), 0)
+      }
+      const exclusionsByStudent = await excludedSubjectIdsFor(studentIdsForGpa)
+
+      // ── CGPA: every published card the student has, across all sessions ──
+      const studentIds = studentIdsForGpa
+      const publishedCardsForCgpa = await prisma.reportCard.findMany({
+        where: { studentId: { in: studentIds }, schoolId, status: 'PUBLISHED' },
+        select: {
+          studentId: true,
+          student: { select: { classLevel: true } },
+          term: { select: { name: true } },
+          entries: { select: { score: true, subjectId: true, subject: { select: { credit: true } } } },
         },
-        include: { subject: { select: { credit: true } }, reportCard: { select: { studentId: true } } },
       })
 
       const wpMap: Record<string, { wp: number; cr: number }> = {}
-      for (const e of allEntries) {
-        if (e.score == null) continue
-        const studentId = (e.reportCard as any).studentId
-        const credit = (e.subject as any).credit ?? 0
-        const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
-        // Matched on the LOWER BOUND only, per DOCUMENTATION.md §7: integer bands
-        // (0-44, 45-49, …) leave gaps a fractional mark falls straight through, and
-        // min..max containment then matched nothing — which here meant `continue`,
-        // silently dropping that course from the student's CGPA altogether.
-        const match = sorted.find((r: any) => e.score! >= r.minScore)
-        if (match == null) continue
-        if (!wpMap[studentId]) wpMap[studentId] = { wp: 0, cr: 0 }
-        wpMap[studentId].wp += match.gradePoint * credit
-        wpMap[studentId].cr += credit
+      for (const card of publishedCardsForCgpa) {
+        const bucket = wpMap[card.studentId] ?? (wpMap[card.studentId] = { wp: 0, cr: 0 })
+        const marked = new Set<string>()
+        for (const e of card.entries) {
+          if (e.score == null) continue
+          marked.add(e.subjectId)
+          const credit = (e.subject as any)?.credit ?? 0
+          const gp = gpFor(e.score)
+          if (gp == null) continue
+          bucket.wp += gp * credit
+          bucket.cr += credit
+        }
+        // Zero grade points, so only the denominator moves.
+        bucket.cr += await unsatCreditsFor(card.student.classLevel, card.term.name, marked, exclusionsByStudent.get(card.studentId) ?? new Set())
       }
       for (const [sid, { wp, cr }] of Object.entries(wpMap)) {
         if (cr > 0) cgpaByStudent[sid] = wp / cr
       }
 
-      // Per-card semester GPA — same weighting as CGPA (Σ(gradePoint × credit) / Σcredit)
-      // but scoped to this one card's courses, and NOT gated on publish status so a draft
-      // still shows a real figure. `entry.score` already accounts for a resit (see
+      // ── Per-card semester GPA ──
+      // Same weighting as CGPA but scoped to one card, and NOT gated on publish status so a
+      // draft still shows a real figure. `entry.score` already accounts for a resit (see
       // saveEntries: effectiveSeq2 = resit ?? seq2).
-      const sortedUniRanges = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
       for (const rc of reportCards) {
         let wp = 0
         let cr = 0
+        const marked = new Set<string>()
         for (const e of rc.entries) {
           if (e.score == null) continue
           const credit = (e.subject as any)?.credit ?? 0
           if (credit <= 0) continue // no credit = can't weight it; excluded rather than counted as 0
-          // Lower-bound match, same rule as CGPA above (DOCUMENTATION.md §7).
-          const match = sortedUniRanges.find((r: any) => e.score! >= r.minScore)
-          if (match == null) continue
-          wp += match.gradePoint * credit
+          marked.add(e.subjectId)
+          const gp = gpFor(e.score)
+          if (gp == null) continue
+          wp += gp * credit
           cr += credit
         }
+        cr += await unsatCreditsFor(rc.student.classLevel, rc.term.name, marked, exclusionsByStudent.get(rc.studentId) ?? new Set())
         if (cr > 0) gpaByCardId[rc.id] = wp / cr
       }
     }
@@ -360,12 +435,19 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       const key = `${rc.termId}::${rc.student.classLevel}`
       const classSize = classSizeByKey.get(key) ?? null
       const classAverageSum = classAverageSumByKey.get(key)
+      const isFinalTerm = finalTermIdBySession.get(rc.term.session) === rc.termId
       return {
         ...rc,
-        cgpa: cgpaByStudent[rc.studentId] ?? null,
+        // CGPA is a YEAR-END figure, so it is only carried by the card that closes the
+        // session: the second semester at a university, the third term elsewhere. It is
+        // cumulative over every published semester the student has, which on an earlier
+        // card meant showing a total that included semesters that had not happened when
+        // that card was issued, and that silently changed whenever a later one was
+        // published. Same rule the annual average has always used (see annualAverage).
+        cgpa: isFinalTerm ? (cgpaByStudent[rc.studentId] ?? null) : null,
         gpa: gpaByCardId[rc.id] ?? null,
         transcriptReady: transcriptReadyByKey[`${rc.studentId}::${rc.term.session}`] ?? false,
-        isFinalTerm: finalTermIdBySession.get(rc.term.session) === rc.termId,
+        isFinalTerm,
         classSize,
         classAverage: classSize && classAverageSum != null ? classAverageSum / classSize : null,
         annualAverage: annualByCardId[rc.id]?.average ?? null,
@@ -499,10 +581,29 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // Does this card CLOSE its academic year? Second semester at a university, third term
+    // everywhere else, judged by the session's own terms rather than by counting to a fixed
+    // number, so a school running a different shape still works. Both the year-end figures
+    // below hang off this: CGPA (university) and the annual average (everyone else).
+    const sessionTermsForCard = await prisma.term.findMany({
+      where: { schoolId, session: reportCard.term.session },
+      orderBy: { startDate: 'asc' },
+      select: { id: true },
+    })
+    const isFinalTermOfSession =
+      sessionTermsForCard.length > 0 && sessionTermsForCard[sessionTermsForCard.length - 1].id === reportCard.termId
+
     // Compute CGPA for university schools: Σ(GP×credit) / Σ(credit) across ALL
     // published terms for this student (current term included).
+    //
+    // Only on the card that closes the year. It is cumulative across every published
+    // semester, so on a first-semester card it was showing a total that included the
+    // SECOND semester's marks, i.e. results that did not exist when that card was issued,
+    // and it moved on its own the moment a later semester was published. A first semester
+    // now simply has no cumulative to show, which is also what makes it agree with the
+    // reader's expectation that early on, the cumulative and the semester are the same.
     let cgpa: number | null = null
-    if (reportCard.school.type === 'UNIVERSITY') {
+    if (reportCard.school.type === 'UNIVERSITY' && isFinalTermOfSession) {
       const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
       const rawRanges: any[] = gradingScale?.ranges
         ? (Array.isArray((gradingScale.ranges as any).ranges)
@@ -511,25 +612,50 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
         : []
       const uniRanges = rawRanges.filter((r: any) => r.gradePoint != null)
 
-      const allEntries = await prisma.reportEntry.findMany({
-        where: {
-          reportCard: { studentId: reportCard.studentId, schoolId, status: 'PUBLISHED' },
-          score: { not: null },
+      // Whole cards, not loose entries: a course the student is DOWN FOR but has no entry
+      // against has to count too, and only the card knows which courses those are. See the
+      // matching block in getReportCards — these two must stay in step or the list and the
+      // detail page report different CGPAs for the same student, which is exactly how the
+      // 1.33-vs-1.67 report started.
+      const publishedCards = await prisma.reportCard.findMany({
+        where: { studentId: reportCard.studentId, schoolId, status: 'PUBLISHED' },
+        select: {
+          student: { select: { classLevel: true } },
+          term: { select: { name: true } },
+          entries: { select: { score: true, subjectId: true, subject: { select: { credit: true } } } },
         },
-        include: { subject: { select: { credit: true } } },
       })
+      const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
+      // Lower-bound match — see the CGPA comment in getReportCards for why containment
+      // silently dropped courses out of the total.
+      const gpFor = (score: number): number | null =>
+        sorted.find((r: any) => score >= r.minScore)?.gradePoint ?? null
 
+      const excludedForStudent = (await excludedSubjectIdsFor([reportCard.studentId])).get(reportCard.studentId) ?? new Set<string>()
       let totalWP = 0, totalCredits = 0
-      for (const e of allEntries) {
-        if (e.score == null) continue
-        const credit = (e.subject as any).credit ?? 0
-        const sorted = [...uniRanges].sort((a: any, b: any) => b.minScore - a.minScore)
-        // Lower-bound match — see the CGPA comment in getReportCards for why containment
-        // silently dropped courses out of the total.
-        const match = sorted.find((r: any) => e.score! >= r.minScore)
-        if (match == null) continue
-        totalWP += match.gradePoint * credit
-        totalCredits += credit
+      for (const card of publishedCards) {
+        const marked = new Set<string>()
+        for (const e of card.entries) {
+          if (e.score == null) continue
+          marked.add(e.subjectId)
+          const credit = (e.subject as any)?.credit ?? 0
+          const gp = gpFor(e.score)
+          if (gp == null) continue
+          totalWP += gp * credit
+          totalCredits += credit
+        }
+        // A university department is a fixed course list, so a compulsory course with no
+        // marks means the student did not sit it: zero grade points, credits still count.
+        const unsat = await prisma.subject.findMany({
+          where: { schoolId, classLevel: card.student.classLevel, ...subjectTermFilter(card.term.name) },
+          select: { id: true, credit: true, compulsory: true },
+        })
+        for (const s of unsat) {
+          // Same rule as the per-card GPA: only an exclusion takes a course off a
+          // student, never the compulsory flag on its own.
+          if (marked.has(s.id) || excludedForStudent.has(s.id)) continue
+          totalCredits += s.credit ?? 0
+        }
       }
       if (totalCredits > 0) cgpa = totalWP / totalCredits
     }
@@ -554,15 +680,9 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
     let annualPosition: number | null = null
     let annualClassSize: number | null = null
     if (reportCard.school.type !== 'UNIVERSITY') {
-      const sessionTerms = await prisma.term.findMany({
-        where: { schoolId, session: reportCard.term.session },
-        orderBy: { startDate: 'asc' },
-        select: { id: true },
-      })
-      const isFinalTermOfSession = sessionTerms.length > 0 && sessionTerms[sessionTerms.length - 1].id === reportCard.termId
-
+      // Same gate as the CGPA above, from the same session terms.
       if (isFinalTermOfSession) {
-        const sessionTermIds = sessionTerms.map((t) => t.id)
+        const sessionTermIds = sessionTermsForCard.map((t) => t.id)
         const sessionCards = await prisma.reportCard.findMany({
           where: { schoolId, termId: { in: sessionTermIds }, average: { not: null }, student: { classLevel: reportCard.student.classLevel } },
           select: { studentId: true, average: true },
@@ -589,7 +709,12 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, annualAverage, annualPosition, annualClassSize })
+    // Which optional courses this student was ticked off. The client builds the course list
+    // from the CLASS's subjects, so without this it would print courses the student does not
+    // take — and, at a university, zero them.
+    const excludedSubjectIds = [...((await excludedSubjectIdsFor([reportCard.studentId])).get(reportCard.studentId) ?? new Set<string>())]
+
+    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, annualAverage, annualPosition, annualClassSize, excludedSubjectIds })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -863,10 +988,21 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
         const effectiveSeq2 = resit ?? seq2
         // University: TOTAL = CA + EXAM (direct sum, both components on their own scale).
         // Secondary: TOTAL = average of the two sequences.
+        //
+        // ONE component is enough. It used to take both, so a course with a CA and no Exam
+        // stored `score: null` and then vanished from the total, the grade, the average and
+        // the GPA as if it had never been marked — indistinguishable from a course nobody
+        // had touched. A missing component now counts as 0 (school's rule, 2026-07-31), so
+        // CA 15 with no Exam is 15/100 and an F, and the course carries its credits into the
+        // GPA. null now means what it should: NEITHER component was entered.
+        //
+        // Secondary keeps averaging over the two sequence slots for the same reason — one
+        // sequence sat out of two is half the term's marks, not a term that did not happen.
+        const anyComponent = seq1 !== null || effectiveSeq2 !== null
         const finalScore: number | null = entry.score !== undefined
           ? entry.score
-          : seq1 !== null && effectiveSeq2 !== null
-            ? isUniversity ? seq1 + effectiveSeq2 : (seq1 + effectiveSeq2) / 2
+          : anyComponent
+            ? isUniversity ? (seq1 ?? 0) + (effectiveSeq2 ?? 0) : ((seq1 ?? 0) + (effectiveSeq2 ?? 0)) / 2
             : null
         const sub = subjectMap[entry.subjectId]
         // University: match raw 0-100 score against 0-100 ranges.
@@ -1003,7 +1139,10 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
     // Rule 2 — every subject must have both sequences filled. An optional
     // subject the student never opted into (no entry at all) isn't "missing" —
     // only flag it if compulsory, or if they started it but left it incomplete.
+    // A course the student was ticked off is not theirs to be missing marks for.
+    const excludedHere = (await excludedSubjectIdsFor([reportCard.studentId])).get(reportCard.studentId) ?? new Set<string>()
     const missing = subjects.filter(s => {
+      if (excludedHere.has(s.id)) return false
       const e = reportCard.entries.find(en => en.subjectId === s.id)
       if (!e) return s.compulsory !== false
       return e.seq1Score == null || e.seq2Score == null
@@ -1173,7 +1312,7 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
  */
 async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string): Promise<boolean> {
   const rc = await prisma.reportCard.findFirst({
-    where: { id: reportCardId }, select: { student: { select: { classLevel: true } }, term: { select: { name: true } } },
+    where: { id: reportCardId }, select: { studentId: true, student: { select: { classLevel: true } }, term: { select: { name: true } } },
   })
   if (!rc) return false
   const [classSubjects, entries] = await Promise.all([
@@ -1181,7 +1320,19 @@ async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string):
     prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true } }),
   ])
   const scoreBy = new Map(entries.map((e) => [e.subjectId, e.score]))
-  const offered = classSubjects.filter((s) => s.compulsory !== false || scoreBy.has(s.id))
+  // A course the student has been ticked off is not theirs to have marks for, so it can
+  // never be what blocks their card.
+  const excluded = (await excludedSubjectIdsFor([rc.studentId])).get(rc.studentId) ?? new Set<string>()
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+  const offered = classSubjects.filter((s) => {
+    if (excluded.has(s.id)) return false
+    // University: a department is a fixed course list, so anything not excluded is sat and
+    // must be marked. Primary/secondary keep the older rule, where an optional subject only
+    // counts once the student has actually started it — they have streams and electives
+    // that nobody is formally ticked off.
+    if (school?.type === 'UNIVERSITY') return true
+    return s.compulsory !== false || scoreBy.has(s.id)
+  })
   return offered.length > 0 && offered.every((s) => scoreBy.get(s.id) != null)
 }
 
@@ -1442,14 +1593,18 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
       let missingSeqs = 0
       let missingRemarks = 0
 
+      const readinessExclusions = await excludedSubjectIdsFor(classStudents.map((st) => st.id))
       for (const student of classStudents) {
         const rc = reportCards.find(r => r.student.id === student.id)
         if (!rc || rc.status === 'PUBLISHED') continue
+        const excludedForThisStudent = readinessExclusions.get(student.id) ?? new Set<string>()
 
         // Check both sequences for every subject. An optional subject the
         // student never opted into (no entry) isn't missing — only compulsory
         // subjects, or optional ones they started but left incomplete, count.
+        // A course they were ticked off is never theirs to be missing.
         for (const subject of classSubjects) {
+          if (excludedForThisStudent.has(subject.id)) continue
           const entry = rc.entries.find(e => e.subjectId === subject.id)
           const isMissing = entry ? (entry.seq1Score == null || entry.seq2Score == null) : subject.compulsory !== false
           if (isMissing) {

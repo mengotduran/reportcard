@@ -405,6 +405,46 @@ Semester GPA = Σ(WP for all courses in semester) / Σ(Credits for all courses i
 
 All courses registered in the semester are included, **including failed courses (F, GP=0)**.
 
+**A compulsory course with no marks counts as ZERO — it is not skipped.** A university
+department is a fixed course list: every student in it sits every course, no exceptions. So a
+compulsory course with no entry means the student did not sit it, which is a zero. It prints
+`00`, grades F, takes a FAIL jury decision, and carries its full credits into the GPA
+denominator at 0 grade points, exactly like any other failure. A missing CA or Exam component
+is treated the same way (`TOTAL = CA + Exam` with a missing part as 0), so one component is
+enough to give the course a real total.
+
+**Optional courses (`Subject.compulsory = false`) work by EXCLUSION, not by opting in.** Marking
+a course optional does not on its own take it off anybody: it only makes it possible to tick
+individual students off it, on Courses → the course → "Not taking". Everyone else still sits
+it, so an optional course with nobody excluded behaves exactly like a compulsory one. That
+default is deliberate — an opt-IN list would have silently emptied every optional course the
+day it shipped.
+
+A ticked-off student's course (`SubjectExclusion`) disappears completely and consistently: it
+is not listed on their report card, it never blocks publishing, and it contributes neither
+grade points nor credits to their GPA. Anything answering "which courses does this student
+offer" must consult it, or two screens will disagree about the same student.
+
+Two guards: a compulsory course refuses exclusions outright (make it optional first), and a
+student who already has a mark for the course cannot be ticked off it — the mark is evidence
+they sat it, so the marks have to be removed first as a deliberate act.
+
+Note the flag alone never excuses a course from the GPA. Only an exclusion does. Testing
+`compulsory !== false` in the GPA sums instead made every optional course vanish for the
+students who DO take it (caught by test, 2.29 vs 4.00 on a two-student class).
+
+**This is UNIVERSITY-ONLY.** Primary and secondary have optional subjects and streams, so an
+unmarked subject there stays out of the average entirely, which is what the API's average has
+always done ("skip unfilled subjects").
+
+Getting this wrong is what produced the original bug report: the report card detail page
+zeroed unmarked courses while the report cards LIST iterated only real entries and could not
+see them at all, so the same student's first semester read 1.33 (20/15) on one screen and
+1.67 (20/12) on the other. Any GPA computed from `reportCard.entries` alone is wrong for a
+university — it must be compared against the class's compulsory subject list for that term.
+Three places do this and must stay in step: `getReportCards` (per-card GPA and CGPA),
+`getReportCard` (CGPA), and the report card detail page's client-side semester GPA.
+
 #### Step 4 — CGPA (Cumulative GPA)
 
 ```
@@ -412,6 +452,27 @@ CGPA = Σ(WP for ALL courses, both semesters) / Σ(Credits for ALL courses, both
 ```
 
 Again, every registered course (pass or fail) is included — this matches standard university practice.
+
+**The CGPA appears only on the card that CLOSES the academic year**: the second semester at a
+university, the third term everywhere else (where the equivalent year-end figure is the
+**annual average**, which has always followed this rule). Judged from the session's own terms
+ordered by `startDate`, not by counting to a fixed number, so a school running a different
+shape still works.
+
+Why it is gated: the CGPA is cumulative over every published semester the student has, with no
+"up to this card" bound. On a first-semester card that meant showing a total that included the
+second semester's marks — results that did not exist when that card was issued — and the
+figure moved on its own the moment a later semester was published, so reprinting an old card
+gave a different number than the one handed out. A first semester now shows no cumulative at
+all, which is also why the first semester's GPA and CGPA no longer appear to disagree.
+
+**Classification (step 6) appears on EVERY semester**, unlike the CGPA. It answers "where does
+this student stand", which is worth knowing in December as much as in June. It bands the CGPA
+once the year has one, and that semester's own GPA before then, so the classification always
+describes a figure printed beside it on the same card.
+
+Only the CGPA itself is withheld, and it prints `—` rather than falling back to the semester
+GPA: that is a different figure and must never be relabelled as a cumulative one.
 
 #### Step 5 — Overall Credits Earned
 

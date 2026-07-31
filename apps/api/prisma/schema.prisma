@@ -77,6 +77,7 @@ model School {
   parentSchool       ParentSchool?       @relation(fields: [parentSchoolId], references: [id])
   students           Student[]
   subjects           Subject[]
+  subjectExclusions           SubjectExclusion[]
   terms              Term[]
   users              User[]
   timetableSlots     TimetableSlot[]
@@ -228,6 +229,7 @@ model Student {
   school                   School        @relation(fields: [schoolId], references: [id])
 
   @@unique([schoolId, studentId])
+  subjectExclusions   SubjectExclusion[]
 }
 
 model FeePayment {
@@ -284,6 +286,7 @@ model Subject {
   teacherSubjects TeacherSubject[]
   timetableSlots  TimetableSlot[]
   pastTermGrants  PastTermMarksGrant[]
+  exclusions      SubjectExclusion[]
 }
 
 // A teacher may only edit marks for the CURRENTLY active term/semester — once it's no
@@ -641,4 +644,29 @@ model MarksEntryModeChange {
 
   @@index([schoolId, changedAt])
   @@index([schoolId, termId])
+}
+
+/// A student who does NOT take an optional course, even though the course belongs to their
+/// class. University departments are otherwise a fixed course list — everyone sits
+/// everything — so this is the ONLY way a course can be absent from one student's report
+/// card without being absent from their classmates'.
+///
+/// Deliberately an EXCLUSION list rather than an enrolment list: the default has to stay
+/// "everyone in the department takes this", so a course that is merely marked optional
+/// behaves exactly as before until somebody is actually ticked off it. An enrolment list
+/// would have silently emptied every optional course the day it shipped.
+///
+/// Only meaningful where `Subject.compulsory` is false; a compulsory course ignores these.
+model SubjectExclusion {
+  id        String   @id @default(uuid())
+  schoolId  String
+  subjectId String
+  studentId String
+  createdAt DateTime @default(now())
+  school    School   @relation(fields: [schoolId], references: [id])
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, studentId])
+  @@index([schoolId, subjectId])
 }

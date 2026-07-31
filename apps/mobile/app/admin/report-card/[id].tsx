@@ -461,8 +461,12 @@ export default function AdminReportCardDetail() {
     }
     return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
   })()
-  const cgpa = reportCard.cgpa ?? semGpaInfo.gpa
-  const classification = classificationForGpa(cgpa, classificationBands)
+  // Null on any semester that does not close the academic year (the API only sends it
+  // on the last one). Not defaulted to the semester GPA, which is a different figure.
+  const cgpa: number | null = reportCard.cgpa ?? null
+  // Classification bands the cumulative once the year has one, otherwise this
+  // semester's own GPA, so it always describes a figure shown on this card.
+  const classification = classificationForGpa(cgpa ?? semGpaInfo.gpa, classificationBands)
 
   const handleSaveRemarks = async () => {
     setSavingRemarks(true)
@@ -515,7 +519,9 @@ export default function AdminReportCardDetail() {
           ? [
               { label: tr('Courses'), value: String(subjects.length || reportCard.entries.length) },
               { label: tr('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
-              { label: tr('Cumulative GPA'), value: cgpa.toFixed(2) },
+              // CGPA is the year-end figure, so only the closing semester carries it.
+              // Never fall back to the semester GPA under a cumulative label.
+              ...(cgpa != null ? [{ label: tr('Cumulative GPA'), value: cgpa.toFixed(2) }] : []),
               { label: tr('Classification'), value: classification, color: classification === 'Fail' ? '#dc2626' : undefined },
             ]
           : [
