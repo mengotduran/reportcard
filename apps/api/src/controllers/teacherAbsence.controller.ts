@@ -35,7 +35,7 @@ function windowForAbsence(
   return { window, periods: 1 }
 }
 
-function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodIndex: number | null; slot: { dayOfWeek: string; startTime: string; endTime: string; subject: { name: string; classLevel: string } | null } }>(
+function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodIndex: number | null; teacherId: string; recordedById: string; slot: { dayOfWeek: string; startTime: string; endTime: string; subject: { name: string; classLevel: string } | null } }>(
   { slot, ...a }: T,
   periodMinutes: number | null,
   graceMinutes: number | null,
@@ -61,6 +61,14 @@ function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodInde
     // endpoint is the real gate either way.
     isFinal: periodHasEnded(a.date, classWindow),
     graceExpired: graceHasExpired(a.date, classWindow, graceMinutes),
+    // Somebody other than the teacher filed this, which can only be an admin — createAbsence
+    // forces teacherId to the caller for everyone else, so a teacher can never record against
+    // another. It is NOT the teacher's report to retract: an admin logging an absence is
+    // recording something they were told happened, and letting the subject of the record erase
+    // it before an admin next opens the list would make the whole thing advisory. Independent
+    // of seenByAdmin, which only ever locked the teacher out of retracting their OWN report and
+    // starts false on a record the teacher never made. See deleteAbsence.
+    recordedByAdmin: a.recordedById !== a.teacherId,
     // How many periods this row is worth: 1 for a per-period row, the whole block for a
     // legacy one. null if the school hasn't set a period length yet, so clients fall back
     // to counting events.
@@ -82,7 +90,7 @@ function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodInde
  */
 function groupByClass<T extends {
   id: string; date: string; timetableSlotId: string; startTime: string; endTime: string
-  seenByAdmin: boolean; periods: number | null; periodIndex: number | null
+  seenByAdmin: boolean; periods: number | null; periodIndex: number | null; recordedByAdmin: boolean
 }>(rows: T[]): T[] {
   const byClass = new Map<string, T[]>()
   for (const r of rows) {
@@ -103,6 +111,11 @@ function groupByClass<T extends {
       : group.reduce((sum, r) => sum + (r.periods ?? 1), 0),
     // Reviewed if ANY period of the class was: the lock is on the class, like everything else.
     seenByAdmin: group.some((r) => r.seenByAdmin),
+    // Same rule, same reason: deleting clears every period of the class, so if an admin filed
+    // any part of it the teacher cannot take the class down. Mixed authorship is only reachable
+    // if a slot's period count changed between two reports, but the gate must match what the
+    // endpoint actually deletes.
+    recordedByAdmin: group.some((r) => r.recordedByAdmin),
     // The entry is the whole class, not one period inside it.
     periodIndex: null,
   }))
@@ -381,6 +394,27 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
     if (!isAdmin && absence.seenByAdmin) {
       res.status(403).json({ message: 'This absence has already been reviewed by an admin and can no longer be removed' })
       return
+    }
+    // An absence an ADMIN recorded is never the teacher's to retract, at any point in its life.
+    // seenByAdmin does not cover this: it starts false on a record the teacher never filed, so
+    // until an admin happened to re-open the list the subject of the record could quietly erase
+    // it — including before ever reading the notification telling them it existed.
+    //
+    // Judged across the whole class, because the delete below clears every period of it. The
+    // check is "not recorded by the teacher themselves" rather than "recorded by an admin role":
+    // createAbsence pins teacherId to the caller for non-admins, so the two are the same set,
+    // and phrasing it this way stays correct if roles are ever added.
+    if (!isAdmin) {
+      const classRows = await prisma.teacherAbsence.findMany({
+        where: {
+          schoolId, teacherId: absence.teacherId, timetableSlotId: absence.timetableSlotId, date: absence.date,
+        },
+        select: { recordedById: true },
+      })
+      if (classRows.some((r) => r.recordedById !== absence.teacherId)) {
+        res.status(403).json({ message: 'An admin recorded this absence, so only an admin can remove it' })
+        return
+      }
     }
     // Deletion is ATOMIC PER SLOT, mirroring reporting: the slot is the class the admin put
     // on the timetable, so it is the unit anyone acts on. Removing an absence therefore clears

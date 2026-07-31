@@ -30,6 +30,16 @@ export type RealtimeEvent =
   // now refuse. Separate from notifications:changed because the two do not coincide — an
   // admin merely opening a list writes no notification at all.
   | 'absences:changed'
+  // Marks were saved for a class. Fired once per report card, which means a class of 40
+  // saved in one click fires up to 40 times — handleSaveAll loops per student — so every
+  // listener MUST debounce rather than refetch per signal.
+  //
+  // Deliberately NOT consumed by the marks entry grid while it holds unsaved edits: there
+  // the row list IS the edit buffer, so a refetch would replace what someone is halfway
+  // through typing. That screen shows a reload bar instead and only auto-refreshes when it
+  // is clean. Read-only views (lists, progress counts, dashboards) have no such buffer and
+  // refetch freely.
+  | 'marks:changed'
 
 let io: Server | null = null
 

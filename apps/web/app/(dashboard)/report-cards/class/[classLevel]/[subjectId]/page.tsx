@@ -12,6 +12,7 @@ import { seqShort, seqFull } from '@/lib/sequences'
 import { ArrowLeft, Save, Copy, AlertTriangle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { onRealtimeDebounced } from '@/lib/socket'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getMeApi } from '@/lib/api/auth'
 import { useT, useLang } from '@/lib/i18n'
@@ -72,6 +73,14 @@ export default function MarksEntryPage() {
   const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
 
   const [rows, setRows] = useState<Row[]>([])
+  // Scores exactly as last loaded from the server, keyed by student. `rows` is the EDIT
+  // BUFFER, so this is the only way to tell a typed-but-unsaved grid from a clean one.
+  // Derived by comparison rather than a flag set in each edit handler, so any future edit
+  // path (bulk clear, copy, paste) is covered without remembering to mark it dirty.
+  const loadedScoresRef = useRef<Record<string, string>>({})
+  // Someone else saved marks for this class while this grid held unsaved edits. We refuse
+  // to refetch over the top of typing, so the user is offered the reload instead.
+  const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [maxScore, setMaxScore] = useState(20)
   const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
@@ -200,6 +209,10 @@ export default function MarksEntryPage() {
 
     if (fetchGenerationRef.current !== myGeneration) return // a newer fetch has since started
     setRows(loaded)
+    // Baseline for "does this grid hold unsaved edits" — see isDirty below. Captured from
+    // the same rows that were just rendered, so a fresh load always starts clean.
+    loadedScoresRef.current = Object.fromEntries(loaded.map((r) => [r.studentId, r.score]))
+    setStaleFromElsewhere(false)
     setInvalidRows({})
     setSelectedIndices(new Set())
     setEditingIndex(null)
@@ -211,6 +224,29 @@ export default function MarksEntryPage() {
   // /re-graded against the NEW sequence's max score (e.g. a CA mark out of 30 briefly
   // graded as an Exam mark out of 70 — a false "FAIL") until the refetch quietly resolved.
   useEffect(() => { setLoading(true); fetchData().finally(() => setLoading(false)) }, [fetchData])
+
+  // Unsaved edits present? Compared against the last load rather than tracked by a flag,
+  // so typing a mark and then undoing it correctly reads as clean again.
+  const isDirty = rows.some((r) => (loadedScoresRef.current[r.studentId] ?? '') !== r.score)
+  // Mirrored into a ref so the realtime subscription below can read the CURRENT value
+  // without re-subscribing on every keystroke.
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
+
+  // Someone else saved marks for this class/subject.
+  //
+  // This grid is the one screen that must NOT blindly refetch: `rows` is the edit buffer,
+  // so refetching over a half-typed column would destroy work with no undo. When the grid
+  // is clean there is nothing to lose and it silently refreshes; when it is dirty the user
+  // is told and decides. Debounced because the signal arrives once per student.
+  //
+  // Also fires for the user's OWN save (they are in the school room too). Harmless: by then
+  // handleSaveAll has already refetched and the grid is clean, so this is one redundant
+  // fetch rather than a surprise.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (isDirtyRef.current) setStaleFromElsewhere(true)
+    else fetchData()
+  }), [fetchData])
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   const rangeSet = (a: number, b: number): Set<number> => {
@@ -620,16 +656,39 @@ export default function MarksEntryPage() {
         )
       )}
 
+      {/* Someone else saved marks for this class while this grid holds unsaved edits.
+          Offered, never applied automatically: reloading replaces the edit buffer, so
+          discarding typed marks has to be the user's decision, not a background event's. */}
+      {staleFromElsewhere && (
+        <div className="flex items-center gap-3 bg-amber-50 border-b border-amber-200 px-4 py-2.5 text-sm text-amber-800">
+          <span className="flex-1">
+            {t('Someone else saved marks for this class. Reload to see them, or finish and save yours first.')}
+          </span>
+          <button
+            onClick={() => { setLoading(true); fetchData().finally(() => setLoading(false)) }}
+            className="flex-shrink-0 font-semibold text-amber-900 underline hover:no-underline"
+          >
+            {t('Reload')}
+          </button>
+        </div>
+      )}
+
       {/* Copy-from-other-seq bar — resit has nothing to copy from, and it's pointless
           (and would look like a back door around ADMIN_ONLY) to show a "fill this in"
-          shortcut on a tab this user has no editable rows on at all. */}
+          shortcut on a tab this user has no editable rows on at all.
+
+          NOT shown for universities at all. CA and Exam are marked out of different totals
+          (effectiveMax: 30 and 70), so one is never a sensible starting point for the other:
+          copying CA into Exam silently halves every student, and copying Exam into CA writes
+          scores above the CA maximum. Primary/secondary sequences share one maxScore, which
+          is the only case where "same marks again" is a meaningful shortcut. */}
       {isResit ? (
         <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
           <span className="flex-1 text-sm text-sky-700">
             {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
           </span>
         </div>
-      ) : editableRows.length > 0 && (
+      ) : editableRows.length > 0 && !isUniversity && (
         <button
           onClick={handleCopyFromOther}
           className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"

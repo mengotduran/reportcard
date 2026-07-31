@@ -17,6 +17,7 @@ import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, Aler
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { onRealtimeDebounced } from '@/lib/socket'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 import DesktopOnly from '@/components/ui/DesktopOnly'
 import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig, DocVariant } from '@/lib/api/reportCardTemplate'
@@ -220,6 +221,12 @@ function TeacherClassesView() {
     }
     load()
   }, [])
+
+  // Someone saved marks. Every class row here is marks-derived (filled counts, averages,
+  // publish readiness), so this list goes stale the moment any teacher saves and nothing
+  // else would tell it. Read-only view with no edit buffer, so refetching is always safe.
+  // Debounced because the signal arrives once per student in a class save.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => { reloadClasses().catch(() => {}) }), [term])
 
   const displayedClasses = (isSecondary && activeDeptId
     ? classes.filter((c) => classDeptMap[c.classLevel] === activeDeptId)

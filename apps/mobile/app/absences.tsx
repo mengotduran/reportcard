@@ -91,9 +91,10 @@ export default function AbsencesScreen() {
           </View>
         }
         renderItem={({ item: a }) => {
-          // Same rule as the Attendance tab: locked once the period's actually over, or
-          // once an admin has reviewed it in a prior visit to their list.
-          const locked = a.isFinal || a.graceExpired || a.seenByAdmin
+          // Same rule as the Attendance tab: locked once the period's actually over, once
+          // an admin has reviewed it in a prior visit to their list, or whenever an admin
+          // was the one who recorded it (locked for its whole life, however far off).
+          const locked = a.isFinal || a.graceExpired || a.seenByAdmin || a.recordedByAdmin
           return (
             <TouchableOpacity
               style={styles.row}
@@ -107,7 +108,11 @@ export default function AbsencesScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowText}>{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</Text>
                 <Text style={styles.rowSub}>{a.subjectName} · {a.classLevel}</Text>
-                {a.seenByAdmin && <Text style={styles.rowHint}>{t('reviewed')}</Text>}
+                {/* Why the padlock: admin-recorded outranks reviewed, being the reason
+                    that never lifts. */}
+                {a.recordedByAdmin
+                  ? <Text style={styles.rowHint}>{t('recorded by admin')}</Text>
+                  : a.seenByAdmin ? <Text style={styles.rowHint}>{t('reviewed')}</Text> : null}
               </View>
               {locked ? (
                 <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />

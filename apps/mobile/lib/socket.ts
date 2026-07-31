@@ -15,8 +15,17 @@ import { API_BASE } from './config'
  *   notifications:changed  the viewer's notification list / unread count changed
  *   absences:changed       an absence they can see was created, removed, or LOCKED by an
  *                          admin reviewing it (which withdraws their ability to retract)
+ *   marks:changed          marks were saved for a class. Fires ONCE PER REPORT CARD, so a
+ *                          class of 40 saved in one click fires up to 40 times — always
+ *                          debounce (see MARKS_REFRESH_DEBOUNCE_MS) instead of refetching
+ *                          per signal. Never blind-refetch a grid holding unsaved edits.
  */
-export type RealtimeEvent = 'notifications:changed' | 'absences:changed'
+export type RealtimeEvent = 'notifications:changed' | 'absences:changed' | 'marks:changed'
+
+/** Trailing debounce for marks:changed, which arrives once per student in a class save.
+ *  Long enough to collapse one Save click into a single refetch, short enough to still feel
+ *  immediate. */
+export const MARKS_REFRESH_DEBOUNCE_MS = 1200
 
 let socket: Socket | null = null
 let currentToken: string | null = null
@@ -90,5 +99,28 @@ export function onRealtime(event: RealtimeEvent, handler: () => void): () => voi
   return () => {
     set!.delete(handler)
     socket?.off(event, handler)
+  }
+}
+
+/**
+ * Same as `onRealtime`, but collapses a burst into a single trailing call.
+ *
+ * Exists for `marks:changed`, which is emitted once per report card: saving a class of 40
+ * delivers 40 signals in well under a second, and refetching per signal would turn one
+ * teacher's Save into 40 round trips on every other open screen in the school.
+ */
+export function onRealtimeDebounced(
+  event: RealtimeEvent,
+  handler: () => void,
+  ms = MARKS_REFRESH_DEBOUNCE_MS,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const unsubscribe = onRealtime(event, () => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(handler, ms)
+  })
+  return () => {
+    if (timer) clearTimeout(timer)
+    unsubscribe()
   }
 }

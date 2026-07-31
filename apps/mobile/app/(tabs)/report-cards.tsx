@@ -17,6 +17,7 @@ import Pagination from '@/components/Pagination'
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { onRealtimeDebounced } from '@/lib/socket'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -172,6 +173,12 @@ function TeacherReportCards() {
   useFocusEffect(useCallback(() => {
     fetchData()
   }, [fetchData]))
+
+  // Someone saved marks. Every row here is marks-derived (the filled/pending counts and
+  // publish readiness), so this list goes stale the moment any teacher saves and only a
+  // refocus would otherwise catch it. Read-only, no edit buffer, so refetching is always
+  // safe. Debounced because the signal arrives once per student in a class save.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => { fetchData().catch(() => {}) }), [fetchData])
 
   const onRefresh = async () => {
     setRefreshing(true)

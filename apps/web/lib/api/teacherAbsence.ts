@@ -28,6 +28,10 @@ export interface TeacherAbsence {
   /** True once an admin has reviewed this in the per-teacher list on a PRIOR visit — from
    *  then on it's locked for everyone, admin included. See getTeacherAbsencesApi. */
   seenByAdmin: boolean
+  /** True when an ADMIN filed this rather than the teacher themselves. The teacher can never
+   *  remove it, at any point, regardless of seenByAdmin or how far off the class is — it isn't
+   *  their report to retract. Admins are unaffected and delete as usual until the class ends. */
+  recordedByAdmin: boolean
   /** Always null now: the API returns ONE entry per class, not per period, so an entry never
    *  stands for a single period inside a block. Kept for wire compatibility. */
   periodIndex: number | null

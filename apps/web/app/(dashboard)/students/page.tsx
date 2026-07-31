@@ -13,7 +13,7 @@ import { stripProgrammeSuffix, withProgrammeSuffix, PROGRAMME_LABELS } from '@/l
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info } from 'lucide-react'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
@@ -21,7 +21,7 @@ import CustomSelect from '@/components/ui/CustomSelect'
 import { usePagination } from '@/lib/usePagination'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
-import { getFeesOverviewApi, formatXAF, FeeOverviewRow } from '@/lib/api/fees'
+import { getFeesOverviewApi, FeeOverviewRow } from '@/lib/api/fees'
 import { buildCsv, saveCsv, saveBlob, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
 
@@ -42,6 +42,23 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   ACTIVE: 'bg-emerald-100 text-emerald-700',
   DISABLED: 'bg-amber-100 text-amber-700',
   DISMISSED: 'bg-red-100 text-red-700',
+}
+// Same three meanings as STATUS_BADGE, reduced to a dot for the table: the label beside it
+// already says the word, so the colour only has to separate the three at a glance.
+const STATUS_DOT: Record<StudentStatus, string> = {
+  ACTIVE: 'bg-emerald-500',
+  DISABLED: 'bg-amber-500',
+  DISMISSED: 'bg-red-500',
+}
+
+/** Two-letter monogram for the row avatar: first and last name, so pupils sharing a first
+ *  name are still told apart. Falls back to one letter for a single-word name. */
+function studentInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '?'
+  const first = words[0][0] ?? ''
+  const last = words.length > 1 ? words[words.length - 1][0] ?? '' : ''
+  return (first + last).toUpperCase()
 }
 
 const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', dateOfBirth: '', placeOfBirth: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', secDept: '', directLevel2Entry: false }
@@ -83,6 +100,8 @@ export default function StudentsPage() {
   const { isAuthenticated, activeSession, setActiveSession, school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  // Primary is the only type with no department layer at all — see the table header.
+  const isPrimary = !isUniversity && !isSecondary
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   // A university's year is split into semesters, not terms. Same Term rows either way, only
@@ -98,6 +117,11 @@ export default function StudentsPage() {
   const [deptFilter, setDeptFilter] = useState('all')
   const [activeClass, setActiveClass] = useState('all')
   const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
+  const [sortAsc, setSortAsc] = useState(true)
+  // Per-term/semester export lives behind the Export CSV caret rather than as its own row of
+  // chips — it is an export option, not a filter on the table, and sitting among the filters
+  // it read as one.
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -598,19 +622,39 @@ export default function StudentsPage() {
     : students
   ).filter((s) => programmeFilter.matches(s.classLevel))
 
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(visibleStudents, 15, `${deptFilter}|${activeClass}|${search}|${statusFilter}`)
+  // Sorted by name, the only column worth ordering on a roster — and the reason the STUDENT
+  // header carries an arrow. localeCompare so accented names file where a reader expects.
+  const sortedStudents = useMemo(
+    () => [...visibleStudents].sort((a, b) => (sortAsc ? 1 : -1) * a.name.localeCompare(b.name)),
+    [visibleStudents, sortAsc],
+  )
+
+  // How many departments the subtitle reports. Secondary keeps them as real records;
+  // a university encodes them in the class name, so they're counted from the classes.
+  const departmentCount = isSecondary
+    ? departments.length
+    : isUniversity
+      ? new Set(definedClasses.map((c) => univDept(c.name))).size
+      : 0
+
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(sortedStudents, 15, `${deptFilter}|${activeClass}|${search}|${statusFilter}|${sortAsc}`)
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between gap-4 mb-5">
         <div>
           <h2 className="text-2xl font-bold text-foreground">{t('Students')}</h2>
+          {/* Roster size first, because it is what the page is for, then the scope it is
+              currently showing so a filtered count is never mistaken for the whole school. */}
           <p className="text-muted-foreground text-sm mt-1">
-            {visibleStudents.length} {activeClass !== 'all'
-              ? `${t('in')} ${stripProgrammeSuffix(isSecondary ? stripDeptSuffix(activeClass) : activeClass)}`
+            {visibleStudents.length} {t('enrolled')}
+            {activeClass !== 'all'
+              ? ` · ${stripProgrammeSuffix(isSecondary ? stripDeptSuffix(activeClass) : activeClass)}`
               : (isSecondary && deptFilter !== 'all')
-                ? `${t('in')} ${departments.find(d => d.id === deptFilter)?.name ?? ''}`
-                : t('total students')}
+                ? ` · ${departments.find(d => d.id === deptFilter)?.name ?? ''}`
+                : departmentCount > 0
+                  ? ` · ${departmentCount} ${departmentCount === 1 ? t('department') : t('departments')}`
+                  : ''}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -623,14 +667,64 @@ export default function StudentsPage() {
               <ArrowUpCircle size={16} /> Promote to Level 2
             </button>
           )}
-          <button onClick={handleExport} disabled={exporting}
-            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 transition">
-            <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
-          </button>
+          {/* Split button: the main half exports what is on screen, the caret narrows it to a
+              single term/semester. Only grown a caret when there is more than one to pick. */}
+          <div className="relative">
+            <div className="flex items-stretch rounded-lg border border-border overflow-hidden">
+              {/* The chosen term rides on the button label. It used to be a highlighted chip
+                  in plain sight, and moving it into a menu would otherwise mean exporting a
+                  single term while the page gives no sign that is what will happen. */}
+              <button onClick={handleExport} disabled={exporting}
+                className="flex items-center gap-2 text-foreground px-3 py-2 text-sm font-medium hover:bg-hover disabled:opacity-50 transition">
+                <Download size={16} />
+                {exporting ? t('Exporting...') : t('Export CSV')}
+                {!exporting && activeTermId && (
+                  <span className="text-xs font-semibold text-primary">
+                    · {visibleTerms.find((tm) => tm.id === activeTermId)?.name}
+                  </span>
+                )}
+              </button>
+              {visibleTerms.length > 0 && (
+                <button
+                  onClick={() => setExportMenuOpen((o) => !o)}
+                  aria-label={ts('Export by term', 'Export by semester')}
+                  className="px-2 border-l border-border text-muted-foreground hover:bg-hover transition"
+                >
+                  <ChevronDown size={15} />
+                </button>
+              )}
+            </div>
+            {exportMenuOpen && visibleTerms.length > 0 && (
+              <>
+                {/* Click-away layer: a menu that only closed on re-clicking the caret is the
+                    kind that gets left open behind a modal. */}
+                <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
+                <div className="absolute right-0 mt-1 z-50 w-56 rounded-xl border border-border bg-card shadow-xl overflow-hidden py-1">
+                  <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    {ts('Export by term', 'Export by semester')}
+                  </p>
+                  <button
+                    onClick={() => { handleTermFilter(''); setExportMenuOpen(false) }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-hover transition ${!activeTermId ? 'text-primary font-semibold' : 'text-foreground'}`}
+                  >
+                    {ts('All Terms', 'All Semesters')}
+                  </button>
+                  {visibleTerms.map((tm) => (
+                    <button key={tm.id}
+                      onClick={() => { handleTermFilter(tm.id); setExportMenuOpen(false) }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-hover transition ${activeTermId === tm.id ? 'text-primary font-semibold' : 'text-foreground'}`}
+                    >
+                      {tm.name}{tm.isCurrent ? ` (${t('Current')})` : ''}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <button onClick={openImportModal} disabled={!hasCurrentTerm}
             title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
             className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
-            <Upload size={16} /> {t('Import Students')}
+            <Upload size={16} /> {t('Import')}
           </button>
           <button onClick={openAdd} disabled={!hasCurrentTerm}
             title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
@@ -648,78 +742,69 @@ export default function StudentsPage() {
         </div>
       )}
 
-      {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          {/* Day/Evening sitting, only once the school runs one. Placed before the class
-              picker because it narrows what that picker offers. */}
-          {programmeFilter.hasEvening && (
-            <ProgrammeChips
-              value={programmeFilter.programme}
-              onChange={(p) => { programmeFilter.setProgramme(p); handleClassFilter('all') }}
-              className="mr-1"
+      {/* One filter bar rather than four stacked rows. Search takes the space it needs and
+          the narrowing controls sit beside it, in the order they narrow: sitting, then
+          department, then class, then status. */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input type="text" placeholder={t('Search by name, ID or guardian...')} value={search} onChange={handleSearch}
+            className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+
+        {/* Day/Evening sitting, only once the school runs one. Placed before the class
+            picker because it narrows what that picker offers. */}
+        {programmeFilter.hasEvening && (
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={(p) => { programmeFilter.setProgramme(p); handleClassFilter('all') }}
+          />
+        )}
+
+        {isSecondary && departments.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}</span>
+            <CustomSelect
+              className="w-44"
+              compact
+              value={deptFilter}
+              onChange={handleDeptFilter}
+              placeholder={t('All Departments')}
+              options={[
+                { value: 'all', label: t('All Departments') },
+                ...departments.map((d) => ({ value: d.id, label: d.name })),
+              ]}
             />
-          )}
-          {isSecondary && departments.length > 0 && (
-            <>
-              <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}:</span>
-              <CustomSelect
-                className="w-52"
-                compact
-                value={deptFilter}
-                onChange={handleDeptFilter}
-                placeholder={t('All Departments')}
-                options={[
-                  { value: 'all', label: t('All Departments') },
-                  ...departments.map((d) => ({ value: d.id, label: d.name })),
-                ]}
-              />
-            </>
-          )}
-          <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? t('Department') : t('Class')}:</span>
+          </div>
+        )}
+
+        {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? t('Department') : t('Class')}</span>
+            <CustomSelect
+              className="w-48"
+              compact
+              value={activeClass}
+              onChange={handleClassFilter}
+              placeholder={isUniversity ? t('All Departments') : t('All Classes')}
+              options={[
+                { value: 'all', label: isUniversity ? t('All Departments') : t('All Classes') },
+                ...classFilterOptions,
+              ]}
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground flex-shrink-0">{t('Status')}</span>
           <CustomSelect
-            className="w-64"
+            className="w-36"
             compact
-            value={activeClass}
-            onChange={handleClassFilter}
-            placeholder={isUniversity ? t('All Departments') : t('All Classes')}
-            options={[
-              { value: 'all', label: isUniversity ? t('All Departments') : t('All Classes') },
-              ...classFilterOptions,
-            ]}
+            value={statusFilter}
+            onChange={(v) => handleStatusFilter(v as StudentStatus)}
+            options={STATUS_TABS.map((tab) => ({ value: tab.value, label: t(tab.label) }))}
           />
         </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className="text-xs text-muted-foreground mr-1">{t('Status')}:</span>
-        {STATUS_TABS.map((tab) => (
-          <button key={tab.value} onClick={() => handleStatusFilter(tab.value)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${statusFilter === tab.value ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-hover'}`}>
-            {t(tab.label)}
-          </button>
-        ))}
-      </div>
-
-      {visibleTerms.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          <span className="text-xs text-muted-foreground mr-1">{ts('Export by term', 'Export by semester')}:</span>
-          <button onClick={() => handleTermFilter('')}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!activeTermId ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}>
-            {ts('All Terms', 'All Semesters')}
-          </button>
-          {visibleTerms.map((tm) => (
-            <button key={tm.id} onClick={() => handleTermFilter(tm.id)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeTermId === tm.id ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}>
-              {tm.name}{tm.isCurrent ? ` (${t('Current')})` : ''}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="relative mb-4">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input type="text" placeholder={t('Search students...')} value={search} onChange={handleSearch}
-          className="w-full pl-9 pr-4 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
       </div>
 
       <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -734,86 +819,120 @@ export default function StudentsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px]">
-            <thead className="bg-muted border-b border-border">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Name')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Student ID')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{isUniversity ? 'Department' : t('Class')}</th>
-                {isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Level</th>}
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Gender')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Fees')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Status')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Actions')}</th>
+          <table className="w-full min-w-[860px]">
+            <thead className="border-b border-border">
+              <tr className="[&>th]:text-left [&>th]:px-4 [&>th]:py-3 [&>th]:text-[11px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-wider [&>th]:text-muted-foreground/70">
+                {/* Name and ID share one column: the ID identifies the person in the row above
+                    it, so a column of its own only pushed everything else right. */}
+                <th>
+                  <button onClick={() => setSortAsc((a) => !a)} className="flex items-center gap-1.5 hover:text-foreground transition uppercase tracking-wider">
+                    {t('Student')}
+                    <ArrowUp size={12} className={`transition-transform ${sortAsc ? '' : 'rotate-180'}`} />
+                  </button>
+                </th>
+                {/* Secondary and university both group classes under a department, so both
+                    get the column. Primary has none, and an empty column would only ask the
+                    reader what belongs in it. */}
+                {!isPrimary && <th>{t('Department')}</th>}
+                <th>{isUniversity ? t('Level') : t('Class')}</th>
+                <th>{t('Gender')}</th>
+                <th>{t('Guardian')}</th>
+                <th>{t('Fees due')}</th>
+                <th>{t('Status')}</th>
+                <th><span className="sr-only">{t('Actions')}</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {pageItems.map((s) => (
-                <tr key={s.id} className="hover:bg-hover transition">
+              {pageItems.map((s) => {
+                const status = s.status ?? 'ACTIVE'
+                return (
+                <tr key={s.id} className="group hover:bg-hover transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 flex-shrink-0 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">
-                        {s.name.charAt(0)}
+                      <div className="w-9 h-9 flex-shrink-0 bg-primary/10 text-primary rounded-lg flex items-center justify-center text-xs font-bold">
+                        {studentInitials(s.name)}
                       </div>
-                      <span className="text-sm font-medium text-foreground">{s.name}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground truncate">{s.name}</p>
+                        {/* Tabular figures so the codes line up down the column — they are
+                            read by comparing them, which ragged digits make harder. */}
+                        <p className="text-xs text-muted-foreground/80 tabular-nums truncate">{s.studentId}</p>
+                      </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
+                  {!isPrimary && (
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {isUniversity
+                        ? stripProgrammeSuffix(univDept(s.classLevel))
+                        : (deptNameOf(s.classLevel) || <span className="text-muted-foreground">—</span>)}
+                    </td>
+                  )}
                   {/* The class name is stripped for display, so without the badge an evening
                       student's row is character for character identical to a day student's in
-                      the same programme. This column is the only place that difference can
-                      show: the Level column beside it is the same for both. */}
+                      the same programme. The badge rides on whichever column names the cohort:
+                      the class, or the level where a university has no class column. */}
                   <td className="px-4 py-3 text-sm text-muted-foreground">
                     <span className="inline-flex items-center gap-2 flex-wrap">
-                      {stripProgrammeSuffix(isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel)}
+                      {isUniversity
+                        ? (() => {
+                            const b = univLevelBadge(s.classLevel)
+                            return b
+                              ? <span className={`inline-flex px-2 py-0.5 rounded-md text-xs font-semibold ${b.cls}`}>{b.label}</span>
+                              : <span className="text-muted-foreground text-sm">—</span>
+                          })()
+                        : stripProgrammeSuffix(isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel)}
                       {programmeFilter.programmeOf(s.classLevel) === 'EVENING' && <EveningBadge />}
                     </span>
                   </td>
-                  {isUniversity && (
-                    <td className="px-4 py-3">
-                      {(() => {
-                        const b = univLevelBadge(s.classLevel)
-                        return b
-                          ? <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${b.cls}`}>{b.label}</span>
-                          : <span className="text-muted-foreground text-sm">—</span>
-                      })()}
-                    </td>
-                  )}
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.gender ? t(s.gender) : '—'}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.guardianName || '—'}</td>
-                  <td className="px-4 py-3">
+                  {/* What is OWED, as a number rather than a badge: this column is scanned to
+                      find who still has to pay, and a row of coloured pills reads as decoration
+                      where a column of figures reads as money. Only an unpaid balance is
+                      coloured, because only that one needs chasing. */}
+                  <td className="px-4 py-3 whitespace-nowrap">
                     {(() => {
                       const f = feesByStudent[s.id]
                       if (!f || f.status === 'NONE') return <span className="text-muted-foreground text-sm">—</span>
-                      if (f.status === 'COMPLETE') return <span className="inline-flex px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded text-xs font-medium">{t('Complete')}</span>
-                      const cls = f.status === 'UNPAID' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                      return <span className={`inline-flex px-3 py-1.5 rounded text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
+                      if (f.status === 'COMPLETE') return <span className="text-sm text-muted-foreground">{t('settled')}</span>
+                      const overdue = f.status === 'UNPAID'
+                      return (
+                        <span className={`inline-flex items-center gap-1.5 text-sm ${overdue ? 'text-destructive' : 'text-foreground'}`}>
+                          {overdue && <AlertCircle size={14} className="flex-shrink-0" />}
+                          <span className="font-semibold tabular-nums">{Math.round(f.balance).toLocaleString('en-US')}</span>
+                          <span className="text-xs text-muted-foreground">XAF</span>
+                        </span>
+                      )
                     })()}
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[s.status ?? 'ACTIVE']}`}>
-                      {t(STATUS_TABS.find((tab) => tab.value === (s.status ?? 'ACTIVE'))?.label ?? 'Active')}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATUS_DOT[status]}`} />
+                      {t(STATUS_TABS.find((tab) => tab.value === status)?.label ?? 'Active')}
                     </span>
                   </td>
+                  {/* Actions stay faint until the row is hovered, so 15 rows do not present 45
+                      buttons competing with the data. Still rendered (not hidden) so they work
+                      on touch, where there is no hover at all. */}
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-end gap-1 opacity-60 group-hover:opacity-100 transition">
                       <button onClick={() => setFeesTarget({ id: s.id, name: s.name })} title={t('School Fees')}
-                        className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 rounded transition">
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition">
                         <Wallet size={14} />
                       </button>
-                      <button onClick={() => openEdit(s)}
-                        className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
+                      <button onClick={() => openEdit(s)} title={t('Edit')}
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition">
                         <Pencil size={14} />
                       </button>
                       <button onClick={() => openStatusModal(s)} title={t('Change Status')}
-                        className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition">
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
                         <UserX size={14} />
                       </button>
                     </div>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
           </div>

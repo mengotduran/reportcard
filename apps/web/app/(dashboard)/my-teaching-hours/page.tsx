@@ -227,10 +227,16 @@ export default function MyTeachingHoursPage() {
                     // Once the period's happened, only an admin can remove it (they may
                     // want to mark the teacher present after all); once an admin has
                     // reviewed it in a PRIOR visit to their list, it's locked for everyone.
-                    const locked = a.isFinal || a.graceExpired || a.seenByAdmin
-                    const lockedReason = a.seenByAdmin
-                      ? t('Already reviewed by an admin — ask them to remove it if needed')
-                      : t('This period has already passed — ask an admin to remove it if needed')
+                    // An admin-recorded absence is never removable here at all, whatever the
+                    // timing — it was never this teacher's report to retract.
+                    const locked = a.isFinal || a.graceExpired || a.seenByAdmin || a.recordedByAdmin
+                    // Most specific reason first: "an admin filed this" outlives both other
+                    // locks and is the only one that was true from the moment it appeared.
+                    const lockedReason = a.recordedByAdmin
+                      ? t('An admin recorded this absence, so only an admin can remove it')
+                      : a.seenByAdmin
+                        ? t('Already reviewed by an admin — ask them to remove it if needed')
+                        : t('This period has already passed — ask an admin to remove it if needed')
                     return (
                       <tr key={a.id} className="hover:bg-hover/40 transition">
                         <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>

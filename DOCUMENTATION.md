@@ -1,6 +1,6 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-07-21 (teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
+> Last updated: 2026-07-31 (an admin-recorded absence is never the teacher's to retract · the copy-marks shortcut is primary/secondary only, CA /30 and Exam /70 cannot fill each other · teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
 > This document is updated every time a new feature or change is made.
 
 ---
@@ -531,6 +531,7 @@ The admin report card detail page is **read-only for marks**. Admin sees subject
 - Go to: Classes → select class → select subject → select sequence
 - **Sequence labels are term-aware** (Cameroon system): Term 1 → Seq 1/2, Term 2 → Seq 3/4, Term 3 → Seq 5/6. Data still stores in `seq1Score`/`seq2Score`; only the displayed label changes (derived from the term name — see `lib/sequences.ts`, web + mobile).
 - Marks are entered one student per row, out of the subject's maxScore
+- A **"Copy marks from <other sequence> → fill here"** bar bulk-fills the tab from the other sequence. **Primary/secondary only.** It is never offered at a university, where CA is out of 30 and the Exam out of 70: neither is a sensible starting point for the other, since copying CA into Exam would silently halve every student and copying Exam into CA would write scores above the CA maximum. The shortcut only means something where both sequences share one `maxScore`. Resit has nothing to copy from either way. The bar also respects `ADMIN_ONLY` and per-row locks, or it would be a bulk back door around cells the user cannot type into.
 - The **REMARK** column shows live performance text (e.g. "Average") from the grading scale
 - Saving marks does **not** overwrite the general remarks set by the class master
 - Report card is auto-created for students who don't have one yet
@@ -887,11 +888,14 @@ Anything **before a course's first-ever assignment is not a gap**. That stretch 
 | Report a class already **ended** | no | no |
 | Delete before an admin has reviewed | yes | yes |
 | Delete **after** an admin has reviewed | **no** | **yes** |
+| Delete an absence **an admin recorded** | **no** | **yes** |
 | Delete once the class is **over** | no | **no** |
 
 The cutoff is judged on the whole class, not on each period inside it. "Whole day" quietly skips classes past the cutoff and reports the rest; explicitly-picked ones are rejected outright, naming the date.
 
 `seenByAdmin` is written when an admin **views** a teacher's list — a read, which writes no notification — so the teacher's screen is told over the realtime channel, or it would keep offering a delete the API now refuses.
+
+An absence an **admin recorded** is never the teacher's to retract, from the moment it is written and regardless of how far off the class is. `seenByAdmin` does not cover this on its own: it starts false on a record the teacher never filed, so until an admin next happened to open the list the subject of the record could quietly erase it, including before ever opening the notification that told them it existed. The test is `recordedById !== teacherId` (derived, no stored field), judged across the whole class because deleting clears every period of it. Teacher-facing lists show a padlock reading "recorded by admin"; admins are unaffected and still delete until the class ends.
 
 `School.absenceGraceMinutes` remains as a second cutoff on teacher retraction. It is null on every live school, so it has no effect today, and it is **not** part of the rules above.
 

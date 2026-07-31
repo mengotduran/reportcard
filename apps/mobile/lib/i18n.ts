@@ -955,6 +955,11 @@ const FR: Record<string, string> = {
   'Could not load teachers. Check your connection and reload.': 'Impossible de charger les enseignants. Vérifiez votre connexion et rechargez.',
   'Every period for this day has already started. Ask an admin to record it.': 'Toutes les heures de cette journée ont déjà commencé. Demandez à un administrateur de l\'enregistrer.',
   'Could not reach the server. Check your connection and pull to refresh.': 'Serveur inaccessible. Vérifiez votre connexion et tirez pour rafraîchir.',
+  'recorded by admin': 'enregistrée par un administrateur',
+  'Someone else saved marks for this class. Tap to reload, or finish and save yours first.':
+    "Quelqu'un d'autre a enregistré des notes pour cette classe. Touchez pour recharger, ou terminez et enregistrez les vôtres d'abord.",
+  'Someone else saved marks for this student. Tap to reload, or finish and save yours first.':
+    "Quelqu'un d'autre a enregistré des notes pour cet élève. Touchez pour recharger, ou terminez et enregistrez les vôtres d'abord.",
 }
 
 const DICTS: Record<Lang, Record<string, string>> = { EN: {}, FR }

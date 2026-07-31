@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
@@ -14,6 +14,7 @@ import {
 } from '@/lib/api/reportcards'
 import { getGradingScale, gradeFromScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { onRealtimeDebounced } from '@/lib/socket'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 
@@ -23,6 +24,13 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
   content: { padding: 16, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  // Amber: this reports a conflict, so it must read as "something happened" at a glance.
+  staleBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fef3c7', borderColor: '#fde68a', borderWidth: 1,
+    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12,
+  },
+  staleBarText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400e' },
   infoCard: {
     backgroundColor: colors.card,
     borderRadius: 14,
@@ -157,6 +165,11 @@ export default function ReportCardDetailScreen() {
   const [reportCard, setReportCard] = useState<ReportCardDetail | null>(null)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [entries, setEntries] = useState<Entry[]>([])
+  // Scores exactly as last loaded, keyed by subject. `entries` is the EDIT BUFFER, so this
+  // is the only way to tell a typed-but-unsaved card from a clean one.
+  const loadedScoresRef = useRef<Record<string, string>>({})
+  // Someone else saved marks for this student while this card held unsaved edits.
+  const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [remarks, setRemarks] = useState('')
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
@@ -183,18 +196,35 @@ export default function ReportCardDetailScreen() {
       && (s.term == null || s.term === rc.term.name)
       && (s.compulsory !== false || rc.entries.some((e) => e.subject.id === s.id)))
     setSubjects(classSubjects)
-    setEntries(
-      classSubjects.map((s) => {
-        const e = rc.entries.find((e) => e.subject.id === s.id)
-        // Use '' for null/unfilled scores so we can distinguish from explicitly-entered 0
-        return { subjectId: s.id, score: e?.score != null ? String(e.score) : '', grade: e?.grade ?? '', remarks: e?.remarks ?? '' }
-      })
-    )
+    const loadedEntries = classSubjects.map((s) => {
+      const e = rc.entries.find((e) => e.subject.id === s.id)
+      // Use '' for null/unfilled scores so we can distinguish from explicitly-entered 0
+      return { subjectId: s.id, score: e?.score != null ? String(e.score) : '', grade: e?.grade ?? '', remarks: e?.remarks ?? '' }
+    })
+    setEntries(loadedEntries)
+    // Baseline for "does this card hold unsaved edits" — see isDirty below. `entries` is the
+    // edit buffer, so this is the only way to tell typed-but-unsaved from clean.
+    loadedScoresRef.current = Object.fromEntries(loadedEntries.map((e) => [e.subjectId, e.score]))
+    setStaleFromElsewhere(false)
   }, [id])
 
   useFocusEffect(useCallback(() => {
     fetchData().finally(() => setLoading(false))
   }, [fetchData]))
+
+  // Unsaved edits present? Compared against the last load rather than tracked by a flag, so
+  // typing a mark and then undoing it correctly reads as clean again.
+  const isDirty = entries.some((e) => (loadedScoresRef.current[e.subjectId] ?? '') !== e.score)
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
+
+  // Someone else saved marks for this student. Same rule as the marks grid: this screen has
+  // an edit buffer, so it is offered a reload rather than having one forced on it. A silent
+  // refetch here would wipe scores typed into the very card being edited.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (isDirtyRef.current) setStaleFromElsewhere(true)
+    else fetchData().catch(() => {})
+  }), [fetchData])
 
   const updateScore = (subjectId: string, raw: string) => {
     const subject = subjects.find((s) => s.id === subjectId)
@@ -327,6 +357,22 @@ export default function ReportCardDetailScreen() {
     >
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      {/* Someone else saved marks for this student while this card holds unsaved edits.
+          Offered, never applied automatically: reloading replaces the edit buffer, so
+          discarding typed marks has to be the user's decision. */}
+      {staleFromElsewhere && (
+        <TouchableOpacity
+          style={styles.staleBar}
+          activeOpacity={0.7}
+          onPress={() => { setLoading(true); fetchData().catch(() => {}).finally(() => setLoading(false)) }}
+        >
+          <Ionicons name="refresh-outline" size={15} color="#92400e" />
+          <Text style={styles.staleBarText}>
+            {t('Someone else saved marks for this student. Tap to reload, or finish and save yours first.')}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {/* Student info */}
       <View style={styles.infoCard}>
         <Text style={styles.studentName}>{reportCard.student.name}</Text>

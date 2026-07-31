@@ -6,6 +6,7 @@ import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, S
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
+import ModalScrollLock from '@/components/ui/ModalScrollLock'
 import { useT } from '@/lib/i18n'
 import { getMeApi, updateLanguagePreferenceApi } from '@/lib/api/auth'
 import { getAcademicYearsApi } from '@/lib/api/dashboard'
@@ -200,6 +201,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <AuthGuard>
       <div className="min-h-screen bg-background flex">
         <ActivityTracker />
+        {/* Locks the page behind any open modal. Renders nothing. */}
+        <ModalScrollLock />
 
         {/* ── Mobile top bar (hamburger) ──────────────────────────────────── */}
         <header className="md:hidden fixed top-0 inset-x-0 h-14 z-30 bg-background border-b border-border flex items-center gap-3 px-4">

@@ -711,8 +711,10 @@ function TeacherAttendanceScreen() {
             {absences.slice(0, ABSENCES_PREVIEW_LIMIT).map((a) => {
               // Once the period's happened, only an admin can remove it (they may want to
               // mark the teacher present after all); once an admin has reviewed it in a PRIOR
-              // visit to their list, it's locked for everyone.
-              const locked = a.isFinal || a.graceExpired || a.seenByAdmin
+              // visit to their list, it's locked for everyone. An admin-recorded absence is
+              // never removable here at all, whatever the timing — it was never this teacher's
+              // report to retract, and they may not have opened the notification yet.
+              const locked = a.isFinal || a.graceExpired || a.seenByAdmin || a.recordedByAdmin
               return (
                 <TouchableOpacity
                   key={a.id}
@@ -727,7 +729,9 @@ function TeacherAttendanceScreen() {
                 >
                   <Text style={styles.absenceText}>
                     {a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}
-                    {a.seenByAdmin ? ` (${t('reviewed')})` : ''}{'\n'}
+                    {/* Says WHY the row shows a padlock instead of a bin. Admin-recorded
+                        outranks reviewed: it's the reason that never lifts. */}
+                    {a.recordedByAdmin ? ` (${t('recorded by admin')})` : a.seenByAdmin ? ` (${t('reviewed')})` : ''}{'\n'}
                     <Text style={{ color: colors.textSecondary }}>{a.subjectName} · {a.classLevel}</Text>
                   </Text>
                   {locked ? (

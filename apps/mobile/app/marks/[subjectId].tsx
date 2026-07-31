@@ -15,6 +15,7 @@ import { getGradingScale, gradeFromScore, isFailingMark, GradeRange, DEFAULT_RAN
 import { useAuthStore } from '@/lib/store/auth.store'
 import { seqFull, seqShort } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
+import { onRealtimeDebounced } from '@/lib/socket'
 
 // University marking split: CA out of 30, exam out of 70, course out of 100.
 const EXAM_MAX = 70
@@ -112,6 +113,13 @@ export default function MarksEntryScreen() {
   const decodedSubjectName = decodeURIComponent(subjectName)
 
   const [rows, setRows] = useState<Row[]>([])
+  // Scores exactly as last loaded from the server, keyed by student. `rows` is the EDIT
+  // BUFFER, so this is the only way to tell a typed-but-unsaved grid from a clean one.
+  // Derived by comparison rather than a flag set in each edit handler, so any future edit
+  // path is covered without remembering to mark it dirty.
+  const loadedScoresRef = useRef<Record<string, string>>({})
+  // Someone else saved marks for this class while this grid held unsaved edits.
+  const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [maxScore, setMaxScore] = useState(20)
   const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
@@ -199,6 +207,10 @@ export default function MarksEntryScreen() {
         }
       })
     setRows(loaded)
+    // Baseline for "does this grid hold unsaved edits" — see isDirty below. Captured from
+    // the same rows just rendered, so a fresh load always starts clean.
+    loadedScoresRef.current = Object.fromEntries(loaded.map((r) => [r.studentId, r.score]))
+    setStaleFromElsewhere(false)
   }, [termId, decodedClass, decodedSubjectId, seqIndex, isAdminRole])
 
   useFocusEffect(useCallback(() => {
@@ -213,6 +225,25 @@ export default function MarksEntryScreen() {
       .catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.')))
       .finally(() => setLoading(false))
   }, [fetchData]))
+
+  // Unsaved edits present? Compared against the last load rather than tracked by a flag,
+  // so typing a mark and then undoing it correctly reads as clean again.
+  const isDirty = rows.some((r) => (loadedScoresRef.current[r.studentId] ?? '') !== r.score)
+  // Mirrored into a ref so the subscription below reads the CURRENT value without
+  // re-subscribing on every keystroke.
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
+
+  // Someone else saved marks for this class/subject.
+  //
+  // This screen is the one that must NOT blindly refetch: `rows` is the edit buffer, so
+  // refetching over a half-typed column would destroy work with no undo. Clean grid, silent
+  // refresh; dirty grid, the user is told and decides. Debounced because the signal arrives
+  // once per student in a class save.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (isDirtyRef.current) setStaleFromElsewhere(true)
+    else fetchData().catch(() => {})
+  }), [fetchData])
 
   const updateScore = (studentId: string, value: string) => {
     // Allow digits + a single decimal point (e.g. 15.5); clamp to maxScore only
@@ -419,6 +450,22 @@ export default function MarksEntryScreen() {
           )
         )}
 
+        {/* Someone else saved marks for this class while this grid holds unsaved edits.
+            Offered, never applied automatically: reloading replaces the edit buffer, so
+            discarding typed marks has to be the user's decision, not a background event's. */}
+        {staleFromElsewhere && (
+          <TouchableOpacity
+            style={s.staleBar}
+            activeOpacity={0.7}
+            onPress={() => { setLoading(true); fetchData().catch(() => {}).finally(() => setLoading(false)) }}
+          >
+            <Ionicons name="refresh-outline" size={15} color="#92400e" />
+            <Text style={s.staleBarText}>
+              {t('Someone else saved marks for this class. Tap to reload, or finish and save yours first.')}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Copy bar — resit has nothing to copy from */}
         {/* Why the sheet is read-only, or a teacher meets a dead grid and assumes the
             app is broken rather than seeing a school policy. */}
@@ -437,9 +484,15 @@ export default function MarksEntryScreen() {
               {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
             </Text>
           </View>
-        ) : editableRows.length > 0 && (
+        ) : editableRows.length > 0 && !isUniversity && (
           // Pointless (and would look like a back door around ADMIN_ONLY) to show a
           // "fill this in" shortcut on a tab this user has no editable rows on at all.
+          //
+          // Never shown for universities: CA is out of 30 and Exam out of 70, so neither is
+          // a sensible starting point for the other. Copying CA into Exam silently halves
+          // every student, and copying Exam into CA writes scores above the CA maximum.
+          // Primary/secondary sequences share one maxScore, which is the only case where
+          // "same marks again" actually means anything.
           <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
             <Ionicons name="copy-outline" size={15} color="#7c3aed" />
             <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
@@ -568,6 +621,14 @@ const makeSStyles = (colors: Colors) => StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   copyBarText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#7c3aed' },
+  // Amber, not the copy bar's violet: this one reports a conflict rather than offering a
+  // shortcut, and it must read as "something happened" at a glance.
+  staleBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fef3c7', paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#fde68a',
+  },
+  staleBarText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400e' },
   resitBar: {
     backgroundColor: '#eff6ff', paddingHorizontal: 14, paddingVertical: 10,
     borderBottomWidth: 1, borderBottomColor: '#bfdbfe',

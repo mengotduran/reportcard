@@ -3,6 +3,7 @@ import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 import { parseStoredScale } from '../utils/gradingScale'
+import { emitToSchool } from '../config/socket'
 
 // Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
 // the administration, which is the distinction MarksEntryMode.ADMIN_ONLY turns on —
@@ -950,6 +951,16 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       // missing positions until the next save happened to fix it.
       await prisma.$transaction(writes)
     }
+
+    // Signal only, never the marks themselves — authorization for who may see which class
+    // stays in the read controllers. Emitted AFTER the re-rank above, so anything that
+    // refetches on this sees settled positions rather than a half-ranked class.
+    //
+    // School-wide because a mark changes what several unrelated screens show (a class's
+    // filled-subject progress, the report cards list, dashboard counts) and there is no
+    // cheap way to know from here who is looking at what. Listeners debounce: this fires
+    // once per report card, so one Save click on a class of 40 sends up to 40 of them.
+    emitToSchool(schoolId, 'marks:changed')
 
     res.json({ message: 'Entries saved', entries: createdEntries })
   } catch (error) {
