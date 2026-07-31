@@ -13,6 +13,12 @@ export interface TimetableSlot {
   // "YYYY-MM-DD" — set only for a one-off private/extra slot that doesn't repeat every
   // week. null means it recurs weekly on dayOfWeek, same as before.
   specificDate?: string | null
+  /** Window for a private class that runs weekly but only part of the term. Both null =
+   *  the whole term. Ignored when specificDate is set. */
+  startsOn?: string | null
+  endsOn?: string | null
+  /** Course a private class delivers hours toward, if any. */
+  privateSubjectId?: string | null
 }
 
 export const getTeacherTimetableApi = async (teacherId: string): Promise<{ slots: TimetableSlot[] }> => {
@@ -23,6 +29,7 @@ export const getTeacherTimetableApi = async (teacherId: string): Promise<{ slots
 export const saveTimetableApi = async (teacherId: string, slots: {
   dayOfWeek: string; startTime: string; endTime: string
   subjectId?: string | null; label?: string | null; room?: string | null; specificDate?: string | null
+  startsOn?: string | null; endsOn?: string | null; privateSubjectId?: string | null
 }[]) => {
   const res = await api.put('/timetable', { slots }, { params: { teacherId } })
   // `reassigned` appears when scheduling a course took it off another lecturer

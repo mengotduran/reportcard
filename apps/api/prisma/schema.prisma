@@ -345,6 +345,22 @@ model TimetableSlot {
   // current (archivedAt: null) timetable, never a mix of old and new. All slots archived
   // by the same save share the exact same timestamp, which is how they're grouped into
   // one "version" for the history view.
+  // ── How long this slot runs (private/extra classes) ──────────────────────────
+  // Three shapes, and only one of them can apply at a time:
+  //   specificDate set          a single day, happens exactly once
+  //   startsOn/endsOn set       recurs weekly on dayOfWeek, but only between those dates
+  //   all three null            recurs weekly for the whole term/session (the original
+  //                             behaviour, and what every school-period slot uses)
+  // Dates are "YYYY-MM-DD" text for the same reason Student.dateOfBirth is: a DateTime
+  // shifts a day across timezones, and these are calendar days, not instants.
+  startsOn     String?
+  endsOn       String?
+  // A private class may be tied to a course, so the hours it delivers land on that
+  // course's coverage instead of floating free. Deliberately NOT `subjectId`: that field
+  // is what distinguishes a school period from a private slot everywhere in the codebase
+  // (absence reporting, the builder's grid, coverage's own query), so reusing it would
+  // silently turn every linked private class into a timetabled school period.
+  privateSubjectId String?
   archivedAt   DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

@@ -125,6 +125,12 @@ type EditableSlot = {
   subjectName?: string | null
   classLevel?: string | null
   specificDate?: string | null
+  // Window for a private class that runs weekly but only for part of the term. Both unset
+  // = it runs the whole term. Ignored when specificDate is set.
+  startsOn?: string | null
+  endsOn?: string | null
+  // Course this private class delivers hours toward, if any.
+  privateSubjectId?: string | null
 }
 
 const slotsOverlap = (a: { dayOfWeek: string; startTime: string; endTime: string; specificDate?: string | null }, b: typeof a) => {
@@ -147,6 +153,10 @@ const emptySlotForm = {
   // mode, specificDates holds exactly the one date being edited; in add mode it's a
   // growable list (one slot gets created per date, all sharing the same time/label/room).
   recurring: true, specificDates: [] as string[], dateInput: '',
+  // Recurring private class bounded to a window rather than the whole term.
+  useWindow: false, windowFrom: '', windowTo: '',
+  // Optional course the private class counts toward (hours land on its coverage).
+  privateSubjectId: '',
 }
 const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false, numPeriods: 1 }
 
@@ -588,6 +598,9 @@ export default function TimetablePage() {
       department: !cls ? '' : isUniversity ? programmeOf(cls) : isSecondary ? (classToDept[cls] ?? '') : '',
       classLevel: cls, subjectId: slot.subjectId ?? '', label: slot.label ?? '', room: slot.room ?? '',
       recurring: !slot.specificDate, specificDates: slot.specificDate ? [slot.specificDate] : [],
+      useWindow: !!(slot.startsOn || slot.endsOn),
+      windowFrom: slot.startsOn ?? '', windowTo: slot.endsOn ?? '',
+      privateSubjectId: slot.privateSubjectId ?? '',
     })
     setSlotError('')
     setShowSlotModal(true)
@@ -625,6 +638,11 @@ export default function TimetablePage() {
     if (slotForm.mode === 'subject' && !slotForm.subjectId) { setSlotError(tr('Please select a subject')); return }
     if (slotForm.mode === 'subject' && modalConflict) { setSlotError(modalConflictMessage); return }
     if (slotForm.mode === 'private' && !slotForm.label.trim()) { setSlotError(tr('Please enter a label')); return }
+    if (slotForm.mode === 'private' && slotForm.recurring && slotForm.useWindow) {
+      if (!slotForm.windowFrom || !slotForm.windowTo) { setSlotError(tr('Choose the dates the class runs between')); return }
+      // A backwards window produces zero hours, which reads as "it never ran".
+      if (slotForm.windowFrom > slotForm.windowTo) { setSlotError(tr('The end date is before the start date')); return }
+    }
 
     // One-off private slot(s): one EditableSlot per chosen date, all sharing this same
     // time/label/room — adding creates all of them at once, editing only ever has one.
@@ -636,6 +654,7 @@ export default function TimetablePage() {
         startTime: slotForm.startTime, endTime: slotForm.endTime,
         subjectId: null, label: slotForm.label.trim(), room: slotForm.room.trim() || null,
         specificDate: date,
+        privateSubjectId: slotForm.privateSubjectId || null,
       }))
       const others = editingSlotId ? slots.filter((s) => s.id !== editingSlotId) : slots
       for (const c of candidates) {
@@ -658,6 +677,11 @@ export default function TimetablePage() {
       subjectName: slotForm.mode === 'subject' ? chosenSubject?.name : null,
       classLevel: slotForm.mode === 'subject' ? chosenSubject?.classLevel : null,
       specificDate: null,
+      // Only a private class can be time-boxed or tied to a course this way; a school
+      // period runs the whole term and already has subjectId.
+      startsOn: slotForm.mode === 'private' && slotForm.useWindow ? (slotForm.windowFrom || null) : null,
+      endsOn: slotForm.mode === 'private' && slotForm.useWindow ? (slotForm.windowTo || null) : null,
+      privateSubjectId: slotForm.mode === 'private' ? (slotForm.privateSubjectId || null) : null,
     }
     const overlap = slots.some((s) => s.id !== next.id && slotsOverlap(s, next))
     if (overlap) { setSlotError(tr('This overlaps with another slot on the same day')); return }
@@ -678,7 +702,11 @@ export default function TimetablePage() {
     if (!activeTeacher) return
     setSaving(true)
     try {
-      await saveTimetableApi(activeTeacher.id, slots.map(({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate }) => ({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate: specificDate ?? null })))
+      await saveTimetableApi(activeTeacher.id, slots.map(({ dayOfWeek, startTime, endTime, subjectId, label, room, specificDate, startsOn, endsOn, privateSubjectId }) => ({
+        dayOfWeek, startTime, endTime, subjectId, label, room,
+        specificDate: specificDate ?? null, startsOn: startsOn ?? null, endsOn: endsOn ?? null,
+        privateSubjectId: privateSubjectId ?? null,
+      })))
       // Scheduling never moves a course between lecturers any more (that happens on the
       // Teachers page), so there's no reassignment to report and no derived department to
       // refresh — this only ever arranges courses the teacher already holds.
@@ -1012,15 +1040,61 @@ export default function TimetablePage() {
                   </>
                 ) : (
                   <>
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: true, specificDates: [] })}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition ${slotForm.recurring ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
-                        {tr('Recurring weekly')}
+                    {/* How long the class runs. Three shapes, one of them at a time:
+                        the whole term, a window inside it, or specific days. */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: true, useWindow: false, specificDates: [] })}
+                        className={`py-1.5 rounded-lg text-xs font-semibold border transition ${slotForm.recurring && !slotForm.useWindow ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                        {isUniversity ? tr('All semester') : tr('All year')}
                       </button>
-                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: false, specificDates: editingSlotId && slotForm.specificDates.length ? slotForm.specificDates : [] })}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition ${!slotForm.recurring ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: true, useWindow: true, specificDates: [] })}
+                        className={`py-1.5 rounded-lg text-xs font-semibold border transition ${slotForm.recurring && slotForm.useWindow ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                        {tr('For a period')}
+                      </button>
+                      <button type="button" onClick={() => setSlotForm({ ...slotForm, recurring: false, useWindow: false, specificDates: editingSlotId && slotForm.specificDates.length ? slotForm.specificDates : [] })}
+                        className={`py-1.5 rounded-lg text-xs font-semibold border transition ${!slotForm.recurring ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
                         {tr('One-off date(s)')}
                       </button>
+                    </div>
+
+                    {slotForm.recurring && slotForm.useWindow && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-medium text-foreground mb-1">{tr('From')} <span className="text-destructive">*</span></label>
+                          <input type="date" value={slotForm.windowFrom}
+                            onChange={(e) => setSlotForm({ ...slotForm, windowFrom: e.target.value })}
+                            className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-foreground mb-1">{tr('To')} <span className="text-destructive">*</span></label>
+                          <input type="date" value={slotForm.windowTo}
+                            onChange={(e) => setSlotForm({ ...slotForm, windowTo: e.target.value })}
+                            className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                        </div>
+                        <p className="col-span-2 text-xs text-muted-foreground">
+                          {tr('It runs on this weekday only between these dates. Anything outside the term is ignored.')}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Optional: which course these hours count toward. Left blank the class
+                        still happens, it just does not land on any course's coverage. */}
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">
+                        {tr('Counts toward')} <span className="text-muted-foreground font-normal">({tr('optional')})</span>
+                      </label>
+                      <CustomSelect
+                        value={slotForm.privateSubjectId}
+                        onChange={(v) => setSlotForm({ ...slotForm, privateSubjectId: v })}
+                        placeholder={tr('No course — just a private class')}
+                        options={[
+                          { value: '', label: tr('No course — just a private class') },
+                          ...activeAssignableSubjects.map((sub) => ({ value: sub.id, label: `${sub.name} · ${stripProgrammeSuffix(sub.classLevel)}` })),
+                        ]}
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {tr('Its hours are added to that course\'s taught hours. The required hours target does not change.')}
+                      </p>
                     </div>
                     {!slotForm.recurring && (
                       <div>

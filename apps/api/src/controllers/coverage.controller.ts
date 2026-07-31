@@ -192,8 +192,19 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
   // superseded version counts only up to the moment it was replaced and its successor only
   // from then on. The two halves add up to one timetable, and a departed teacher keeps what
   // they actually taught.
+  // Timetabled periods for these courses, PLUS private/extra classes the lecturer tied to
+  // one of them. A private class is a real class that was held, so its hours belong on the
+  // course's taught total; the course's target is untouched, which is what makes an extra
+  // catch-up session close the gap rather than widen it.
   const slots = await prisma.timetableSlot.findMany({
-    where: { schoolId, teacherId: { in: teacherIds }, subjectId: { in: subjectIds } },
+    where: {
+      schoolId,
+      teacherId: { in: teacherIds },
+      OR: [
+        { subjectId: { in: subjectIds } },
+        { subjectId: null, privateSubjectId: { in: subjectIds } },
+      ],
+    },
   })
   const slotIds = slots.map((s) => s.id)
   const absences = await prisma.teacherAbsence.findMany({
@@ -221,7 +232,9 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     // halfway through a term still describes the whole term, and counting only from the day
     // it was typed in would rob teachers of hours they had already taught.
     const teacherSlots = slots.filter((s) =>
-      s.teacherId === ts.userId && s.subjectId === subject.id &&
+      s.teacherId === ts.userId &&
+      // Either a timetabled period for this course, or a private class tied to it.
+      (s.subjectId === subject.id || (s.subjectId == null && s.privateSubjectId === subject.id)) &&
       (s.archivedAt == null || (ts.endedAt != null && s.archivedAt >= ts.endedAt))
     )
     // Clamped to the ASSIGNMENT WINDOW: hours only count while this teacher actually held the
@@ -259,7 +272,14 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
 
     const result = computeCoverage({
       requiredHours: subject.requiredHours,
-      slots: teacherSlots.map((s) => ({ id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime })),
+      // specificDate/startsOn/endsOn must come through: without them a one-off or
+      // time-boxed private class would be counted as if it recurred every week of the
+      // term. Harmless while only school periods reached here (they are all unbounded),
+      // but private classes tied to a course now do.
+      slots: teacherSlots.map((s) => ({
+        id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime,
+        specificDate: s.specificDate, startsOn: s.startsOn, endsOn: s.endsOn,
+      })),
       terms: scopeTerms,
       absences: teacherAbsences,
       asOfDate,
@@ -523,7 +543,10 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
     for (const [programme, sittingSlots] of bySitting) {
       const result = computeCoverage({
         requiredHours: null,
-        slots: sittingSlots.map((s) => ({ id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime, specificDate: s.specificDate })),
+        slots: sittingSlots.map((s) => ({
+          id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime,
+          specificDate: s.specificDate, startsOn: s.startsOn, endsOn: s.endsOn,
+        })),
         terms: scopeTerms,
         absences: teacherAbsences,
         asOfDate,

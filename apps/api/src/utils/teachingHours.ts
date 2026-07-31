@@ -221,6 +221,17 @@ export function dateStringInAnyRange(dateStr: string, ranges: DateRange[]): bool
  * Holidays are intersected with the range before subtracting, so a closure that starts before
  * the term or runs past its end only removes the days actually inside it.
  */
+/** "YYYY-MM-DD" to a UTC Date, or null. Text in, calendar day out — see the field comments
+ *  on TimetableSlot for why these are strings and not DateTime. */
+function parseDateString(v?: string | null): Date | null {
+  if (!v) return null
+  const [y, m, d] = v.split('-').map(Number)
+  if (!y || !m || !d) return null
+  return new Date(Date.UTC(y, m - 1, d))
+}
+const maxDate = (a: Date, b: Date | null): Date => (b && toUtcMidnight(b) > toUtcMidnight(a) ? b : a)
+const minDate = (a: Date, b: Date | null): Date => (b && toUtcMidnight(b) < toUtcMidnight(a) ? b : a)
+
 export function countTeachingWeekdays(
   dayOfWeek: DayOfWeek,
   rangeStart: Date,
@@ -277,6 +288,11 @@ export interface CoverageSlot {
   // date instead of recurring every week. When set, this slot contributes its duration
   // exactly once (on that date) rather than once per week across the scope terms.
   specificDate?: string | null
+  // Bounds for a slot that recurs weekly but only for part of the term (a private class
+  // booked "for six weeks"). Both null = runs the whole term, which is every school period
+  // and the original behaviour. Ignored when specificDate is set, since that is one day.
+  startsOn?: string | null
+  endsOn?: string | null
 }
 
 export interface CoverageAbsence {
@@ -340,8 +356,15 @@ export function computeCoverage(params: {
       continue
     }
     for (const term of terms) {
-      scheduledHours += countTeachingWeekdays(slot.dayOfWeek, term.startDate, term.endDate, holidays) * hours
-      elapsedScheduledHours += countTeachingWeekdays(slot.dayOfWeek, term.startDate, term.endDate, holidays, asOfDate) * hours
+      // A bounded slot only runs where its own window overlaps the term, so the weekly
+      // count is taken over the INTERSECTION rather than the whole term. Clamping here
+      // rather than filtering whole terms matters for a window that starts or ends
+      // mid-term, which is the normal case for "extra classes for the next month".
+      const from = maxDate(term.startDate, parseDateString(slot.startsOn))
+      const to = minDate(term.endDate, parseDateString(slot.endsOn))
+      if (toUtcMidnight(from) > toUtcMidnight(to)) continue // window misses this term entirely
+      scheduledHours += countTeachingWeekdays(slot.dayOfWeek, from, to, holidays) * hours
+      elapsedScheduledHours += countTeachingWeekdays(slot.dayOfWeek, from, to, holidays, asOfDate) * hours
     }
   }
 

@@ -289,10 +289,18 @@ interface SlotInput {
   // "YYYY-MM-DD" — set only for a one-off private slot (see the schema comment on
   // TimetableSlot). Always null for a school-subject period.
   specificDate: string | null
+  // Window for a private class that recurs weekly but only for part of the term. Both null
+  // = runs the whole term, which is every school period and every "continuous" private one.
+  startsOn: string | null
+  endsOn: string | null
+  // Optional course a private class delivers hours toward. Never set on a school period,
+  // which already has subjectId.
+  privateSubjectId: string | null
 }
 
 const slotKey = (s: SlotInput) =>
   `${s.dayOfWeek}|${s.startTime}|${s.endTime}|${s.subjectId ?? ''}|${s.label ?? ''}|${s.room ?? ''}|${s.specificDate ?? ''}`
+  + `|${s.startsOn ?? ''}|${s.endsOn ?? ''}|${s.privateSubjectId ?? ''}`
 
 // Identity for the period-shape rules, which judge WHEN a class runs and nothing else.
 // Deliberately excludes room and label, so renaming a room never forces a class to be
@@ -329,8 +337,23 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
         label: s.label ? String(s.label).trim() : null,
         room: s.room ? String(s.room).trim() : null,
         specificDate,
+        // A window only means anything on a recurring slot. A one-off already names its
+        // single day, so carrying a range alongside it would be two answers to one question.
+        startsOn: !specificDate && s.startsOn && DATE_RE.test(String(s.startsOn)) ? String(s.startsOn) : null,
+        endsOn: !specificDate && s.endsOn && DATE_RE.test(String(s.endsOn)) ? String(s.endsOn) : null,
+        // Only a private slot can point at a course this way; a school period already has
+        // subjectId, and setting both would double-count its hours on that course.
+        privateSubjectId: !s.subjectId && s.privateSubjectId ? String(s.privateSubjectId) : null,
       }
     })
+
+    // A backwards window silently produces zero hours, which reads as "the class never
+    // happened" rather than "the dates are the wrong way round".
+    const badWindow = slots.find((s) => s.startsOn && s.endsOn && s.startsOn > s.endsOn)
+    if (badWindow) {
+      res.status(400).json({ message: `A private class ends before it starts (${badWindow.startsOn} to ${badWindow.endsOn}).` })
+      return
+    }
 
     const [school, breakPeriods] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
