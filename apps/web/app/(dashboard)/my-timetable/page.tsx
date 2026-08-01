@@ -10,6 +10,7 @@ import WeekGrid, { WeekGridSlot } from '@/components/ui/WeekGrid'
 import MissedPeriodBanner, { missedInfoFromParams } from '@/components/ui/MissedPeriodBanner'
 import { buildGridSlots, groupAbsencesBySlot } from '@/lib/timetableGrid'
 import { onRealtime } from '@/lib/socket'
+import { shortDate } from '@/lib/timetableGrid'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { stripProgrammeSuffix } from '@/lib/programme'
 
@@ -44,6 +45,13 @@ function MyTimetableView() {
   // change.
   useEffect(() => onRealtime('absences:changed', loadAbsences), [])
 
+  // An admin rearranged this timetable. Unlike absences:changed above, the SLOTS themselves
+  // moved, so refetching only the decorations would leave the old grid on screen.
+  useEffect(() => onRealtime('timetable:changed', () => {
+    getMyTimetableApi().then((s) => setSlots(s.slots)).catch(() => { /* keep the last grid */ })
+    loadAbsences()
+  }), [])
+
   useEffect(() => {
     // Deliberately NOT one Promise.all: absences are a decoration on the grid, so a failure
     // there must not blank the timetable itself. Bundling them would make any absence error
@@ -66,6 +74,8 @@ function MyTimetableView() {
   const absencesBySlot = groupAbsencesBySlot(absences)
   const gridSlots: WeekGridSlot[] = buildGridSlots(slots, absencesBySlot, {
     t: tr, unknownSubject: tr('Unknown subject'),
+    // Ring the period this page was opened for, so an absence click lands ON it.
+    focusSlotId: missedInfo.missedSlotId,
   })
 
   return (
@@ -96,7 +106,10 @@ function MyTimetableView() {
                 : tr("Your timetable hasn't been set up yet — check back once your admin has built it.")}
             </p>
           )}
-          <MissedPeriodBanner {...missedInfo} />
+          <MissedPeriodBanner {...missedInfo}
+            // Archived by a later save: the grid has nothing to ring, so say so
+            // rather than leaving the click looking broken.
+            slotGone={!!missedInfo.missedSlotId && !loading && !slots.some((s) => s.id === missedInfo.missedSlotId)} />
           <WeekGrid
             slots={gridSlots}
             breaks={breakPeriods}
@@ -115,24 +128,56 @@ function MyTimetableView() {
               <button onClick={() => setSelectedSlot(null)} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
             </div>
             <div className="space-y-2 text-sm">
+              {/* A one-off names its date instead of a weekday — a private class that runs
+                  once is not a "every Monday" fixture and must not read as one. */}
               <div className="flex justify-between">
-                <span className="text-muted-foreground">{tr('Day')}</span>
-                <span className="text-foreground font-medium">{tr(dayLabel(selectedSlot.dayOfWeek))}</span>
+                <span className="text-muted-foreground">{selectedSlot.specificDate ? tr('Date') : tr('Day')}</span>
+                <span className="text-foreground font-medium">
+                  {selectedSlot.specificDate ? shortDate(selectedSlot.specificDate) : tr(dayLabel(selectedSlot.dayOfWeek))}
+                </span>
               </div>
+              {/* Time-boxed private class: without this a six-week revision class looks
+                  identical to a permanent one. Matches the mobile detail sheet. */}
+              {!selectedSlot.specificDate && (selectedSlot.startsOn || selectedSlot.endsOn) && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{tr('Runs')}</span>
+                  <span className="text-foreground font-medium">
+                    {selectedSlot.startsOn && selectedSlot.endsOn
+                      ? `${shortDate(selectedSlot.startsOn)} → ${shortDate(selectedSlot.endsOn)}`
+                      : selectedSlot.startsOn
+                        ? `${tr('From')} ${shortDate(selectedSlot.startsOn)}`
+                        : `${tr('Until')} ${shortDate(selectedSlot.endsOn!)}`}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{tr('Time')}</span>
                 <span className="text-foreground font-medium">{selectedSlot.startTime} – {selectedSlot.endTime}</span>
               </div>
               {selectedSlot.subjectId && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">{tr(isUniversity ? 'Course' : 'Subject')}</span>
-                  <span className="text-foreground font-medium">{selectedSlot.subjectName ?? tr('Unknown subject')}</span>
+                <div>
+                  <span className="block text-muted-foreground">{tr(isUniversity ? 'Course' : 'Subject')}</span>
+                  <span className="block text-foreground font-medium break-words">{selectedSlot.subjectName ?? tr('Unknown subject')}</span>
                 </div>
               )}
               {selectedSlot.subjectId && selectedSlot.classLevel && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">{tr('Class')}</span>
-                  <span className="text-foreground font-medium">{stripProgrammeSuffix(selectedSlot.classLevel)}</span>
+                <div>
+                  <span className="block text-muted-foreground">{tr('Class')}</span>
+                  <span className="block text-foreground font-medium break-words">{stripProgrammeSuffix(selectedSlot.classLevel)}</span>
+                </div>
+              )}
+              {/* Which course this private class delivers hours toward. Rendered nowhere
+                  before, so a linked class looked identical to a standalone one. */}
+              {!selectedSlot.subjectId && selectedSlot.privateSubjectName && (
+                <div>
+                  <span className="block text-muted-foreground">{tr('Counts toward')}</span>
+                  <span className="block text-foreground font-medium break-words">{selectedSlot.privateSubjectName}</span>
+                </div>
+              )}
+              {!selectedSlot.subjectId && selectedSlot.privateSubjectClass && (
+                <div>
+                  <span className="block text-muted-foreground">{tr('Class')}</span>
+                  <span className="block text-foreground font-medium break-words">{stripProgrammeSuffix(selectedSlot.privateSubjectClass)}</span>
                 </div>
               )}
               {selectedSlot.room && (

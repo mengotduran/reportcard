@@ -40,6 +40,10 @@ export type RealtimeEvent =
   // is clean. Read-only views (lists, progress counts, dashboards) have no such buffer and
   // refetch freely.
   | 'marks:changed'
+  // The recipient's own TIMETABLE was rearranged by an admin. Sent to the affected teacher
+  // only. Fires on any real change, including a pure retiming that adds and removes nothing,
+  // because an open timetable screen would otherwise keep showing the old grid.
+  | 'timetable:changed'
 
 let io: Server | null = null
 

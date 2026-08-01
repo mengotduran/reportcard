@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, Fragment} from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
@@ -16,6 +17,7 @@ import { onRealtime } from '@/lib/socket'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { usePagination } from '@/lib/usePagination'
 import { Clock, CalendarOff, Search, X, Trash2, Users, ChevronRight} from 'lucide-react'
+import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
 
 interface DrillTarget {
   teacherId: string
@@ -105,6 +107,7 @@ export default function TeachingHoursPage() {
   // "2 periods" vs "2 absences" — depends on whether a period length is configured.
   const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period') : t('periods')) : (n === 1 ? t('absence') : t('absences'))
 
+  const router = useRouter()
   const [drillDown, setDrillDown] = useState<DrillTarget | null>(null)
   // Which course row is open. One at a time: the breakdown is for answering "who taught
   // this", not for scanning every course at once.
@@ -169,7 +172,9 @@ export default function TeachingHoursPage() {
     getTeacherTimetableApi(reportTeacherId).then((d) => setTeacherSlots(d.slots)).finally(() => setSlotsLoading(false))
   }, [reportTeacherId])
 
-  const daySlots = date ? teacherSlots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
+  // See the twin in my-teaching-hours: private classes are reportable, and each slot is
+  // only offered on the dates it actually runs.
+  const daySlots = date ? teacherSlots.filter((s) => slotRunsOn(s, date)) : []
   // An absence can only be reported for a period that hasn't ENDED yet — admins are no
   // longer exempt from that (the API enforces it either way).
   const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
@@ -550,7 +555,15 @@ export default function TeachingHoursPage() {
                     was reported for is FINAL (isFinal: start + the school's grace period) — after that it's
                     final for everyone, since there's no more chance the teacher shows up. */}
                 {absences.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2">
+                  // Opens THAT teacher's timetable at this period, ringed. The admin's
+                  // read-only view, since this is somebody else's schedule.
+                  <div key={a.id}
+                    onClick={() => drillDown?.teacherId && router.push(
+                      `/teacher-timetable?teacherId=${encodeURIComponent(drillDown.teacherId)}&teacherName=${encodeURIComponent(drillDown.teacherName)}`
+                      + `&missedSlotId=${encodeURIComponent(a.timetableSlotId)}&missedDate=${encodeURIComponent(a.date)}`
+                      + `&missedFrom=${encodeURIComponent(a.startTime)}&missedTo=${encodeURIComponent(a.endTime)}`,
+                    )}
+                    className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2 cursor-pointer hover:bg-hover transition">
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-foreground">{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</span>
@@ -561,7 +574,7 @@ export default function TeachingHoursPage() {
                           already scopes the whole list to one course, so this would be
                           redundant there. */}
                       {!drillDown.subjectName && (a.subjectName || a.classLevel) && (
-                        <p className="text-xs text-muted-foreground mt-0.5">{a.subjectName} · {a.classLevel}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{a.subjectName}{a.classLevel ? ` · ${a.classLevel}` : ''}</p>
                       )}
                     </div>
                     {/* The REASON has to be on screen, not only in a title tooltip: a
@@ -661,7 +674,7 @@ export default function TeachingHoursPage() {
                               disabled={wholeDay || passed}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
-                            {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{s.classLevel}</span>
+                            {s.startTime}–{s.endTime} · {slotTitle(s)} {s.classLevel && <span className="text-xs text-muted-foreground">{s.classLevel}</span>}
                             {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
                           </label>
                         )

@@ -22,6 +22,8 @@ export interface NotificationLink {
   /** Courses that moved to another teacher, and who has them now. */
   reassignedCourses?: string
   reassignedTo?: string
+  /** The viewer's timetable was rearranged; the link just opens it. */
+  timetableChanged?: boolean
 }
 
 export interface AppNotification {
@@ -54,6 +56,11 @@ export function notificationHref(link: NotificationLink | null, ownUserId?: stri
     q.set('missedPeriods', String(link.periods))
     q.set('missedDateFrom', link.dateFrom)
     q.set('missedDateTo', link.dateTo)
+  } else if (link.timetableChanged) {
+    // Nothing to highlight — a save can add, move and remove several classes at once, so
+    // the body carries the detail and this only has to land them on the timetable. Still
+    // needs its own branch: without one the row falls through and is not clickable.
+    q.set('timetableChanged', '1')
   } else if (link.reassignedCourses) {
     q.set('reassignedCourses', link.reassignedCourses)
     if (link.reassignedTo) q.set('reassignedTo', link.reassignedTo)

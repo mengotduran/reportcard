@@ -9,7 +9,7 @@ import {
 import { getClassLevelsApi, ClassLevel as ClassLevelDef } from '@/lib/api/classLevels'
 import { getDepartmentsApi } from '@/lib/api/departments'
 import { getTermsApi } from '@/lib/api/terms'
-import { stripProgrammeSuffix, programmeFromName, Programme } from '@/lib/programme'
+import { stripProgrammeSuffix, programmeFromName, Programme, PROGRAMME_LABELS } from '@/lib/programme'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { Plus, X, ArrowLeft, Search, Briefcase, Clock, Trash2, Pencil } from 'lucide-react'
 import CustomSelect from '@/components/ui/CustomSelect'
@@ -148,7 +148,7 @@ const roleLabels: Record<string, string> = {
 
 const emptySlotForm = {
   dayOfWeek: 'MONDAY', periodId: '', numPeriods: 1, startTime: '', endTime: '', mode: 'subject' as 'subject' | 'private',
-  level: '', department: '', classLevel: '', subjectId: '', label: '', room: '',
+  level: '', department: '', section: '' as Programme | '', classLevel: '', subjectId: '', label: '', room: '',
   // Private-class-only: recurring weekly (default) vs one-off specific date(s). In edit
   // mode, specificDates holds exactly the one date being edited; in add mode it's a
   // growable list (one slot gets created per date, all sharing the same time/label/room).
@@ -158,7 +158,7 @@ const emptySlotForm = {
   // Optional course the private class counts toward (hours land on its coverage).
   privateSubjectId: '',
 }
-const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false, numPeriods: 1 }
+const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false, numPeriods: 1, programme: null as 'DAY' | 'EVENING' | null }
 
 export default function TimetablePage() {
   const { toast, showToast, hideToast } = useToast()
@@ -194,6 +194,9 @@ export default function TimetablePage() {
   const [editingSlotId, setEditingSlotId] = useState<string | null>(null)
   const [slotForm, setSlotForm] = useState(emptySlotForm)
   const [slotError, setSlotError] = useState('')
+  // Today, for the date pickers' `min`. A class cannot be booked into a day that is over;
+  // the API refuses it too (saveTimetable), this just stops it being offered.
+  const todayStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
   const [deleteTarget, setDeleteTarget] = useState<EditableSlot | null>(null)
 
   const [periods, setPeriods] = useState<TimetablePeriod[]>([])
@@ -255,7 +258,7 @@ export default function TimetablePage() {
     // rounding it silently would hide the very thing the admin came here to correct.
     const exact = !p.isBreak && isWholePeriods(p.startTime, p.endTime, periodLen)
     const numPeriods = exact ? (periodsBetween(p.startTime, p.endTime, periodLen) ?? 1) : 0
-    setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak, numPeriods })
+    setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak, numPeriods, programme: p.programme ?? null })
     setPeriodError('')
   }
 
@@ -305,7 +308,7 @@ export default function TimetablePage() {
       return
     }
 
-    const row = { startTime: periodForm.startTime, endTime, isBreak: periodForm.isBreak }
+    const row = { startTime: periodForm.startTime, endTime, isBreak: periodForm.isBreak, programme: periodForm.isBreak ? null : periodForm.programme }
     const updatedList = editingPeriodId
       ? periods.map((p) => p.id === editingPeriodId ? { ...p, ...row } : p)
       : [...periods, { id: `new-${Date.now()}`, ...row }]
@@ -336,7 +339,7 @@ export default function TimetablePage() {
     }
     setPeriodsSaving(true)
     try {
-      const result = await savePeriodsApi(periods.map(({ startTime, endTime, isBreak }) => ({ startTime, endTime, isBreak })), periodLen)
+      const result = await savePeriodsApi(periods.map(({ startTime, endTime, isBreak, programme }) => ({ startTime, endTime, isBreak, programme })), periodLen)
       showToast(result.message)
       setShowPeriodsModal(false)
       // A period's time moving can carry teacher slots along with it (school-wide, not
@@ -439,6 +442,19 @@ export default function TimetablePage() {
   const classOptionLabel = (name: string, base: string): string =>
     sittingOfClass(name) === 'EVENING' ? `${base} (${tr('Evening')})` : base
 
+  // Both sittings of the same course share the same Level + Department, so when a teacher
+  // holds both, Department alone can't tell them apart any more (it collapses to one option,
+  // see slotDeptOptions above). An explicit Section step is the only way to say which one is
+  // meant — skipped, exactly like Department, when there's only one to answer.
+  const slotSectionOptions = isUniversity
+    ? ([...new Set(activeAssignableSubjects
+        .filter((s) => levelGroupOf(s.classLevel) === slotForm.level && programmeOf(s.classLevel) === effectiveDepartment)
+        .map((s) => sittingOfClass(s.classLevel)))] as Programme[])
+        .sort()
+        .map((p) => ({ value: p, label: tr(PROGRAMME_LABELS[p]) }))
+    : []
+  const effectiveSection: Programme | '' = slotSectionOptions.length === 1 ? slotSectionOptions[0].value : slotForm.section
+
   const slotClassOptions = isSecondary
     ? [...new Set(activeAssignableSubjects.filter((s) => classToDept[s.classLevel] === effectiveDepartment).map((s) => s.classLevel))]
         .sort((a, b) => (classOrder[a] ?? 0) - (classOrder[b] ?? 0))
@@ -452,11 +468,25 @@ export default function TimetablePage() {
   // University has no separate Class step — Level + Department together
   // already resolve to exactly one class, so resolving a Department (whether
   // auto or picked) goes straight to it.
-  const resolveUniClass = (level: string, department: string) =>
-    activeAssignableSubjects.find((s) => levelGroupOf(s.classLevel) === level && programmeOf(s.classLevel) === department)?.classLevel ?? ''
+  const resolveUniClass = (level: string, department: string, section: Programme | '') =>
+    activeAssignableSubjects.find((s) =>
+      levelGroupOf(s.classLevel) === level && programmeOf(s.classLevel) === department &&
+      (!section || sittingOfClass(s.classLevel) === section)
+    )?.classLevel ?? ''
+  // Genuinely ambiguous (both sittings exist) and not yet answered: resolving to the first
+  // match anyway would silently guess a class while the Section field still shows required
+  // and unanswered — nothing should be pickable until the admin actually says which one.
+  const sectionUnanswered = slotSectionOptions.length > 1 && !effectiveSection
   const effectiveClassLevel = isUniversity
-    ? (effectiveDepartment ? resolveUniClass(slotForm.level, effectiveDepartment) : '')
+    ? (effectiveDepartment && !sectionUnanswered ? resolveUniClass(slotForm.level, effectiveDepartment, effectiveSection) : '')
     : slotForm.classLevel
+
+  // Only the periods this class's section may use — an Evening class never sees a Day-only
+  // period, and a Day class never sees an Evening-only one. Untagged periods (the vast
+  // majority — every school with no evening programme never tags any) are always offered.
+  const availableTeachingPeriods = effectiveClassLevel
+    ? teachingPeriods.filter((p) => !p.programme || p.programme === sittingOfClass(effectiveClassLevel))
+    : teachingPeriods
 
   // Live cross-teacher clash check. The scarce thing here is a TIME SLOT for
   // this class (a class of students can't be in two lessons at once) — not
@@ -596,6 +626,7 @@ export default function TimetablePage() {
       mode: slot.subjectId ? 'subject' : 'private',
       level: isUniversity && cls ? levelGroupOf(cls) : '',
       department: !cls ? '' : isUniversity ? programmeOf(cls) : isSecondary ? (classToDept[cls] ?? '') : '',
+      section: isUniversity && cls ? sittingOfClass(cls) : '',
       classLevel: cls, subjectId: slot.subjectId ?? '', label: slot.label ?? '', room: slot.room ?? '',
       recurring: !slot.specificDate, specificDates: slot.specificDate ? [slot.specificDate] : [],
       useWindow: !!(slot.startsOn || slot.endsOn),
@@ -642,12 +673,17 @@ export default function TimetablePage() {
       if (!slotForm.windowFrom || !slotForm.windowTo) { setSlotError(tr('Choose the dates the class runs between')); return }
       // A backwards window produces zero hours, which reads as "it never ran".
       if (slotForm.windowFrom > slotForm.windowTo) { setSlotError(tr('The end date is before the start date')); return }
+      // A window that started earlier is fine — that class is still running. One that has
+      // already finished can never run again.
+      if (slotForm.windowTo < todayStr) { setSlotError(tr('That class finishes in the past. Pick an end date of today or later.')); return }
     }
 
     // One-off private slot(s): one EditableSlot per chosen date, all sharing this same
     // time/label/room — adding creates all of them at once, editing only ever has one.
     if (slotForm.mode === 'private' && !slotForm.recurring) {
       if (slotForm.specificDates.length === 0) { setSlotError(tr('Add at least one date')); return }
+      // `min` on the input is only a hint — a typed or pasted date walks straight past it.
+      if (slotForm.specificDates.some((d) => d < todayStr)) { setSlotError(tr('That date has already passed. Pick today or a later date.')); return }
       const candidates: EditableSlot[] = slotForm.specificDates.map((date, i) => ({
         id: editingSlotId && slotForm.specificDates.length === 1 ? editingSlotId : `new-${Date.now()}-${i}`,
         dayOfWeek: dayOfWeekForDate(date),
@@ -905,7 +941,7 @@ export default function TimetablePage() {
                         <label className="block text-xs font-medium text-foreground mb-1">{tr('Level')} <span className="text-destructive">*</span></label>
                         <CustomSelect
                           value={slotForm.level}
-                          onChange={(v) => setSlotForm({ ...slotForm, level: v, department: '', classLevel: '', periodId: '', startTime: '', endTime: '', subjectId: '' })}
+                          onChange={(v) => setSlotForm({ ...slotForm, level: v, department: '', section: '', classLevel: '', periodId: '', startTime: '', endTime: '', subjectId: '' })}
                           options={slotLevelOptions}
                           placeholder={tr('Select a level...')}
                         />
@@ -917,7 +953,7 @@ export default function TimetablePage() {
                           <label className="block text-xs font-medium text-foreground mb-1">{tr('Department')} <span className="text-destructive">*</span></label>
                           <CustomSelect
                             value={slotForm.department}
-                            onChange={(v) => setSlotForm({ ...slotForm, department: v, periodId: '', startTime: '', endTime: '', subjectId: '' })}
+                            onChange={(v) => setSlotForm({ ...slotForm, department: v, section: '', periodId: '', startTime: '', endTime: '', subjectId: '' })}
                             options={slotDeptOptions}
                             placeholder={tr('Select a department...')}
                           />
@@ -931,6 +967,25 @@ export default function TimetablePage() {
                       ) : (
                         <p className="text-xs text-muted-foreground">{tr('No departments found yet — add subjects from the Subjects page, or add a Private Class instead.')}</p>
                       )
+                    )}
+                    {isUniversity && effectiveDepartment && (
+                      slotSectionOptions.length > 1 ? (
+                        <div>
+                          <label className="block text-xs font-medium text-foreground mb-1">{tr('Section')} <span className="text-destructive">*</span></label>
+                          <CustomSelect
+                            value={slotForm.section}
+                            onChange={(v) => setSlotForm({ ...slotForm, section: v as Programme, periodId: '', startTime: '', endTime: '', subjectId: '' })}
+                            options={slotSectionOptions}
+                            placeholder={tr('Select a section...')}
+                          />
+                        </div>
+                      ) : slotSectionOptions.length === 1 ? (
+                        // Only one sitting to choose from — nothing to actually ask, same
+                        // pattern as Department just above.
+                        <p className="text-xs text-muted-foreground">
+                          {tr('Section')}: <span className="font-medium text-foreground">{slotSectionOptions[0].label}</span>
+                        </p>
+                      ) : null
                     )}
                     {isSecondary && effectiveDepartment && (
                       <div>
@@ -981,7 +1036,7 @@ export default function TimetablePage() {
                           disabled={!effectiveClassLevel}
                           className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed">
                           <option value="">{tr(effectiveClassLevel ? 'Select...' : 'Select a class first')}</option>
-                          {teachingPeriods.map((p) => {
+                          {availableTeachingPeriods.map((p) => {
                             const clash = periodConflict(p)
                             return (
                               <option key={p.id} value={p.id} disabled={!!clash}>
@@ -1006,6 +1061,13 @@ export default function TimetablePage() {
                       </div>
                       {teachingPeriods.length === 0 ? (
                         <p className="col-span-3 text-xs text-muted-foreground">{tr("This school hasn't set up its period structure yet — use \"Set Up Periods\" first.")}</p>
+                      ) : availableTeachingPeriods.length === 0 ? (
+                        // Periods exist, just none open to this class's section — distinct from
+                        // the message above so the fix is "tag one for this section" rather
+                        // than "set up periods from scratch".
+                        <p className="col-span-3 text-xs text-muted-foreground">
+                          {tr('No periods are open to the')} {tr(effectiveClassLevel && sittingOfClass(effectiveClassLevel) === 'EVENING' ? 'Evening' : 'Day')} {tr('section yet — use "Set Up Periods" to tag one.')}
+                        </p>
                       ) : slotForm.startTime && slotForm.endTime ? (
                         <div className="col-span-3 space-y-1">
                           <p className="text-xs text-muted-foreground">
@@ -1061,13 +1123,13 @@ export default function TimetablePage() {
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="block text-xs font-medium text-foreground mb-1">{tr('From')} <span className="text-destructive">*</span></label>
-                          <input type="date" value={slotForm.windowFrom}
+                          <input type="date" min={todayStr} value={slotForm.windowFrom}
                             onChange={(e) => setSlotForm({ ...slotForm, windowFrom: e.target.value })}
                             className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-foreground mb-1">{tr('To')} <span className="text-destructive">*</span></label>
-                          <input type="date" value={slotForm.windowTo}
+                          <input type="date" min={slotForm.windowFrom || todayStr} value={slotForm.windowTo}
                             onChange={(e) => setSlotForm({ ...slotForm, windowTo: e.target.value })}
                             className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                         </div>
@@ -1102,13 +1164,13 @@ export default function TimetablePage() {
                           {editingSlotId ? tr('Date') : tr('Dates')} <span className="text-destructive">*</span>
                         </label>
                         {editingSlotId ? (
-                          <input type="date" value={slotForm.specificDates[0] ?? ''}
+                          <input type="date" min={todayStr} value={slotForm.specificDates[0] ?? ''}
                             onChange={(e) => setSlotForm({ ...slotForm, specificDates: e.target.value ? [e.target.value] : [] })}
                             className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                         ) : (
                           <>
                             <div className="flex gap-2">
-                              <input type="date" value={slotForm.dateInput}
+                              <input type="date" min={todayStr} value={slotForm.dateInput}
                                 onChange={(e) => setSlotForm({ ...slotForm, dateInput: e.target.value })}
                                 className="flex-1 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                               <button type="button"
@@ -1295,6 +1357,11 @@ export default function TimetablePage() {
                           <span className="text-[10px] font-medium text-muted-foreground">{rowPeriods} {rowPeriods === 1 ? tr('period') : tr('periods')}</span>
                         ) : null}
                         {p.isBreak && <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{tr('Break')}</span>}
+                        {p.programme && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                            {tr(p.programme === 'DAY' ? 'Day only' : 'Evening only')}
+                          </span>
+                        )}
                         <button onClick={() => startEditPeriod(p)} className="text-muted-foreground hover:text-primary p-1 rounded transition"><Pencil size={13} /></button>
                         <button onClick={() => removePeriodRow(p.id)} className="text-muted-foreground hover:text-destructive p-1 rounded transition"><Trash2 size={13} /></button>
                       </div>
@@ -1345,6 +1412,28 @@ export default function TimetablePage() {
                   <input type="checkbox" checked={periodForm.isBreak} onChange={(e) => setPeriodForm({ ...periodForm, isBreak: e.target.checked, endTime: '', numPeriods: 1 })} />
                   {tr('This is a break (not a teaching period)')}
                 </label>
+                {/* Evening only exists for universities today, so this stays hidden rather
+                    than offering a choice with one real option everywhere else. A break
+                    applies to everyone regardless, so it has no section of its own either. */}
+                {isUniversity && !periodForm.isBreak && (
+                  <div>
+                    <label className="block text-xs font-medium text-foreground mb-1">{tr('Applies to')}</label>
+                    <div className="flex gap-2">
+                      {([null, 'DAY', 'EVENING'] as const).map((opt) => (
+                        <button
+                          key={String(opt)}
+                          type="button"
+                          onClick={() => setPeriodForm({ ...periodForm, programme: opt })}
+                          className={`flex-1 py-1.5 rounded-lg text-xs border transition ${
+                            periodForm.programme === opt ? 'bg-primary text-white border-primary' : 'border-border text-foreground hover:bg-hover'
+                          }`}
+                        >
+                          {tr(opt === null ? 'Whole school' : opt === 'DAY' ? 'Day only' : 'Evening only')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   {editingPeriodId && (
                     <button onClick={cancelEditPeriod}

@@ -19,6 +19,10 @@ export interface TimetableSlot {
   endsOn?: string | null
   /** Course a private class delivers hours toward, if any. */
   privateSubjectId?: string | null
+  /** Name of that course, resolved by the API so no client refetches the subject list. */
+  privateSubjectName?: string | null
+  /** And its class, so a linked private class can show the same two rows a course does. */
+  privateSubjectClass?: string | null
 }
 
 export const getTeacherTimetableApi = async (teacherId: string): Promise<{ slots: TimetableSlot[] }> => {
@@ -78,6 +82,9 @@ export interface TimetablePeriod {
   startTime: string
   endTime: string
   isBreak: boolean
+  /** Which sitting this slot is for. Null = shared by both, the default for every school
+   *  without an evening programme. */
+  programme?: 'DAY' | 'EVENING' | null
 }
 
 export const getPeriodsApi = async (): Promise<{ periods: TimetablePeriod[]; periodMinutes: number | null }> => {
@@ -85,7 +92,10 @@ export const getPeriodsApi = async (): Promise<{ periods: TimetablePeriod[]; per
   return res.data
 }
 
-export const savePeriodsApi = async (periods: { startTime: string; endTime: string; isBreak: boolean }[], periodMinutes: number | null) => {
+export const savePeriodsApi = async (
+  periods: { startTime: string; endTime: string; isBreak: boolean; programme?: 'DAY' | 'EVENING' | null }[],
+  periodMinutes: number | null,
+) => {
   const res = await api.put('/timetable/periods', { periods, periodMinutes })
   return res.data as { message: string }
 }

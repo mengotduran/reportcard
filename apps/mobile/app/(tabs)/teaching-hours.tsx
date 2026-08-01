@@ -10,6 +10,7 @@ import { getMyTimetable, getTeacherTimetable, MyTimetableSlot } from '@/lib/api/
 import { getMyAbsences, getTeacherAbsences, getAbsenceCounts, reportAbsence, deleteAbsence, TeacherAbsence, AbsenceDay } from '@/lib/api/teacherAbsence'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import { formatHours } from '@/lib/formatHours'
+import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
 import { onRealtime } from '@/lib/socket'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
@@ -297,10 +298,12 @@ function AbsenceDayPicker({
   // so moving to another day drops the highlight and tapping it again re-runs it from there.
   const [applied, setApplied] = useState<{ preset: RangePresetKey; anchor: string } | null>(null)
 
-  const dayChoices = bookingWindowDates(periodEnd).filter((w) => slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+  // slotRunsOn, not weekday + subjectId: private classes are reportable, and a one-off or
+  // time-boxed one must only offer the dates it actually runs on.
+  const dayChoices = bookingWindowDates(periodEnd).filter((w) => slots.some((s) => slotRunsOn(s, w.date)))
   const weekGroups = groupByWeek(dayChoices)
 
-  const daySlotsFor = (d: string) => slots.filter((s) => s.dayOfWeek === dayOfWeekFor(d) && s.subjectId)
+  const daySlotsFor = (d: string) => slots.filter((s) => slotRunsOn(s, d))
   // How many periods a slot spans — a 100-minute class on a 50-minute grid is two.
   const periodCountOf = (s: MyTimetableSlot) => {
     if (!periodMinutes || periodMinutes <= 0) return 1
@@ -471,7 +474,7 @@ function AbsenceDayPicker({
                       ? current.slotIds.filter((id) => id !== s.id)
                       : [...current.slotIds, s.id],
                   })}
-                  label={`${s.startTime}–${s.endTime} · ${s.subjectName} (${s.classLevel})${note}`}
+                  label={`${s.startTime}–${s.endTime} · ${slotTitle(s)}${s.classLevel ? ` (${s.classLevel})` : ''}${note}`}
                   colors={colors}
                 />
               )
@@ -567,7 +570,7 @@ function TeacherAttendanceScreen() {
   // so you can never file an absence against a day with no class in the first place. The
   // month lets you book known absences (travel, medical, a funeral) well in advance rather
   // than only within the current week.
-  const dayChoices = bookingWindowDates(periodEnd).filter((w) => slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+  const dayChoices = bookingWindowDates(periodEnd).filter((w) => slots.some((s) => slotRunsOn(s, w.date)))
   // Booking weeks ahead makes it easy to forget you already filed a day, and a repeat save
   // is silently swallowed server-side (the row is unique on teacher+slot+date), so the
   // picker shows those periods as already reported rather than letting it look like
@@ -732,7 +735,7 @@ function TeacherAttendanceScreen() {
                     {/* Says WHY the row shows a padlock instead of a bin. Admin-recorded
                         outranks reviewed: it's the reason that never lifts. */}
                     {a.recordedByAdmin ? ` (${t('recorded by admin')})` : a.seenByAdmin ? ` (${t('reviewed')})` : ''}{'\n'}
-                    <Text style={{ color: colors.textSecondary }}>{a.subjectName} · {a.classLevel}</Text>
+                    <Text style={{ color: colors.textSecondary }}>{a.subjectName}{a.classLevel ? ` · ${a.classLevel}` : ''}</Text>
                   </Text>
                   {locked ? (
                     <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
@@ -1015,7 +1018,7 @@ function AdminAttendanceScreen() {
         setTeacherSlots(d.slots)
         // Land on today when they teach today, otherwise their next teaching day — the
         // picker needs a day in hand, and this teacher's timetable is only known now.
-        const choices = bookingWindowDates(periodEnd).filter((w) => d.slots.some((s) => s.dayOfWeek === w.dayOfWeek && s.subjectId))
+        const choices = bookingWindowDates(periodEnd).filter((w) => d.slots.some((s) => slotRunsOn(s, w.date)))
         setDate(choices.find((c) => c.date === todayStr())?.date ?? choices[0]?.date ?? '')
       })
       .catch(() => setTeacherSlots([]))
@@ -1334,7 +1337,7 @@ function AdminAttendanceScreen() {
                       {/* Only shown in the unscoped "By Teacher" view — the "By Course"
                           view already scopes the whole list to one course. */}
                       {!drillDown?.subjectName && (a.subjectName || a.classLevel) && (
-                        <Text style={styles.absenceHint}>{a.subjectName} · {a.classLevel}</Text>
+                        <Text style={styles.absenceHint}>{a.subjectName}{a.classLevel ? ` · ${a.classLevel}` : ''}</Text>
                       )}
                       {a.seenByAdmin && <Text style={styles.absenceHint}>{t('reviewed')}</Text>}
                     </View>

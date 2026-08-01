@@ -28,7 +28,7 @@ import { useToast } from '@/lib/useToast'
 import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
-import { stripProgrammeSuffix } from '@/lib/programme'
+import { stripProgrammeSuffix, programmeFromName } from '@/lib/programme'
 
 interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean
   /** Which sitting(s) they actually teach, derived server-side from their live course
@@ -650,7 +650,14 @@ export default function TeachersPage() {
                 .map(([classLevel, subjects]) => (
                 <div key={classLevel}>
                   <p className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-2">
-                    {isSecondary ? stripSection(classLevel) : stripProgrammeSuffix(classLevel)}
+                    {/* Day and Evening are separate ClassLevel rows, so a department with both
+                        renders as two groups here. Stripped bare, both would read as the exact
+                        same heading with nothing to tell them apart. */}
+                    {isSecondary
+                      ? stripSection(classLevel)
+                      : programmeFromName(classLevel) === 'EVENING'
+                        ? `${stripProgrammeSuffix(classLevel)} (${tr('Evening')})`
+                        : stripProgrammeSuffix(classLevel)}
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {subjects.map((s) => (

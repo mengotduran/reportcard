@@ -7,6 +7,41 @@ const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
  *  across a timezone. Shared with the missed-period banner so both read the same. */
 export const shortDate = (d: string) => `${Number(d.slice(8, 10))} ${MONTH_SHORT[Number(d.slice(5, 7)) - 1]}`
 
+const DAY_NAMES = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'] as const
+
+/** "2026-08-04" -> "TUESDAY", without a Date round-trip (which would shift the day). */
+export function dayOfWeekForDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return DAY_NAMES[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]
+}
+
+/**
+ * Does this slot actually run on `dateStr`?
+ *
+ * Mirrors slotRunsOn in apps/api/src/utils/teachingHours.ts and MUST stay in step with it:
+ * the server decides what can be reported, and a client offering a date the server will
+ * reject is worse than not offering it at all.
+ *
+ * A school period recurs weekly forever. A private class may instead be a single day
+ * (specificDate) or time-boxed (startsOn/endsOn) — without this a one-off Saturday tutorial
+ * was offered on every Saturday of the term.
+ */
+export function slotRunsOn(
+  slot: { dayOfWeek: string; specificDate?: string | null; startsOn?: string | null; endsOn?: string | null },
+  dateStr: string,
+): boolean {
+  if (slot.specificDate) return slot.specificDate === dateStr
+  if (slot.dayOfWeek !== dayOfWeekForDate(dateStr)) return false
+  if (slot.startsOn && dateStr < slot.startsOn) return false
+  if (slot.endsOn && dateStr > slot.endsOn) return false
+  return true
+}
+
+/** What to call a slot in a picker or a list. A private class has only its label. */
+export function slotTitle(slot: { subjectName?: string | null; label?: string | null }): string {
+  return slot.subjectName ?? slot.label ?? 'Private class'
+}
+
 /** Absences keyed by the slot they were reported against. */
 export function groupAbsencesBySlot(absences: TeacherAbsence[]): Map<string, TeacherAbsence[]> {
   const bySlot = new Map<string, TeacherAbsence[]>()
@@ -32,7 +67,7 @@ export function groupAbsencesBySlot(absences: TeacherAbsence[]): Map<string, Tea
 export function buildGridSlots(
   slots: TimetableSlot[],
   absencesBySlot: Map<string, TeacherAbsence[]>,
-  opts: { t: (s: string) => string; unknownSubject: string },
+  opts: { t: (s: string) => string; unknownSubject: string; focusSlotId?: string | null },
 ): WeekGridSlot[] {
   const { t } = opts
   return slots.map((s) => {
@@ -52,8 +87,14 @@ export function buildGridSlots(
       startTime: s.startTime,
       endTime: s.endTime,
       title: s.subjectId ? (s.subjectName ?? opts.unknownSubject) : (s.label ?? ''),
-      subtitle: s.subjectId ? s.classLevel : (s.room ?? null),
+      // A private class tied to a course reads like a course tile: its label on top, the
+      // course it serves underneath. Unlinked ones fall back to room/date as before.
+      subtitle: s.subjectId
+        ? s.classLevel
+        : [s.privateSubjectName, s.room, s.specificDate ? shortDate(s.specificDate) : null]
+            .filter(Boolean).join(' · ') || null,
       isPrivate: !s.subjectId,
+      focused: !!opts.focusSlotId && s.id === opts.focusSlotId,
       isOneOff: !!s.specificDate,
       reportedAbsent: upcoming.length > 0,
       note,

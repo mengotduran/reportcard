@@ -1,7 +1,9 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
-import { timeToMinutes, dateStringToDayOfWeek } from '../utils/teachingHours'
+import { emitToUser } from '../config/socket'
+import { NotificationLink } from '../utils/notificationLink'
+import { timeToMinutes, dateStringToDayOfWeek, todayAtSchool } from '../utils/teachingHours'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const DAY_SET = new Set(DAY_ORDER)
@@ -31,10 +33,22 @@ function shiftTime(hhmm: string, deltaMinutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
 
-function shapeSlot<T extends { dayOfWeek: string; startTime: string; subject: { name: string; classLevel: string } | null }>(
-  { subject, ...s }: T
+function shapeSlot<T extends {
+  dayOfWeek: string; startTime: string
+  subject: { name: string; classLevel: string } | null
+  privateSubject?: { name: string; classLevel: string } | null
+}>(
+  { subject, privateSubject, ...s }: T
 ) {
-  return { ...s, subjectName: subject?.name ?? null, classLevel: subject?.classLevel ?? null }
+  return {
+    ...s,
+    subjectName: subject?.name ?? null,
+    classLevel: subject?.classLevel ?? null,
+    // The course a PRIVATE class delivers hours toward, resolved here so no client has to
+    // fetch the whole subject list just to name it in a detail sheet.
+    privateSubjectName: privateSubject?.name ?? null,
+    privateSubjectClass: privateSubject?.classLevel ?? null,
+  }
 }
 
 // A specific teacher's whole schedule — open to any authenticated role, same
@@ -52,7 +66,10 @@ export const getTeacherTimetable = async (req: AuthRequest, res: Response) => {
 
     const slots = await prisma.timetableSlot.findMany({
       where: { schoolId, teacherId, archivedAt: null },
-      include: { subject: { select: { name: true, classLevel: true } } },
+      include: {
+        subject: { select: { name: true, classLevel: true } },
+        privateSubject: { select: { name: true, classLevel: true } },
+      },
     })
 
     res.json({ slots: slots.map(shapeSlot).sort(byDayThenTime) })
@@ -68,7 +85,10 @@ export const getMyTimetable = async (req: AuthRequest, res: Response) => {
     const teacherId = req.user!.id
     const slots = await prisma.timetableSlot.findMany({
       where: { teacherId, archivedAt: null },
-      include: { subject: { select: { name: true, classLevel: true } } },
+      include: {
+        subject: { select: { name: true, classLevel: true } },
+        privateSubject: { select: { name: true, classLevel: true } },
+      },
     })
     res.json({ slots: slots.map(shapeSlot).sort(byDayThenTime) })
   } catch (error) {
@@ -134,12 +154,15 @@ export const savePeriods = async (req: AuthRequest, res: Response) => {
       res.status(400).json({ message: 'Minutes per period must be a positive whole number' }); return
     }
 
-    type PeriodRow = { startTime: string; endTime: string; isBreak: boolean }
+    type PeriodRow = { startTime: string; endTime: string; isBreak: boolean; programme: 'DAY' | 'EVENING' | null }
     const rawPeriods = Array.isArray(req.body.periods) ? req.body.periods : []
     const periods: PeriodRow[] = rawPeriods.map((p: Record<string, unknown>) => ({
       startTime: String(p.startTime ?? ''),
       endTime: String(p.endTime ?? ''),
       isBreak: !!p.isBreak,
+      // Anything but DAY/EVENING means shared by both sittings, the sane default for a
+      // value that is simply absent. Same convention as SchoolHoliday (see holiday.controller).
+      programme: p.programme === 'DAY' || p.programme === 'EVENING' ? p.programme : null,
     }))
 
     for (const p of periods) {
@@ -298,6 +321,16 @@ interface SlotInput {
   privateSubjectId: string | null
 }
 
+/** How a slot reads in the "your timetable changed" summary. A private class has no subject,
+ *  only a label, so reading subject.name alone would list it as a blank line. */
+const slotSummaryName = (s: { subjectName?: string | null; label?: string | null }): string =>
+  s.subjectName ?? s.label ?? 'Private class'
+
+const SHORT_DAY: Record<string, string> = {
+  MONDAY: 'Mon', TUESDAY: 'Tue', WEDNESDAY: 'Wed', THURSDAY: 'Thu',
+  FRIDAY: 'Fri', SATURDAY: 'Sat', SUNDAY: 'Sun',
+}
+
 const slotKey = (s: SlotInput) =>
   `${s.dayOfWeek}|${s.startTime}|${s.endTime}|${s.subjectId ?? ''}|${s.label ?? ''}|${s.room ?? ''}|${s.specificDate ?? ''}`
   + `|${s.startsOn ?? ''}|${s.endsOn ?? ''}|${s.privateSubjectId ?? ''}`
@@ -383,6 +416,29 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
         if (!DATE_RE.test(s.specificDate)) { res.status(400).json({ message: 'Invalid one-off date' }); return }
         if (s.subjectId) { res.status(400).json({ message: 'A one-off date can only be used for a private/extra class, not a school subject period' }); return }
       }
+
+      // A class cannot be booked into a day that is already over.
+      //
+      // Only for slots being ADDED or RETIMED (`preExisting`), exactly like the period-shape
+      // rules above and for the same reason: this save re-sends every slot on the teacher's
+      // timetable, so judging the old ones too would refuse every future edit the moment a
+      // single past one-off existed — the admin would be locked out of that timetable for
+      // good.
+      //
+      // Date-only, so entering this morning's class this afternoon still works. A window is
+      // judged on its END: one that began a fortnight ago and is still running is a real
+      // class being recorded late, but one that finished already can never run again.
+      if (!preExisting) {
+        const today = todayAtSchool()
+        if (s.specificDate && s.specificDate < today) {
+          res.status(400).json({ message: `That date has already passed (${s.specificDate}). Pick today or a later date.` })
+          return
+        }
+        if (s.endsOn && s.endsOn < today) {
+          res.status(400).json({ message: `That class finishes in the past (${s.endsOn}). Pick an end date of today or later.` })
+          return
+        }
+      }
       // A class (subject slot) must be a whole number of periods. Private slots (label,
       // no subject) are exempt — extra/after-hours classes can be any length. So are
       // Saturday/Sunday classes: weekend schedules routinely don't follow the same
@@ -459,6 +515,36 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
         })
         return
       }
+
+      // A period tagged for one sitting only accepts a class of that same sitting — the
+      // whole point of tagging is to stop a Day class landing in an Evening-only period, or
+      // the reverse. Only NEW or RETIMED slots are judged, same grandfathering as the
+      // period-shape rules above: a school that tags a period after building its grid must
+      // still be able to re-save the timetable it already has.
+      const classLevelRows = await prisma.classLevel.findMany({
+        where: { schoolId, name: { in: [...new Set(subjectClassLevel.values())] } },
+        select: { name: true, programme: true },
+      })
+      const classProgramme = new Map(classLevelRows.map((c) => [c.name, c.programme]))
+      const taggedPeriods = await prisma.timetablePeriod.findMany({
+        where: { schoolId, isBreak: false, programme: { not: null } },
+        select: { startTime: true, endTime: true, programme: true },
+      })
+      if (taggedPeriods.length > 0) {
+        for (const s of slots) {
+          if (!s.subjectId || WEEKEND_DAYS.has(s.dayOfWeek) || untouchedTiming.has(slotTimingKey(s))) continue
+          const period = taggedPeriods.find((p) => p.startTime === s.startTime && p.endTime === s.endTime)
+          if (!period) continue
+          const classLevel = subjectClassLevel.get(s.subjectId)
+          const programme = (classLevel && classProgramme.get(classLevel)) ?? 'DAY'
+          if (programme !== period.programme) {
+            res.status(400).json({
+              message: `${s.startTime}-${s.endTime} is an ${period.programme === 'EVENING' ? 'Evening' : 'Day'}-only period, but ${classLevel} is a ${programme === 'EVENING' ? 'Evening' : 'Day'} class.`,
+            })
+            return
+          }
+        }
+      }
     }
 
     // Cross-teacher clash check — a class can only have one teacher in front of
@@ -508,6 +594,53 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
           ? [prisma.timetableSlot.createMany({ data: slots.map((s) => ({ ...s, schoolId, teacherId })) })]
           : []),
       ])
+
+      // Tell the teacher their schedule moved. Until now saving a timetable notified nobody
+      // and emitted nothing: an admin could add, move or remove a class and the teacher had
+      // no way of finding out short of opening the screen and noticing.
+      //
+      // The diff is free — existingKeys/newKeys above already exist for the `unchanged`
+      // check, so the same key sets say what was added and what was removed.
+      const existingSet = new Set(existingKeys)
+      const newSet = new Set(newKeys)
+      // Neither side of the diff carries a subject NAME: `slots` is the parsed request body
+      // and `existingActive` is a bare row query, both of which have only subjectId. Resolve
+      // them once, or every added/removed course would be summarised as "Private class".
+      const namedIds = [...new Set([...slots, ...existingActive].map((x) => x.subjectId).filter((v): v is string => !!v))]
+      const subjectNameById = new Map(
+        (namedIds.length > 0
+          ? await prisma.subject.findMany({ where: { id: { in: namedIds } }, select: { id: true, name: true } })
+          : []
+        ).map((x) => [x.id, x.name]),
+      )
+      const describe = (x: { dayOfWeek: string; startTime: string; endTime: string; subjectId: string | null; label?: string | null; specificDate?: string | null }) =>
+        `${slotSummaryName({ subjectName: x.subjectId ? subjectNameById.get(x.subjectId) ?? null : null, label: x.label })}`
+        + ` · ${x.specificDate ?? SHORT_DAY[x.dayOfWeek] ?? x.dayOfWeek} ${x.startTime}-${x.endTime}`
+      const addedList = slots.filter((x) => !existingSet.has(slotKey(x))).map(describe)
+      const removedList = existingActive.filter((x) => !newSet.has(slotKey(x))).map(describe)
+
+      // Capped: a rebuilt timetable would otherwise produce a notification listing forty
+      // lines, which nobody reads. The count still tells the whole truth.
+      const summarise = (verb: string, list: string[]) =>
+        list.length === 0 ? null
+          : `${verb}: ${list.slice(0, 3).join('; ')}${list.length > 3 ? ` and ${list.length - 3} more` : ''}`
+      const parts = [summarise('Added', addedList), summarise('Removed', removedList)].filter(Boolean)
+
+      if (parts.length > 0) {
+        const link: NotificationLink = { teacherId, teacherName: teacher.name, timetableChanged: true }
+        await prisma.notification.create({
+          data: {
+            schoolId, recipientId: teacherId, type: 'TIMETABLE_UPDATED',
+            title: 'Your timetable was updated',
+            body: `${parts.join('. ')}.`,
+            data: link as any,
+          },
+        })
+        emitToUser(teacherId, 'notifications:changed')
+      }
+      // Signalled whether or not a notification was written: even a pure retiming (same
+      // classes, different times) leaves an open timetable screen showing the old grid.
+      emitToUser(teacherId, 'timetable:changed')
     }
 
     res.json({ message: unchanged ? 'No changes to save' : 'Timetable saved' })
@@ -529,7 +662,10 @@ export const getTimetableHistory = async (req: AuthRequest, res: Response) => {
 
     const archived = await prisma.timetableSlot.findMany({
       where: { schoolId, teacherId, archivedAt: { not: null } },
-      include: { subject: { select: { name: true, classLevel: true } } },
+      include: {
+        subject: { select: { name: true, classLevel: true } },
+        privateSubject: { select: { name: true, classLevel: true } },
+      },
     })
 
     const versions = new Map<string, ReturnType<typeof shapeSlot>[]>()

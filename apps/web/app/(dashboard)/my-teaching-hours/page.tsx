@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { getMyTimetableApi, TimetableSlot } from '@/lib/api/timetable'
@@ -12,6 +13,7 @@ import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { CalendarOff, Trash2, X } from 'lucide-react'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { onRealtime } from '@/lib/socket'
+import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
@@ -47,6 +49,7 @@ const STATUS_STYLE: Record<CoverageStatus, string> = {
 
 export default function MyTeachingHoursPage() {
   const t = useT()
+  const router = useRouter()
   const { school, user } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
@@ -90,7 +93,10 @@ export default function MyTeachingHoursPage() {
     setShowReportModal(true)
   }
 
-  const daySlots = date ? slots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
+  // slotRunsOn, not weekday + subjectId. Dropping `s.subjectId` is what lets a private
+  // class be reported at all; slotRunsOn is what keeps a one-off or time-boxed one from
+  // being offered on a date it does not actually run.
+  const daySlots = date ? slots.filter((s) => slotRunsOn(s, date)) : []
   const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.startTime))
 
   const handleReport = async (e: React.FormEvent) => {
@@ -238,13 +244,17 @@ export default function MyTeachingHoursPage() {
                         ? t('Already reviewed by an admin — ask them to remove it if needed')
                         : t('This period has already passed — ask an admin to remove it if needed')
                     return (
-                      <tr key={a.id} className="hover:bg-hover/40 transition">
+                      // Clicking an absence opens the timetable AT that period, ringed. Same
+                      // params the notification links already use, so both routes land alike.
+                      <tr key={a.id}
+                        onClick={() => router.push(`/my-timetable?missedSlotId=${encodeURIComponent(a.timetableSlotId)}&missedDate=${encodeURIComponent(a.date)}&missedFrom=${encodeURIComponent(a.startTime)}&missedTo=${encodeURIComponent(a.endTime)}`)}
+                        className="hover:bg-hover/40 transition cursor-pointer">
                         <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(a.classLevel)}</span></td>
+                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} {a.classLevel && <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(a.classLevel)}</span>}</td>
                         <td className="px-4 py-3 text-sm text-muted-foreground">{t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</td>
                         <td className="px-4 py-3 text-center">
                           <button
-                            onClick={() => handleDeleteAbsence(a.id)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteAbsence(a.id) }}
                             disabled={locked}
                             className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
                             title={locked ? lockedReason : t('Remove')}
@@ -308,7 +318,7 @@ export default function MyTeachingHoursPage() {
                               disabled={locked}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
-                            {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(s.classLevel)}</span>
+                            {s.startTime}–{s.endTime} · {slotTitle(s)} {s.classLevel && <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(s.classLevel)}</span>}
                             {passed && <span className="text-xs text-muted-foreground italic">({t('already started')})</span>}
                           </label>
                         )

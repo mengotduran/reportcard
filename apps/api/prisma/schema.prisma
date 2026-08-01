@@ -287,6 +287,7 @@ model Subject {
   timetableSlots  TimetableSlot[]
   pastTermGrants  PastTermMarksGrant[]
   exclusions      SubjectExclusion[]
+  privateSlots    TimetableSlot[]    @relation("PrivateSlotCourse")
 }
 
 // A teacher may only edit marks for the CURRENTLY active term/semester — once it's no
@@ -361,6 +362,9 @@ model TimetableSlot {
   // (absence reporting, the builder's grid, coverage's own query), so reusing it would
   // silently turn every linked private class into a timetabled school period.
   privateSubjectId String?
+  // SetNull, not Cascade: deleting a course must unlink the private class, never
+  // delete it. The class still happened; it just stops counting toward that course.
+  privateSubject   Subject? @relation("PrivateSlotCourse", fields: [privateSubjectId], references: [id], onDelete: SetNull)
   archivedAt   DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -447,6 +451,11 @@ model TimetablePeriod {
   startTime String
   endTime   String
   isBreak   Boolean @default(false)
+  // Which sitting this slot is for. NULL = shared by both, which is what every existing
+  // period means and stays the default — a school with no evening programme never sets
+  // this. Same convention as SchoolHoliday.programme. Evening currently exists for
+  // universities only, so this is a no-op everywhere else.
+  programme Programme?
   school    School  @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])

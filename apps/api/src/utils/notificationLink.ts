@@ -41,4 +41,11 @@ export type NotificationLink = {
   reassignedCourses?: string
   /** Who holds them now. */
   reassignedTo?: string
+
+  // ── Timetable changed ──
+  /** The recipient's timetable was rearranged. No slot is named because a save can add,
+   *  move and remove several at once; the body carries the summary and the link just opens
+   *  their timetable. Without a field of this kind the row would not be tappable at all —
+   *  notificationHref returns null unless it recognises one. */
+  timetableChanged?: boolean
 }

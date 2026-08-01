@@ -2,7 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import {
-  dateStringToDayOfWeek, slotHasPassed, slotPeriods, periodWindows, graceHasExpired, periodHasEnded, PeriodWindow,
+  dateStringToDayOfWeek, slotHasPassed, slotPeriods, periodWindows, graceHasExpired, periodHasEnded, PeriodWindow, slotRunsOn,
 } from '../utils/teachingHours'
 import { getCurrentPeriodRange } from './coverage.controller'
 import { NotificationLink } from '../utils/notificationLink'
@@ -18,6 +18,16 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
  * own start and end rather than the whole block's. A legacy row (null index, written before
  * absences became per-period) still stands for the entire slot.
  */
+/**
+ * What to call a slot in a list or a notification.
+ *
+ * A private class has no subject, only a free-text label — reading `subject.name` for it gave
+ * every list a blank name (mobile literally rendered "undefined (undefined)").
+ */
+function slotDisplayName(slot: { subject?: { name: string } | null; label?: string | null }): string {
+  return slot.subject?.name ?? slot.label ?? 'Private class'
+}
+
 function windowForAbsence(
   periodIndex: number | null,
   slot: { startTime: string; endTime: string },
@@ -35,7 +45,7 @@ function windowForAbsence(
   return { window, periods: 1 }
 }
 
-function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodIndex: number | null; teacherId: string; recordedById: string; slot: { dayOfWeek: string; startTime: string; endTime: string; subject: { name: string; classLevel: string } | null } }>(
+function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodIndex: number | null; teacherId: string; recordedById: string; slot: { dayOfWeek: string; startTime: string; endTime: string; subjectId: string | null; label: string | null; subject: { name: string; classLevel: string } | null; privateSubject: { name: string; classLevel: string } | null } }>(
   { slot, ...a }: T,
   periodMinutes: number | null,
   graceMinutes: number | null,
@@ -51,8 +61,12 @@ function shapeAbsence<T extends { date: string; seenByAdmin: boolean; periodInde
     dayOfWeek: slot.dayOfWeek,
     startTime: window.startTime,
     endTime: window.endTime,
-    subjectName: slot.subject?.name ?? null,
-    classLevel: slot.subject?.classLevel ?? null,
+    // Falls back to the private class's label, so clients need no special case. A private
+    // class linked to a course borrows that course's class for the secondary line.
+    subjectName: slot.subject?.name ?? slot.label ?? null,
+    classLevel: slot.subject?.classLevel ?? slot.privateSubject?.classLevel ?? null,
+    /** True for a private/personal class, so clients can badge it as one. */
+    isPrivate: slot.subjectId == null,
     // Two separate gates, because they apply to different people (see deleteAbsence):
     //   isFinal      the CLASS is over — nobody, admin included, can change it
     //   graceExpired the arrival window has closed — the teacher can no longer retract,
@@ -181,8 +195,14 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
         // them must keep working), so without this a "whole day" report books the CURRENT
         // timetable plus every superseded version of it. One teacher with two archived
         // Thursday slots got 7 periods for a day that has 2.
-        where: { schoolId, teacherId, dayOfWeek: { in: daysOfWeek }, subjectId: { not: null }, archivedAt: null },
-        include: { subject: { select: { name: true } } },
+        // No `subjectId: { not: null }` any more. That single filter was why a private class
+        // could never be reported absent: it was never in the candidate set, so naming one
+        // explicitly produced nothing and fell through to the "no reportable periods" 400.
+        where: { schoolId, teacherId, dayOfWeek: { in: daysOfWeek }, archivedAt: null },
+        include: {
+          subject: { select: { name: true } },
+          privateSubject: { select: { name: true, classLevel: true } },
+        },
       }),
       prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
     ])
@@ -203,7 +223,10 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
     const toMark: Marked[] = []
 
     for (const d of days) {
-      const daySlots = allSlots.filter((s) => s.dayOfWeek === dateStringToDayOfWeek(d.date))
+      // slotRunsOn, not a bare weekday match: a one-off private class runs on exactly one
+      // date and a time-boxed one only inside its window. A weekday match alone offered
+      // a single Saturday tutorial on every Saturday of the term.
+      const daySlots = allSlots.filter((s) => slotRunsOn(s, d.date))
       const slotsToMark = d.wholeDay ? daySlots : daySlots.filter((s) => d.timetableSlotIds.includes(s.id))
 
       // Reporting is ATOMIC PER SLOT. The slot is the class the admin put on the timetable,
@@ -283,7 +306,7 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
     }
 
     const markedDates = [...new Set(toMark.map((m) => m.date))].sort()
-    const subjectNames = [...new Set(toMark.map((m) => m.slot.subject?.name).filter((n): n is string => !!n))]
+    const subjectNames = [...new Set(toMark.map((m) => slotDisplayName(m.slot)))]
     const periodWord = toMark.length === 1 ? 'period' : 'periods'
     // Multi-day reports describe the SPAN; a single day keeps the original wording so the
     // common case reads exactly as it did before.
@@ -379,7 +402,13 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
 
     const absence = await prisma.teacherAbsence.findFirst({
       where: { id, schoolId },
-      include: { teacher: { select: { name: true } }, slot: { include: { subject: { select: { name: true } } } } },
+      include: {
+        teacher: { select: { name: true } },
+        slot: { include: {
+          subject: { select: { name: true } },
+          privateSubject: { select: { name: true, classLevel: true } },
+        } },
+      },
     })
     if (!absence) { res.status(404).json({ message: 'Absence not found' }); return }
     if (!isAdmin && absence.teacherId !== req.user!.id) {
@@ -479,7 +508,7 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
         select: { id: true },
       })
       if (admins.length > 0) {
-        const subjectName = absence.slot.subject?.name
+        const subjectName = slotDisplayName(absence.slot)
         const body = `${absence.teacher.name} is no longer absent — retracted their report for ${absence.date}${subjectName ? ` (${subjectName})` : ''}.`
         await prisma.notification.createMany({
           data: admins.map((a) => ({
@@ -492,7 +521,7 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
     } else {
       // An ADMIN removed it instead — e.g. deciding to mark the teacher present after
       // all. The teacher would otherwise have no way of knowing their report vanished.
-      const subjectName = absence.slot.subject?.name
+      const subjectName = slotDisplayName(absence.slot)
       const body = `An admin removed your absence report for ${absence.date}${subjectName ? ` (${subjectName})` : ''} — you're now marked present for that period.`
       await prisma.notification.create({
         data: {
@@ -538,7 +567,12 @@ async function listAbsences(schoolId: string, teacherId: string, from?: string, 
         ...(effectiveFrom ? { date: { gte: effectiveFrom } } : {}),
         ...(effectiveTo ? { date: { lte: effectiveTo } } : {}),
       },
-      include: { slot: { include: { subject: { select: { name: true, classLevel: true } } } } },
+      include: { slot: { include: {
+        subject: { select: { name: true, classLevel: true } },
+        // Needed so a private class can be named by its label and, when linked, borrow
+        // that course's class for the secondary line. See shapeAbsence.
+        privateSubject: { select: { name: true, classLevel: true } },
+      } } },
       // Within a day, earliest period first, so a split double period reads in order.
       orderBy: [{ date: 'desc' }, { periodIndex: 'asc' }],
     }),

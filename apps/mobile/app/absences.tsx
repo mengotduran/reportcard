@@ -107,7 +107,7 @@ export default function AbsencesScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowText}>{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</Text>
-                <Text style={styles.rowSub}>{a.subjectName} · {a.classLevel}</Text>
+                <Text style={styles.rowSub}>{a.subjectName}{a.classLevel ? ` · ${a.classLevel}` : ''}</Text>
                 {/* Why the padlock: admin-recorded outranks reviewed, being the reason
                     that never lifts. */}
                 {a.recordedByAdmin

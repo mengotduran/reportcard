@@ -67,6 +67,18 @@ export function slotHasPassed(date: string, endTime: string, now: Date = new Dat
   return slotEndUtcMs <= now.getTime()
 }
 
+/**
+ * Today's calendar date in the school's own time, as "YYYY-MM-DD".
+ *
+ * Date-only on purpose: it answers "has this DAY passed", not "has this class finished".
+ * Booking a class for earlier today is normal — an admin entering the morning's timetable
+ * at 2pm is doing paperwork, not time travel — so only yesterday and earlier are past.
+ */
+export function todayAtSchool(now: Date = new Date()): string {
+  const shifted = new Date(now.getTime() + SCHOOL_UTC_OFFSET_HOURS * 3600_000)
+  return shifted.toISOString().slice(0, 10)
+}
+
 const minutesToTime = (mins: number) =>
   `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`
 
@@ -210,6 +222,30 @@ export function mergeDateRanges(ranges: DateRange[]): DateRange[] {
 }
 
 /** True if a "YYYY-MM-DD" falls inside any of the ranges. */
+/**
+ * Does this slot actually run on `dateStr`?
+ *
+ * A school period runs every week on its weekday, which is what the weekday check alone used
+ * to assume for everything. A PRIVATE class can also be:
+ *   - a single day  (`specificDate`)            -> only that exact date
+ *   - time-boxed    (`startsOn` / `endsOn`)     -> its weekday, but only inside the window
+ * Without this, reporting an absence offered a one-off Saturday class on every Saturday of
+ * the term, and a six-week class for the whole year.
+ *
+ * String comparison is safe and deliberate: "YYYY-MM-DD" sorts lexicographically the same way
+ * it sorts chronologically, and it avoids the timezone shift a Date round-trip would add.
+ */
+export function slotRunsOn(
+  slot: { dayOfWeek: string; specificDate?: string | null; startsOn?: string | null; endsOn?: string | null },
+  dateStr: string,
+): boolean {
+  if (slot.specificDate) return slot.specificDate === dateStr
+  if (slot.dayOfWeek !== dateStringToDayOfWeek(dateStr)) return false
+  if (slot.startsOn && dateStr < slot.startsOn) return false
+  if (slot.endsOn && dateStr > slot.endsOn) return false
+  return true
+}
+
 export function dateStringInAnyRange(dateStr: string, ranges: DateRange[]): boolean {
   return ranges.some((r) => dateStringWithinRange(dateStr, r.startDate, r.endDate))
 }

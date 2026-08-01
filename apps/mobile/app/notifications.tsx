@@ -25,6 +25,10 @@ function missedParamsFor(link: NotificationLink | null): Record<string, string> 
     params.missedPeriods = String(link.periods)
     params.missedDateFrom = link.dateFrom
     params.missedDateTo = link.dateTo
+  } else if (link.timetableChanged) {
+    // See the web twin: this branch exists so the row is tappable at all. Nothing is
+    // highlighted because a save can change several classes at once.
+    params.timetableChanged = '1'
   } else if (link.reassignedCourses) {
     params.reassignedCourses = link.reassignedCourses
     if (link.reassignedTo) params.reassignedTo = link.reassignedTo

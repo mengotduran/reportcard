@@ -19,8 +19,10 @@ import { API_BASE } from './config'
  *                          class of 40 saved in one click fires up to 40 times — always
  *                          debounce (see MARKS_REFRESH_DEBOUNCE_MS) instead of refetching
  *                          per signal. Never blind-refetch a grid holding unsaved edits.
+ *   timetable:changed      the viewer's own timetable was rearranged by an admin; refetch
+ *                          the timetable itself, not just its absences
  */
-export type RealtimeEvent = 'notifications:changed' | 'absences:changed' | 'marks:changed'
+export type RealtimeEvent = 'notifications:changed' | 'absences:changed' | 'marks:changed' | 'timetable:changed'
 
 /** Trailing debounce for marks:changed, which arrives once per student in a class save.
  *  Long enough to collapse one Save click into a single refetch, short enough to still feel

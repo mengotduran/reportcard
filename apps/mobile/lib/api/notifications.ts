@@ -22,6 +22,8 @@ export interface NotificationLink {
   /** Courses that moved to another teacher, and who has them now. */
   reassignedCourses?: string
   reassignedTo?: string
+  /** The viewer's timetable was rearranged; the link just opens it. */
+  timetableChanged?: boolean
 }
 
 export interface AppNotification {

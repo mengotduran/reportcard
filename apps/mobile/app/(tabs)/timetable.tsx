@@ -45,8 +45,14 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
+  // Long values (course names run to 40+ characters) get their own line instead of being
+  // squeezed against the label, where they used to overlap it and run off the right edge.
+  detailRowStacked: {
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border, gap: 3,
+  },
   detailLabel: { fontSize: 13, color: colors.textMuted },
   detailValue: { fontSize: 13, fontWeight: '600', color: colors.text },
+  detailValueStacked: { fontSize: 13, fontWeight: '600', color: colors.text, flexShrink: 1 },
 })
 
 export default function TimetableScreen() {
@@ -89,6 +95,8 @@ export default function TimetableScreen() {
   // An admin deleting or locking one of these must show up here at once — the grid marks the
   // affected period, so stale data means a period still drawn as absent after it was cleared.
   useEffect(() => onRealtime('absences:changed', load), [load])
+  // The slots themselves moved, not just their absence markers. load() refetches both.
+  useEffect(() => onRealtime('timetable:changed', load), [load])
 
   const onRefresh = () => { setRefreshing(true); load() }
 
@@ -99,6 +107,8 @@ export default function TimetableScreen() {
   const absencesBySlot = groupAbsencesBySlot(absences)
   const gridSlots: WeekGridSlot[] = buildGridSlots(slots, absencesBySlot, {
     t, unknownSubject: t('Unknown subject'),
+    // Ring the period this screen was opened for.
+    focusSlotId: missedParams.missedSlotId,
   })
 
   if (loading) {
@@ -134,7 +144,8 @@ export default function TimetableScreen() {
           </Text>
         )}
 
-        <MissedPeriodBanner {...missedParams} />
+        <MissedPeriodBanner {...missedParams}
+          slotGone={!!missedParams.missedSlotId && !loading && !slots.some((s) => s.id === missedParams.missedSlotId)} />
 
         <WeekGrid
           slots={gridSlots}
@@ -183,20 +194,51 @@ export default function TimetableScreen() {
                     {selectedSlot.specificDate ? formatOneOffDate(selectedSlot.specificDate) : t(dayLabel(selectedSlot.dayOfWeek))}
                   </Text>
                 </View>
+                {/* A private class can be time-boxed. Without this row a six-week revision
+                    class is indistinguishable from a permanent weekly fixture, which is the
+                    one thing this screen exists to tell a lecturer. */}
+                {!selectedSlot.specificDate && (selectedSlot.startsOn || selectedSlot.endsOn) && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>{t('Runs')}</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedSlot.startsOn && selectedSlot.endsOn
+                        ? `${formatOneOffDate(selectedSlot.startsOn)} → ${formatOneOffDate(selectedSlot.endsOn)}`
+                        : selectedSlot.startsOn
+                          ? `${t('From')} ${formatOneOffDate(selectedSlot.startsOn)}`
+                          : `${t('Until')} ${formatOneOffDate(selectedSlot.endsOn!)}`}
+                    </Text>
+                  </View>
+                )}
+                {/* Which course this private class delivers hours toward, and that course's
+                    class — the same two facts a normal course row shows. Stacked, because a
+                    course name runs to 40+ characters and squeezing it beside the label made
+                    it overlap and run off the right edge. */}
+                {!selectedSlot.subjectId && selectedSlot.privateSubjectName && (
+                  <View style={styles.detailRowStacked}>
+                    <Text style={styles.detailLabel}>{t('Counts toward')}</Text>
+                    <Text style={styles.detailValueStacked}>{selectedSlot.privateSubjectName}</Text>
+                  </View>
+                )}
+                {!selectedSlot.subjectId && selectedSlot.privateSubjectClass && (
+                  <View style={styles.detailRowStacked}>
+                    <Text style={styles.detailLabel}>{t('Class')}</Text>
+                    <Text style={styles.detailValueStacked}>{selectedSlot.privateSubjectClass}</Text>
+                  </View>
+                )}
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>{t('Time')}</Text>
                   <Text style={styles.detailValue}>{selectedSlot.startTime} – {selectedSlot.endTime}</Text>
                 </View>
                 {selectedSlot.subjectId && (
-                  <View style={styles.detailRow}>
+                  <View style={styles.detailRowStacked}>
                     <Text style={styles.detailLabel}>{t(isUniversity ? 'Course' : 'Subject')}</Text>
-                    <Text style={styles.detailValue}>{selectedSlot.subjectName ?? t('Unknown subject')}</Text>
+                    <Text style={styles.detailValueStacked}>{selectedSlot.subjectName ?? t('Unknown subject')}</Text>
                   </View>
                 )}
                 {selectedSlot.subjectId && selectedSlot.classLevel && (
-                  <View style={styles.detailRow}>
+                  <View style={styles.detailRowStacked}>
                     <Text style={styles.detailLabel}>{t('Class')}</Text>
-                    <Text style={styles.detailValue}>{selectedSlot.classLevel}</Text>
+                    <Text style={styles.detailValueStacked}>{selectedSlot.classLevel}</Text>
                   </View>
                 )}
                 {selectedSlot.room && (
