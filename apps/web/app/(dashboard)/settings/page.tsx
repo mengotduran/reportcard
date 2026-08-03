@@ -215,8 +215,6 @@ export default function SettingsPage() {
   })
   const [loadingInfo, setLoadingInfo] = useState(true)
   const [savingInfo, setSavingInfo] = useState(false)
-  const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
-  const [savingThreshold, setSavingThreshold] = useState(false)
   // Minutes after a period starts before it counts as missed. Blank = the older rule
   // (changeable until the period ends), which is what every school starts on.
   const [graceValue, setGraceValue] = useState<string>(school?.absenceGraceMinutes != null ? String(school.absenceGraceMinutes) : '')
@@ -258,7 +256,6 @@ export default function SettingsPage() {
         phone: s.phone ?? '', address: s.address ?? '', website: s.website ?? '',
         authorizationNumber: s.authorizationNumber ?? '',
       })
-      setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
       setGraceValue(s.absenceGraceMinutes != null ? String(s.absenceGraceMinutes) : '')
       setMarksMode((s as any).marksEntryMode ?? 'TEACHERS')
       setMarksSwitches(res.data.marksEntrySwitches ?? null)
@@ -317,16 +314,6 @@ export default function SettingsPage() {
       return
     }
     handleSaveMarksMode(mode)
-  }
-
-  const handleSaveThreshold = async () => {
-    setSavingThreshold(true)
-    try {
-      const res = await api.put('/school/settings', { repeatThreshold: thresholdValue === '' ? null : Number(thresholdValue) })
-      updateSchool(res.data.school)
-      showToast(t('Decision threshold saved'))
-    } catch { showToast(t('Failed to save'), 'error') }
-    finally { setSavingThreshold(false) }
   }
 
   // Worked example against a concrete start time, because "15 minutes" alone doesn't tell
@@ -788,44 +775,25 @@ export default function SettingsPage() {
           <section id="reportcards" className="scroll-mt-8 space-y-4">
             <h4 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">{t('Report Cards')}</h4>
 
-            {/* Academic Decisions */}
+            {/* Academic Decisions — now a CTA to its own page, same pattern as Grading
+                Scale below: Pass / Promoted on Trial / Repeat wording is per-school and
+                needs more room (3 labels + a trial minimum) than fits inline here. */}
             <div className={CARD}>
               <CardHead
                 icon={GraduationCap}
-                title={t('Academic Decisions (PASS / REPEAT)')}
+                title={t('Academic Decisions (Pass / Trial / Repeat)')}
                 desc={isUniversity
-                  ? t('Set the minimum CGPA a student needs to continue. When you end the academic year, PASS or REPEAT is written automatically on every report card based on each student\'s cumulative GPA.')
-                  : t('Set the minimum annual average a student needs to pass. When you end the academic year, PASS or REPEAT is written automatically on every report card.')}
+                  ? t('Set the minimum CGPA for a trial promotion, and the wording shown for Pass, Promoted on Trial, and Repeat. When you end the academic year, the decision is written automatically on every report card based on each student\'s cumulative GPA.')
+                  : t('Set the minimum annual average for a trial promotion, and the wording shown for Pass, Promoted on Trial, and Repeat. When you end the academic year, the decision is written automatically on every report card.')}
+                action={
+                  <button
+                    onClick={() => router.push('/promotion-scale')}
+                    className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {t('Configure')} <ArrowRight size={14} />
+                  </button>
+                }
               />
-              <div className="mt-5 flex items-end gap-3">
-                <div className="flex-1 max-w-xs">
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    {isUniversity ? t('Min CGPA to continue') : t('Min average to pass (0 – 20)')}
-                  </label>
-                  <input
-                    type="number"
-                    min={0} max={isUniversity ? 4 : 20} step={isUniversity ? 0.1 : 0.5}
-                    placeholder={isUniversity ? 'e.g. 2.0' : 'e.g. 10'}
-                    value={thresholdValue}
-                    onChange={(e) => setThresholdValue(e.target.value)}
-                    className={FIELD}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {thresholdValue !== ''
-                      ? isUniversity
-                        ? `Students with CGPA below ${thresholdValue} will be marked REPEAT.`
-                        : `Students averaging below ${thresholdValue} will be marked REPEAT.`
-                      : t('Leave blank to disable auto-decisions.')}
-                  </p>
-                </div>
-                <button
-                  onClick={handleSaveThreshold}
-                  disabled={savingThreshold}
-                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
-                >
-                  {savingThreshold ? t('Saving…') : t('Save')}
-                </button>
-              </div>
             </div>
 
             {/* Who enters marks. University only: some universities record marks centrally

@@ -32,6 +32,20 @@ export interface ParsedScale {
   legendRows: { abbr: string; meaning: string }[]
 }
 
+/** Bottom edge of the school's lowest PASSING classification band — the real CGPA a
+ *  student must clear to pass, independent of a school's own admin-editable trial threshold
+ *  (see PromotionScale). Bands literally labeled "Fail" are excluded before taking the
+ *  minimum — DEFAULT_CLASSIFICATION_BANDS (and most schools' own scales) include an explicit
+ *  Fail band down to 0, so a naive Math.min over every band's min would always return 0.
+ *  Empty classificationBands, or every band excluded (all labeled Fail — degenerate, but
+ *  possible), falls back to 2.00, matching DEFAULT_CLASSIFICATION_BANDS' own Pass band and
+ *  the identical fallback already used in excelTemplate.controller.ts. */
+export function truePassCgpaFor(parsed: Pick<ParsedScale, 'classificationBands'>): number {
+  const passing = parsed.classificationBands.filter((b) => b.label.trim().toLowerCase() !== 'fail')
+  if (passing.length === 0) return 2.00
+  return Math.min(...passing.map((b) => b.min))
+}
+
 export function parseStoredScale(raw: unknown): ParsedScale {
   if (Array.isArray(raw)) return { ranges: raw as StoredRange[], classificationBands: [], legendRows: [] }
   if (raw && typeof raw === 'object') {

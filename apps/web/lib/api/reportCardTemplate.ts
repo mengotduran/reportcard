@@ -1,11 +1,78 @@
 import api from './client'
 
-export type TemplateName = 'classic' | 'bilingual' | 'modern' | 'official' | 'ledger'
+// The six colour themes. Since the 2026 redesign these differ by PALETTE only — every
+// one renders the same layout (see getDefaultLayout) — so the names are labels for a
+// colour scheme, not for a structure. `ledger` is retained purely so designs saved before
+// the redesign still resolve; it is no longer offered in the designer.
+export type TemplateName = 'classic' | 'bilingual' | 'modern' | 'official' | 'emerald' | 'slate' | 'ledger'
+
+/** Palette for one theme. `primary` is the dark structural colour (header bands, table
+ *  head, rules); `accent` is the metallic/secondary used for the term chip, the
+ *  End-of-Year band and hairline rules. */
+export const THEME_PALETTES: Record<TemplateName, { primary: string; accent: string; label: string }> = {
+  classic:   { primary: '#1d3557', accent: '#b58a2b', label: 'Classic' },
+  bilingual: { primary: '#14532d', accent: '#b58a2b', label: 'Bilingual' },
+  modern:    { primary: '#1e40af', accent: '#64748b', label: 'Modern' },
+  official:  { primary: '#7f1d1d', accent: '#b58a2b', label: 'Official' },
+  emerald:   { primary: '#0f5132', accent: '#a97142', label: 'Emerald' },
+  slate:     { primary: '#334155', accent: '#b87333', label: 'Slate' },
+  // Legacy, not offered: same palette as classic so an old saved design keeps its look.
+  ledger:    { primary: '#0f172a', accent: '#b58a2b', label: 'Ledger' },
+}
+
+/**
+ * Split one stored letterhead block (officialLeftTextEn and friends) into typed lines for
+ * the redesign's crest header. Roles are inferred rather than configured, because these
+ * fields are plain text a school types in School Settings:
+ *
+ *   title   – the first line, or any line explicitly wrapped in <b>
+ *   motto   – a line wrapped in <i>, or a non-title line that ISN'T all-caps
+ *             ("Peace-Work-Fatherland" beside "MINISTRY OF SECONDARY EDUCATION")
+ *   heading – everything else
+ *
+ * Shared by the print renderer and the designer canvas so the two can never disagree.
+ */
+export type HeaderLineRole = 'title' | 'heading' | 'motto'
+export function parseHeaderLines(raw: string): { text: string; role: HeaderLineRole }[] {
+  return raw.split(/<br\s*\/?>|\n/)
+    .map(l => l.trim())
+    .filter(Boolean)
+    .map((line, i) => {
+      const bold = /<b>/i.test(line)
+      const em = /<i>/i.test(line)
+      const text = line.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
+      const isTitle = bold || (!em && i === 0)
+      const role: HeaderLineRole = isTitle ? 'title'
+        : (em || text !== text.toUpperCase()) ? 'motto'
+        : 'heading'
+      return { text, role }
+    })
+    .filter(l => !!l.text)
+}
+
+/** Inline styles for each letterhead line role — one source for both renderers. */
+export function headerLineStyle(role: HeaderLineRole, color: string): Record<string, string | number> {
+  if (role === 'title') return { fontFamily: 'Caladea, Georgia, "Times New Roman", serif', fontSize: 11, fontWeight: 'bold', letterSpacing: .5, color, textTransform: 'uppercase' }
+  if (role === 'motto') return { fontSize: 7.4, letterSpacing: .9, color: '#8a7c58', textTransform: 'uppercase' }
+  return { fontSize: 8.4, fontWeight: 'bold', letterSpacing: .5, color: '#33415c', textTransform: 'uppercase' }
+}
+
+/** Themes shown in the designer, in order. `ledger` is deliberately absent. */
+export const SELECTABLE_THEMES: TemplateName[] = ['classic', 'bilingual', 'modern', 'official', 'emerald', 'slate']
+
+/** The design's secondary colour. Falls back to the theme's own accent, then to the
+ *  classic gold — a design saved before accentColor existed must never render accent-less. */
+export function accentOf(cfg: { accentColor?: string; template?: TemplateName }): string {
+  return cfg.accentColor || THEME_PALETTES[cfg.template ?? 'classic']?.accent || '#b58a2b'
+}
 
 // ── Legacy toggle-based config (kept for backward compat) ─────────────────────
 export interface TemplateConfig {
   template: TemplateName
   primaryColor: string
+  /** Secondary/metallic colour — term chip, End-of-Year band, hairline rules. Optional so
+   *  pre-redesign designs stay valid; read it through accentOf(), never directly. */
+  accentColor?: string
   reportTitle: string
   schoolSubtitle: string
   showSchoolType: boolean
@@ -29,6 +96,25 @@ export interface TemplateConfig {
   // What counts as a fail comes from the school's own grading scale (isFailingScore),
   // so it's a mark /100 at a university and a subject's term average /20 elsewhere.
   highlightFailingRed?: boolean
+  // School-wide marking policy (NOT per-layout, same convention as highlightFailingRed):
+  // whether the identity box's photo frame prints at all — on every layout that has one
+  // (Standard, Ledger, Annual), for every student, with or without a photo on file (no
+  // photo = an empty labelled rectangle, left for a physical photo to be glued in by
+  // hand). Undefined/true = shown, matching how the frame behaved before this toggle
+  // existed.
+  showStudentPhoto?: boolean
+  // Same school-wide convention: the photo frame's width in px (its height always
+  // stretches to match the identity box beside it, so only width is a free choice — same
+  // as HeaderSec.logoSize). Clamped to STUDENT_PHOTO_SIZE_MIN/MAX wherever it's used, so a
+  // bad saved value (or an old design from before this existed) can't blow out the layout.
+  // Undefined = the pre-toggle default width.
+  studentPhotoSize?: number
+  // School-wide (NOT per-layout, same convention as highlightFailingRed): print the
+  // student's promotion Decision (Pass / Promoted on Trial / Repeat, in the school's own
+  // PromotionScale wording) as a stat box next to Average/Position. Primary/secondary
+  // only — never offered for a university. Undefined/false = hidden, since this is a new
+  // opt-in field and existing saved designs must not suddenly start printing it.
+  showDecision?: boolean
   // sections-based layout (overrides toggle config if present)
   sections?: LayoutSection[]
   // background color of the card paper
@@ -38,8 +124,8 @@ export interface TemplateConfig {
   // what stamps UNOFFICIAL across a student copy while the sealed official stays clean.
   // Undefined = both copies, so existing watermarks are unaffected.
   watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
-  // top-level layout type — 'standard' (section-based designer), 'transcript' (annual
-  // transcript style, university only), or 'ledger' (totals-in-table style, non-university only)
+  // top-level layout type — 'standard' (section-based designer), 'transcript' (the
+  // annual/multi-period stacked design), or 'ledger' (totals-merged-into-the-table style)
   layoutType?: 'standard' | 'transcript' | 'ledger'
   // settings for the transcript layout
   transcriptConfig?: {
@@ -117,7 +203,18 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   // Official header only — manual multiplier (default 1) on top of the automatic
   // logoSize-based scale (see officialTextScaleFor below), so the admin can fine
   // tune the left/right text block sizing independently of the logo.
-  officialTextScale?: number }
+  officialTextScale?: number
+  /** Redesign letterhead. 'crest' = the three-column bilingual letterhead with the seal
+   *  centred between EN and FR blocks; 'logo' = a thin republic strip above a large
+   *  centred school name with the logo to its left. Undefined = the pre-redesign header,
+   *  so an old saved design renders exactly as before. */
+  headerStyle?: 'crest' | 'logo'
+  /** 'logo' style only: the thin bilingual republic strip along the very top. */
+  showRepublicStrip?: boolean
+  /** Ruled contact line under the letterhead (P.O. Box · Tel · email · website). */
+  showContactLine?: boolean
+  /** The dark title ribbon with the term/session chip on its right. */
+  showTitleRibbon?: boolean }
 
 // Official header only: the left/right text blocks auto-scale with the logo size
 // (bigger logo -> bigger text, so they stay visually balanced), on top of the
@@ -236,10 +333,18 @@ export function officialTextBlockHtml(text: string, edge: 'left' | 'right', scal
   return `<div style="width:fit-content;${edgeMargin}">${lines}</div>`
 }
 
-export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|3; rows: InfoRow[] }
+export interface StudentInfoSec{ id: string; type: 'student_info'; columns: 1|2|3; rows: InfoRow[]
+  /** Redesign: box the rows, with room to their right for the photo frame — shown or
+   *  hidden by the school-wide TemplateConfig.showStudentPhoto toggle, not per-section.
+   *  The frame prints as an empty labelled rectangle when the student has no photo on
+   *  file, so the card's shape is the same either way. */
+  boxed?: boolean }
 export interface MarksTableSec { id: string; type: 'marks_table';  showSeq1: boolean; showSeq2: boolean; showCoef?: boolean; showGrade: boolean; showRemarks: boolean; headers?: Record<string,string>; headerColor?: string; colColors?: Record<string,string>; columnOrder?: string[];
   /** When set, the marks table is rendered from this SpreadsheetTable template instead of the default layout. The row marked _isDataRow repeats per subject in the print renderer. */
   template?: SpreadsheetTable
+  /** Small caps caption printed above the table with a rule beside it (the redesign's
+   *  "ACADEMIC RECORD — THIRD TERM"). `{term}` is replaced with the card's term name. */
+  caption?: string
   /** Transcript layout only: sources this table's data from ONE specific period of the
    *  academic year instead of the document's combined subjects/entries. The slots are
    *  ordinal, not literally semesters — a university year has two (sem1/sem2), a primary
@@ -299,7 +404,13 @@ export const MARKS_COL_LABELS: Record<string, { label: string; align: 'left' | '
   min:          { label: 'Min',          align: 'center' },
   avg:          { label: 'Avg',          align: 'center' },
   max:          { label: 'Max',          align: 'center' },
+  // Deliberately valueless: a ruled box the subject teacher initials by hand once the
+  // card is printed. Resolves to '' for every student, like the signature rules elsewhere.
+  visa:         { label: "Teacher's Visa", align: 'center' },
 }
+
+/** Marks columns that never carry data — printed blank to be completed by hand. */
+export const BLANK_MARKS_COLS = new Set(['visa'])
 
 /** Ordered, visibility-filtered column keys for a marks table (respects columnOrder). */
 export function marksColumnOrder(sec: Pick<MarksTableSec, 'columnOrder' | 'showSeq1' | 'showSeq2' | 'showCoef' | 'showGrade' | 'showRemarks'>): string[] {
@@ -436,17 +547,19 @@ function seedTranscriptTermMarksTable(color: string): SpreadsheetTable {
           ...(k === 'score' || k === 'grade' ? { bold: true } : {}),
         })),
       } as SheetRow,
-      // TOTAL row — coefficient and weighted-mark sums, scoped to this table's term.
+      // TOTAL row — coefficient and weighted-point sums, scoped to this table's term.
+      // wpTotal here is Σ(avg × coef) (see the school-type branch in statResolver's
+      // scopedAgg handling), not the raw Σ of averages 'total' would give. Spans are
+      // sized against this table's own column widths (NARROW_PX in
+      // PrintableReportCard.tsx) — a label defaulting to colSpan 1 on a narrow numeric
+      // column clips its own text.
       {
         id: `mfoot_${ts + 2}`,
         cells: [
-          { text: 'TOTAL', bold: true, align: 'left', bgColor: bandBg, textColor: bandFg },
+          { text: 'TOTAL:', bold: true, align: 'right', bgColor: bandBg, textColor: bandFg },
           { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
-          { text: '', bgColor: bandBg },
-          { text: '', bgColor: bandBg },
-          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
-          { text: '', bgColor: bandBg },
-          { text: '', bgColor: bandBg },
+          { text: 'TOTAL POINTS:', bold: true, colSpan: 4, align: 'right', bgColor: bandBg, textColor: bandFg },
+          { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
         ],
       } as SheetRow,
       // Hero line — this term's own average.
@@ -463,7 +576,40 @@ function seedTranscriptTermMarksTable(color: string): SpreadsheetTable {
 }
 
 export interface SummarySec    { id: string; type: 'summary';      boxes: SummaryBox[]; valueColor?: string }
-export interface RemarksSec    { id: string; type: 'remarks';      label: string; placeholderColor?: string }
+export interface RemarksSec    { id: string; type: 'remarks';      label: string; placeholderColor?: string
+  /** Redesign: render as a bordered panel with a titled header bar (the mockup's
+   *  "Class Master's Remark" / "General Remarks" boxes) rather than the older plain block.
+   *  Undefined = the old look, so pre-redesign designs are untouched. */
+  panel?: boolean
+  /** Panel variant only: draw a thick coloured bar down the left edge (the mockup's
+   *  General Remarks box). Uses the theme accent unless overridden. */
+  edgeColor?: string
+  /** Panel variant only: a signature rule under the text, with this caption. */
+  signatureCaption?: string }
+
+/**
+ * Conduct & Attendance — printed as a LABELLED BUT EMPTY panel. The school stores none of
+ * this (the Attendance feature records TEACHER absence, not students'), so every value
+ * prints blank for the class master to complete by hand, exactly like the ruled signature
+ * lines elsewhere on the card. Labels are editable; add/remove rows freely.
+ */
+export interface ConductSec {
+  id: string; type: 'conduct'
+  title?: string
+  rows: { id: string; label: string }[]
+}
+
+/**
+ * The gold "End of Year" strip. Only renders on the session's FINAL term — it is gated on
+ * annualAverage being present, the same rule Annual Average/Position and the promotion
+ * Decision already follow, so a First/Second Term card simply omits it.
+ */
+export interface AnnualBandSec {
+  id: string; type: 'annual_band'
+  /** Vertical tag down the left edge. */
+  tag?: string
+  cells: { id: string; label: string; field: string }[]
+}
 export interface SignaturesSec { id: string; type: 'signatures';   lines: SignatureLine[] }
 export interface TextBlockSec  { id: string; type: 'text_block';   content: string; align: 'left'|'center'|'right' }
 /**
@@ -520,7 +666,20 @@ export function sectionShowsOn(sec: SectionVariant, variant: DocVariant): boolea
 export type LayoutSection = (
   | HeaderSec | StudentInfoSec | MarksTableSec | SummarySec
   | RemarksSec | SignaturesSec | TextBlockSec | DividerSec | GradingLegendSec | StampSec
+  | ConductSec | AnnualBandSec | PanelRowSec
 ) & SectionVariant
+
+/**
+ * Lays its children side by side in one row (the mockup pairs Grading Scale with Conduct,
+ * and the two remark boxes with the stamp). A row rather than a CSS concern because the
+ * designer reorders and deletes whole sections — nesting keeps a pair moving together.
+ * `weights` are flex ratios, one per child.
+ */
+export interface PanelRowSec {
+  id: string; type: 'panel_row'
+  children: LayoutSection[]
+  weights?: number[]
+}
 
 // Degree classification by CGPA (mirrors classificationForGpa in lib/api/gradingScale).
 export const CLASSIFICATION_BANDS: { min: number; max: number; label: string }[] = [
@@ -533,54 +692,45 @@ export const CLASSIFICATION_BANDS: { min: number; max: number; label: string }[]
 export const DEFAULT_TRANSCRIPT_LEGEND =
   'CV = Credit Value &nbsp;·&nbsp; GP = Grade Point &nbsp;·&nbsp; WGP = Weighted Grade Point (CV × GP) &nbsp;·&nbsp; GPA = Grade Point Average &nbsp;·&nbsp; CGPA = Cumulative Grade Point Average'
 
-// ── Template presets ──────────────────────────────────────────────────────────
+// ── Theme presets ─────────────────────────────────────────────────────────────
+// Since the 2026 redesign every theme renders the SAME layout and differs only in its
+// palette (see THEME_PALETTES / getDefaultLayout). The per-template structural toggles
+// below are identical across all six on purpose — they are legacy fields the sections
+// renderer no longer consults, kept so the type and any pre-redesign saved design stay
+// valid. To restyle a theme, change its entry in THEME_PALETTES, not here.
+const themeBase = (name: TemplateName, reportTitle: string, footerText = ''): TemplateConfig => ({
+  template: name,
+  primaryColor: THEME_PALETTES[name].primary,
+  accentColor: THEME_PALETTES[name].accent,
+  reportTitle, schoolSubtitle: '',
+  showSchoolType: true, showSeq1: true, showSeq2: true,
+  showGrade: true, showRemarks: true, showPosition: true, showAverage: true,
+  showGeneralRemarks: true, showTeacherSig: true, showPrincipalSig: true, showParentSig: true,
+  principalTitle: 'Principal', footerText,
+})
+
 export const TEMPLATE_DEFAULTS: Record<TemplateName, TemplateConfig> = {
-  classic: {
-    template: 'classic', primaryColor: '#1e3a5f',
-    reportTitle: 'STUDENT REPORT CARD', schoolSubtitle: '',
-    showSchoolType: true, showSeq1: true, showSeq2: true,
-    showGrade: true, showRemarks: true, showPosition: true, showAverage: true,
-    showGeneralRemarks: true, showTeacherSig: true, showPrincipalSig: true, showParentSig: true,
-    principalTitle: 'Principal', footerText: '',
-  },
-  bilingual: {
-    template: 'bilingual', primaryColor: '#1a5c1a',
-    reportTitle: 'END OF TERM REPORT / RAPPORT DE FIN DE TERME',
-    schoolSubtitle: 'République du Cameroun / Republic of Cameroon',
-    showSchoolType: true, showSeq1: true, showSeq2: true,
-    showGrade: true, showRemarks: true, showPosition: true, showAverage: true,
-    showGeneralRemarks: true, showTeacherSig: true, showPrincipalSig: true, showParentSig: true,
-    principalTitle: 'Principal', footerText: 'Paix — Travail — Patrie / Peace — Work — Fatherland',
-  },
-  modern: {
-    template: 'modern', primaryColor: '#2563eb',
-    reportTitle: 'ACADEMIC PERFORMANCE REPORT', schoolSubtitle: '',
-    showSchoolType: false, showSeq1: false, showSeq2: false,
-    showGrade: true, showRemarks: false, showPosition: true, showAverage: true,
-    showGeneralRemarks: true, showTeacherSig: false, showPrincipalSig: true, showParentSig: false,
-    principalTitle: 'Principal', footerText: '',
-  },
-  official: {
-    template: 'official', primaryColor: '#92400e',
-    reportTitle: 'OFFICIAL ACADEMIC REPORT',
-    schoolSubtitle: 'Republic of Cameroon — Peace, Work, Fatherland',
-    showSchoolType: true, showSeq1: true, showSeq2: true,
-    showGrade: true, showRemarks: true, showPosition: true, showAverage: true,
-    showGeneralRemarks: true, showTeacherSig: true, showPrincipalSig: true, showParentSig: true,
-    principalTitle: 'Headmaster/Headmistress',
-    footerText: 'This report is an official academic document of the school.',
-  },
-  ledger: {
-    template: 'ledger', primaryColor: '#0f172a',
-    reportTitle: 'STUDENT LEDGER REPORT', schoolSubtitle: '',
-    showSchoolType: true, showSeq1: true, showSeq2: true,
-    showGrade: true, showRemarks: true, showPosition: true, showAverage: true,
-    showGeneralRemarks: true, showTeacherSig: true, showPrincipalSig: true, showParentSig: true,
-    principalTitle: 'Principal', footerText: '',
-  },
+  classic:   themeBase('classic',   'STUDENT REPORT CARD'),
+  bilingual: themeBase('bilingual', 'STUDENT REPORT CARD', 'Paix — Travail — Patrie / Peace — Work — Fatherland'),
+  modern:    themeBase('modern',    'STUDENT REPORT CARD'),
+  official:  themeBase('official',  'STUDENT REPORT CARD', 'This report is an official academic document of the school.'),
+  emerald:   themeBase('emerald',   'STUDENT REPORT CARD'),
+  slate:     themeBase('slate',     'STUDENT REPORT CARD'),
+  ledger:    themeBase('ledger',    'STUDENT LEDGER REPORT'),
 }
 
 export const DEFAULT_CONFIG = TEMPLATE_DEFAULTS.classic
+
+// The identity box's photo frame: default/min/max width in px (its height always
+// stretches to match the rows box beside it). Shared by the designer's slider and the
+// print renderer so a bad/stale saved value is clamped identically in both places.
+export const STUDENT_PHOTO_SIZE_DEFAULT = 74
+export const STUDENT_PHOTO_SIZE_MIN = 50
+export const STUDENT_PHOTO_SIZE_MAX = 150
+export function clampStudentPhotoSize(size?: number): number {
+  if (size == null || Number.isNaN(size)) return STUDENT_PHOTO_SIZE_DEFAULT
+  return Math.min(STUDENT_PHOTO_SIZE_MAX, Math.max(STUDENT_PHOTO_SIZE_MIN, size))
+}
 
 // Starter text for the official Cameroon-style three-column header (editable).
 export const OFFICIAL_HEADER_LEFT = `<b>RÉPUBLIQUE DU CAMEROUN</b><br><i>Paix - Travail - Patrie</i><br>MINISTÈRE DES ENSEIGNEMENTS SECONDAIRES<br>DÉLÉGATION RÉGIONALE DE …<br>DÉLÉGATION DÉPARTEMENTALE DE …`
@@ -590,7 +740,210 @@ export const OFFICIAL_HEADER_RIGHT = `<b>REPUBLIC OF CAMEROON</b><br><i>Peace - 
 let _id = 0
 const uid = (prefix: string) => `${prefix}_${++_id}_${Math.random().toString(36).slice(2, 6)}`
 
-export function getDefaultLayout(tpl: TemplateName): TemplateConfig & { sections: LayoutSection[] } {
+/**
+ * The 2026 house design, for every school type. One layout; the six themes only change
+ * its palette (THEME_PALETTES). Structure, top to bottom:
+ *
+ *   letterhead → identity box + photo frame → captioned marks table (ONE straight table,
+ *   no subject-group bands) → five stat boxes → End-of-Year band (final term only) →
+ *   grading scale beside the blank conduct panel → general remarks → the two remark
+ *   boxes beside the stamp → footer line.
+ *
+ * Built out of ordinary sections so everything the designer already does — drag to
+ * reorder, edit any text, add/remove/re-key table columns, scope a section to one printed
+ * copy — keeps working with no special cases.
+ */
+function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  const t = TEMPLATE_DEFAULTS[tpl]
+  const color = t.primaryColor
+  const accent = accentOf(t)
+  const isUni = schoolType === 'UNIVERSITY'
+  const isPrimary = schoolType === 'PRIMARY'
+  const learner = isPrimary ? 'Pupil' : 'Student'
+  const periodWord = isUni ? 'Semester' : 'Term'
+
+  // University marks on a /100 course scale with credits and grade points; everyone else
+  // on the Cameroon /20 sequence-and-coefficient grid. Same table either way — only the
+  // columns and their headers differ.
+  const cols = isUni
+    ? ['sn', 'code', 'subject', 'credit', 'seq1', 'seq2', 'score', 'grade', 'gradePoint', 'weighted', 'visa']
+    : ['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks', 'visa']
+  const headers: Record<string, string> = isUni
+    ? { subject: 'Course Title', credit: 'Credits', seq1: 'CA', seq2: 'Exam', score: 'Total /100', gradePoint: 'GP', weighted: 'WGP' }
+    : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
+
+  const ts = Date.now()
+  const bandBg = '#f1f5f9'
+  const marksTemplate: SpreadsheetTable = {
+    id: `marks_${ts}`,
+    title: '',
+    colCount: cols.length,
+    rows: [
+      {
+        id: `mhdr_${ts}`,
+        cells: cols.map((k) => ({
+          text: headers[k] ?? MARKS_COL_LABELS[k]?.label ?? k,
+          bold: true, align: MARKS_COL_LABELS[k]?.align ?? 'center',
+          bgColor: color, textColor: '#ffffff',
+        })),
+      },
+      {
+        id: `mdata_${ts + 1}`,
+        _isDataRow: true,
+        cells: cols.map((k) => ({
+          field: `m:${k}`,
+          align: MARKS_COL_LABELS[k]?.align ?? 'center',
+          ...(MARKS_COL_LABELS[k]?.bold ? { bold: true } : {}),
+          ...(k === 'weighted' ? { bgColor: '#f4f1e8', bold: true } : {}),
+        })),
+      },
+      // Totals band. Spans are picked so each label ends on the border of the column its
+      // value sits in, which is what keeps the rule from slicing through the text.
+      {
+        id: `mfoot_${ts + 2}`,
+        cells: isUni
+          ? [
+              { text: 'TOTALS', bold: true, colSpan: 3, align: 'right', bgColor: color, textColor: '#ffffff' },
+              { field: 'credits', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
+              { text: 'TOTAL POINTS', bold: true, colSpan: 3, align: 'right', bgColor: color, textColor: '#ffffff' },
+              { field: 'wpTotal', bold: true, align: 'center', bgColor: accent, textColor: '#ffffff' },
+              { text: 'GPA', bold: true, colSpan: 2, align: 'right', bgColor: color, textColor: '#ffffff' },
+              { field: 'gpa', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
+            ]
+          : [
+              { text: 'TOTALS', bold: true, colSpan: 2, align: 'right', bgColor: color, textColor: '#ffffff' },
+              { field: 'coefTotal', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
+              // Σ(avg × coef) — the numerator of the weighted average, matching the
+              // "Avg × Coef" column above it. NOT `total` (Σ of the raw averages), which
+              // would not divide by the coefficient total to give the term average.
+              { text: 'TOTAL POINTS OBTAINED', bold: true, colSpan: 3, align: 'right', bgColor: color, textColor: '#ffffff' },
+              { field: 'wpTotal', bold: true, align: 'center', bgColor: accent, textColor: '#ffffff' },
+              { text: 'WEIGHTED AVERAGE', bold: true, colSpan: 2, align: 'right', bgColor: color, textColor: '#ffffff' },
+              { field: 'average', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
+            ],
+      },
+    ],
+  }
+
+  const infoRows = [
+    { label: 'Name', field: 'student.name' },
+    { label: `${learner} ID`, field: 'student.studentId' },
+    { label: isUni ? 'Programme' : 'Class', field: 'student.classLevel' },
+    { label: 'Sex', field: 'student.gender' },
+    { label: 'Date of Birth', field: 'student.dateOfBirth' },
+    { label: 'Place of Birth', field: 'student.placeOfBirth' },
+    { label: periodWord, field: 'term.name' },
+    { label: 'Academic Year', field: 'term.session' },
+  ]
+
+  // Five stat boxes. `appreciation` is the school's own grading-scale remark for the term
+  // average — real data, unlike a per-term pass/fail, which the system does not compute.
+  const summaryBoxes = isUni
+    ? [
+        { label: 'Total Credits', field: 'credits' },
+        { label: `${periodWord} GPA`, field: 'gpa' },
+        { label: 'Cumulative GPA', field: 'cgpa' },
+        { label: 'Class Average', field: 'classAverage' },
+        { label: 'Classification', field: 'classification' },
+      ]
+    : [
+        { label: `${periodWord} Average /20`, field: 'average' },
+        { label: 'Class Average /20', field: 'classAverage' },
+        { label: 'Position in Class', field: 'position' },
+        { label: 'Best Average', field: 'bestAverage' },
+        { label: 'Appreciation', field: 'appreciation' },
+      ]
+
+  const sections: LayoutSection[] = [
+    {
+      id: uid('hdr'), type: 'header',
+      reportTitle: t.reportTitle, subtitle: '',
+      showSchoolType: true, showLogo: true, logoSize: 74, logoPosition: 'center',
+      headerStyle: 'crest', showRepublicStrip: true, showContactLine: true, showTitleRibbon: true,
+      showEmail: true, showPhone: true, showAddress: true, showWebsite: true, showAuthorization: true,
+    },
+    {
+      id: uid('info'), type: 'student_info', columns: 2, boxed: true,
+      rows: infoRows.map((r) => ({ id: uid('r'), label: r.label, field: r.field })),
+    },
+    {
+      id: uid('tbl'), type: 'marks_table',
+      caption: `Academic Record — {term}`,
+      showSeq1: true, showSeq2: true, showGrade: true, showRemarks: !isUni,
+      showCoef: !isUni, columnOrder: cols, headers,
+      template: marksTemplate,
+    },
+    { id: uid('sum'), type: 'summary', boxes: summaryBoxes.map((b) => ({ id: uid('b'), label: b.label, field: b.field })) },
+    // Final term only — see AnnualBandSec. University years close on CGPA/classification
+    // rather than an annual /20 average, so its cells differ.
+    {
+      id: uid('ann'), type: 'annual_band', tag: 'End of Year',
+      cells: (isUni
+        ? [
+            { label: 'Cumulative GPA', field: 'cgpa' },
+            { label: 'Total Credits', field: 'credits' },
+            { label: 'Classification', field: 'classification' },
+          ]
+        : [
+            { label: 'Annual Average /20', field: 'annualAverage' },
+            { label: 'Annual Position', field: 'annualPosition' },
+            { label: 'Annual Class Average', field: 'annualClassAverage' },
+            { label: 'Final Decision', field: 'decision' },
+          ]
+      ).map((c) => ({ id: uid('ac'), label: c.label, field: c.field })),
+    },
+    {
+      id: uid('row1'), type: 'panel_row', weights: [1.55, 1],
+      children: [
+        {
+          id: uid('leg'), type: 'grading_legend', title: 'Grading Scale · Appreciation',
+          showGradeSystem: true, showClassification: isUni, showLegend: false,
+          ...(isUni ? { legendText: DEFAULT_TRANSCRIPT_LEGEND } : {}),
+        },
+        {
+          id: uid('con'), type: 'conduct', title: 'Conduct & Attendance',
+          rows: ['Discipline', 'Punctuality', 'Days Absent', 'Late Arrivals', 'Warnings Issued']
+            .map((label) => ({ id: uid('cr'), label })),
+        },
+      ],
+    },
+    {
+      id: uid('gen'), type: 'remarks', label: 'General Remarks',
+      panel: true, edgeColor: accent,
+    },
+    {
+      id: uid('row2'), type: 'panel_row', weights: [1, 1, 0.42],
+      children: [
+        {
+          id: uid('rm1'), type: 'remarks',
+          label: isUni ? "Adviser's Remark" : "Class Master's Remark",
+          panel: true, signatureCaption: 'Signature',
+        },
+        {
+          id: uid('rm2'), type: 'remarks',
+          label: isUni ? "Dean's Remark" : "Principal's Remark",
+          panel: true, signatureCaption: isUni ? 'Dean' : 'Principal',
+        },
+        { id: uid('stp'), type: 'stamp', size: 92, align: 'center', label: 'School Stamp' },
+      ],
+    },
+    {
+      id: uid('ft'), type: 'text_block',
+      content: t.footerText || 'This document is an official record and is invalid without the school stamp.',
+      align: 'center',
+    },
+  ]
+
+  return { ...t, sections }
+}
+
+export function getDefaultLayout(tpl: TemplateName, schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  return buildRedesignLayout(tpl, schoolType)
+}
+
+/** Pre-redesign layout builder. Unused by the designer now — kept so a school that saved
+ *  a design under the old structure can still be rendered until it re-saves. */
+export function getLegacyDefaultLayout(tpl: TemplateName): TemplateConfig & { sections: LayoutSection[] } {
   const t = TEMPLATE_DEFAULTS[tpl]
   const isBi = tpl === 'bilingual'
   const sections: LayoutSection[] = [
@@ -676,9 +1029,15 @@ function buildLayout(opts: {
  * "SEMESTER GPA:" banner line), all resolved live via the same mechanism the
  * transcript-style footer rows already use.
  */
-export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] } {
+export function getLedgerLayout(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   const color = '#0f172a'
-  const cols = ['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const
+  const isUni = schoolType === 'UNIVERSITY'
+  const cols = isUni
+    ? (['sn', 'code', 'subject', 'credit', 'score', 'gradePoint', 'grade', 'weighted'] as const)
+    : (['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks'] as const)
+  const headers: Record<string, string> = isUni
+    ? { subject: 'Course Title', score: 'Mark /100', gradePoint: 'GP', weighted: 'WGP' }
+    : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
   const ts = Date.now()
 
   // CITEC-transcript-style banding: near-black full-width term banner on top,
@@ -692,7 +1051,7 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
     title: '',
     colCount: cols.length,
     rows: [
-      // Full-width term banner — resolves to "FIRST TERM" etc. per report card.
+      // Full-width term/semester banner — resolves to "FIRST TERM" etc. per report card.
       {
         id: `mban_${ts}`,
         cells: [
@@ -702,7 +1061,7 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
       {
         id: `mhdr_${ts + 1}`,
         cells: cols.map((k) => ({
-          text: MARKS_COL_LABELS[k]?.label ?? k,
+          text: headers[k] ?? MARKS_COL_LABELS[k]?.label ?? k,
           bold: true,
           align: MARKS_COL_LABELS[k]?.align ?? 'center',
           bgColor: bandBg,
@@ -718,73 +1077,119 @@ export function getLedgerLayout(): TemplateConfig & { sections: LayoutSection[] 
           ...(MARKS_COL_LABELS[k]?.bold ? { bold: true } : {}),
         })),
       },
-      // TOTAL band — mirrors the transcript's course-total row.
+      // Totals band — credits/points for a university, coefficients/points otherwise.
+      // Spans are hand-picked against this table's own fixed/flex column widths (see
+      // NARROW_PX in PrintableReportCard.tsx): each label's span must reach across
+      // enough real pixels for its own text, not just "however many columns are left" —
+      // a colSpan defaulting to 1 narrow numeric column clips a label like "TOTAL POINTS
+      // OBTAINED:" down to "TOTAL", and a value like "12th/12" needs 2 narrow columns,
+      // not 1, or it clips too.
       {
         id: `mfoot_${ts + 3}`,
-        cells: [
-          { text: 'TOTAL', bold: true, colSpan: 4, align: 'left', bgColor: bandBg, textColor: bandFg },
-          { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
-          { text: '', colSpan: 2, bgColor: bandBg },
-        ],
+        cells: isUni
+          ? [
+              { text: 'TOTAL CREDITS:', bold: true, colSpan: 3, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'credits', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+              { text: 'TOTAL POINTS:', bold: true, colSpan: 3, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+            ]
+          : [
+              { text: 'TOTAL:', bold: true, colSpan: 2, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+              { text: 'TOTAL POINTS OBTAINED:', bold: true, colSpan: 4, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'wpTotal', bold: true, align: 'center', colSpan: 2, bgColor: bandBg, textColor: bandFg },
+            ],
       },
-      // Secondary stats share one white row: class average | class position.
-      // Spans are chosen around the print column widths: the first label
-      // absorbs the wide flexible subject column (S/N + Subject), its value
-      // lands in the narrow Seq 1 column, the second label spans Seq 2 +
-      // Score + Grade (~134px — wide enough that the column border never
-      // slices the text), and its value sits in the fixed-width Remarks
-      // column at the right edge, on the same border line as the TERM
-      // AVERAGE value below it.
+      // Second row: this period's average/GPA | class average. Non-university only gets
+      // a third row for position/best average — university has no ranking concept
+      // anywhere in this app (see the Standard layout's own annual_band).
       {
         id: `mfoot_${ts + 4}`,
-        cells: [
-          { text: 'CLASS AVERAGE:', bold: true, colSpan: 2, align: 'right', textColor: '#475569' },
-          { field: 'classAverage', bold: true, align: 'center' },
-          { text: 'CLASS POSITION:', bold: true, colSpan: 3, align: 'right', textColor: '#475569' },
-          { field: 'position', bold: true, align: 'center' },
-        ],
+        cells: isUni
+          ? [
+              { text: 'SEMESTER GPA:', bold: true, colSpan: 3, align: 'right', textColor: '#475569' },
+              { field: 'gpa', bold: true, align: 'center' },
+              { text: 'CLASS AVERAGE:', bold: true, colSpan: 3, align: 'right', textColor: '#475569' },
+              { field: 'classAverage', bold: true, align: 'center' },
+            ]
+          : [
+              { text: 'TERM AVERAGE:', bold: true, colSpan: 2, align: 'right', textColor: '#475569' },
+              { field: 'average', bold: true, align: 'center' },
+              { text: 'CLASS AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: '#475569' },
+              { field: 'classAverage', bold: true, align: 'center', colSpan: 2 },
+            ],
       },
-      // Hero line — big bold term average, like the transcript's GPA row.
-      {
+      ...(isUni ? [] : [{
         id: `mfoot_${ts + 5}`,
         cells: [
-          { text: 'TERM AVERAGE:', bold: true, colSpan: 6, align: 'right', textColor: color },
-          { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
+          { text: 'POSITION IN CLASS:', bold: true, colSpan: 2, align: 'right' as const, textColor: '#475569' },
+          { field: 'position', bold: true, align: 'center' as const, colSpan: 2 },
+          { text: 'BEST AVERAGE:', bold: true, colSpan: 3, align: 'right' as const, textColor: '#475569' },
+          { field: 'bestAverage', bold: true, align: 'center' as const, colSpan: 2 },
+        ],
+      } as SheetRow]),
+      // Closing band — every period. University bands on Classification (which itself
+      // bands on the cumulative GPA once one exists, otherwise this semester's own GPA —
+      // see classificationForGpa), so it needs no final-period gate. Everyone else gets
+      // this period's own grading-scale appreciation; on the year's final term the
+      // renderer swaps this row for Annual Average/Position + Decision instead.
+      {
+        id: `mfoot_${ts + 6}`,
+        cells: [
+          { text: `${(isUni ? 'CLASSIFICATION' : 'TERM APPRECIATION')}:`, bold: true, colSpan: cols.length - 1, align: 'right', textColor: color },
+          { field: isUni ? 'classification' : 'appreciation', bold: true, align: 'center', textColor: color, fontSize: 15 },
         ],
       },
     ],
   }
 
   const sections: LayoutSection[] = [
-    { id: uid('hdr'), type: 'header', reportTitle: 'STUDENT LEDGER REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    { id: uid('hdr'), type: 'header', reportTitle: 'STUDENT LEDGER REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left', headerStyle: 'crest' },
     {
-      id: uid('info'), type: 'student_info', columns: 2,
-      rows: [
-        { id: uid('r'), label: 'Student Name', field: 'student.name' },
-        { id: uid('r'), label: 'Student ID',    field: 'student.studentId' },
-        { id: uid('r'), label: 'Class',         field: 'student.classLevel' },
-        { id: uid('r'), label: 'Guardian',      field: 'student.guardianName' },
-        { id: uid('r'), label: 'Term',          field: 'term.name' },
-        { id: uid('r'), label: 'Session',       field: 'term.session' },
-      ],
+      id: uid('info'), type: 'student_info', columns: 2, boxed: true,
+      rows: isUni
+        ? [
+            { id: uid('r'), label: 'Student Name', field: 'student.name' },
+            { id: uid('r'), label: 'Student ID',    field: 'student.studentId' },
+            { id: uid('r'), label: 'Programme',     field: 'student.classLevel' },
+            { id: uid('r'), label: 'Sex',           field: 'student.gender' },
+            { id: uid('r'), label: 'Semester',      field: 'term.name' },
+            { id: uid('r'), label: 'Academic Year', field: 'term.session' },
+          ]
+        : [
+            { id: uid('r'), label: 'Student Name', field: 'student.name' },
+            { id: uid('r'), label: 'Student ID',    field: 'student.studentId' },
+            { id: uid('r'), label: 'Class',         field: 'student.classLevel' },
+            { id: uid('r'), label: 'Guardian',      field: 'student.guardianName' },
+            { id: uid('r'), label: 'Term',          field: 'term.name' },
+            { id: uid('r'), label: 'Session',       field: 'term.session' },
+          ],
     },
-    { id: uid('tbl'), type: 'marks_table', showSeq1: true, showSeq2: true, showGrade: true, showRemarks: true, template: marksTemplate },
-    // Same boxed-table look as the university transcript's grading legend —
-    // just the one grade-scale table (no classification/CGPA side table, since
-    // that's a university-only concept).
-    { id: uid('leg'), type: 'grading_legend', title: 'Grading Scale', showGradeSystem: true, showClassification: false, showLegend: false },
+    { id: uid('tbl'), type: 'marks_table', showSeq1: !isUni, showSeq2: !isUni, showGrade: true, showRemarks: !isUni, showCoef: !isUni, template: marksTemplate },
+    // Same boxed-table look as the university transcript's grading legend — the
+    // classification/CGPA side table only makes sense for a university.
+    { id: uid('leg'), type: 'grading_legend', title: `Grading Scale${isUni ? ' · Classification' : ''}`, showGradeSystem: true, showClassification: isUni, showLegend: false },
     { id: uid('rem'), type: 'remarks', label: 'General Remarks' },
     {
       id: uid('sig'), type: 'signatures',
-      lines: [
-        { id: uid('s'), label: "Class Teacher's Signature" },
-        { id: uid('s'), label: "Principal's Signature" },
-        { id: uid('s'), label: "Parent / Guardian's Signature" },
-      ],
+      lines: isUni
+        ? [
+            { id: uid('s'), label: "Dean of Studies' Signature" },
+            { id: uid('s'), label: "Registrar's Signature" },
+          ]
+        : [
+            { id: uid('s'), label: "Class Teacher's Signature" },
+            { id: uid('s'), label: "Principal's Signature" },
+            { id: uid('s'), label: "Parent / Guardian's Signature" },
+          ],
     },
   ]
 
-  return { ...TEMPLATE_DEFAULTS.ledger, sections }
+  // On by default — unlike Standard, where "Show Decision" is an opt-in extra box,
+  // the whole point of the Ledger's closing band is to carry the year's verdict once
+  // it exists, so a school that picks this layout shouldn't have to separately find
+  // and enable the toggle just to see it.
+  return { ...TEMPLATE_DEFAULTS.ledger, sections, showDecision: true }
 }
 
 /**
@@ -803,12 +1208,11 @@ export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig 
   if (schoolType && schoolType !== 'UNIVERSITY') return getTranscriptTermLayout(schoolType)
   const color = '#1e3a5f'
   const sections: LayoutSection[] = [
-    // Same non-official defaults as the standard university layout (logo left,
-    // school type shown) — so unchecking "Official" on this header behaves the
-    // same way it does on standard, instead of falling back to its own look.
-    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL TRANSCRIPT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    // Same crest letterhead as the standard university layout, so the transcript's
+    // header never falls back to the plain pre-2026 look Standard moved away from.
+    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL TRANSCRIPT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left', headerStyle: 'crest' },
     {
-      id: uid('info'), type: 'student_info', columns: 2,
+      id: uid('info'), type: 'student_info', columns: 2, boxed: true,
       rows: [
         { id: uid('r'), label: 'Student Name', field: 'student.name' },
         { id: uid('r'), label: 'Matricule No.', field: 'student.studentId' },
@@ -856,9 +1260,9 @@ function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sectio
   const color = schoolType === 'PRIMARY' ? '#0f766e' : '#1e3a5f'
   const pupil = schoolType === 'PRIMARY'
   const sections: LayoutSection[] = [
-    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' },
+    { id: uid('hdr'), type: 'header', reportTitle: 'ANNUAL REPORT', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left', headerStyle: 'crest' },
     {
-      id: uid('info'), type: 'student_info', columns: 2,
+      id: uid('info'), type: 'student_info', columns: 2, boxed: true,
       rows: [
         { id: uid('r'), label: pupil ? 'Pupil Name' : 'Student Name', field: 'student.name' },
         { id: uid('r'), label: pupil ? 'Pupil ID' : 'Student ID', field: 'student.studentId' },
@@ -936,6 +1340,15 @@ export function ensureBirthRows<T extends Partial<TemplateConfig>>(cfg: T, schoo
 }
 
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
+  // Since the 2026 redesign every school type gets the SAME layout, differing only in its
+  // marks columns and stat boxes (see buildRedesignLayout). The per-type builders below
+  // are the pre-redesign defaults, unused now but kept for reference/rollback.
+  return buildRedesignLayout('classic', schoolType)
+}
+
+/** Pre-redesign per-type defaults. Superseded by buildRedesignLayout; retained so the
+ *  older shapes are still on hand if a school needs one rebuilt. */
+export function getLegacyDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   if (schoolType === 'PRIMARY') return buildLayout({
     primaryColor: '#0f766e',
     reportTitle: 'PRIMARY SCHOOL REPORT CARD', subtitle: '',
@@ -989,7 +1402,7 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
     signatures: ["Dean of Studies", "Registrar"],
     gradingLegend: true,
   })
-  return getDefaultLayout('classic') // secondary / default
+  return getLegacyDefaultLayout('classic') // secondary / default
 }
 
 /**
@@ -1003,9 +1416,17 @@ export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & {
  */
 export function mergeSavedStandardConfig(saved: Partial<TemplateConfig> | null | undefined, schoolType?: string): TemplateConfig {
   const { transcript: _t, ...top } = (saved ?? {}) as Partial<TemplateConfig>
-  // `highlightFailingRed` is a school-wide marking policy rather than part of any one
-  // design, so it has to survive even the fallbacks below that discard the saved design.
-  const policy = top.highlightFailingRed != null ? { highlightFailingRed: top.highlightFailingRed } : {}
+  // `highlightFailingRed`, `showStudentPhoto` and `studentPhotoSize` are school-wide
+  // marking/print policy rather than part of any one design, so they have to survive
+  // even the fallbacks below that discard the saved design. `showDecision`, unlike
+  // those, is deliberately PER DESIGN (Standard/Ledger vs Transcript each remember their
+  // own toggle) — it is NOT carried through here, so a fallback to defaults correctly
+  // reads it as unset rather than inheriting it.
+  const policy = {
+    ...(top.highlightFailingRed != null ? { highlightFailingRed: top.highlightFailingRed } : {}),
+    ...(top.showStudentPhoto != null ? { showStudentPhoto: top.showStudentPhoto } : {}),
+    ...(top.studentPhotoSize != null ? { studentPhotoSize: top.studentPhotoSize } : {}),
+  }
   if (Object.keys(top).length === 0 || top.layoutType === 'transcript')
     return { ...getDefaultLayoutForType(schoolType), ...policy }
   const base = TEMPLATE_DEFAULTS[(top.template as TemplateName) ?? 'classic']

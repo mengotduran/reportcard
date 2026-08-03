@@ -52,6 +52,19 @@ export function slotPeriods(startTime: string, endTime: string, periodMinutes: n
   return Math.max(1, Math.round(dur / periodMinutes))
 }
 
+// Day and Evening are separate sittings with their own bell schedule and their own
+// period length (School.dayPeriodMinutes / eveningPeriodMinutes) — an evening course runs
+// its own curriculum with its own evaluations, so its missed-period count must never be
+// measured against the day's period length, or the reverse. `programme` is whatever a
+// class/course/slot resolves to (see getProgrammeByClassLevel); anything but 'EVENING'
+// (including null/undefined, the pre-split default) reads as Day.
+export function periodMinutesFor(
+  school: { dayPeriodMinutes: number | null | undefined; eveningPeriodMinutes: number | null | undefined },
+  programme: string | null | undefined,
+): number | null {
+  return (programme === 'EVENING' ? school.eveningPeriodMinutes : school.dayPeriodMinutes) ?? null
+}
+
 // Cameroon is UTC+1 (WAT) year-round, no DST. There's no per-school timezone field yet,
 // so this assumes WAT — fine for the calendar-day comparisons used elsewhere in this
 // file, and close enough for the hour-level cutoff this specific check needs.

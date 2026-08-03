@@ -92,11 +92,14 @@ model School {
   updatedAt      DateTime   @updatedAt
   acronym        String?
   batch          Int?
-  repeatThreshold Float?
   // Length of one school period in minutes. Teaching hours are counted in real clock
   // hours, but a teacher's ATTENDANCE is counted in these periods, so a 100-minute class
   // on a 50-minute grid is 2 periods missed. Mirrors the Postgres schema.
-  periodMinutes  Int?
+  // Day and Evening are separate sittings with their own bell schedule (see
+  // TimetablePeriod.programme), so each gets its own period length. Mirrors the Postgres
+  // schema — see the fuller comment there.
+  dayPeriodMinutes     Int?
+  eveningPeriodMinutes Int?
   // Minutes after a period STARTS before the teacher counts as having missed it; once up,
   // that period's absence is final for everyone. null keeps the older end-of-period rule.
   // Mirrors the Postgres schema — see the fuller comment there.
@@ -123,6 +126,7 @@ model School {
   reportCardTemplate       ReportCardTemplate?
   classListTemplate        ClassListTemplate?
   gradingScale             GradingScale?
+  promotionScale           PromotionScale?
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
   excelTemplates           ExcelTemplate[]
@@ -139,6 +143,19 @@ model GradingScale {
   schoolId  String   @unique
   ranges    Json     @default("[]")
   updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
+// Mirrors the Postgres schema — see the fuller comment there.
+model PromotionScale {
+  id           String   @id @default(uuid())
+  schoolId     String   @unique
+  trialMinimum Float?
+  passLabel    String   @default("Pass")
+  trialLabel   String   @default("This student was promoted on trial")
+  repeatLabel  String   @default("Repeat")
+  updatedAt    DateTime @updatedAt
 
   school School @relation(fields: [schoolId], references: [id])
 }
@@ -254,6 +271,9 @@ model Student {
   // round-tripping it through a timestamp shifts it by a day for anyone west of UTC.
   dateOfBirth       String?
   placeOfBirth      String?
+  // Uploaded file URL, same "/uploads/<file>" shape as School.logo/stamp. Absent = the
+  // report card's identity box prints an empty labelled photo frame instead of an image.
+  photo             String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -434,11 +454,10 @@ model TimetablePeriod {
   startTime String
   endTime   String
   isBreak   Boolean @default(false)
-  // Which sitting this slot is for. NULL = shared by both, which is what every existing
-  // period means and stays the default — a school with no evening programme never sets
-  // this. Same convention as SchoolHoliday.programme. Evening currently exists for
-  // universities only, so this is a no-op everywhere else.
-  programme Programme?
+  // Which sitting this period belongs to. Day and Evening are two fully independent bell
+  // schedules, so every row picks one explicitly — no more "whole school" null. Defaults
+  // to DAY, a no-op for every school type except university.
+  programme Programme @default(DAY)
   school    School  @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])

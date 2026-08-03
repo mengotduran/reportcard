@@ -1,8 +1,18 @@
 import { Response } from 'express'
+import path from 'path'
+import fs from 'fs'
 import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { stripProgramme, withProgrammeOf } from '../utils/programme'
 import { demoLimitBlock } from '../config/demo'
+import { UPLOAD_DIR } from '../config/uploads'
+
+function deleteFile(urlPath: string) {
+  try {
+    const filePath = path.join(UPLOAD_DIR, path.basename(urlPath))
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+  } catch { /* ignore */ }
+}
 
 /** '' / whitespace from an untouched optional form field means "not provided", i.e. NULL,
  *  never an empty string: one representation of missing keeps the print side simple. */
@@ -344,6 +354,42 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
     })
 
     res.json({ message: 'Student updated', student: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Same flow as School.logo/stamp (see school.controller.ts uploadLogo/uploadStamp):
+// disk upload via multer, the old file removed once the new one is on record.
+export const uploadStudentPhoto = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+    if (!req.file) { res.status(400).json({ message: 'No file uploaded' }); return }
+
+    const student = await prisma.student.findFirst({ where: { id, schoolId } })
+    if (!student) { res.status(404).json({ message: 'Student not found' }); return }
+    if (student.photo) deleteFile(student.photo)
+
+    const url = `/uploads/${req.file.filename}`
+    const updated = await prisma.student.update({ where: { id }, data: { photo: url } })
+    res.json({ message: 'Photo uploaded', student: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const removeStudentPhoto = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+    const student = await prisma.student.findFirst({ where: { id, schoolId } })
+    if (!student) { res.status(404).json({ message: 'Student not found' }); return }
+    if (student.photo) deleteFile(student.photo)
+    const updated = await prisma.student.update({ where: { id }, data: { photo: null } })
+    res.json({ message: 'Photo removed', student: updated })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

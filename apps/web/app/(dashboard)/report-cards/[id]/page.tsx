@@ -13,6 +13,7 @@ import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
 import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfig, DocVariant } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { gradeFromScore } from '@/lib/grading'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
@@ -29,6 +30,7 @@ interface ReportCard {
   position: number | null
   classSize?: number | null
   classAverage?: number | null
+  bestAverage?: number | null
   annualAverage?: number | null
   annualPosition?: number | null
   annualClassSize?: number | null
@@ -38,7 +40,7 @@ interface ReportCard {
   remarksSource: string | null
   marksEditGrantedTo: string | null
   remarksEditGrantedTo: string | null
-  student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
+  student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string; photo?: string | null }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
   school: { name: string; type: string; language?: string; logo?: string | null; stamp?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
@@ -81,6 +83,7 @@ export default function ReportCardDetailPage() {
   const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
   const [studentCgpa, setStudentCgpa] = useState<number | null>(null)
   const [subjectStats, setSubjectStats] = useState<Record<string, { min: number; avg: number; max: number }>>({})
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
 
   const [teachers, setTeachers] = useState<{ id: string; name: string; role: string }[]>([])
   const [grantMarksUserId, setGrantMarksUserId] = useState('')
@@ -118,13 +121,15 @@ export default function ReportCardDetailPage() {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
-      const [rc, subjectData, tplData, scaleData, teacherData] = await Promise.all([
+      const [rc, subjectData, tplData, scaleData, teacherData, promoScale] = await Promise.all([
         getReportCardApi(String(params.id)),
         getSubjectsApi(),
         getTemplateApi().catch(() => ({ config: {} })),
         getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: DEFAULT_CLASSIFICATION_BANDS, legendRows: [] })),
         getTeachersApi().catch(() => ({ teachers: [] })),
+        getPromotionScaleApi().catch(() => null),
       ])
+      setPromotionScale(promoScale)
       setTeachers((teacherData.teachers ?? []).filter((t: any) => ['CLASS_TEACHER', 'CLASS_MASTER'].includes(t.role)))
       if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
       if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
@@ -860,9 +865,12 @@ export default function ReportCardDetailPage() {
             position={reportCard.position}
             classSize={reportCard.classSize ?? undefined}
             classAverage={reportCard.classAverage ?? undefined}
+            bestAverage={reportCard.bestAverage ?? undefined}
+            studentPhoto={reportCard.student.photo ?? undefined}
             annualAverage={reportCard.annualAverage ?? undefined}
             annualPosition={reportCard.annualPosition ?? undefined}
             annualClassSize={reportCard.annualClassSize ?? undefined}
+            promotionScale={promotionScale}
             config={templateConfig}
             gradeBands={gradingRanges}
             classificationBands={classificationBands}

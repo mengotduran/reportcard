@@ -14,6 +14,9 @@ import {
   officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
   TranscriptPeriod, transcriptPeriodsFor, transcriptPeriodLabel,
   DocVariant, sectionShowsOn, ensureBirthRows,
+  ConductSec, AnnualBandSec, PanelRowSec,
+  SELECTABLE_THEMES, THEME_PALETTES, accentOf, parseHeaderLines, headerLineStyle,
+  STUDENT_PHOTO_SIZE_DEFAULT, STUDENT_PHOTO_SIZE_MIN, STUDENT_PHOTO_SIZE_MAX, clampStudentPhotoSize,
 } from '@/lib/api/reportCardTemplate'
 import { useAuthStore as _useAuthStore } from '@/lib/store/auth.store'
 import Toast from '@/components/ui/Toast'
@@ -362,7 +365,7 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 
 // ── Section renderers (edit mode) ─────────────────────────────────────────────
 
-function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null; language?: string; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null } | null; update: (s: HeaderSec) => void }) {
+function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; accent: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null; language?: string; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null } | null; update: (s: HeaderSec) => void }) {
   const t = useT()
   const logoSize = sec.logoSize || 60
   const officialLeftResolved = resolveOfficialText(school, 'left', sec.leftText ?? '')
@@ -449,12 +452,14 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
           <input type="checkbox" checked={sec.showSchoolType} onChange={e => update({ ...sec, showSchoolType: e.target.checked })} />
           {t('Show school type')}
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!sec.officialHeader}
-            onChange={e => update({ ...sec, officialHeader: e.target.checked })} />
-          {t('Official (logo center)')}
-        </label>
-        {sec.officialHeader && (
+        {!sec.headerStyle && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!sec.officialHeader}
+              onChange={e => update({ ...sec, officialHeader: e.target.checked })} />
+            {t('Official (logo center)')}
+          </label>
+        )}
+        {(sec.officialHeader || sec.headerStyle === 'crest') && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             {t('Text Size:')}
             <input type="range" min={0.6} max={1.8} step={0.05} value={sec.officialTextScale ?? 1.15}
@@ -462,6 +467,43 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
             {Math.round((sec.officialTextScale ?? 1.15) * 100)}%
           </label>
         )}
+      </div>
+
+      {/* Letterhead style. The two redesign styles share everything below the header —
+          only the letterhead differs — so this is one setting rather than two layouts.
+          The old pre-redesign "Classic" header isn't offered here any more (it looked
+          dated next to these two) — a design saved under it before this change still
+          opens exactly as before; this just stops anyone from picking it again. */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, padding: '6px 8px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
+        <span>{t('Header style:')}</span>
+        {([
+          ['crest', 'Crest (bilingual)'],
+          ['logo', 'Logo + name'],
+        ] as const).map(([style, label]) => (
+          <button key={label} onClick={() => update({ ...sec, headerStyle: style })}
+            style={{ padding: '1px 8px', fontSize: 10, borderRadius: 3, border: '1px solid', borderColor: sec.headerStyle === style ? color : '#d1d5db', background: sec.headerStyle === style ? color : 'white', color: sec.headerStyle === style ? 'white' : '#374151', cursor: 'pointer' }}>
+            {t(label)}
+          </button>
+        ))}
+        {sec.headerStyle && <>
+          {sec.headerStyle === 'logo' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={sec.showRepublicStrip !== false}
+                onChange={e => update({ ...sec, showRepublicStrip: e.target.checked })} />
+              {t('Republic strip')}
+            </label>
+          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={sec.showContactLine !== false}
+              onChange={e => update({ ...sec, showContactLine: e.target.checked })} />
+            {t('Contact line')}
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={sec.showTitleRibbon !== false}
+              onChange={e => update({ ...sec, showTitleRibbon: e.target.checked })} />
+            {t('Title ribbon')}
+          </label>
+        </>}
       </div>
 
       {/* Per-field contact-line toggles — available in every header style, each
@@ -486,8 +528,92 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
         ))}
       </div>
 
-      {/* Rendered header */}
-      {sec.officialHeader ? (
+      {/* Rendered header — redesign letterheads first. Mirrors PrintableReportCard's own
+          crest/logo branches so the canvas shows what will actually print; the title and
+          the term chip are the only editable bits (the rest comes from School Settings). */}
+      {sec.headerStyle ? (() => {
+        const argb = hexRgb(accent)
+        const scale = officialTextScaleFor(sec)
+        const lineEls = (raw: string, italic: boolean) =>
+          parseHeaderLines(raw).map((l, i) => (
+            <div key={i} style={{ ...headerLineStyle(l.role, color) as React.CSSProperties, ...(italic ? { fontStyle: 'italic' } : {}), fontSize: (headerLineStyle(l.role, color).fontSize as number) * scale }}>
+              {l.text}
+            </div>
+          ))
+        const goldRule = <div style={{ width: 78, height: 1, margin: '5px auto', background: `linear-gradient(90deg, rgba(${argb},0), ${accent}, rgba(${argb},0))` }} />
+        const sideColumn = (en: string, fr: string, reg?: string | null) => (
+          <div style={{ flex: 1, textAlign: 'center', paddingTop: 2 }}>
+            {(en.trim() || fr.trim()) ? (
+              <>
+                {en.trim() && <div style={{ lineHeight: 1.28 }}>{lineEls(en, false)}</div>}
+                {en.trim() && fr.trim() && goldRule}
+                {fr.trim() && <div style={{ lineHeight: 1.28 }}>{lineEls(fr, true)}</div>}
+              </>
+            ) : (
+              <p style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic' }} title="Set this in School Settings">
+                {t('(Set this header text in School Settings)')}
+              </p>
+            )}
+            {reg && <div style={{ fontSize: 7, color: '#8b93a1', letterSpacing: .6, marginTop: 5 }}>{reg}</div>}
+          </div>
+        )
+        const contactStrip = sec.showContactLine !== false && contactLine ? (
+          <div style={{ marginTop: 8, borderTop: `1.6px solid ${color}`, borderBottom: `.6px solid ${accent}`, padding: '4px 0', textAlign: 'center', fontSize: 7.8, color: '#5b6472', letterSpacing: .5 }}>
+            {contactLine}
+          </div>
+        ) : null
+        const titleRibbon = sec.showTitleRibbon !== false ? (
+          <div style={{ display: 'flex', marginTop: 10, border: `1px solid ${color}` }}>
+            <div style={{ flex: 1, background: color, color: '#fff', textAlign: 'center', padding: '6px 0' }}>
+              <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
+                style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 13, letterSpacing: 5, fontWeight: 'bold', color: '#fff' }} />
+            </div>
+            <div style={{ background: accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+              {t('First Term')} · 2025/2026
+            </div>
+          </div>
+        ) : null
+
+        if (sec.headerStyle === 'crest') {
+          const authLine = sec.showAuthorization !== false && school?.authorizationNumber
+            ? `${t('Authorisation N°')} ${school.authorizationNumber}` : null
+          return (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {sideColumn(school?.officialLeftTextEn || '', school?.officialLeftTextFr || '', authLine)}
+                <div style={{ flex: `0 0 ${Math.max(logoSize, 40) + 16}px`, textAlign: 'center' }}>{sec.showLogo && LogoEl}</div>
+                {sideColumn(school?.officialRightTextEn || '', school?.officialRightTextFr || '', null)}
+              </div>
+              {contactStrip}
+              {titleRibbon}
+            </>
+          )
+        }
+        return (
+          <>
+            {sec.showRepublicStrip !== false && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 7.4, letterSpacing: .9, textTransform: 'uppercase', color: '#6b7280', borderBottom: `.6px solid rgba(${argb},0.45)`, paddingBottom: 4 }}>
+                <span><b style={{ color }}>Republic of Cameroon</b> · Peace – Work – Fatherland</span>
+                <span>République du Cameroun · <b style={{ color }}>Paix – Travail – Patrie</b></span>
+              </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 0 8px' }}>
+              <div style={{ flex: `0 0 ${logoSize}px` }}>{sec.showLogo && LogoEl}</div>
+              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 25, letterSpacing: 1.4, color, lineHeight: 1.05, fontWeight: 'bold' }}>{schoolName}</div>
+                {sec.showSchoolType && (
+                  <div style={{ fontSize: 9.2, letterSpacing: 4.2, color: accent, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 3 }}>
+                    {schoolType} {t('Section')}
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: `0 0 ${logoSize}px` }} />
+            </div>
+            {contactStrip}
+            {titleRibbon}
+          </>
+        )
+      })() : sec.officialHeader ? (
         /* Three-column official layout: left text | logo | right text.
            Per-line styling (bold caps / big acronym / italic motto) comes from
            officialTextBlockHtml \u2014 shared with the print renderer, see its
@@ -563,7 +689,7 @@ function RenderHeader({ sec, color, schoolName, schoolType, schoolLogo, school, 
   )
 }
 
-function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec: StudentInfoSec; color: string; schoolName: string; schoolType?: string; update: (s: StudentInfoSec) => void }) {
+function RenderStudentInfo({ sec, color, schoolName, schoolType, showPhoto, photoSize, update }: { sec: StudentInfoSec; color: string; schoolName: string; schoolType?: string; showPhoto: boolean; photoSize: number; update: (s: StudentInfoSec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
   const FIELD_OPTIONS = [
@@ -620,7 +746,10 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
           </button>
         ))}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${sec.columns}, 1fr)`, gap: '4px 12px', background: `rgba(${rgb},0.05)`, padding: 10, border: `1px solid rgba(${rgb},0.2)` }}>
+      {/* The frame is drawn whether or not a student has a photo on file — an empty
+          labelled rectangle keeps the card the same shape for everyone. */}
+      <div style={{ display: 'flex', gap: 9, alignItems: 'stretch' }}>
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${sec.columns}, 1fr)`, gap: '4px 12px', background: sec.boxed ? '#f7f5ef' : `rgba(${rgb},0.05)`, padding: 10, border: `1px solid rgba(${rgb},0.2)` }}>
         {sec.rows.map(row => {
           const existingLabelColor = extractColor(row.label)
           return (
@@ -657,6 +786,12 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
           )
         })}
       </div>
+      {showPhoto && (
+        <div style={{ width: photoSize, border: `1px solid rgba(${rgb},0.28)`, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 6.6, letterSpacing: .7, color: '#a6aeba', textTransform: 'uppercase', lineHeight: 1.5, flexShrink: 0 }}>
+          {t('Student')}<br />{t('Photo')}
+        </div>
+      )}
+      </div>
       <button onClick={addRow} style={{ marginTop: 6, fontSize: 11, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer' }}>
         {t('+ Add Row')}
       </button>
@@ -666,7 +801,12 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, update }: { sec
 
 // Marks-table keys that only make sense on a university (HND/Degree) grading
 // system — hidden from the key picker for secondary/primary schools.
-const UNIVERSITY_ONLY_MARKS_KEYS = new Set(['m:code', 'm:credit', 'm:gradePoint', 'm:weighted', 'm:juryDecision'])
+// 'm:weighted' is NOT one of these: cellValue's 'weighted' case already branches on
+// school.type (avg × coefficient for primary/secondary, grade point × credit for a
+// university), and it ships as a real column on both the Standard and Ledger
+// non-university defaults ("Avg × Coef") — it was wrongly excluded here, which meant
+// deleting that column on a non-university school made it impossible to add back.
+const UNIVERSITY_ONLY_MARKS_KEYS = new Set(['m:code', 'm:credit', 'm:gradePoint', 'm:juryDecision'])
 
 function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableSec; color: string; schoolType?: string; update: (s: MarksTableSec) => void }) {
   const isUni = schoolType === 'UNIVERSITY'
@@ -693,16 +833,36 @@ function RenderMarksTable({ sec, color, schoolType, update }: { sec: MarksTableS
           {transcriptPeriodLabel(sec.transcriptSemester, schoolType)}
         </div>
       )}
+      {/* Redesign caption above the table. `{term}` is swapped for the card's own term
+          name at print time, so one caption reads correctly on every term. */}
+      {!sec.transcriptSemester && sec.caption !== undefined && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 5px' }}>
+          <ET value={sec.caption} onChange={v => update({ ...sec, caption: v })}
+            style={{ fontSize: 8, letterSpacing: 2.6, textTransform: 'uppercase', color, fontWeight: 'bold' }} />
+          <span style={{ flex: 1, height: 1, background: '#e4dcc8' }} />
+          <button onClick={() => update({ ...sec, caption: undefined })} title="Remove caption"
+            style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 11, lineHeight: 1 }}>×</button>
+        </div>
+      )}
+      {!sec.transcriptSemester && sec.caption === undefined && (
+        <button onClick={() => update({ ...sec, caption: 'Academic Record — {term}' })}
+          style={{ ...smallBtn, marginBottom: 5 }}>+ Caption</button>
+      )}
       {/* No resolveField — every bound cell shows its raw [field] key, same as the
           grading legend's tables, so the design canvas never looks like it's showing
           real marks. Only the actual report card/transcript print shows real data. */}
-      <SpreadsheetGrid
-        table={tpl}
-        onChange={t => update({ ...sec, template: t })}
-        color={color}
-        marksKeyMode
-        marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef') && !(!isUni && UNIVERSITY_ONLY_MARKS_KEYS.has(o.value)))}
-      />
+      {/* Scrolls rather than clipping: the redesign's table runs to ten columns, which is
+          wider than the canvas — the printed page lays them out at a fixed width, but here
+          the far-right columns would simply be cut off and unreachable. */}
+      <div style={{ overflowX: 'auto' }}>
+        <SpreadsheetGrid
+          table={tpl}
+          onChange={t => update({ ...sec, template: t })}
+          color={color}
+          marksKeyMode
+          marksKeyOptions={SHEET_FIELD_OPTIONS.filter(o => o.marks && !(isUni && o.value === 'm:coef') && !(!isUni && UNIVERSITY_ONLY_MARKS_KEYS.has(o.value)))}
+        />
+      </div>
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#94a3b8', flexWrap: 'wrap' }}>
         <span>Highlighted row repeats per subject. Double-click any data cell to choose its key.</span>
         <button style={smallBtn} onClick={seedMarksTable}>↺ Reseed from defaults</button>
@@ -778,7 +938,7 @@ function RenderStamp({ sec, schoolStamp, uploading, onUpload, update }: { sec: S
   )
 }
 
-function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; color: string; schoolType?: string; update: (s: SummarySec) => void }) {
+function RenderSummary({ sec, color, accent, schoolType, update }: { sec: SummarySec; color: string; accent: string; schoolType?: string; update: (s: SummarySec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
   const isUni = schoolType === 'UNIVERSITY'
@@ -811,22 +971,32 @@ function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; co
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${sec.boxes.length || 1}, 1fr)`, gap: 10 }}>
-        {sec.boxes.map(box => (
-          <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', position: 'relative' }}>
-            <button onClick={() => deleteBox(box.id)} style={{ position: 'absolute', top: 2, right: 4, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>×</button>
-            <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-              <ColorableCell sampleText={box.field ? `[${box.field}]` : ''} color={sec.valueColor || color}
-                onColorChange={syncBoxValueColor} style={{ fontWeight: 'bold' }} />
+      {/* Same box styling the print renderer uses: a thick rule along the top in the
+          primary colour, switching to the accent (over a tinted panel) for the word-ish
+          stats — an appreciation or classification reads as a label, not a figure. */}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${sec.boxes.length || 1}, 1fr)`, gap: 7 }}>
+        {sec.boxes.map(box => {
+          const isWord = ['appreciation', 'classification', 'decision'].includes(box.field)
+          return (
+            <div key={box.id} style={{
+              border: `.8px solid rgba(${rgb},0.28)`, borderTop: `2.4px solid ${isWord ? accent : color}`,
+              background: isWord ? `rgba(${hexRgb(accent)},0.06)` : '#fff',
+              padding: '6px 4px', textAlign: 'center', position: 'relative',
+            }}>
+              <button onClick={() => deleteBox(box.id)} style={{ position: 'absolute', top: 1, right: 3, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12, lineHeight: 1 }}>×</button>
+              <div style={{ fontSize: isWord ? 13 : 16, fontWeight: 'bold' }}>
+                <ColorableCell sampleText={box.field ? `[${box.field}]` : ''} color={sec.valueColor || color}
+                  onColorChange={syncBoxValueColor} style={{ fontWeight: 'bold' }} />
+              </div>
+              <ET value={box.label} onChange={v => updateBox(box.id, { label: v })} onColorApplied={syncBoxLabelColor}
+                style={{ fontSize: 6.6, letterSpacing: 1.1, textTransform: 'uppercase', color: '#7a8290', fontWeight: 'bold', display: 'block', margin: '2px auto 4px' }} />
+              <select value={box.field} onChange={e => updateBox(box.id, { field: e.target.value })}
+                style={{ fontSize: 10, border: '1px solid #e5e7eb', borderRadius: 3, padding: '1px 2px', maxWidth: '100%' }}>
+                {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.label)}</option>)}
+              </select>
             </div>
-            <ET value={box.label} onChange={v => updateBox(box.id, { label: v })} onColorApplied={syncBoxLabelColor}
-              style={{ fontSize: 11, color: '#6b7280', display: 'block', margin: '3px auto 4px' }} />
-            <select value={box.field} onChange={e => updateBox(box.id, { field: e.target.value })}
-              style={{ fontSize: 10, border: '1px solid #e5e7eb', borderRadius: 3, padding: '1px 2px' }}>
-              {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.label)}</option>)}
-            </select>
-          </div>
-        ))}
+          )
+        })}
       </div>
       <button onClick={addBox} style={{ marginTop: 6, fontSize: 11, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 10px', borderRadius: 4, cursor: 'pointer' }}>
         {t('+ Add Box')}
@@ -835,9 +1005,47 @@ function RenderSummary({ sec, color, schoolType, update }: { sec: SummarySec; co
   )
 }
 
-function RenderRemarks({ sec, color, update }: { sec: RemarksSec; color: string; update: (s: RemarksSec) => void }) {
+function RenderRemarks({ sec, color, accent, update }: { sec: RemarksSec; color: string; accent: string; update: (s: RemarksSec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
+  // Panel variant — the redesign's bordered box with a titled header bar, optionally an
+  // accent edge (General Remarks) and a signature rule. Mirrors the print renderer.
+  if (sec.panel) {
+    return (
+      <div style={{
+        border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', marginBottom: 12,
+        ...(sec.edgeColor ? { borderLeft: `3px solid ${sec.edgeColor}` } : {}),
+      }}>
+        <div style={{ background: `rgba(${rgb},0.07)`, borderBottom: `.6px solid rgba(${rgb},0.22)`, padding: '3.6px 7px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <ET value={sec.label} onChange={v => update({ ...sec, label: v })}
+            style={{ fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', color, fontWeight: 'bold', flex: 1 }} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#94a3b8', cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!sec.edgeColor}
+              onChange={e => update({ ...sec, edgeColor: e.target.checked ? accent : undefined })} />
+            {t('Edge bar')}
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: '#94a3b8', cursor: 'pointer' }}>
+            <input type="checkbox" checked={sec.signatureCaption !== undefined}
+              onChange={e => update({ ...sec, signatureCaption: e.target.checked ? t('Signature') : undefined })} />
+            {t('Signature')}
+          </label>
+        </div>
+        <div style={{ fontSize: 8.7, fontStyle: 'italic', minHeight: 30, padding: '6px 8px 0', color: '#33415c' }}>
+          <ColorableCell sampleText={t('Student remarks will appear here…')}
+            color={sec.placeholderColor || '#9ca3af'}
+            onColorChange={c => update({ ...sec, placeholderColor: c })} />
+        </div>
+        {sec.signatureCaption !== undefined && (
+          <div style={{ display: 'flex', alignItems: 'flex-end', padding: '8px 8px 6px' }}>
+            <span style={{ flex: 1, borderBottom: '.7px dotted #9aa2ae', height: 15, marginRight: 8 }} />
+            <ET value={sec.signatureCaption} onChange={v => update({ ...sec, signatureCaption: v })}
+              style={{ fontSize: 6.3, letterSpacing: 1, textTransform: 'uppercase', color: '#8b93a1', fontWeight: 'bold' }} />
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 12, marginBottom: 12 }}>
       <ET value={sec.label} onChange={v => update({ ...sec, label: v })}
@@ -847,6 +1055,98 @@ function RenderRemarks({ sec, color, update }: { sec: RemarksSec; color: string;
           color={sec.placeholderColor || '#9ca3af'}
           onColorChange={c => update({ ...sec, placeholderColor: c })} />
       </div>
+    </div>
+  )
+}
+
+/**
+ * Conduct & Attendance. Mirrors the print output, which deliberately prints every value
+ * blank (the school stores no student conduct data) — so the only thing editable here is
+ * the panel title and the row labels.
+ */
+function RenderConduct({ sec, color, update }: { sec: ConductSec; color: string; update: (s: ConductSec) => void }) {
+  const t = useT()
+  const rgb = hexRgb(color)
+  const setRow = (id: string, label: string) => update({ ...sec, rows: sec.rows.map(r => r.id === id ? { ...r, label } : r) })
+  return (
+    <div style={{ border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', marginBottom: 12 }}>
+      <div style={{ background: `rgba(${rgb},0.07)`, color, fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', padding: '3.6px 7px', fontWeight: 'bold', borderBottom: `.6px solid rgba(${rgb},0.22)` }}>
+        <ET value={sec.title ?? ''} onChange={v => update({ ...sec, title: v })} placeholder={t('Panel title')}
+          style={{ fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', color, fontWeight: 'bold' }} />
+      </div>
+      {sec.rows.map((row, i) => (
+        <div key={row.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 10, fontSize: 8.4, padding: '3.4px 7px', ...(i < sec.rows.length - 1 ? { borderBottom: '.5px solid #efece2' } : {}) }}>
+          <ET value={row.label} onChange={v => setRow(row.id, v)} style={{ color: '#6b7280', fontSize: 8.4, whiteSpace: 'nowrap' }} />
+          <span style={{ flex: 1, borderBottom: '.6px dotted #c2c9d3', height: 11 }} />
+          <button onClick={() => update({ ...sec, rows: sec.rows.filter(r => r.id !== row.id) })}
+            style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '0 2px' }}>×</button>
+        </div>
+      ))}
+      <button onClick={() => update({ ...sec, rows: [...sec.rows, { id: `cr_${Date.now()}`, label: t('New row') }] })}
+        style={{ margin: 6, fontSize: 9, color, border: `1px dashed ${color}`, background: 'none', padding: '2px 8px', borderRadius: 3, cursor: 'pointer' }}>
+        + {t('Add row')}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * The End-of-Year band. Prints on the session's FINAL term only (it needs an annual
+ * average), so the canvas says as much — otherwise an admin would think it was broken
+ * after previewing a First Term card.
+ */
+function RenderAnnualBand({ sec, color, accent, schoolType, update }: {
+  sec: AnnualBandSec; color: string; accent: string; schoolType?: string; update: (s: AnnualBandSec) => void
+}) {
+  const t = useT()
+  const argb = hexRgb(accent)
+  const isUni = schoolType === 'UNIVERSITY'
+  const FIELD_OPTIONS = isUni ? [
+    { label: 'Cumulative GPA', value: 'cgpa' },
+    { label: 'Total Credits', value: 'credits' },
+    { label: 'Classification', value: 'classification' },
+    { label: 'Class Average', value: 'classAverage' },
+  ] : [
+    { label: 'Annual Average', value: 'annualAverage' },
+    { label: 'Annual Position', value: 'annualPosition' },
+    { label: 'Annual Class Average', value: 'annualClassAverage' },
+    { label: 'Decision', value: 'decision' },
+    { label: 'Best Average', value: 'bestAverage' },
+  ]
+  const setCell = (id: string, patch: Partial<{ label: string; field: string }>) =>
+    update({ ...sec, cells: sec.cells.map(c => c.id === id ? { ...c, ...patch } : c) })
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <p style={{ fontSize: 9, color: '#94a3b8', marginBottom: 3 }}>
+        {t('Prints on the final term only — it needs the annual average.')}
+      </p>
+      <div style={{ border: `1.1px solid ${accent}`, background: `rgba(${argb},0.07)`, display: 'flex', alignItems: 'stretch' }}>
+        <div style={{ background: accent, color: '#fff', writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 7.2, letterSpacing: 2.3, fontWeight: 'bold', textAlign: 'center', padding: '6px 4px', textTransform: 'uppercase', display: 'flex', alignItems: 'center' }}>
+          <ET value={sec.tag ?? ''} onChange={v => update({ ...sec, tag: v })} placeholder={t('Tag')}
+            style={{ fontSize: 7.2, letterSpacing: 2.3, color: '#fff', fontWeight: 'bold' }} />
+        </div>
+        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${sec.cells.length || 1}, 1fr)` }}>
+          {sec.cells.map((cell, i) => (
+            <div key={cell.id} style={{ padding: '7px 6px', textAlign: 'center', position: 'relative', ...(i < sec.cells.length - 1 ? { borderRight: `.6px dashed rgba(${argb},0.5)` } : {}) }}>
+              <button onClick={() => update({ ...sec, cells: sec.cells.filter(c => c.id !== cell.id) })}
+                style={{ position: 'absolute', top: 1, right: 2, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 10, lineHeight: 1 }}>×</button>
+              <div style={{ fontSize: 14, fontWeight: 'bold', color: cell.field === 'decision' ? '#1b7a4b' : '#8a6516' }}>
+                [{cell.field}]
+              </div>
+              <ET value={cell.label} onChange={v => setCell(cell.id, { label: v })}
+                style={{ fontSize: 6.5, letterSpacing: 1.1, textTransform: 'uppercase', color: '#9a8756', fontWeight: 'bold', display: 'block', marginTop: 2 }} />
+              <select value={cell.field} onChange={e => setCell(cell.id, { field: e.target.value })}
+                style={{ marginTop: 3, fontSize: 9, border: '1px solid #d1d5db', borderRadius: 3, padding: '1px 2px', maxWidth: '100%' }}>
+                {FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.label)}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+      </div>
+      <button onClick={() => update({ ...sec, cells: [...sec.cells, { id: `ac_${Date.now()}`, label: t('New Cell'), field: FIELD_OPTIONS[0].value }] })}
+        style={{ marginTop: 4, fontSize: 9, color: accent, border: `1px dashed ${accent}`, background: 'none', padding: '2px 8px', borderRadius: 3, cursor: 'pointer' }}>
+        + {t('Add cell')}
+      </button>
     </div>
   )
 }
@@ -1199,12 +1499,15 @@ function RenderGradingLegend({ sec, color, update }: { sec: GradingLegendSec; co
 }
 
 // ── Templates gallery ─────────────────────────────────────────────────────────
-const TEMPLATES = [
-  { id: 'classic'  as TemplateName, label: 'Classic GCE',  color: '#1e3a5f' },
-  { id: 'bilingual'as TemplateName, label: 'Bilingual',    color: '#1a5c1a' },
-  { id: 'modern'   as TemplateName, label: 'Modern',       color: '#2563eb' },
-  { id: 'official' as TemplateName, label: 'Official',     color: '#92400e' },
-]
+// Since the 2026 redesign these are COLOUR THEMES, not structures — all six render the
+// same layout (see buildRedesignLayout) and differ only in their palette, which is why
+// each button shows both of its colours rather than a name alone.
+const TEMPLATES = SELECTABLE_THEMES.map(id => ({
+  id,
+  label: THEME_PALETTES[id].label,
+  color: THEME_PALETTES[id].primary,
+  accent: THEME_PALETTES[id].accent,
+}))
 
 type AddSectionType = LayoutSection['type'] | 'marks_table_sem1' | 'marks_table_sem2' | 'marks_table_sem3'
 
@@ -1220,6 +1523,8 @@ const ADD_OPTIONS: { type: AddSectionType; label: string; transcriptOnly?: true;
   { type: 'marks_table_sem3' as const, label: '📋 Period 3 Table', transcriptOnly: true, period: 'sem3' },
   { type: 'summary'        as const, label: '📊 Summary Boxes' },
   { type: 'grading_legend' as const, label: '🎓 Grading Legend' },
+  { type: 'conduct'        as const, label: '🧭 Conduct & Attendance' },
+  { type: 'annual_band'    as const, label: '🏅 End of Year Band' },
   { type: 'remarks'        as const, label: '💬 Remarks' },
   { type: 'signatures'     as const, label: '✍ Signatures' },
   { type: 'stamp'          as const, label: '🔏 Stamp / Seal' },
@@ -1248,6 +1553,19 @@ function newSection(type: AddSectionType, color: string, schoolType?: string): L
     return { ...sec, template: seedMarksTableSection(sec, color, schoolType) }
   }
   if (type === 'grading_legend') return { id, type, showGradeSystem: true, showClassification: true, showLegend: true, legendText: DEFAULT_TRANSCRIPT_LEGEND }
+  if (type === 'conduct') return {
+    id, type, title: 'Conduct & Attendance',
+    rows: ['Discipline', 'Punctuality', 'Days Absent', 'Late Arrivals', 'Warnings Issued']
+      .map((label, i) => ({ id: `cr_${Date.now()}_${i}`, label })),
+  }
+  if (type === 'annual_band') {
+    const uni = schoolType === 'UNIVERSITY'
+    const cells = uni
+      ? [{ label: 'Cumulative GPA', field: 'cgpa' }, { label: 'Total Credits', field: 'credits' }, { label: 'Classification', field: 'classification' }]
+      : [{ label: 'Annual Average /20', field: 'annualAverage' }, { label: 'Annual Position', field: 'annualPosition' }, { label: 'Annual Class Average', field: 'annualClassAverage' }, { label: 'Final Decision', field: 'decision' }]
+    return { id, type, tag: 'End of Year', cells: cells.map((c, i) => ({ id: `ac_${Date.now()}_${i}`, ...c })) }
+  }
+  if (type === 'panel_row') return { id, type, children: [], weights: [] }
   return { id, type: 'header', reportTitle: 'REPORT CARD', subtitle: '', showSchoolType: true, showLogo: true, logoSize: 60, logoPosition: 'left' as const }
 }
 
@@ -1277,6 +1595,7 @@ export default function ReportCardDesignPage() {
   const [saving, setSaving] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [colorText, setColorText] = useState(config.primaryColor)
+  const [accentText, setAccentText] = useState(accentOf(config))
   const [bgText, setBgText] = useState(config.bgColor || '#ffffff')
   const canvasRef = useRef<HTMLDivElement>(null)
   // The last design actually saved to the server (raw, pre-merge) — kept around so
@@ -1325,11 +1644,71 @@ export default function ReportCardDesignPage() {
   // Every school type has an annual transcript (2 semester tables at a university,
   // 3 term tables at a primary/secondary school) — see getDefaultTranscriptLayout.
   const isTranscript = config.layoutType === 'transcript'
-  const isLedger = schoolType !== 'UNIVERSITY' && config.layoutType === 'ledger'
+  // Is the open design the 2026 house design? Detected from the sections themselves (a
+  // redesign letterhead), exactly as the print renderer detects it, so the canvas and the
+  // printed page can never disagree about which styling applies.
+  const isRedesign = (config.sections ?? []).some(s => s.type === 'header' && !!(s as HeaderSec).headerStyle)
+  const isLedger = config.layoutType === 'ledger'
+
+  /**
+   * One section's editable body. Split out of the canvas loop so a `panel_row` can call it
+   * for each of its children — the row's children are ordinary sections and must stay just
+   * as editable inside the row as they are at the top level.
+   */
+  const renderSectionBody = (sec: LayoutSection, update: (s: LayoutSection) => void): React.ReactNode => {
+    switch (sec.type) {
+      case 'header':
+        return <RenderHeader sec={sec} color={config.primaryColor} accent={accentOf(config)} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={update} />
+      case 'student_info':
+        return <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} showPhoto={config.showStudentPhoto ?? true} photoSize={clampStudentPhotoSize(config.studentPhotoSize)} update={update} />
+      case 'marks_table':
+        return <RenderMarksTable sec={sec} color={config.primaryColor} schoolType={schoolType} update={update} />
+      case 'summary':
+        return <RenderSummary sec={sec} color={config.primaryColor} accent={accentOf(config)} schoolType={schoolType} update={update} />
+      case 'remarks':
+        return <RenderRemarks sec={sec} color={config.primaryColor} accent={accentOf(config)} update={update} />
+      case 'signatures':
+        return <RenderSignatures sec={sec} color={config.primaryColor} update={update} />
+      case 'stamp':
+        return <RenderStamp sec={sec} schoolStamp={schoolStamp} uploading={uploadingStamp} onUpload={handleStampUpload} update={update} />
+      case 'text_block':
+        return <RenderTextBlock sec={sec} color={config.primaryColor} update={update} />
+      case 'divider':
+        return <RenderDivider sec={sec} color={config.primaryColor} update={update} />
+      case 'grading_legend':
+        return <RenderGradingLegend sec={sec as GradingLegendSec} color={config.primaryColor} update={update} />
+      case 'conduct':
+        return <RenderConduct sec={sec} color={config.primaryColor} update={update} />
+      case 'annual_band':
+        return <RenderAnnualBand sec={sec} color={config.primaryColor} accent={accentOf(config)} schoolType={schoolType} update={update} />
+      case 'panel_row': {
+        const row = sec as PanelRowSec
+        return (
+          <div style={{ display: 'flex', gap: 9, alignItems: 'stretch', marginBottom: 12 }}>
+            {row.children.map((child, ci) => (
+              <div key={child.id} style={{ flex: row.weights?.[ci] ?? 1, minWidth: 0, position: 'relative' }}>
+                {/* Lift a panel back out to full width, for an admin who wants it on its
+                    own row — the row itself disappears once it has no children left. */}
+                <button
+                  title={tr('Remove from row')}
+                  onClick={() => {
+                    const rest = row.children.filter((_, k) => k !== ci)
+                    update(rest.length ? { ...row, children: rest, weights: row.weights?.filter((_, k) => k !== ci) } : rest[0] ?? row)
+                  }}
+                  style={{ position: 'absolute', top: -8, right: 0, zIndex: 2, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 3, color: '#f87171', cursor: 'pointer', fontSize: 9, lineHeight: 1.4, padding: '0 4px' }}>×</button>
+                {renderSectionBody(child, s => update({ ...row, children: row.children.map((c, k) => k === ci ? s : c) }))}
+              </div>
+            ))}
+          </div>
+        )
+      }
+      default:
+        return null
+    }
+  }
   // The three layouts are mutually exclusive — Standard is "neither of the others".
   const isStandard = !isLedger && !isTranscript
-  // Every layout gets the official/student split: the ledger is a primary/secondary
-  // report card, so leaving it out meant those schools had no official copy at all.
+  // Every layout gets the official/student split, ledger included.
   // Harmless where unused, since sections default to printing on both copies.
   const supportsVariants = true
   // Design-time preview only: which copy the canvas is showing. Never saved — the real
@@ -1403,7 +1782,7 @@ export default function ReportCardDesignPage() {
     const ensure = (cfg: any) => ensureMarksTables(cfg, sType)
     // Ledger isn't in getDefaultLayout's set — it has its own base builder
     // (special TOTAL/AVERAGE/POSITION footer rows baked into the marks table).
-    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(), layoutType: 'ledger' as const } : getDefaultLayout(tpl)
+    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(sType), layoutType: 'ledger' as const } : getDefaultLayout(tpl)
     if (saved && (saved as any).sections?.length > 0) {
       const base = baseFor((saved.template as TemplateName) || 'classic')
       return ensure(localizeLayout({ ...base, ...saved } as any, lang))
@@ -1445,8 +1824,13 @@ export default function ReportCardDesignPage() {
       // so stamp it onto whichever layout loaded — the checkbox must read the same in
       // every view, not whatever a layout happened to be saved with.
       merged.highlightFailingRed = saved?.highlightFailingRed ?? true
+      // Same convention: whether the identity box's photo frame prints at all, stored
+      // school-wide, applying to every layout regardless of which one loaded.
+      merged.showStudentPhoto = saved?.showStudentPhoto ?? true
+      merged.studentPhotoSize = saved?.studentPhotoSize
       setConfig(merged)
       setColorText(merged.primaryColor)
+      setAccentText(accentOf(merged))
       setBgText(merged.bgColor || '#ffffff')
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -1506,6 +1890,20 @@ export default function ReportCardDesignPage() {
   }
 
   const loadTemplate = (name: TemplateName) => {
+    // On the Ledger, a theme swatch is just a colour choice — it must never swap
+    // the layout back to Standard underneath the admin. Ledger's own table bands
+    // (the dark banner, the neutral grey TOTAL rows) are deliberately fixed and
+    // don't come from a theme at all — only the letterhead (crest/logo header)
+    // reads primaryColor/accentColor live, so recolouring those two fields is all
+    // a theme pick needs to do here. Sections, and everything the admin has
+    // customized in them, are left completely untouched.
+    if (isLedger) {
+      const palette = THEME_PALETTES[name]
+      setConfig(c => ({ ...c, template: name, primaryColor: palette.primary, accentColor: palette.accent }))
+      setColorText(palette.primary)
+      setAccentText(palette.accent)
+      return
+    }
     // Re-selecting the template you last saved should bring back that saved
     // design, not wipe it back to blank defaults — only a genuinely different,
     // never-saved-under-this-name template falls back to defaults.
@@ -1517,8 +1915,9 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.template === name && saved?.layoutType !== 'transcript') ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? getDefaultLayout(name)
-    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
+    setAccentText(accentOf(layout))
     setBgText(layout.bgColor || '#ffffff')
   }
 
@@ -1532,11 +1931,12 @@ export default function ReportCardDesignPage() {
     const saved = savedConfigRef.current
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
-    const restored = (saved?.layoutType !== 'transcript' && (saved as any)?.sections?.length > 0)
+    const restored = (saved?.layoutType !== 'transcript' && saved?.layoutType !== 'ledger' && (saved as any)?.sections?.length > 0)
       ? buildMergedConfig(saved, lang, sType) : null
     const layout = ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType)
-    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
+    setAccentText(accentOf(layout))
     setBgText(layout.bgColor || '#ffffff')
   }
 
@@ -1545,9 +1945,10 @@ export default function ReportCardDesignPage() {
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
     const restored = saved?.template === 'ledger' ? buildMergedConfig(saved, lang, sType) : null
-    const layout = restored ?? { ...getLedgerLayout(), layoutType: 'ledger' as const }
-    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed }))
+    const layout = restored ?? ensureMarksTables(localizeLayout({ ...getLedgerLayout(sType), layoutType: 'ledger' as const }, lang), sType)
+    setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
+    setAccentText(accentOf(layout))
     setBgText(layout.bgColor || '#ffffff')
   }
 
@@ -1567,9 +1968,27 @@ export default function ReportCardDesignPage() {
       ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
       : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
     const seeded = ensureBirthRows(layout, schoolType)
-    setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed }))
+    setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
+    setAccentText(accentOf(layout))
     setBgText(layout.bgColor || '#ffffff')
+  }
+
+  // Each sidebar thumbnail's preview swatch must show THAT template's own colour,
+  // not whatever you're currently editing — otherwise picking a colour on one
+  // layout visibly recolours all three thumbnails at once (they all previously
+  // read the single live `config.primaryColor`). The layout you're actually on
+  // still shows its live, unsaved colour (so the preview tracks your edit); every
+  // other thumbnail shows its own last-saved colour, or its built-in default if
+  // it's never been customized.
+  const previewColor = (kind: 'standard' | 'ledger' | 'transcript'): string => {
+    const activeKind = isTranscript ? 'transcript' : isLedger ? 'ledger' : 'standard'
+    if (kind === activeKind) return config.primaryColor
+    const saved = savedConfigRef.current
+    if (kind === 'transcript') return saved?.transcript?.primaryColor ?? getDefaultTranscriptLayout(schoolType).primaryColor
+    if (kind === 'ledger') return (saved?.template === 'ledger' && saved?.primaryColor) || getLedgerLayout(schoolType).primaryColor
+    return (saved?.template !== 'ledger' && saved?.layoutType !== 'transcript' && saved?.primaryColor)
+      || getDefaultLayoutForType(schoolType).primaryColor
   }
 
   const handleSave = async () => {
@@ -1586,13 +2005,18 @@ export default function ReportCardDesignPage() {
       const base: TemplateConfig = config.layoutType === 'transcript'
         ? { ...(legacyTranscript ? {} : prevTop), transcript: configTop } as TemplateConfig
         : { ...configTop, transcript: prev?.transcript ?? legacyTranscript } as TemplateConfig
-      // "Failing marks in red" is a school-wide marking policy, not a per-layout style:
-      // it always lives at the TOP level, whichever layout is being saved, and is kept
-      // out of the transcript sub-key so the two can never disagree.
-      const { highlightFailingRed: _t, ...transcriptDesign } = (base.transcript ?? {}) as Partial<TemplateConfig>
+      // "Failing marks in red" and "Show student photo" are school-wide marking/print
+      // policy, not a per-layout style: they always live at the TOP level, whichever
+      // layout is being saved, and are kept out of the transcript sub-key so the two can
+      // never disagree. "Show Decision" is the opposite on purpose — PER layout
+      // (Standard/Ledger vs Transcript each keep their own toggle) — so it is left
+      // wherever `base` already put it above, never forced.
+      const { highlightFailingRed: _t, showStudentPhoto: _sp, studentPhotoSize: _sps, ...transcriptDesign } = (base.transcript ?? {}) as Partial<TemplateConfig>
       const payload: TemplateConfig = {
         ...base,
         highlightFailingRed: config.highlightFailingRed ?? true,
+        showStudentPhoto: config.showStudentPhoto ?? true,
+        studentPhotoSize: config.studentPhotoSize,
         ...(base.transcript ? { transcript: transcriptDesign } : {}),
       }
       await saveTemplateApi(payload)
@@ -1632,13 +2056,19 @@ export default function ReportCardDesignPage() {
           <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
         </div>
 
-        {/* Template picker — hidden in transcript/ledger mode (those pick their own layout on the right) */}
-        {!isTranscript && !isLedger && (
-          <div className="flex gap-1 ml-2">
+        {/* Theme picker. Each swatch shows the theme's two colours, since that is now the
+            only difference between them — the layout is shared. Hidden in transcript mode,
+            which picks its own layout on the right. */}
+        {!isTranscript && (
+          <div className="flex gap-1 ml-2 flex-wrap">
             {TEMPLATES.map(t => (
               <button key={t.id} onClick={() => loadTemplate(t.id)} title={tr(t.label)}
-                className="px-3 py-1 rounded text-xs font-medium border transition"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border transition"
                 style={{ borderColor: config.template === t.id ? t.color : '#e5e7eb', background: config.template === t.id ? t.color : 'white', color: config.template === t.id ? 'white' : '#374151' }}>
+                <span className="flex rounded-sm overflow-hidden border border-black/10" style={{ width: 16, height: 10 }}>
+                  <span style={{ background: t.color, width: 10 }} />
+                  <span style={{ background: t.accent, width: 6 }} />
+                </span>
                 {tr(t.label)}
               </button>
             ))}
@@ -1656,6 +2086,21 @@ export default function ReportCardDesignPage() {
               setColorText(e.target.value)
               if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
                 setConfig(c => ({ ...c, primaryColor: e.target.value }))
+            }}
+            className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
+        </div>
+
+        {/* Accent color — the design's second colour (term chip, End-of-Year band, rules). */}
+        <div className="flex items-center gap-2 ml-2">
+          <label className="text-xs text-muted-foreground">{tr('Accent')}</label>
+          <input type="color" value={accentOf(config)}
+            onChange={e => { setConfig(c => ({ ...c, accentColor: e.target.value })); setAccentText(e.target.value) }}
+            className="w-7 h-7 rounded border border-border cursor-pointer" />
+          <input type="text" value={accentText}
+            onChange={e => {
+              setAccentText(e.target.value)
+              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
+                setConfig(c => ({ ...c, accentColor: e.target.value }))
             }}
             className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
         </div>
@@ -1755,6 +2200,54 @@ export default function ReportCardDesignPage() {
             onChange={e => setConfig(c => ({ ...c, highlightFailingRed: e.target.checked }))} />
           {tr('Failing marks in red')}
         </label>
+
+        {/* Student photo frame. School-wide, not per-layout, same convention as "Failing
+            marks in red": applies to every layout that has an identity box (Standard,
+            Ledger, Annual) for every student. On, the frame always prints — with the
+            uploaded photo, or an empty labelled rectangle for a school that prefers to
+            glue in a physical photo by hand. Off, the frame is dropped entirely, in the
+            design, the preview and the printed card alike. */}
+        <label className="flex items-center gap-2 ml-2 text-xs text-muted-foreground cursor-pointer select-none"
+          title={tr('Applies to every layout: shows the photo frame in the identity box (photo if uploaded, otherwise an empty box)')}>
+          <button type="button" role="switch" aria-checked={config.showStudentPhoto ?? true}
+            onClick={() => setConfig(c => ({ ...c, showStudentPhoto: !(c.showStudentPhoto ?? true) }))}
+            className="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors"
+            style={{ background: (config.showStudentPhoto ?? true) ? config.primaryColor : '#d1d5db' }}>
+            <span className="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform"
+              style={{ transform: (config.showStudentPhoto ?? true) ? 'translateX(18px)' : 'translateX(3px)' }} />
+          </button>
+          {tr('Student Photo')}
+        </label>
+
+        {/* Frame width — same slider pattern as the header's logo Size, and same reason
+            for a hard max: an admin-chosen width that's free to grow without limit would
+            eventually crowd out the identity box beside it (or, on the small side, get too
+            small to hold a real photo). Height is never a free choice — the frame always
+            stretches to match the identity box's own height, so only width needs a control. */}
+        {(config.showStudentPhoto ?? true) && (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input type="range" min={STUDENT_PHOTO_SIZE_MIN} max={STUDENT_PHOTO_SIZE_MAX}
+              value={config.studentPhotoSize ?? STUDENT_PHOTO_SIZE_DEFAULT}
+              onChange={e => setConfig(c => ({ ...c, studentPhotoSize: Number(e.target.value) }))}
+              style={{ width: 70 }} />
+            {clampStudentPhotoSize(config.studentPhotoSize)}px
+          </label>
+        )}
+
+        {/* Promotion Decision. School-wide, not per-layout, same convention as "Failing
+            marks in red": applies to the report card and the transcript alike. Prints as
+            a stat box next to Average/Position, using the school's own PromotionScale
+            wording (Pass / Promoted on Trial / Repeat). University has no equivalent
+            concept (it reports Classification/CGPA instead), so this is hidden outright
+            rather than offered and doing nothing. */}
+        {schoolType !== 'UNIVERSITY' && (
+          <label className="flex items-center gap-2 ml-2 text-xs text-muted-foreground cursor-pointer"
+            title={tr('Prints the student\'s Pass / Promoted on Trial / Repeat decision, worded per your Promotion Scale settings')}>
+            <input type="checkbox" checked={config.showDecision ?? false}
+              onChange={e => setConfig(c => ({ ...c, showDecision: e.target.checked }))} />
+            {tr('Show Decision (Pass/Trial/Repeat)')}
+          </label>
+        )}
 
         {/* Watermark */}
         <div className="flex items-center gap-2 ml-2 border-l border-border pl-4 flex-wrap">
@@ -1942,16 +2435,34 @@ export default function ReportCardDesignPage() {
       {/* ── Canvas ── */}
       <TextColorToolbar canvasRef={canvasRef} />
       <SheetCtx.Provider value={sheetCtxValue}>
-      <div className="flex gap-5 items-start justify-center">
+      {/* items-start, not stretch: a flex row is already as tall as its tallest child
+          (the canvas column) regardless of align-items, so the sticky sidebar gets its
+          full scroll range for free. `align-items/align-self: stretch` looks like the
+          natural way to give the sidebar that height explicitly, but it defeats
+          `position: sticky` on the stretched child in this layout — verified live via
+          CDP (with stretch, the sticky box never holds its scroll-top position; with
+          items-start, it does). */}
+      <div className="flex gap-5 justify-center items-start">
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
         {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
         {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
+        {/* The canvas mirrors the printed page: on the redesign it takes the same double
+            frame, cream paper and body face the print renderer uses, so what the admin
+            arranges here is what comes out. Extra left padding stays regardless — that
+            gutter is where each section's drag/move/delete handles live. */}
         <div ref={canvasRef} className="shadow-sm border border-[#e4e4e7] rounded-xl p-10 pl-14" style={{
-          fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#111',
-          position: 'relative', overflow: 'hidden', background: config.bgColor || '#ffffff',
+          fontFamily: isRedesign ? 'Carlito, Calibri, "DejaVu Sans", Arial, sans-serif' : 'Arial, sans-serif',
+          fontSize: 13, color: isRedesign ? '#14213d' : '#111',
+          position: 'relative', overflow: 'hidden',
+          background: config.bgColor || (isRedesign ? '#fffdf9' : '#ffffff'),
+          ...(isRedesign ? {
+            border: `2px solid ${config.primaryColor}`,
+            outline: `1px solid ${accentOf(config)}`,
+            outlineOffset: 3,
+          } : {}),
           /* Force light-mode CSS vars so dark-mode global rules don't bleed in */
           '--background': '#f8f8f8', '--foreground': '#09090b',
           '--card': '#ffffff', '--card-foreground': '#09090b',
@@ -1987,36 +2498,7 @@ export default function ReportCardDesignPage() {
               showOn={sec.showOn}
               onShowOn={supportsVariants ? v => updateSection(i, { ...sec, showOn: v }) : undefined}
               hiddenHere={!sectionShowsOn(sec, previewVariant)}>
-              {sec.type === 'header' && (
-                <RenderHeader sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'student_info' && (
-                <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'marks_table' && (
-                <RenderMarksTable sec={sec} color={config.primaryColor} schoolType={schoolType} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'summary' && (
-                <RenderSummary sec={sec} color={config.primaryColor} schoolType={schoolType} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'remarks' && (
-                <RenderRemarks sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'signatures' && (
-                <RenderSignatures sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'stamp' && (
-                <RenderStamp sec={sec} schoolStamp={schoolStamp} uploading={uploadingStamp} onUpload={handleStampUpload} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'text_block' && (
-                <RenderTextBlock sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'divider' && (
-                <RenderDivider sec={sec} color={config.primaryColor} update={s => updateSection(i, s)} />
-              )}
-              {sec.type === 'grading_legend' && (
-                <RenderGradingLegend sec={sec as GradingLegendSec} color={config.primaryColor} update={s => updateSection(i, s)} />
-              )}
+              {renderSectionBody(sec, s => updateSection(i, s))}
             </SectionWrap>
           ))}
 
@@ -2031,7 +2513,7 @@ export default function ReportCardDesignPage() {
 
       {/* ── Right sidebar: Layout switcher (university only) ── */}
       {schoolType === 'UNIVERSITY' && (
-        <div className="flex-shrink-0 sticky" style={{ width: 168, top: 110 }}>
+        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: 110 }}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
             <LayoutTemplate size={12} /> Layout
           </p>
@@ -2040,19 +2522,19 @@ export default function ReportCardDesignPage() {
           <button
             onClick={loadStandardLayout}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: !isTranscript ? config.primaryColor : '#e5e7eb', background: !isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: !isTranscript ? previewColor('standard') : '#e5e7eb', background: !isTranscript ? `${previewColor('standard')}10` : '#f9fafb' }}
           >
             {/* Mini visual */}
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
-              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ background: previewColor('standard'), height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ width: 40, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, marginBottom: 3 }}>
                 {[0,1,2,3].map(i => <div key={i} style={{ height: 4, background: '#e5e7eb', borderRadius: 1 }} />)}
               </div>
               <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: `${config.primaryColor}22` }}>
-                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: `${previewColor('standard')}22` }}>
+                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: previewColor('standard'), fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
                 </div>
                 {[0,1,2,3].map(i => (
                   <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
@@ -2063,11 +2545,51 @@ export default function ReportCardDesignPage() {
                 ))}
               </div>
               <div style={{ marginTop: 3, display: 'flex', gap: 2 }}>
-                {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${config.primaryColor}30`, borderRadius: 2 }} />)}
+                {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${previewColor('standard')}30`, borderRadius: 2 }} />)}
               </div>
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: !isTranscript ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: !isTranscript ? previewColor('standard') : '#6b7280' }}>
               Standard
+            </div>
+          </button>
+
+          {/* Ledger thumbnail — totals merged into the table itself, closing on a
+              dark verdict band (Classification, or Cumulative GPA + Classification
+              on the second/final semester). */}
+          <button
+            onClick={loadLedger}
+            className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
+            style={{ borderColor: isLedger ? previewColor('ledger') : '#e5e7eb', background: isLedger ? `${previewColor('ledger')}10` : '#f9fafb' }}
+          >
+            <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
+              <div style={{ background: previewColor('ledger'), height: 10, borderRadius: 2, marginBottom: 3, display: 'flex', alignItems: 'center', paddingLeft: 3 }}>
+                <div style={{ width: 34, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              </div>
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: '#f1f5f9' }}>
+                  {['Course','Cr','GP'].map(l => <div key={l} style={{ fontSize: 5, color: '#111827', fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                </div>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
+                    {[0,1,2].map(j => <div key={j} style={{ height: 4, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />)}
+                  </div>
+                ))}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', borderTop: '1px solid #ccc', background: '#f1f5f9' }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', padding: '1px 2px' }}>TOTAL CREDITS</div>
+                  <div style={{ height: 4, margin: '2px', background: '#ccc', borderRadius: 1 }} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', borderTop: '1px solid #ccc' }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', padding: '1px 2px', color: '#475569' }}>SEMESTER GPA</div>
+                  <div style={{ height: 4, margin: '2px', background: '#e5e7eb', borderRadius: 1 }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#0f172a', padding: '2px 3px' }}>
+                  <span style={{ fontSize: 4, color: '#e2e8f0', fontWeight: 'bold' }}>CLASSIFICATION</span>
+                  <span style={{ fontSize: 5, color: '#fff', fontWeight: 'bold' }}>2:1</span>
+                </div>
+              </div>
+            </div>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isLedger ? previewColor('ledger') : '#6b7280' }}>
+              Ledger
             </div>
           </button>
 
@@ -2075,16 +2597,16 @@ export default function ReportCardDesignPage() {
           <button
             onClick={loadTranscriptLayout}
             className="w-full rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: isTranscript ? previewColor('transcript') : '#e5e7eb', background: isTranscript ? `${previewColor('transcript')}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
-              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ background: previewColor('transcript'), height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ width: 50, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
               </div>
-              <div style={{ fontSize: 5, fontWeight: 'bold', color: config.primaryColor, marginBottom: 2 }}>FIRST SEMESTER</div>
+              <div style={{ fontSize: 5, fontWeight: 'bold', color: previewColor('transcript'), marginBottom: 2 }}>FIRST SEMESTER</div>
               <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr 1fr', background: `${config.primaryColor}22` }}>
-                  {['CD','Title','Cr','Mk','Gr'].map(l => <div key={l} style={{ fontSize: 4, color: config.primaryColor, fontWeight: 'bold', padding: '1px 1px', borderRight: '1px solid #e5e7eb', whiteSpace: 'nowrap' }}>{l}</div>)}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr 1fr', background: `${previewColor('transcript')}22` }}>
+                  {['CD','Title','Cr','Mk','Gr'].map(l => <div key={l} style={{ fontSize: 4, color: previewColor('transcript'), fontWeight: 'bold', padding: '1px 1px', borderRight: '1px solid #e5e7eb', whiteSpace: 'nowrap' }}>{l}</div>)}
                 </div>
                 {[0,1,2].map(i => (
                   <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
@@ -2099,12 +2621,12 @@ export default function ReportCardDesignPage() {
               </div>
               <div style={{ marginTop: 3, display: 'flex', gap: 2 }}>
                 <div style={{ flex: 1, height: 14, background: '#f0f0f0', borderRadius: 2, border: '1px solid #e5e7eb' }} />
-                <div style={{ width: 44, height: 14, border: `1px solid ${config.primaryColor}55`, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <div style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold' }}>3.25</div>
+                <div style={{ width: 44, height: 14, border: `1px solid ${previewColor('transcript')}55`, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ fontSize: 5, color: previewColor('transcript'), fontWeight: 'bold' }}>3.25</div>
                 </div>
               </div>
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? previewColor('transcript') : '#6b7280' }}>
               Transcript
             </div>
           </button>
@@ -2114,27 +2636,27 @@ export default function ReportCardDesignPage() {
 
       {/* ── Right sidebar: Layout switcher (secondary/primary only) ── */}
       {schoolType !== 'UNIVERSITY' && (
-        <div className="flex-shrink-0 sticky" style={{ width: 168, top: 110 }}>
+        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: 110 }}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
             <LayoutTemplate size={12} /> Layout
           </p>
 
           {/* Standard thumbnail */}
           <button
-            onClick={() => loadTemplate('classic')}
+            onClick={loadStandardLayout}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: isStandard ? config.primaryColor : '#e5e7eb', background: isStandard ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: isStandard ? previewColor('standard') : '#e5e7eb', background: isStandard ? `${previewColor('standard')}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
-              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ background: previewColor('standard'), height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ width: 40, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, marginBottom: 3 }}>
                 {[0,1,2,3].map(i => <div key={i} style={{ height: 4, background: '#e5e7eb', borderRadius: 1 }} />)}
               </div>
               <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: `${config.primaryColor}22` }}>
-                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: `${previewColor('standard')}22` }}>
+                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: previewColor('standard'), fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
                 </div>
                 {[0,1,2,3].map(i => (
                   <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
@@ -2145,46 +2667,50 @@ export default function ReportCardDesignPage() {
                 ))}
               </div>
               <div style={{ marginTop: 3, display: 'flex', gap: 2 }}>
-                {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${config.primaryColor}30`, borderRadius: 2 }} />)}
+                {[50,40,60].map((w,i) => <div key={i} style={{ width: w, height: 8, background: `${previewColor('standard')}30`, borderRadius: 2 }} />)}
               </div>
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isStandard ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isStandard ? previewColor('standard') : '#6b7280' }}>
               Standard
             </div>
           </button>
 
-          {/* Ledger thumbnail — totals folded into the table itself */}
+          {/* Ledger thumbnail — totals merged into the table itself, closing on a
+              dark verdict band (Term Appreciation, or Annual Average/Position +
+              Decision on the year's final term). */}
           <button
             onClick={loadLedger}
             className="w-full mb-3 rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: isLedger ? config.primaryColor : '#e5e7eb', background: isLedger ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: isLedger ? previewColor('ledger') : '#e5e7eb', background: isLedger ? `${previewColor('ledger')}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
-              <div style={{ background: config.primaryColor, height: 14, borderRadius: 2, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ width: 40, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
+              <div style={{ background: previewColor('ledger'), height: 10, borderRadius: 2, marginBottom: 3, display: 'flex', alignItems: 'center', paddingLeft: 3 }}>
+                <div style={{ width: 34, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
               </div>
               <div style={{ border: '1px solid #e5e7eb', borderRadius: 2 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr', background: `${config.primaryColor}22` }}>
-                  {['Subject','Sc','Gr','↕'].map(l => <div key={l} style={{ fontSize: 5, color: config.primaryColor, fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', background: '#f1f5f9' }}>
+                  {['Subject','Sc','Gr'].map(l => <div key={l} style={{ fontSize: 5, color: '#111827', fontWeight: 'bold', padding: '1px 2px', borderRight: '1px solid #e5e7eb' }}>{l}</div>)}
                 </div>
                 {[0,1,2].map(i => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr', borderTop: '1px solid #f0f0f0' }}>
-                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
-                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
-                    <div style={{ height: 5, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />
-                    <div style={{ fontSize: 5, textAlign: 'center', color: i === 0 ? '#16a34a' : i === 1 ? '#dc2626' : '#6b7280' }}>{i === 0 ? '▲' : i === 1 ? '▼' : '●'}</div>
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: '1px solid #f0f0f0' }}>
+                    {[0,1,2].map(j => <div key={j} style={{ height: 4, margin: '1px 2px', background: '#e5e7eb', borderRadius: 1 }} />)}
                   </div>
                 ))}
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.2fr 1fr 1.2fr 1fr', borderTop: '1px solid #ccc', background: '#f1f5f9' }}>
-                  {['Tot','','Avg','','Pos',''].map((l, i) => (
-                    <div key={i} style={{ fontSize: 4, fontWeight: 'bold', padding: '2px 1px', textAlign: i % 2 === 0 ? 'right' : 'center', color: i % 2 === 1 ? config.primaryColor : '#374151' }}>
-                      {l || '••'}
-                    </div>
-                  ))}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', borderTop: '1px solid #ccc', background: '#f1f5f9' }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', padding: '1px 2px' }}>TOTAL</div>
+                  <div style={{ height: 4, margin: '2px', background: '#ccc', borderRadius: 1 }} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', borderTop: '1px solid #ccc' }}>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', padding: '1px 2px', color: '#475569' }}>TERM AVERAGE</div>
+                  <div style={{ height: 4, margin: '2px', background: '#e5e7eb', borderRadius: 1 }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#0f172a', padding: '2px 3px' }}>
+                  <span style={{ fontSize: 4, color: '#e2e8f0', fontWeight: 'bold' }}>DECISION</span>
+                  <span style={{ fontSize: 5, color: '#fff', fontWeight: 'bold' }}>PASS</span>
                 </div>
               </div>
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isLedger ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isLedger ? previewColor('ledger') : '#6b7280' }}>
               Ledger
             </div>
           </button>
@@ -2194,15 +2720,15 @@ export default function ReportCardDesignPage() {
           <button
             onClick={loadTranscriptLayout}
             className="w-full rounded-lg border-2 overflow-hidden transition"
-            style={{ borderColor: isTranscript ? config.primaryColor : '#e5e7eb', background: isTranscript ? `${config.primaryColor}10` : '#f9fafb' }}
+            style={{ borderColor: isTranscript ? previewColor('transcript') : '#e5e7eb', background: isTranscript ? `${previewColor('transcript')}10` : '#f9fafb' }}
           >
             <div style={{ padding: '6px 6px 4px', height: 100, position: 'relative' }}>
-              <div style={{ background: config.primaryColor, height: 12, borderRadius: 2, marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ background: previewColor('transcript'), height: 12, borderRadius: 2, marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ width: 50, height: 2, background: 'rgba(255,255,255,0.7)', borderRadius: 1 }} />
               </div>
               {['FIRST TERM', 'SECOND TERM', 'THIRD TERM'].map(label => (
                 <div key={label} style={{ marginBottom: 3 }}>
-                  <div style={{ fontSize: 4, fontWeight: 'bold', color: '#fff', background: config.primaryColor, padding: '0 2px' }}>{label}</div>
+                  <div style={{ fontSize: 4, fontWeight: 'bold', color: '#fff', background: previewColor('transcript'), padding: '0 2px' }}>{label}</div>
                   <div style={{ border: '1px solid #e5e7eb' }}>
                     {[0, 1].map(i => (
                       <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', borderTop: i ? '1px solid #f0f0f0' : undefined }}>
@@ -2213,7 +2739,7 @@ export default function ReportCardDesignPage() {
                 </div>
               ))}
             </div>
-            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? config.primaryColor : '#6b7280' }}>
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '3px 6px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: isTranscript ? previewColor('transcript') : '#6b7280' }}>
               Annual
             </div>
           </button>

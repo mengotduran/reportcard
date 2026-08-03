@@ -2,9 +2,9 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import {
-  dateStringToDayOfWeek, slotHasPassed, slotPeriods, periodWindows, graceHasExpired, periodHasEnded, PeriodWindow, slotRunsOn,
+  dateStringToDayOfWeek, slotHasPassed, slotPeriods, periodWindows, graceHasExpired, periodHasEnded, PeriodWindow, slotRunsOn, periodMinutesFor,
 } from '../utils/teachingHours'
-import { getCurrentPeriodRange } from './coverage.controller'
+import { getCurrentPeriodRange, getProgrammeByClassLevel } from './coverage.controller'
 import { NotificationLink } from '../utils/notificationLink'
 import { emitToUser, emitToUsers, emitToSchool } from '../config/socket'
 
@@ -188,7 +188,7 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
     // Every weekday the report touches, fetched once rather than per day — a month-long
     // report hits the same handful of weekdays over and over.
     const daysOfWeek = [...new Set(days.map((d) => dateStringToDayOfWeek(d.date)))]
-    const [allSlots, school] = await Promise.all([
+    const [allSlots, school, programmeByClassLevel] = await Promise.all([
       prisma.timetableSlot.findMany({
         // archivedAt: null is essential, not a refinement. Re-saving a teacher's timetable
         // archives the old rows rather than deleting them (absences already logged against
@@ -200,13 +200,20 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
         // explicitly produced nothing and fell through to the "no reportable periods" 400.
         where: { schoolId, teacherId, dayOfWeek: { in: daysOfWeek }, archivedAt: null },
         include: {
-          subject: { select: { name: true } },
+          // classLevel is needed on the school subject too now — Day and Evening are
+          // counted in their own period length, so each slot's sitting must be resolvable.
+          subject: { select: { name: true, classLevel: true } },
           privateSubject: { select: { name: true, classLevel: true } },
         },
       }),
-      prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
+      getProgrammeByClassLevel(schoolId),
     ])
-    const periodMinutes = school?.periodMinutes ?? null
+    const periodMinutesForSlot = (slot: { subject?: { classLevel: string } | null; privateSubject?: { classLevel: string } | null }): number | null => {
+      const classLevel = slot.subject?.classLevel ?? slot.privateSubject?.classLevel
+      const programme = classLevel ? programmeByClassLevel.get(classLevel) : undefined
+      return periodMinutesFor(school ?? { dayPeriodMinutes: null, eveningPeriodMinutes: null }, programme)
+    }
 
     // Absences already on record for these dates. Two reasons: a legacy whole-slot row
     // (null periodIndex) must NOT gain per-period siblings, which would count the same
@@ -268,8 +275,9 @@ export const createAbsence = async (req: AuthRequest, res: Response) => {
         if (legacyWholeSlot.has(`${d.date}|${slot.id}`)) continue
         if (slotPastCutoff(slot)) continue
         // Every period of the slot, all or nothing. One row each so the count and the hours
-        // stay per period, and so an admin can later cancel just one of them.
-        for (const window of periodWindows(slot.startTime, slot.endTime, periodMinutes)) {
+        // stay per period, and so an admin can later cancel just one of them. Measured in
+        // THIS slot's own sitting's period length.
+        for (const window of periodWindows(slot.startTime, slot.endTime, periodMinutesForSlot(slot))) {
           toMark.push({ date: d.date, slot, window })
         }
       }
@@ -458,7 +466,7 @@ export const deleteAbsence = async (req: AuthRequest, res: Response) => {
     // needs to mark them present again; past it the record stands.
     const school = await prisma.school.findUnique({
       where: { id: schoolId },
-      select: { periodMinutes: true, absenceGraceMinutes: true },
+      select: { absenceGraceMinutes: true },
     })
     // The whole class, not this row's own 50 minutes — see the atomicity note above.
     const window: PeriodWindow = { index: 0, startTime: absence.slot.startTime, endTime: absence.slot.endTime }
@@ -560,7 +568,7 @@ async function listAbsences(schoolId: string, teacherId: string, from?: string, 
     effectiveFrom = range.start.toISOString().slice(0, 10)
     effectiveTo = periodEnd ?? undefined
   }
-  const [absences, school] = await Promise.all([
+  const [absences, school, programmeByClassLevel] = await Promise.all([
     prisma.teacherAbsence.findMany({
       where: {
         schoolId, teacherId,
@@ -576,14 +584,24 @@ async function listAbsences(schoolId: string, teacherId: string, from?: string, 
       // Within a day, earliest period first, so a split double period reads in order.
       orderBy: [{ date: 'desc' }, { periodIndex: 'asc' }],
     }),
-    prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true, absenceGraceMinutes: true } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true, absenceGraceMinutes: true } }),
+    getProgrammeByClassLevel(schoolId),
   ])
-  const periodMinutes = school?.periodMinutes ?? null
-  const shaped = absences.map((a) => shapeAbsence(a, periodMinutes, school?.absenceGraceMinutes ?? null))
+  // Each row measured in ITS OWN sitting's period length — a legacy row with no linked
+  // class at all (a bare private class) falls back to Day, same convention as elsewhere.
+  const shaped = absences.map((a) => {
+    const classLevel = a.slot.subject?.classLevel ?? a.slot.privateSubject?.classLevel
+    const programme = classLevel ? programmeByClassLevel.get(classLevel) : undefined
+    const rowPeriodMinutes = periodMinutesFor(school ?? { dayPeriodMinutes: null, eveningPeriodMinutes: null }, programme)
+    return shapeAbsence(a, rowPeriodMinutes, school?.absenceGraceMinutes ?? null)
+  })
   // Total periods missed: 1 per per-period row, the whole block for a legacy one. Falls
   // back to the plain event count when no period length is set yet.
   // Counted on the UNGROUPED rows: the total is per period even though the list is per class.
   const periodsMissed = shaped.reduce((sum, a) => sum + (a.periods ?? 1), 0)
+  // Display-only field for the client's singular/plural unit toggle — not used for any
+  // actual counting, which already resolves Day vs Evening per row above.
+  const periodMinutes = school?.dayPeriodMinutes ?? school?.eveningPeriodMinutes ?? null
   return { absences: groupByClass(shaped), periodMinutes, periodsMissed, periodEnd }
 }
 
@@ -612,29 +630,40 @@ export const getAbsenceCounts = async (req: AuthRequest, res: Response) => {
     const range = await getCurrentPeriodRange(schoolId)
     // Sum PERIODS per teacher (a 2-period class = 2), not just event rows — so this can't
     // be a plain groupBy count; each row's slot duration has to be turned into periods.
-    const [absences, school] = await Promise.all([
+    const [absences, school, programmeByClassLevel] = await Promise.all([
       prisma.teacherAbsence.findMany({
         where: {
           schoolId,
           ...(range ? { date: { gte: range.start.toISOString().slice(0, 10), lte: range.end.toISOString().slice(0, 10) } } : {}),
         },
-        select: { teacherId: true, periodIndex: true, slot: { select: { startTime: true, endTime: true } } },
+        select: {
+          teacherId: true, periodIndex: true,
+          slot: { select: {
+            startTime: true, endTime: true,
+            subject: { select: { classLevel: true } },
+            privateSubject: { select: { classLevel: true } },
+          } },
+        },
       }),
-      prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
+      getProgrammeByClassLevel(schoolId),
     ])
-    const periodMinutes = school?.periodMinutes ?? null
     const byTeacher = new Map<string, { count: number; periods: number }>()
     for (const a of absences) {
       const cur = byTeacher.get(a.teacherId) ?? { count: 0, periods: 0 }
       cur.count += 1
       // A per-period row is worth exactly one period; only a legacy whole-slot row still
-      // has to be converted from its duration.
-      cur.periods += a.periodIndex != null ? 1 : (slotPeriods(a.slot.startTime, a.slot.endTime, periodMinutes) ?? 1)
+      // has to be converted from its duration, measured in ITS sitting's own period length.
+      const classLevel = a.slot.subject?.classLevel ?? a.slot.privateSubject?.classLevel
+      const programme = classLevel ? programmeByClassLevel.get(classLevel) : undefined
+      const rowPeriodMinutes = periodMinutesFor(school ?? { dayPeriodMinutes: null, eveningPeriodMinutes: null }, programme)
+      cur.periods += a.periodIndex != null ? 1 : (slotPeriods(a.slot.startTime, a.slot.endTime, rowPeriodMinutes) ?? 1)
       byTeacher.set(a.teacherId, cur)
     }
     res.json({
       counts: [...byTeacher].map(([teacherId, v]) => ({ teacherId, count: v.count, periods: v.periods })),
-      periodMinutes,
+      // Display-only unit toggle on the client, see listAbsences.
+      periodMinutes: school?.dayPeriodMinutes ?? school?.eveningPeriodMinutes ?? null,
       // Also the far edge for booking an absence ahead — see listAbsences. Served from here
       // so the admin's report-on-behalf form can get it without calling getTeacherAbsences,
       // which would mark that teacher's records as reviewed as a side effect.

@@ -82,20 +82,25 @@ export interface TimetablePeriod {
   startTime: string
   endTime: string
   isBreak: boolean
-  /** Which sitting this slot is for. Null = shared by both, the default for every school
-   *  without an evening programme. */
-  programme?: 'DAY' | 'EVENING' | null
+  /** Which sitting this period belongs to. Day and Evening are independent bell
+   *  schedules, own periods, own breaks, own minutes-per-period — every row picks one. */
+  programme: 'DAY' | 'EVENING'
 }
 
-export const getPeriodsApi = async (): Promise<{ periods: TimetablePeriod[]; periodMinutes: number | null }> => {
+export const getPeriodsApi = async (): Promise<{
+  periods: TimetablePeriod[]
+  dayPeriodMinutes: number | null
+  eveningPeriodMinutes: number | null
+}> => {
   const res = await api.get('/timetable/periods')
   return res.data
 }
 
 export const savePeriodsApi = async (
-  periods: { startTime: string; endTime: string; isBreak: boolean; programme?: 'DAY' | 'EVENING' | null }[],
-  periodMinutes: number | null,
+  periods: { startTime: string; endTime: string; isBreak: boolean; programme: 'DAY' | 'EVENING' }[],
+  dayPeriodMinutes: number | null,
+  eveningPeriodMinutes: number | null,
 ) => {
-  const res = await api.put('/timetable/periods', { periods, periodMinutes })
+  const res = await api.put('/timetable/periods', { periods, dayPeriodMinutes, eveningPeriodMinutes })
   return res.data as { message: string }
 }

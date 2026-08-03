@@ -2,7 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
-import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, DayOfWeek, ScopeTerm, DateRange, mergeDateRanges } from '../utils/teachingHours'
+import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, periodMinutesFor, DayOfWeek, ScopeTerm, DateRange, mergeDateRanges } from '../utils/teachingHours'
 
 // Falls back to the most recently created session when no term is currently active —
 // same situation fees.controller's currentSession already leaves null; a school between
@@ -65,8 +65,9 @@ function holidaysFor(
   return holidays.filter((h) => h.programme == null || h.programme === programme)
 }
 
-/** classLevel name -> its programme, so a course can be matched to the right closures. */
-async function getProgrammeByClassLevel(schoolId: string): Promise<Map<string, string>> {
+/** classLevel name -> its programme, so a course can be matched to the right closures
+ *  and the right sitting's period length. Exported for teacherAbsence.controller.ts. */
+export async function getProgrammeByClassLevel(schoolId: string): Promise<Map<string, string>> {
   const levels = await prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, programme: true } })
   return new Map(levels.map((l) => [l.name, l.programme as string]))
 }
@@ -177,10 +178,9 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       where: { subject: { schoolId }, ...(teacherId ? { userId: teacherId } : {}) },
       include: { subject: true, user: { select: { id: true, name: true } } },
     }),
-    prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
   ])
   if (teacherSubjects.length === 0) return []
-  const periodMinutes = school?.periodMinutes ?? null
 
   const teacherIds = [...new Set(teacherSubjects.map((ts) => ts.userId))]
   const subjectIds = [...new Set(teacherSubjects.map((ts) => ts.subjectId))]
@@ -257,6 +257,11 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       scopeTerms.some((term) => dateStringWithinRange(a.date, term.startDate, term.endDate))
     )
 
+    // This course's own sitting — an evening closure must not cancel day periods, and its
+    // absences must be measured in the evening's own period length, not the day's.
+    const courseProgramme = programmeByClassLevel.get(subject.classLevel) ?? null
+    const coursePeriodMinutes = periodMinutesFor(school ?? { dayPeriodMinutes: null, eveningPeriodMinutes: null }, courseProgramme)
+
     // For the COUNT badge: PERIODS missed (a 2-period class = 2), using the open-ended
     // cutoff (next-term-start) so it stays consistent with the "By Teacher" view when a
     // term's configured endDate is stale and the school is still recording absences past
@@ -267,7 +272,7 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
         // One period per per-period row; only a legacy whole-slot row expands.
         if (a.periodIndex != null) return sum + 1
         const slot = teacherSlots.find((s) => s.id === a.timetableSlotId)
-        return sum + (slot ? (slotPeriods(slot.startTime, slot.endTime, periodMinutes) ?? 1) : 1)
+        return sum + (slot ? (slotPeriods(slot.startTime, slot.endTime, coursePeriodMinutes) ?? 1) : 1)
       }, 0)
 
     const result = computeCoverage({
@@ -283,9 +288,8 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       terms: scopeTerms,
       absences: teacherAbsences,
       asOfDate,
-      periodMinutes,
-      // This course's own sitting: an evening closure must not cancel day periods.
-      holidays: holidaysFor(holidays, programmeByClassLevel.get(subject.classLevel) ?? null),
+      periodMinutes: coursePeriodMinutes,
+      holidays: holidaysFor(holidays, courseProgramme),
     })
 
     return [{
@@ -420,15 +424,18 @@ export const getMyCoverage = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const session = await resolveSession(schoolId, req.query.session ? String(req.query.session) : undefined)
-    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } })
-    if (!session) { res.json({ session: null, rows: [], periodMinutes: school?.periodMinutes ?? null }); return }
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } })
+    // Display-only (picks singular/plural "period(s)" vs "absence(s)" on the client) — not
+    // used for any actual counting, which already resolves Day vs Evening per course/slot.
+    const periodMinutes = school?.dayPeriodMinutes ?? school?.eveningPeriodMinutes ?? null
+    if (!session) { res.json({ session: null, rows: [], periodMinutes }); return }
     // Built from ALL contributors, then narrowed to courses this teacher is on. Filtering
     // earlier would make a shared course's total look like their share alone — "12 of 30"
     // when the course is actually at 18 — so they could not tell whether it is on track.
     // Their own contribution is still in `contributors`, tagged by teacherId.
     const all = await buildCoverageRows(schoolId, session)
     const mine = all.filter((r) => r.contributors.some((c) => c.teacherId === req.user!.id))
-    res.json({ session, rows: mine, periodMinutes: school?.periodMinutes ?? null })
+    res.json({ session, rows: mine, periodMinutes })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -439,8 +446,10 @@ export const getCoverage = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const session = await resolveSession(schoolId, req.query.session ? String(req.query.session) : undefined)
-    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } })
-    if (!session) { res.json({ session: null, rows: [], periodMinutes: school?.periodMinutes ?? null }); return }
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } })
+    // Display-only, see getMyCoverage.
+    const periodMinutes = school?.dayPeriodMinutes ?? school?.eveningPeriodMinutes ?? null
+    if (!session) { res.json({ session: null, rows: [], periodMinutes }); return }
     const teacherId = req.query.teacherId ? String(req.query.teacherId) : undefined
     const rows = await buildCoverageRows(schoolId, session, teacherId)
     // A coverage row is a (teacher, subject) pair, so a course with an hours target but no
@@ -456,7 +465,7 @@ export const getCoverage = async (req: AuthRequest, res: Response) => {
           orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
         })
       : []
-    res.json({ session, rows, periodMinutes: school?.periodMinutes ?? null, unassignedTargets })
+    res.json({ session, rows, periodMinutes, unassignedTargets })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -503,10 +512,9 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
       // subject.classLevel is what tells us which sitting a slot belongs to.
       include: { teacher: { select: { id: true, name: true } }, subject: { select: { classLevel: true } } },
     }),
-    prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
   ])
   if (slots.length === 0) return []
-  const periodMinutes = school?.periodMinutes ?? null
 
   const slotIds = slots.map((s) => s.id)
   const absences = await prisma.teacherAbsence.findMany({
@@ -550,7 +558,9 @@ async function buildTeacherHoursTotals(schoolId: string): Promise<TeacherHoursTo
         terms: scopeTerms,
         absences: teacherAbsences,
         asOfDate,
-        periodMinutes,
+        // Each sitting measured against its OWN period length — the whole reason the
+        // slots were split by sitting above.
+        periodMinutes: periodMinutesFor(school ?? { dayPeriodMinutes: null, eveningPeriodMinutes: null }, programme === 'NONE' ? null : programme),
         holidays: holidaysFor(holidays, programme === 'NONE' ? null : programme),
       })
       totals.scheduledHours += result.scheduledHours

@@ -45,6 +45,18 @@ export const updateStudentApi = async (id: string, data: {
   return res.data
 }
 
+export const uploadStudentPhotoApi = async (id: string, file: File) => {
+  const formData = new FormData()
+  formData.append('photo', file)
+  const res = await api.post(`/students/${id}/photo`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return res.data
+}
+
+export const removeStudentPhotoApi = async (id: string) => {
+  const res = await api.delete(`/students/${id}/photo`)
+  return res.data
+}
+
 export const bulkPromoteStudentsApi = async (studentIds: string[]): Promise<{ promoted: number; message: string }> => {
   const res = await api.post('/students/bulk-promote', { studentIds })
   return res.data

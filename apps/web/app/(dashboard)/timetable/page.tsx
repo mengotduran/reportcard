@@ -19,6 +19,8 @@ import DesktopOnly from '@/components/ui/DesktopOnly'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import Pagination from '@/components/ui/Pagination'
+import { usePagination } from '@/lib/usePagination'
 import WeekGrid, { WeekGridSlot } from '@/components/ui/WeekGrid'
 import { levelGroupOf, programmeOf, sortLevelGroups } from '@/lib/universityLevels'
 
@@ -158,7 +160,10 @@ const emptySlotForm = {
   // Optional course the private class counts toward (hours land on its coverage).
   privateSubjectId: '',
 }
-const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false, numPeriods: 1, programme: null as 'DAY' | 'EVENING' | null }
+// No `programme` field — Day and Evening are edited as two separate lists in the Set Up
+// Periods modal, so a row's sitting is whichever tab is open when it's added, not a choice
+// made per row.
+const emptyPeriodForm = { startTime: '', endTime: '', isBreak: false, numPeriods: 1 }
 
 export default function TimetablePage() {
   const { toast, showToast, hideToast } = useToast()
@@ -200,10 +205,15 @@ export default function TimetablePage() {
   const [deleteTarget, setDeleteTarget] = useState<EditableSlot | null>(null)
 
   const [periods, setPeriods] = useState<TimetablePeriod[]>([])
-  // Minutes per teaching period ("school hour"), e.g. 50. Must be set before class slots
-  // can be measured in whole periods. Kept as a string for the input; '' means unset.
-  const [periodMinutes, setPeriodMinutes] = useState<string>('')
+  // Minutes per teaching period ("school hour"), e.g. 50 — one per sitting, since Day and
+  // Evening are independent bell schedules with no reason to share a period length. Kept
+  // as strings for the inputs; '' means unset.
+  const [dayPeriodMinutes, setDayPeriodMinutes] = useState<string>('')
+  const [eveningPeriodMinutes, setEveningPeriodMinutes] = useState<string>('')
   const [showPeriodsModal, setShowPeriodsModal] = useState(false)
+  // Which sitting's list the modal is currently showing/editing. Non-university schools
+  // never leave DAY — there is no tab UI for them at all.
+  const [periodsSitting, setPeriodsSitting] = useState<'DAY' | 'EVENING'>('DAY')
   const [periodForm, setPeriodForm] = useState(emptyPeriodForm)
   const [editingPeriodId, setEditingPeriodId] = useState<string | null>(null)
   const [periodError, setPeriodError] = useState('')
@@ -218,13 +228,23 @@ export default function TimetablePage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [deleteVersionTarget, setDeleteVersionTarget] = useState<string | null>(null)
 
-  const periodLen = Number(periodMinutes) > 0 ? Number(periodMinutes) : null
+  const dayLenNum = Number(dayPeriodMinutes) > 0 ? Number(dayPeriodMinutes) : null
+  const eveningLenNum = Number(eveningPeriodMinutes) > 0 ? Number(eveningPeriodMinutes) : null
+  // The length that applies to whichever sitting's tab is currently open in the modal.
+  const periodLen = periodsSitting === 'EVENING' ? eveningLenNum : dayLenNum
 
   useBodyScrollLock(showSlotModal || showPeriodsModal || !!deleteTarget || showHistoryModal || !!deleteVersionTarget)
 
   useEffect(() => {
     Promise.all([getTeachersApi(), getPeriodsApi(), getTermsApi(), getSchoolTimetableApi()])
-      .then(([t, p, tm, st]) => { setTeachers(t.teachers); setPeriods(p.periods); setPeriodMinutes(p.periodMinutes != null ? String(p.periodMinutes) : ''); setTerms(tm.terms ?? []); setSchoolSlots(st.slots) })
+      .then(([t, p, tm, st]) => {
+        setTeachers(t.teachers)
+        setPeriods(p.periods)
+        setDayPeriodMinutes(p.dayPeriodMinutes != null ? String(p.dayPeriodMinutes) : '')
+        setEveningPeriodMinutes(p.eveningPeriodMinutes != null ? String(p.eveningPeriodMinutes) : '')
+        setTerms(tm.terms ?? [])
+        setSchoolSlots(st.slots)
+      })
       .catch(() => showToast(tr('Failed to load data'), 'error'))
       .finally(() => setLoading(false))
     // Class order (for sorting the Class picker) — every school type has this.
@@ -249,6 +269,9 @@ export default function TimetablePage() {
 
   const teachingPeriods = periods.filter((p) => !p.isBreak).sort((a, b) => a.startTime.localeCompare(b.startTime))
   const breakPeriods = periods.filter((p) => p.isBreak)
+  // The Set Up Periods modal only ever shows/edits ONE sitting's rows at a time — Day and
+  // Evening are independent lists now, not one shared list with per-row tags.
+  const sittingPeriods = periods.filter((p) => p.programme === periodsSitting).sort((a, b) => a.startTime.localeCompare(b.startTime))
 
   const startEditPeriod = (p: TimetablePeriod) => {
     setEditingPeriodId(p.id)
@@ -258,23 +281,31 @@ export default function TimetablePage() {
     // rounding it silently would hide the very thing the admin came here to correct.
     const exact = !p.isBreak && isWholePeriods(p.startTime, p.endTime, periodLen)
     const numPeriods = exact ? (periodsBetween(p.startTime, p.endTime, periodLen) ?? 1) : 0
-    setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak, numPeriods, programme: p.programme ?? null })
+    setPeriodForm({ startTime: p.startTime, endTime: p.endTime, isBreak: p.isBreak, numPeriods })
     setPeriodError('')
   }
 
-  // The pending "add a row" form always starts where the schedule currently leaves off, so
-  // consecutive rows need no retyping. It must be recomputed from the list after EVERY
-  // change to it: adding, editing AND deleting all move where the day now ends. Taking the
-  // list as an argument rather than reading `periods` is deliberate — a caller that just
-  // called setPeriods still sees the OLD state in its own closure, which is exactly how the
-  // form came to offer 13:50 as a start when the last row ended at 13:00.
+  // The pending "add a row" form always starts where the CURRENT SITTING's schedule
+  // leaves off, so consecutive rows need no retyping. Recomputed from that sitting's list
+  // after EVERY change to it: adding, editing, deleting AND switching sittings all move
+  // where its day now ends. Taking the list as an argument rather than reading `periods` is
+  // deliberate — a caller that just called setPeriods still sees the OLD state in its own
+  // closure, which is exactly how the form came to offer 13:50 as a start when the last row
+  // ended at 13:00.
   const resetPendingPeriodRow = (list: { endTime: string }[]) => {
     setEditingPeriodId(null)
     setPeriodForm({ ...emptyPeriodForm, startTime: latestEndTime(list) })
     setPeriodError('')
   }
 
-  const cancelEditPeriod = () => resetPendingPeriodRow(periods)
+  const cancelEditPeriod = () => resetPendingPeriodRow(sittingPeriods)
+
+  // Switching tabs cancels whatever was mid-edit on the other sitting and starts the "add a
+  // row" form fresh from where THIS sitting's schedule leaves off.
+  const switchPeriodsSitting = (sitting: 'DAY' | 'EVENING') => {
+    setPeriodsSitting(sitting)
+    resetPendingPeriodRow(periods.filter((p) => p.programme === sitting))
+  }
 
   const submitPeriodRow = () => {
     if (!periodForm.startTime) { setPeriodError(tr('Start time is required')); return }
@@ -295,8 +326,11 @@ export default function TimetablePage() {
     const endTime = periodForm.isBreak ? periodForm.endTime : addMinutes(periodForm.startTime, periodLen! * periodForm.numPeriods)
     if (!endTime) { setPeriodError(tr('End time is required')); return }
     if (endTime <= periodForm.startTime) { setPeriodError(tr('End time must be after start time')); return }
+    // Overlap is only checked within the SAME sitting — Day and Evening are independent
+    // schedules, so nothing stops their clock windows from overlapping (in practice Evening
+    // simply starts once Day is over).
     const overlap = periods
-      .filter((p) => p.id !== editingPeriodId)
+      .filter((p) => p.id !== editingPeriodId && p.programme === periodsSitting)
       .find((p) => periodForm.startTime < p.endTime && p.startTime < endTime)
     if (overlap) {
       // A class may never run across a break, so a teaching row that reaches into one is
@@ -308,12 +342,12 @@ export default function TimetablePage() {
       return
     }
 
-    const row = { startTime: periodForm.startTime, endTime, isBreak: periodForm.isBreak, programme: periodForm.isBreak ? null : periodForm.programme }
+    const row = { startTime: periodForm.startTime, endTime, isBreak: periodForm.isBreak, programme: periodsSitting }
     const updatedList = editingPeriodId
       ? periods.map((p) => p.id === editingPeriodId ? { ...p, ...row } : p)
       : [...periods, { id: `new-${Date.now()}`, ...row }]
     setPeriods(updatedList.sort((a, b) => a.startTime.localeCompare(b.startTime)))
-    resetPendingPeriodRow(updatedList)
+    resetPendingPeriodRow(updatedList.filter((p) => p.programme === periodsSitting))
   }
 
   const removePeriodRow = (id: string) => {
@@ -322,24 +356,38 @@ export default function TimetablePage() {
     // Deleting the last row of the day moves where the next one starts, so the pending form
     // follows it down. An edit in progress on a DIFFERENT row is left alone — dropping it
     // would throw away typing the admin hasn't submitted yet.
-    if (!editingPeriodId || editingPeriodId === id) resetPendingPeriodRow(next)
+    if (!editingPeriodId || editingPeriodId === id) resetPendingPeriodRow(next.filter((p) => p.programme === periodsSitting))
   }
 
-  // Rows that aren't a whole number of periods — normally rows saved before the school set
-  // a period length, which the API rejects outright. Listed together so the admin fixes
-  // every one in a single pass instead of discovering them one save at a time.
-  const nonConformingPeriods = periods.filter((p) => !p.isBreak && !isWholePeriods(p.startTime, p.endTime, periodLen))
+  // Rows that aren't a whole number of periods, for the sitting currently open — normally
+  // rows saved before the school set that sitting's period length, which the API rejects
+  // outright. Listed together so the admin fixes every one in a single pass.
+  const nonConformingPeriods = sittingPeriods.filter((p) => !p.isBreak && !isWholePeriods(p.startTime, p.endTime, periodLen))
 
   const handleSavePeriods = async () => {
-    if (!periodLen) { setPeriodError(tr('Enter how many minutes count as one period')); return }
-    if (nonConformingPeriods.length > 0) {
-      const rows = nonConformingPeriods.map((p) => `${p.startTime}–${p.endTime} (${durationMinutes(p.startTime, p.endTime)} min)`).join(', ')
-      setPeriodError(`${tr('These rows are not a whole number of')} ${periodLen} ${tr('minute periods')}: ${rows}. ${tr('Edit each one and set how many periods it is.')}`)
-      return
+    // Both sittings are validated before saving, not just whichever tab happens to be open —
+    // Save persists the whole combined list in one call.
+    for (const sitting of ['DAY', 'EVENING'] as const) {
+      const len = sitting === 'EVENING' ? eveningLenNum : dayLenNum
+      const rows = periods.filter((p) => p.programme === sitting)
+      const label = tr(sitting === 'EVENING' ? 'Evening' : 'Day')
+      if (rows.some((p) => !p.isBreak) && !len) {
+        switchPeriodsSitting(sitting)
+        setPeriodError(`${tr('Enter how many minutes count as one')} ${label} ${tr('period')}`)
+        setMinutesShakeKey((k) => k + 1)
+        return
+      }
+      const bad = rows.filter((p) => !p.isBreak && !isWholePeriods(p.startTime, p.endTime, len))
+      if (bad.length > 0) {
+        switchPeriodsSitting(sitting)
+        const badList = bad.map((p) => `${p.startTime}–${p.endTime} (${durationMinutes(p.startTime, p.endTime)} min)`).join(', ')
+        setPeriodError(`${tr('These')} ${label} ${tr('rows are not a whole number of')} ${len} ${tr('minute periods')}: ${badList}. ${tr('Edit each one and set how many periods it is.')}`)
+        return
+      }
     }
     setPeriodsSaving(true)
     try {
-      const result = await savePeriodsApi(periods.map(({ startTime, endTime, isBreak, programme }) => ({ startTime, endTime, isBreak, programme })), periodLen)
+      const result = await savePeriodsApi(periods.map(({ startTime, endTime, isBreak, programme }) => ({ startTime, endTime, isBreak, programme })), dayLenNum, eveningLenNum)
       showToast(result.message)
       setShowPeriodsModal(false)
       // A period's time moving can carry teacher slots along with it (school-wide, not
@@ -383,6 +431,10 @@ export default function TimetablePage() {
     const q = search.trim().toLowerCase()
     return t.name.toLowerCase().includes(q) || t.email.toLowerCase().includes(q)
   })
+  const TEACHER_COLS = 3
+  const TEACHER_ROWS_PER_PAGE = 7
+  const { page: teacherPage, setPage: setTeacherPage, pageItems: teacherPageItems, totalPages: teacherTotalPages } =
+    usePagination(filteredTeachers, TEACHER_COLS * TEACHER_ROWS_PER_PAGE, `${activeDept ?? ''}|${search}`)
 
   // The current teaching period, by name: universities teach a different set of courses each
   // semester, primary/secondary run their subjects across the whole year. `Subject.term`
@@ -481,12 +533,31 @@ export default function TimetablePage() {
     ? (effectiveDepartment && !sectionUnanswered ? resolveUniClass(slotForm.level, effectiveDepartment, effectiveSection) : '')
     : slotForm.classLevel
 
-  // Only the periods this class's section may use — an Evening class never sees a Day-only
-  // period, and a Day class never sees an Evening-only one. Untagged periods (the vast
-  // majority — every school with no evening programme never tags any) are always offered.
+  // Only the periods this class's own sitting defines — an Evening class never sees a Day
+  // period, and a Day class never sees an Evening one. Every period now belongs to exactly
+  // one sitting (no more shared/"whole school" rows).
   const availableTeachingPeriods = effectiveClassLevel
-    ? teachingPeriods.filter((p) => !p.programme || p.programme === sittingOfClass(effectiveClassLevel))
+    ? teachingPeriods.filter((p) => p.programme === sittingOfClass(effectiveClassLevel))
     : teachingPeriods
+
+  // How many periods actually exist back-to-back from the selected start, within THIS
+  // sitting's own structure — a double period can only be as long as the structure defines,
+  // never longer. Stops counting at the first gap (a break, or simply no period defined
+  // past that point), so picking the very last Evening period caps this at 1, not 20.
+  const maxPeriodsFromStart = (() => {
+    if (!slotForm.periodId) return MAX_PERIODS_PER_ROW
+    const idx = availableTeachingPeriods.findIndex((p) => p.id === slotForm.periodId)
+    if (idx === -1) return MAX_PERIODS_PER_ROW
+    let count = 1
+    for (let i = idx; i < availableTeachingPeriods.length - 1; i++) {
+      if (availableTeachingPeriods[i].endTime === availableTeachingPeriods[i + 1].startTime) count++
+      else break
+    }
+    return count
+  })()
+  const exceedsStructureMessage = (slotForm.mode === 'subject' && !WEEKEND_DAYS.has(slotForm.dayOfWeek) && slotForm.periodId && slotForm.numPeriods > maxPeriodsFromStart)
+    ? `${tr('Only')} ${maxPeriodsFromStart} ${maxPeriodsFromStart === 1 ? tr('period is') : tr('periods are')} ${tr('defined from this start — add more in "Set Up Periods" first.')}`
+    : ''
 
   // Live cross-teacher clash check. The scarce thing here is a TIME SLOT for
   // this class (a class of students can't be in two lessons at once) — not
@@ -664,6 +735,7 @@ export default function TimetablePage() {
     if (slotForm.mode === 'subject' && !useFreeSubjectTime && !slotForm.periodId) { setSlotError(tr('Please select a period')); return }
     if (slotForm.mode === 'subject' && !useFreeSubjectTime && slotForm.numPeriods < 1) { setSlotError(tr('Enter how many periods this class spans')); return }
     if (breakCrossed) { setSlotError(breakCrossedMessage); return }
+    if (exceedsStructureMessage) { setSlotError(exceedsStructureMessage); return }
     if (!slotForm.startTime || !slotForm.endTime) { setSlotError(tr('Start and end time are required')); return }
     if (slotForm.endTime <= slotForm.startTime) { setSlotError(tr('End time must be after start time')); return }
     if (slotForm.mode === 'subject' && !slotForm.subjectId) { setSlotError(tr('Please select a subject')); return }
@@ -779,7 +851,7 @@ export default function TimetablePage() {
                 <h2 className="text-2xl font-bold text-foreground">{tr('Timetable')}</h2>
                 <p className="text-muted-foreground text-sm mt-1">{tr('Pick a teacher to build their weekly schedule')}</p>
               </div>
-              <button onClick={() => { resetPendingPeriodRow(periods); setShowPeriodsModal(true) }}
+              <button onClick={() => { setPeriodsSitting('DAY'); resetPendingPeriodRow(periods.filter((p) => p.programme === 'DAY')); setShowPeriodsModal(true) }}
                 className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition flex-shrink-0">
                 <Clock size={15} /> {tr('Set Up Periods')}
               </button>
@@ -815,23 +887,28 @@ export default function TimetablePage() {
             ) : filteredTeachers.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground text-sm">{tr('No teachers found.')}</div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {filteredTeachers.map((t) => (
-                  <button key={t.id} onClick={() => openTeacher(t)}
-                    className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-sm transition flex items-center gap-3">
-                    <div className="w-10 h-10 flex-shrink-0 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-sm font-bold">
-                      {t.name.charAt(0)}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground truncate">{t.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{tr(roleLabels[t.role] || t.role)}</p>
-                      {teacherDeptNames(t).length > 0 && (
-                        <p className="text-xs text-muted-foreground/80 truncate">{teacherDeptNames(t).join(', ')}</p>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {teacherPageItems.map((t) => (
+                    <button key={t.id} onClick={() => openTeacher(t)}
+                      className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-sm transition flex items-center gap-3">
+                      <div className="w-10 h-10 flex-shrink-0 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-sm font-bold">
+                        {t.name.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground truncate">{t.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{tr(roleLabels[t.role] || t.role)}</p>
+                        {teacherDeptNames(t).length > 0 && (
+                          <p className="text-xs text-muted-foreground/80 truncate">{teacherDeptNames(t).join(', ')}</p>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3">
+                  <Pagination page={teacherPage} totalPages={teacherTotalPages} total={filteredTeachers.length} pageSize={TEACHER_COLS * TEACHER_ROWS_PER_PAGE} onPage={setTeacherPage} />
+                </div>
+              </>
             )}
           </>
         ) : (
@@ -1052,9 +1129,9 @@ export default function TimetablePage() {
                             whatever maximum the dropdown happened to offer. */}
                         <label className="block text-xs font-medium text-foreground mb-1">{tr('Periods')} <span className="text-destructive">*</span></label>
                         <input
-                          type="number" min={1} max={MAX_PERIODS_PER_ROW} placeholder="1"
+                          type="number" min={1} max={maxPeriodsFromStart} placeholder="1"
                           value={slotForm.numPeriods || ''}
-                          onChange={(e) => handleNumPeriodsChange(parsePeriodCount(e.target.value))}
+                          onChange={(e) => handleNumPeriodsChange(Math.min(parsePeriodCount(e.target.value), maxPeriodsFromStart))}
                           disabled={!effectiveClassLevel || !periodLen}
                           className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
                         />
@@ -1082,6 +1159,7 @@ export default function TimetablePage() {
                             })()}
                           </p>
                           {breakCrossedMessage && <p className="text-xs text-destructive">{breakCrossedMessage}</p>}
+                          {exceedsStructureMessage && <p className="text-xs text-destructive">{exceedsStructureMessage}</p>}
                         </div>
                       ) : null}
                     </div>
@@ -1320,27 +1398,50 @@ export default function TimetablePage() {
                 <h3 className="font-semibold text-foreground text-lg">{tr('Period Structure')}</h3>
                 <button onClick={() => setShowPeriodsModal(false)} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
               </div>
-              <p className="text-xs text-muted-foreground mb-4">{tr("Define the school's daily bell schedule once — every teacher's timetable picks periods from this same list.")}</p>
+              <p className="text-xs text-muted-foreground mb-4">
+                {isUniversity
+                  ? tr('Day and Evening each have their own bell schedule — every teacher’s timetable picks periods from their own sitting’s list.')
+                  : tr("Define the school's daily bell schedule once — every teacher's timetable picks periods from this same list.")}
+              </p>
+
+              {/* Only universities have an Evening sitting — every other school type stays
+                  exactly as before, one plain list, no tabs. */}
+              {isUniversity && (
+                <div className="flex gap-2 mb-4">
+                  {(['DAY', 'EVENING'] as const).map((s) => (
+                    <button key={s} type="button" onClick={() => switchPeriodsSitting(s)}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
+                        periodsSitting === s ? 'bg-primary text-white border-primary' : 'border-border text-foreground hover:bg-hover'
+                      }`}>
+                      {tr(s === 'DAY' ? 'Day' : 'Evening')}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {periodError && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{periodError}</div>}
 
-              {/* Minutes per period is the foundation — every teaching period is exactly this
-                  long, and a class is measured in whole periods. Set it before adding rows. */}
-              <div key={minutesShakeKey} className={`mb-4 p-3 bg-muted/50 border rounded-lg ${minutesShakeKey > 0 ? 'animate-shake' : ''} ${minutesShakeKey > 0 && !periodLen ? 'border-destructive/40' : 'border-border'}`}>
-                <label className="block text-xs font-medium text-foreground mb-1">{tr('Minutes per period')} <span className="text-destructive">*</span></label>
+              {/* Minutes per period is the foundation — every teaching period of THIS
+                  sitting is exactly this long, and a class is measured in whole periods.
+                  Set it before adding rows. Day and Evening each keep their own value. */}
+              <div key={`${periodsSitting}-${minutesShakeKey}`} className={`mb-4 p-3 bg-muted/50 border rounded-lg ${minutesShakeKey > 0 ? 'animate-shake' : ''} ${minutesShakeKey > 0 && !periodLen ? 'border-destructive/40' : 'border-border'}`}>
+                <label className="block text-xs font-medium text-foreground mb-1">
+                  {tr('Minutes per period')}{isUniversity ? ` (${tr(periodsSitting === 'EVENING' ? 'Evening' : 'Day')})` : ''} <span className="text-destructive">*</span>
+                </label>
                 <div className="flex items-center gap-2">
                   <input
                     type="number" min={1} placeholder="50"
-                    value={periodMinutes}
-                    onChange={(e) => setPeriodMinutes(e.target.value)}
+                    value={periodsSitting === 'EVENING' ? eveningPeriodMinutes : dayPeriodMinutes}
+                    onChange={(e) => periodsSitting === 'EVENING' ? setEveningPeriodMinutes(e.target.value) : setDayPeriodMinutes(e.target.value)}
                     className="w-24 border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <span className="text-xs text-muted-foreground">{tr('minutes — one teaching period. Breaks can be any length.')}</span>
                 </div>
               </div>
 
-              {periods.length > 0 && (
+              {sittingPeriods.length > 0 && (
                 <div className="mb-4 border border-border rounded-lg overflow-hidden divide-y divide-border">
-                  {periods.map((p) => {
+                  {sittingPeriods.map((p) => {
                     const rowPeriods = p.isBreak ? null : periodsBetween(p.startTime, p.endTime, periodLen)
                     const rowBroken = !p.isBreak && !isWholePeriods(p.startTime, p.endTime, periodLen)
                     return (
@@ -1357,11 +1458,6 @@ export default function TimetablePage() {
                           <span className="text-[10px] font-medium text-muted-foreground">{rowPeriods} {rowPeriods === 1 ? tr('period') : tr('periods')}</span>
                         ) : null}
                         {p.isBreak && <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{tr('Break')}</span>}
-                        {p.programme && (
-                          <span className="text-[10px] font-semibold uppercase tracking-wide text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                            {tr(p.programme === 'DAY' ? 'Day only' : 'Evening only')}
-                          </span>
-                        )}
                         <button onClick={() => startEditPeriod(p)} className="text-muted-foreground hover:text-primary p-1 rounded transition"><Pencil size={13} /></button>
                         <button onClick={() => removePeriodRow(p.id)} className="text-muted-foreground hover:text-destructive p-1 rounded transition"><Trash2 size={13} /></button>
                       </div>
@@ -1412,28 +1508,6 @@ export default function TimetablePage() {
                   <input type="checkbox" checked={periodForm.isBreak} onChange={(e) => setPeriodForm({ ...periodForm, isBreak: e.target.checked, endTime: '', numPeriods: 1 })} />
                   {tr('This is a break (not a teaching period)')}
                 </label>
-                {/* Evening only exists for universities today, so this stays hidden rather
-                    than offering a choice with one real option everywhere else. A break
-                    applies to everyone regardless, so it has no section of its own either. */}
-                {isUniversity && !periodForm.isBreak && (
-                  <div>
-                    <label className="block text-xs font-medium text-foreground mb-1">{tr('Applies to')}</label>
-                    <div className="flex gap-2">
-                      {([null, 'DAY', 'EVENING'] as const).map((opt) => (
-                        <button
-                          key={String(opt)}
-                          type="button"
-                          onClick={() => setPeriodForm({ ...periodForm, programme: opt })}
-                          className={`flex-1 py-1.5 rounded-lg text-xs border transition ${
-                            periodForm.programme === opt ? 'bg-primary text-white border-primary' : 'border-border text-foreground hover:bg-hover'
-                          }`}
-                        >
-                          {tr(opt === null ? 'Whole school' : opt === 'DAY' ? 'Day only' : 'Evening only')}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
                 <div className="flex gap-2">
                   {editingPeriodId && (
                     <button onClick={cancelEditPeriod}

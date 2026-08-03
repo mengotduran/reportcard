@@ -2,7 +2,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked, CalendarClock, CalendarCheck, Bell, Search, ChevronsUpDown } from 'lucide-react'
+import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked, CalendarClock, CalendarCheck, Bell, Search, ChevronsUpDown, Award } from 'lucide-react'
 import ActivityTracker from '@/components/ActivityTracker'
 import AuthGuard from '@/components/AuthGuard'
 import ThemeToggle from '@/components/ui/ThemeToggle'
@@ -33,6 +33,7 @@ const ADMIN_NAV = [
   { icon: Palette,         label: 'Card Design',  href: '/report-card-design',      group: 'Records' },
   { icon: ClipboardList,   label: 'Class List',   href: '/class-list-design',       group: 'Records' },
   { icon: Star,            label: 'Grading',      href: '/grading-scale',           group: 'Records' },
+  { icon: Award,           label: 'Promotion Scale', href: '/promotion-scale',      group: 'Records' },
   { icon: Wallet,          label: 'Fees',             href: '/fees',                group: 'Finance' },
   { icon: BookMarked,      label: 'HND Registration', href: '/hnd-registration', examRegistration: true, group: 'Finance' },
   { icon: Settings,        label: 'Settings',     href: '/settings',       group: 'System' },

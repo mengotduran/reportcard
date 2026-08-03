@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { parseStoredScale, truePassCgpaFor } from '../utils/gradingScale'
 
 // The moment a term becomes the live/current one, every active student should
 // have a DRAFT report card for it — same reasoning as student creation (see
@@ -138,13 +139,32 @@ export const setCurrentTerm = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// The real pass mark for non-university schools — fixed at 10/20 (Cameroon-style), never
+// admin-editable. University has no equivalent constant: its true pass mark is derived live
+// from the school's own GradingScale classification bands (see truePassCgpaFor), since a
+// CGPA scale's "passing" point already varies by what each school configured there.
+const TRUE_PASS_MARK_NON_UNIVERSITY = 10
+
+/** Pass / Trial / Repeat from a figure (annual average or CGPA) against the real pass mark
+ *  and the school's own admin-configured trial floor. Trial still counts as promoted — only
+ *  the label differs — so callers that branch on "did they advance" should treat PASS and
+ *  TRIAL the same way. */
+function decisionFor(figure: number, truePassMark: number, trialMinimum: number): 'PASS' | 'TRIAL' | 'REPEAT' {
+  if (figure >= truePassMark) return 'PASS'
+  if (figure >= trialMinimum) return 'TRIAL'
+  return 'REPEAT'
+}
+
 /**
  * POST /api/terms/end-year
  * Closes the current academic year:
  *  - Unsets isCurrent on all terms of the active session
- *  - If school.repeatThreshold is configured, computes each student's annual
- *    average across all published report cards in the session and writes
- *    decision = 'PASS' | 'REPEAT' on every one of those report cards.
+ *  - If the school has a PromotionScale with a trialMinimum configured, computes each
+ *    student's annual average (or CGPA, for universities) across the session and writes
+ *    decision = 'PASS' | 'TRIAL' | 'REPEAT' on every one of those report cards. PASS is the
+ *    school's real pass mark (10/20 non-university; the school's own classification Pass
+ *    band for university); TRIAL is anything at or above the admin's trialMinimum but below
+ *    that — still a promotion, just worded differently on the admin's report-cards list.
  */
 export const endAcademicYear = async (req: AuthRequest, res: Response) => {
   try {
@@ -160,29 +180,26 @@ export const endAcademicYear = async (req: AuthRequest, res: Response) => {
     // Unset isCurrent for all terms in this session
     await prisma.term.updateMany({ where: { schoolId, session }, data: { isCurrent: false } })
 
-    const school = await prisma.school.findUnique({
-      where: { id: schoolId },
-      select: { type: true, repeatThreshold: true },
-    })
+    const [school, promotionScale] = await Promise.all([
+      prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
+      prisma.promotionScale.findUnique({ where: { schoolId } }),
+    ])
     let decisionsSet = 0
 
-    if (school?.repeatThreshold != null) {
-      const threshold = school.repeatThreshold
+    if (promotionScale?.trialMinimum != null) {
+      const trialMinimum = promotionScale.trialMinimum
       const termsInSession = await prisma.term.findMany({ where: { schoolId, session }, select: { id: true } })
       const termIds = termsInSession.map((t) => t.id)
 
-      if (school.type === 'UNIVERSITY') {
+      if (school?.type === 'UNIVERSITY') {
         // University: use CGPA — Σ(gradePoint × credit) / Σ(credit) across ALL
         // published entries for each student (cumulative, not session-scoped).
         const gradingScale = await prisma.gradingScale.findUnique({ where: { schoolId } })
-        const rawRanges: any[] = gradingScale?.ranges
-          ? (Array.isArray((gradingScale.ranges as any).ranges)
-              ? (gradingScale.ranges as any).ranges
-              : gradingScale.ranges as any)
-          : []
-        const uniRanges = rawRanges
-          .filter((r: any) => r.gradePoint != null)
-          .sort((a: any, b: any) => b.minScore - a.minScore)
+        const parsed = parseStoredScale(gradingScale?.ranges)
+        const truePassMark = truePassCgpaFor(parsed)
+        const uniRanges = parsed.ranges
+          .filter((r) => r.gradePoint != null)
+          .sort((a, b) => b.minScore - a.minScore)
 
         // Get all students who have a report card in this session
         const sessionCards = await prisma.reportCard.findMany({
@@ -213,17 +230,17 @@ export const endAcademicYear = async (req: AuthRequest, res: Response) => {
         for (const e of entries) {
           const sid = (e.reportCard as any).studentId
           const credit = (e.subject as any).credit ?? 0
-          const match = uniRanges.find((r: any) => e.score! >= r.minScore && e.score! <= r.maxScore)
+          const match = uniRanges.find((r) => e.score! >= r.minScore && e.score! <= r.maxScore)
           if (!match || credit === 0) continue
           const prev = wpMap.get(sid) ?? { wp: 0, cr: 0 }
-          wpMap.set(sid, { wp: prev.wp + match.gradePoint * credit, cr: prev.cr + credit })
+          wpMap.set(sid, { wp: prev.wp + match.gradePoint! * credit, cr: prev.cr + credit })
         }
 
         for (const studentId of studentIds) {
           const wp = wpMap.get(studentId)
           const cgpa = wp && wp.cr > 0 ? wp.wp / wp.cr : null
           if (cgpa == null) continue
-          const decision = cgpa >= threshold ? 'PASS' : 'REPEAT'
+          const decision = decisionFor(cgpa, truePassMark, trialMinimum)
           const ids = cardIdsByStudent.get(studentId) ?? []
           if (ids.length) {
             await prisma.reportCard.updateMany({ where: { id: { in: ids } }, data: { decision } })
@@ -248,7 +265,7 @@ export const endAcademicYear = async (req: AuthRequest, res: Response) => {
 
         for (const { ids, sum, count } of byStudent.values()) {
           const annualAvg = sum / count
-          const decision = annualAvg >= threshold ? 'PASS' : 'REPEAT'
+          const decision = decisionFor(annualAvg, TRUE_PASS_MARK_NON_UNIVERSITY, trialMinimum)
           await prisma.reportCard.updateMany({ where: { id: { in: ids } }, data: { decision } })
           decisionsSet += ids.length
         }

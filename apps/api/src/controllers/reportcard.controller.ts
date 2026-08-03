@@ -368,11 +368,13 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
       : reportCards
     const classSizeByKey = new Map<string, number>()
     const classAverageSumByKey = new Map<string, number>()
+    const classBestByKey = new Map<string, number>()
     for (const rc of populationCards) {
       if (rc.average == null) continue
       const key = `${rc.termId}::${rc.student.classLevel}`
       classSizeByKey.set(key, (classSizeByKey.get(key) ?? 0) + 1)
       classAverageSumByKey.set(key, (classAverageSumByKey.get(key) ?? 0) + rc.average)
+      classBestByKey.set(key, Math.max(classBestByKey.get(key) ?? -Infinity, rc.average))
     }
 
     // For non-university schools, compute annual average + class rank for any
@@ -450,6 +452,7 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
         isFinalTerm,
         classSize,
         classAverage: classSize && classAverageSum != null ? classAverageSum / classSize : null,
+        bestAverage: classBestByKey.get(key) ?? null,
         annualAverage: annualByCardId[rc.id]?.average ?? null,
         annualPosition: annualByCardId[rc.id]?.position ?? null,
         annualClassSize: annualByCardId[rc.id]?.classSize ?? null,
@@ -671,6 +674,9 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
     })
     const classSize = classCards.length
     const classAverage = classSize > 0 ? classCards.reduce((s, c) => s + c.average!, 0) / classSize : null
+    // The class's top average this term — same population as classAverage/position,
+    // just the max instead of the mean.
+    const bestAverage = classSize > 0 ? Math.max(...classCards.map((c) => c.average!)) : null
 
     // Annual average + class rank: only on the final term of the session (by
     // date, not by name — schools name terms freely) for non-university
@@ -714,7 +720,7 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
     // take — and, at a university, zero them.
     const excludedSubjectIds = [...((await excludedSubjectIdsFor([reportCard.studentId])).get(reportCard.studentId) ?? new Set<string>())]
 
-    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, annualAverage, annualPosition, annualClassSize, excludedSubjectIds })
+    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, bestAverage, annualAverage, annualPosition, annualClassSize, excludedSubjectIds })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

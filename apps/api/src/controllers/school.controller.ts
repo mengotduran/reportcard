@@ -33,7 +33,7 @@ export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
 export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, phone, address, website, acronym, batch, repeatThreshold, absenceGraceMinutes, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr, marksEntryMode } = req.body
+    const { name, email, phone, address, website, acronym, batch, absenceGraceMinutes, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr, marksEntryMode } = req.body
     const data: Record<string, unknown> = {}
     if (name             !== undefined) data.name             = String(name).trim()
     if (phone            !== undefined) data.phone            = String(phone).trim() || null
@@ -41,7 +41,6 @@ export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
     if (website          !== undefined) data.website          = String(website).trim() || null
     if (acronym          !== undefined) data.acronym          = String(acronym).trim().toUpperCase() || null
     if (batch            !== undefined) data.batch            = batch === null || batch === '' ? null : Number(batch)
-    if (repeatThreshold  !== undefined) data.repeatThreshold  = repeatThreshold === null || repeatThreshold === '' ? null : Number(repeatThreshold)
     // Minutes after a period starts before the teacher counts as having missed it. Cleared
     // back to null means "no grace", which restores the older rule that a period is only
     // final once it has ENDED. Rejected rather than clamped when out of range: silently

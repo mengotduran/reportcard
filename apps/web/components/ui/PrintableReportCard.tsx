@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, ConductSec, AnnualBandSec, PanelRowSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn, accentOf, parseHeaderLines, headerLineStyle, clampStudentPhotoSize } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { stripProgrammeSuffix } from '@/lib/programme'
@@ -34,6 +34,21 @@ export interface PrintableReportCardProps {
   annualAverage?: number | null   // final term of the session only (non-university)
   annualPosition?: number | null  // class rank by annual average, final term only
   annualClassSize?: number | null // denominator next to Annual Position
+  // Primary/secondary only (see FIELD_OPTIONS in the designer). Computed LIVE from
+  // annualAverage + promotionScale (see decisionLabel in SectionsRenderer) — deliberately
+  // NOT read from ReportCard.decision (the once-a-year endAcademicYear snapshot used only
+  // by the admin's report-cards list pill). Printing must not wait for that batch action:
+  // the moment a card has an annualAverage (i.e. it's the session's final/third term),
+  // there's enough to show a live Pass/Trial/Repeat here. Same reason this only ever
+  // renders when annualAverage is present — never on a First/Second Term card.
+  promotionScale?: { trialMinimum: number | null; truePassMark: number; passLabel: string; trialLabel: string; repeatLabel: string } | null
+  /** URL of the student's photo. Absent = the identity box's frame prints as a labelled
+   *  empty rectangle instead, so the card's shape doesn't depend on who has a photo. */
+  studentPhoto?: string | null
+  /** Highest term average in this class+term, and the class's mean ANNUAL average. Both
+   *  come from the API alongside classAverage; absent = the stat box prints a dash. */
+  bestAverage?: number | null
+  annualClassAverage?: number | null
   config?: Partial<TemplateConfig>
   gradeBands?: GradeRange[]           // school grading scale; for university transcripts the bands carry gradePoint
   classificationBands?: ClassificationBand[] // CGPA classification bands (university)
@@ -51,6 +66,11 @@ export interface PrintableReportCardProps {
 
 // Colour a failed subject's marks print in when the admin enables it school-wide.
 const FAIL_RED = '#dc2626'
+
+// Display face for the redesign's letterhead titles, ribbon title and the big figures in
+// the stat boxes / End-of-Year band. Caladea is the mockup's own face (a Linux Cambria
+// metric-match); Georgia and the generic serif keep it close to intent everywhere else.
+const DISPLAY_SERIF = 'Caladea, Georgia, "Times New Roman", serif'
 
 const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const MONTHS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
@@ -646,6 +666,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const sections = (cfg as any).sections as LayoutSection[]
   const color = cfg.primaryColor
   const rgb = hexToRgb(color)
+  // Secondary/metallic colour of the redesign (term chip, End-of-Year band, hairlines).
+  // Read through accentOf so a design saved before accentColor existed still gets one.
+  const accent = accentOf(cfg)
+  const accentRgb = hexToRgb(accent)
 
   const resolveField = (field: string) => {
     const m: Record<string, string> = {
@@ -717,11 +741,47 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
   const resolveStat = (field: string) => {
     const total = entries.reduce((s, e) => s + (e.score ?? 0), 0)
+    // Document-level table totals. These previously resolved ONLY inside a transcript's
+    // per-period table (statResolver's scopedAgg); on an ordinary card they fell through
+    // and printed a dash, which is what the redesign's TOTALS band exposed.
+    // Unmarked subjects are skipped, exactly as the average itself skips them.
+    if (field === 'coefTotal' || field === 'wpTotal' || field === 'gpTotal') {
+      let coef = 0, wp = 0, gp = 0
+      for (const subj of subjects) {
+        const e = entries.find(x => x.subjectId === subj.id)
+        if (e?.score == null) continue
+        if (school.type === 'UNIVERSITY') {
+          const g = gradePointForScore20(e.score, bands)
+          if (g != null) { gp += g; wp += g * (subj.credit ?? 0) }
+        } else {
+          coef += subj.coefficient ?? 1
+          wp += e.score * (subj.coefficient ?? 1)
+        }
+      }
+      if (field === 'coefTotal') return String(coef)
+      if (field === 'gpTotal')   return gp % 1 === 0 ? String(gp) : gp.toFixed(1)
+      return wp.toFixed(2)
+    }
     if (field === 'total')          return String(total)
     if (field === 'average')        return average.toFixed(1)
     if (field === 'position')       return position != null ? `${ordinalPos(position)}${classSize ? `/${classSize}` : ''}` : '—'
     if (field === 'classAverage')   return classAverage != null ? classAverage.toFixed(1) : '—'
     if (field === 'grade')          return calculateGrade((average / 20) * 100)
+    if (field === 'classSize')      return classSize != null ? String(classSize) : '—'
+    // Annual figures: present only on the session's FINAL term (see annualAverage in
+    // reportcard.controller.ts), so these dash out on a First/Second Term card.
+    if (field === 'annualAverage')  return annualAverage != null ? annualAverage.toFixed(2) : '—'
+    if (field === 'annualPosition') return annualPosition != null ? `${ordinalPos(annualPosition)}${annualClassSize ? `/${annualClassSize}` : ''}` : '—'
+    if (field === 'annualClassAverage') return props.annualClassAverage != null ? props.annualClassAverage.toFixed(2) : '—'
+    if (field === 'bestAverage')    return props.bestAverage != null ? props.bestAverage.toFixed(2) : '—'
+    // The school's OWN wording for this term's average, taken from its grading scale —
+    // matched on the band's lower bound, the same convention isFailingScore uses (a
+    // coefficient-weighted average is fractional and falls through min..max containment).
+    if (field === 'appreciation') {
+      const scoreFor20 = average
+      const band = [...bands].sort((a, b) => b.minScore - a.minScore).find(b => scoreFor20 >= b.minScore)
+      return band?.remark?.trim() || '—'
+    }
     if (field === 'gpa')            return gpaInfo.gpa.toFixed(2)
     // Dash, not this semester's GPA: a card that closes no year has no cumulative.
     if (field === 'cgpa')           return cgpa == null ? '—' : cgpa.toFixed(2)
@@ -729,6 +789,19 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     // Bands the cumulative once there is one, otherwise this semester's own GPA, so it
     // always describes a figure that appears on the card. Only 'cgpa' itself dashes out.
     if (field === 'classification') return classificationForGpa(cgpa ?? gpaInfo.gpa, classBands)
+    // Primary/secondary only, and only when there's an annualAverage to judge — which
+    // itself only exists on the session's final (third) term's card (see annualAverage
+    // in reportcard.controller.ts). Computed LIVE right here rather than read off
+    // ReportCard.decision: that field is a once-a-year snapshot written by
+    // endAcademicYear for the admin's report-cards list, and printing must not wait on
+    // that batch action — the moment the annual average is knowable, so is this.
+    if (field === 'decision') {
+      const ps = props.promotionScale
+      if (annualAverage == null || !ps) return '—'
+      if (annualAverage >= ps.truePassMark) return ps.passLabel
+      if (ps.trialMinimum != null && annualAverage >= ps.trialMinimum) return ps.trialLabel
+      return ps.repeatLabel
+    }
     // General (non-stat) keys the sheet field picker offers — used by banner
     // rows like the Ledger's full-width term strip. Term is uppercased because
     // these always render as headings ("FIRST TERM"), never inline prose.
@@ -760,7 +833,34 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     )
   }
 
-  const renderSec = (sec: LayoutSection) => {
+  // Set true once the Decision stat has actually been rendered inside a 'summary'
+  // section's box row (next to Average/Position) — lets the fallback below (for layouts
+  // like the transcript's default, which has no 'summary' section at all) know whether it
+  // still needs to render its own copy, so a layout with BOTH never shows it twice.
+  let decisionRendered = false
+
+  // The redesign carries the annual figures (and the Decision) in its own End-of-Year
+  // band, so the summary section must not ALSO append its built-in annual rows or a
+  // Decision box — that would print each of them twice on the same card. Scans nested
+  // panel_row children too, since a band could be moved into one.
+  const allSections = ((): LayoutSection[] => {
+    const flat: LayoutSection[] = []
+    const walk = (list: LayoutSection[]) => list.forEach(s => {
+      flat.push(s)
+      if (s.type === 'panel_row') walk((s as PanelRowSec).children)
+    })
+    walk(sections ?? [])
+    return flat
+  })()
+  const annualBands = allSections.filter(s => s.type === 'annual_band') as AnnualBandSec[]
+  const hasAnnualBand = annualBands.length > 0
+  const annualBandHasDecision = annualBands.some(b => b.cells.some(c => c.field === 'decision'))
+  // Is this the 2026 house design? Detected from the sections themselves (a redesign
+  // letterhead) rather than a stored flag, so a design saved before the redesign — or one
+  // an admin has rebuilt out of the old sections — keeps its original page styling.
+  const isRedesign = allSections.some(s => s.type === 'header' && !!(s as HeaderSec).headerStyle)
+
+  const renderSec = (sec: LayoutSection): React.ReactNode => {
     if (sec.type === 'header') {
       const s = sec as HeaderSec
       const logoSize = s.logoSize || 60
@@ -770,6 +870,115 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       const contactLineEl = contactLine
         ? <p style={{ fontSize: 8.5, color: '#444', margin: '4px 0 0' }}>{contactLine}</p>
         : null
+
+      // ── Redesign letterheads ────────────────────────────────────────────────
+      // Shared between both styles: the ruled contact strip and the dark title ribbon
+      // with the term/session chip on its right.
+      if (s.headerStyle === 'crest' || s.headerStyle === 'logo') {
+        const contactStrip = s.showContactLine !== false && contactLine ? (
+          <div style={{ marginTop: 8, borderTop: `1.6px solid ${color}`, borderBottom: `.6px solid ${accent}`, padding: '4px 0', textAlign: 'center', fontSize: 7.8, color: '#5b6472', letterSpacing: .5 }}>
+            {contactLine}
+          </div>
+        ) : null
+        const titleRibbon = s.showTitleRibbon !== false ? (
+          <div style={{ display: 'flex', marginTop: 10, border: `1px solid ${color}` }}>
+            <div style={{ flex: 1, background: color, color: '#fff', textAlign: 'center', padding: '6px 0', fontFamily: DISPLAY_SERIF, fontSize: 13, letterSpacing: 5, fontWeight: 'bold' }}>
+              {t(s.reportTitle)}
+            </div>
+            <div style={{ background: accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+              {t(term.name)} · {term.session}
+            </div>
+          </div>
+        ) : null
+
+        if (s.headerStyle === 'crest') {
+          // Three columns: the school's own bilingual block, the crest, the ministry's.
+          // Each column stacks its ENGLISH text, a small gold rule, then its FRENCH text
+          // in italic — which is exactly how the officialLeftText{En,Fr} /
+          // officialRightText{En,Fr} pairs in School Settings are already stored, so both
+          // languages print at once instead of the renderer picking one.
+          //
+          // Line roles are inferred rather than configured: the first line is the title,
+          // an explicitly <b>/<i>-marked line wins, and after that an ALL-CAPS line is a
+          // heading while a mixed-case one is a motto ("Peace-Work-Fatherland"). That
+          // matches how these fields are filled in practice with no extra settings.
+          const headerLines = (raw: string, italic: boolean) =>
+            parseHeaderLines(raw).map((line, i) => (
+              <div key={i} style={{ ...headerLineStyle(line.role, color) as React.CSSProperties, ...(italic ? { fontStyle: 'italic' } : {}) }}>
+                {line.text}
+              </div>
+            ))
+          const goldRule = (
+            <div style={{ width: 78, height: 1, margin: '5px auto', background: `linear-gradient(90deg, rgba(${accentRgb},0), ${accent}, rgba(${accentRgb},0))` }} />
+          )
+          const sideColumn = (en: string, fr: string, reg?: string | null) => {
+            // A school that hasn't filled its letterhead in yet still gets a header that
+            // names it, rather than a column of empty space next to the crest.
+            const hasAny = en.trim() || fr.trim()
+            return (
+              <div style={{ flex: 1, textAlign: 'center', paddingTop: 2 }}>
+                {hasAny ? (
+                  <>
+                    {en.trim() && <div style={{ lineHeight: 1.28 }}>{headerLines(en, false)}</div>}
+                    {en.trim() && fr.trim() && goldRule}
+                    {fr.trim() && <div style={{ lineHeight: 1.28 }}>{headerLines(fr, true)}</div>}
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontFamily: DISPLAY_SERIF, fontSize: 11, fontWeight: 'bold', letterSpacing: .5, color, textTransform: 'uppercase' }}>{school.name}</div>
+                    {s.showSchoolType && (
+                      <div style={{ fontSize: 8.4, fontWeight: 'bold', letterSpacing: .5, color: '#33415c', textTransform: 'uppercase' }}>
+                        {t(school.type)} {t('Section')}
+                      </div>
+                    )}
+                  </>
+                )}
+                {reg && <div style={{ fontSize: 7, color: '#8b93a1', letterSpacing: .6, marginTop: 5 }}>{reg}</div>}
+              </div>
+            )
+          }
+          const authLine = s.showAuthorization !== false && school.authorizationNumber
+            ? `${t('Authorisation N°')} ${school.authorizationNumber}` : null
+          return (
+            <div style={{ marginBottom: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {sideColumn(school.officialLeftTextEn || '', school.officialLeftTextFr || '', authLine)}
+                <div style={{ flex: `0 0 ${Math.max(logoSize, 40) + 16}px`, textAlign: 'center' }}>{s.showLogo && logoEl}</div>
+                {sideColumn(school.officialRightTextEn || '', school.officialRightTextFr || '', null)}
+              </div>
+              {contactStrip}
+              {titleRibbon}
+            </div>
+          )
+        }
+
+        // 'logo': thin bilingual republic strip, then the school name with its logo left.
+        return (
+          <div style={{ marginBottom: 2 }}>
+            {s.showRepublicStrip !== false && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 7.4, letterSpacing: .9, textTransform: 'uppercase', color: '#6b7280', borderBottom: `.6px solid rgba(${accentRgb},0.45)`, paddingBottom: 4 }}>
+                <span><b style={{ color }}>Republic of Cameroon</b> · Peace – Work – Fatherland</span>
+                <span>République du Cameroun · <b style={{ color }}>Paix – Travail – Patrie</b></span>
+              </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 0 8px' }}>
+              <div style={{ flex: `0 0 ${logoSize}px` }}>{s.showLogo && logoEl}</div>
+              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: 25, letterSpacing: 1.4, color, lineHeight: 1.05, fontWeight: 'bold' }}>{school.name}</div>
+                {s.showSchoolType && (
+                  <div style={{ fontSize: 9.2, letterSpacing: 4.2, color: accent, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 3 }}>
+                    {t(school.type)} {t('Section')}
+                  </div>
+                )}
+                {s.subtitle && <div style={{ fontSize: 7, color: '#8b93a1', marginTop: 2 }} dangerouslySetInnerHTML={{ __html: s.subtitle }} />}
+              </div>
+              <div style={{ flex: `0 0 ${logoSize}px` }} />
+            </div>
+            {contactStrip}
+            {titleRibbon}
+          </div>
+        )
+      }
 
       // Official Cameroon-style header: left block | logo | right block, then the
       // authorization line (subtitle), the ruled contact strip, and the title.
@@ -841,7 +1050,44 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       // without, instead of a row of empty prompts.
       const filled = s.rows.filter(row => hasValue(resolveField(row.field)))
       // Every row empty means an empty bordered box, so the section stands down too.
+      // The photo frame alone is not reason enough to print the box.
       if (filled.length === 0) return null
+
+      // ── Redesign: ruled identity box, optionally with the photo frame beside it ──
+      if (s.boxed) {
+        const rows = (
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${s.columns}, 1fr)`, gap: '4px 16px', background: '#f7f5ef', border: `.8px solid rgba(${rgb},0.28)`, padding: '8px 10px' }}>
+            {filled.map(row => (
+              <div key={row.id} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 9.4 }}>
+                <span style={{ fontSize: 7.3, letterSpacing: .9, textTransform: 'uppercase', color: '#7a8290', minWidth: 74, fontWeight: 'bold' }}
+                  dangerouslySetInnerHTML={{ __html: localizeLabel(row.label, lang) }} />
+                <span style={{ fontWeight: 'bold', color: row.valueColor ?? '#14213d', borderBottom: '.6px dotted #b9c0ca', flex: 1, paddingBottom: 1 }}>
+                  {resolveField(row.field)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )
+        // School-wide toggle (TemplateConfig.showStudentPhoto), not per-section — see the
+        // designer's toolbar. Undefined/true = shown.
+        if (cfg.showStudentPhoto === false) return <div style={{ marginBottom: 11 }}>{rows}</div>
+        // The frame prints either way: with the photo when one is on file, as a labelled
+        // empty rectangle when not, so the card keeps its shape for every student.
+        const photoSize = clampStudentPhotoSize(cfg.studentPhotoSize)
+        return (
+          <div style={{ display: 'flex', gap: 9, marginBottom: 11, alignItems: 'stretch' }}>
+            {rows}
+            <div style={{ width: photoSize, border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', overflow: 'hidden' }}>
+              {props.studentPhoto
+                ? <img src={props.studentPhoto} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                : <span style={{ fontSize: 6.6, letterSpacing: .7, color: '#a6aeba', textTransform: 'uppercase', lineHeight: 1.5 }}>
+                    {t('Student')}<br />{t('Photo')}
+                  </span>}
+            </div>
+          </div>
+        )
+      }
+
       return (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.columns}, 1fr)`, gap: '5px 12px', background: `rgba(${rgb},0.05)`, padding: 12, border: `1px solid rgba(${rgb},0.25)`, marginBottom: 16, fontSize: 12 }}>
           {filled.map(row => (
@@ -874,6 +1120,13 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         }}>
           {t(semData?.term.name || transcriptPeriodLabel(s.transcriptSemester, school.type))}
         </div>
+      ) : s.caption ? (
+        // Redesign: small-caps caption with a rule running off to the right. `{term}` is
+        // substituted so one saved caption reads correctly on every term's card.
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '11px 0 5px', fontSize: 8, letterSpacing: 2.6, textTransform: 'uppercase', color, fontWeight: 'bold' }}>
+          <span>{t(s.caption).replace(/\{term\}/gi, t(term.name))}</span>
+          <span style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${accent}, rgba(${accentRgb},0.15))` }} />
+        </div>
       ) : null
       // Sums for THIS period only, used by the footer fields below (statResolver).
       // University tables band on credits/grade points; primary/secondary term tables
@@ -905,7 +1158,10 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           if (field === 'credits')   return String(scopedAgg.credit)
           if (field === 'total')     return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
           if (field === 'gpTotal')   return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
-          if (field === 'wpTotal')   return scopedAgg.wp.toFixed(2)
+          // University bands on grade-point × credit; everyone else on avg × coefficient
+          // (subjects here carry a coefficient, not credit hours — scopedAgg.wp is always
+          // credit-based, so it silently zeroed out for non-university until this branch).
+          if (field === 'wpTotal')   return (school.type === 'UNIVERSITY' ? scopedAgg.wp : scopedAgg.weightedMark).toFixed(2)
           if (field === 'gpa')       return (scopedAgg.gpaCredit > 0 ? scopedAgg.wp / scopedAgg.gpaCredit : 0).toFixed(2)
           if (field === 'coefTotal') return String(scopedAgg.coef)
           // Scoped to this period — the document-level 'average' is the ANNUAL one.
@@ -963,7 +1219,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           case 'code':         return courseCode(subj, i)
           case 'credit':       return subj.credit ?? '—'
           case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
-          case 'weighted':     { const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1) }
+          // University: grade point × credit. Everyone else: the subject's contribution to
+          // the coefficient-weighted average, i.e. its mark × its coefficient — which is
+          // what the redesign's "Avg × Coef" column shows and what the TOTALS band sums.
+          case 'weighted': {
+            if (school.type !== 'UNIVERSITY') {
+              return e?.score == null ? '—' : (e.score * (subj.coefficient ?? 1)).toFixed(2)
+            }
+            const gp = gradePointOf(e); return gp == null ? '—' : (gp * (subj.credit ?? 0)).toFixed(1)
+          }
           case 'evaluation':   { const gp = gradePointOf(e); return gp == null ? '—' : evalForGpa(gp) }
           // A course with NO marks gets a dash, not FAIL. The student did not sit it, so
           // there is no decision to report, and printing FAIL beside a row of dashes read
@@ -1087,6 +1351,68 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         )
 
         const colCount = tpl.colCount || (dataRowTpl?.cells.length ?? 1)
+        // Ledger-style layouts (TOTAL / CLASS AVERAGE / CLASS POSITION / TERM AVERAGE
+        // bands, no separate 'summary' section) get Decision appended as one more band
+        // here, right after Term Average — this is what "close to the terms average or
+        // class position" means for THIS layout shape. Only when this table already HAS
+        // a footer band (footerRows.length > 0): the Standard layout's marks_table has
+        // none (its stats live in a 'summary' section instead, handled elsewhere), so it
+        // is untouched. Never on a transcript's per-period table — Decision is an ANNUAL
+        // figure, not a per-semester one.
+        const showDecisionInFooter = footerRows.length > 0 && !(sec as MarksTableSec).transcriptSemester
+          && cfg.showDecision === true && school.type !== 'UNIVERSITY' && annualAverage != null && !decisionRendered
+        // University counterpart: once a cumulative GPA exists (the year's final
+        // semester), the closing Classification band's OWN value already reflects it —
+        // classificationForGpa bands on cgpa ?? this semester's GPA, no code change
+        // needed there — this just adds the Cumulative GPA figure it's now judged on,
+        // the same way Decision needs Annual Average alongside it.
+        const showCumulativeInFooter = footerRows.length > 0 && !(sec as MarksTableSec).transcriptSemester
+          && cfg.showDecision === true && school.type === 'UNIVERSITY' && cgpa != null && !decisionRendered
+        if (showDecisionInFooter || showCumulativeInFooter) decisionRendered = true
+        // The seeded closing band (Term Appreciation) is judged on THIS period's own
+        // average — on the year's final term it is replaced, not supplemented, by
+        // Annual Average/Position + Decision, which are judged on the annual figure.
+        const appreciationIdx = footerRows.findIndex(r => r.cells.some(c => c.field === 'appreciation'))
+        const baseFooterRows = showDecisionInFooter && appreciationIdx >= 0
+          ? footerRows.filter((_, i) => i !== appreciationIdx)
+          : footerRows
+        // Annual Average (and Position, when known) travel with Decision — the whole
+        // reason it's worth showing is that Decision is judged against this figure, not
+        // the term's own average just above it. Same gate as Decision itself.
+        const annualRows: SheetRow[] = showDecisionInFooter ? [
+          {
+            id: '__annual_average_footer',
+            cells: [
+              { text: `${t('ANNUAL AVERAGE')}:`, bold: true, colSpan: Math.max(1, colCount - 1), align: 'right' as const, textColor: '#475569' },
+              { text: annualAverage!.toFixed(1), bold: true, align: 'center' as const },
+            ],
+          },
+          ...(annualPosition != null ? [{
+            id: '__annual_position_footer',
+            cells: [
+              { text: `${t('ANNUAL POSITION')}:`, bold: true, colSpan: Math.max(1, colCount - 1), align: 'right' as const, textColor: '#475569' },
+              { text: `${annualPosition}${annualClassSize ? `/${annualClassSize}` : ''}`, bold: true, align: 'center' as const },
+            ],
+          }] : []),
+        ] : []
+        const cumulativeRow: SheetRow[] = showCumulativeInFooter ? [{
+          id: '__cumulative_gpa_footer',
+          cells: [
+            { text: `${t('CUMULATIVE GPA')}:`, bold: true, colSpan: Math.max(1, colCount - 1), align: 'right' as const, textColor: '#475569' },
+            { text: cgpa!.toFixed(2), bold: true, align: 'center' as const },
+          ],
+        }] : []
+        const effectiveFooterRows: SheetRow[] = showDecisionInFooter
+          ? [...baseFooterRows, ...annualRows, {
+              id: '__decision_footer',
+              cells: [
+                { text: `${t('DECISION')}:`, bold: true, colSpan: Math.max(1, colCount - 1), align: 'right' as const, textColor: color },
+                { field: 'decision', bold: true, align: 'center' as const, textColor: color, fontSize: 15 },
+              ],
+            }]
+          : showCumulativeInFooter
+          ? [...footerRows.slice(0, -1), ...cumulativeRow, ...footerRows.slice(-1)]
+          : footerRows
         return (
           <>
           {periodCaption}
@@ -1114,7 +1440,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                 const e = scopedEntries.find(x => x.subjectId === subj.id)
                 return renderTplRow(dataRowTpl, field => resolveMarksField(field, subj, e, si), `subj_${si}`)
               })}
-              {footerRows.map((row: SheetRow) => renderTplRow(row, statResolver))}
+              {effectiveFooterRows.map((row: SheetRow) => renderTplRow(row, statResolver))}
             </tbody>
           </table>
           </>
@@ -1155,22 +1481,49 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'summary') {
       const s = sec as SummarySec
+      // Promotion Decision is a per-design toggle (cfg.showDecision, the "Show Decision"
+      // checkbox in the designer), not a box the admin adds per-section — appended here,
+      // next to Average/Position, whenever a summary section is present. Primary/secondary
+      // only, and only on the session's final (third) term — annualAverage is null on
+      // every other term's card, same rule "Annual Average"/"Annual Position" already
+      // follow. `!decisionRendered` matters here too: a Ledger-style marks_table (which
+      // renders earlier) already claims Decision in ITS OWN footer band when it has one —
+      // this only fires when nothing has shown it yet.
+      const showDecisionHere = !decisionRendered && !annualBandHasDecision
+        && cfg.showDecision === true && school.type !== 'UNIVERSITY' && annualAverage != null
+      if (showDecisionHere) decisionRendered = true
+      const boxes = showDecisionHere
+        ? [...s.boxes, { id: '__decision', label: t('Decision'), field: 'decision' }]
+        : s.boxes
+      // Word-ish stats (an appreciation or a classification) don't fit at the numeric size.
+      const WORD_FIELDS = new Set(['appreciation', 'classification', 'decision'])
       return (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${s.boxes.length || 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
-            {s.boxes.map(box => {
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${boxes.length || 1}, 1fr)`, gap: 7, marginBottom: 9 }}>
+            {boxes.map(box => {
               const boxLabel = box.field === 'gpa' ? `${term.name} GPA` : box.label
+              const isWord = WORD_FIELDS.has(box.field)
               return (
-                <div key={box.id} style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
-                  <div style={{ fontSize: 20, fontWeight: 'bold', color: s.valueColor || color }}>{resolveStat(box.field)}</div>
-                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }} dangerouslySetInnerHTML={{ __html: localizeLabel(boxLabel, lang) }} />
+                <div key={box.id} style={{
+                  border: `.8px solid rgba(${rgb},0.28)`,
+                  borderTop: `2.4px solid ${isWord ? accent : color}`,
+                  background: isWord ? `rgba(${accentRgb},0.06)` : '#fff',
+                  padding: '6px 4px', textAlign: 'center',
+                }}>
+                  <div style={{ fontFamily: DISPLAY_SERIF, fontSize: isWord ? 13.5 : 16.5, fontWeight: 'bold', color: s.valueColor || color, lineHeight: 1.1, letterSpacing: isWord ? .8 : 0 }}>
+                    {resolveStat(box.field)}
+                  </div>
+                  <div style={{ fontSize: 6.6, letterSpacing: 1.1, textTransform: 'uppercase', color: '#7a8290', marginTop: 2, fontWeight: 'bold' }}
+                    dangerouslySetInnerHTML={{ __html: localizeLabel(boxLabel, lang) }} />
                 </div>
               )
             })}
           </div>
           {/* Annual average/position: only present when this is the session's final
-              term (non-university) — see reportcard.controller.ts getReportCard(s). */}
-          {annualAverage != null && (
+              term (non-university) — see reportcard.controller.ts getReportCard(s).
+              Suppressed when the design has its own End-of-Year band, which already
+              carries these (and more) — otherwise they'd print twice. */}
+          {annualAverage != null && !hasAnnualBand && (
             <div style={{ display: 'grid', gridTemplateColumns: `repeat(${annualPosition != null ? 2 : 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
               <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center', backgroundColor: `rgba(${rgb},0.05)` }}>
                 <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualAverage.toFixed(1)}</div>
@@ -1190,10 +1543,101 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'remarks') {
       const s = sec as RemarksSec
+      // ── Redesign: titled panel, optional coloured edge bar and signature rule ──
+      if (s.panel) {
+        return (
+          <div style={{
+            border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', marginBottom: 9,
+            ...(s.edgeColor ? { borderLeft: `3px solid ${s.edgeColor}` } : {}),
+            display: 'flex', flexDirection: 'column', height: '100%',
+          }}>
+            <div style={{ background: `rgba(${rgb},0.07)`, color, fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', padding: '3.6px 7px', fontWeight: 'bold', borderBottom: `.6px solid rgba(${rgb},0.22)` }}
+              dangerouslySetInnerHTML={{ __html: localizeLabel(s.label, lang) }} />
+            <div style={{ fontSize: 8.8, lineHeight: 1.5, color: '#33415c', padding: '6px 8px 0', minHeight: 34, fontStyle: 'italic', flex: 1 }}>
+              {generalRemarks || generalRemarksFr || ''}
+            </div>
+            {s.signatureCaption && (
+              <div style={{ display: 'flex', alignItems: 'flex-end', padding: '8px 8px 6px' }}>
+                <span style={{ flex: 1, borderBottom: '.7px dotted #9aa2ae', height: 15, marginRight: 8 }} />
+                <span style={{ fontSize: 6.4, letterSpacing: 1, textTransform: 'uppercase', color: '#8b93a1', fontWeight: 'bold' }}>
+                  {t(s.signatureCaption)}
+                </span>
+              </div>
+            )}
+          </div>
+        )
+      }
       return (
         <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 12, marginBottom: 16 }}>
           <div style={{ fontWeight: 'bold', marginBottom: 5, color }} dangerouslySetInnerHTML={{ __html: localizeLabel(s.label, lang) }} />
           <div style={{ minHeight: 36, color: '#444' }}>{generalRemarks || generalRemarksFr || '—'}</div>
+        </div>
+      )
+    }
+
+    // Conduct & Attendance — labels only; every value prints blank for the class master to
+    // complete by hand, because the school stores none of this (see ConductSec).
+    if (sec.type === 'conduct') {
+      const s = sec as ConductSec
+      if (!s.rows.length) return null
+      return (
+        <div style={{ border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', height: '100%' }}>
+          {s.title && (
+            <div style={{ background: `rgba(${rgb},0.07)`, color, fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', padding: '3.6px 7px', fontWeight: 'bold', borderBottom: `.6px solid rgba(${rgb},0.22)` }}>
+              {t(s.title)}
+            </div>
+          )}
+          {s.rows.map((row, i) => (
+            <div key={row.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 10, fontSize: 8.4, padding: '3.4px 7px', ...(i < s.rows.length - 1 ? { borderBottom: '.5px solid #efece2' } : {}) }}>
+              <span style={{ color: '#6b7280', whiteSpace: 'nowrap' }}>{t(row.label)}</span>
+              <span style={{ flex: 1, borderBottom: '.6px dotted #c2c9d3', height: 11 }} />
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    // End-of-Year band. Final term only: annualAverage is null on every other term's card,
+    // the same gate Annual Average/Position and the Decision already use.
+    if (sec.type === 'annual_band') {
+      const s = sec as AnnualBandSec
+      if (annualAverage == null || !s.cells.length) return null
+      return (
+        <div style={{ marginBottom: 9, border: `1.1px solid ${accent}`, background: `rgba(${accentRgb},0.07)`, display: 'flex', alignItems: 'stretch' }}>
+          {s.tag && (
+            <div style={{ background: accent, color: '#fff', writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 7.4, letterSpacing: 2.4, fontWeight: 'bold', textAlign: 'center', padding: '6px 4px', textTransform: 'uppercase' }}>
+              {t(s.tag)}
+            </div>
+          )}
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${s.cells.length}, 1fr)` }}>
+            {s.cells.map((cell, i) => (
+              <div key={cell.id} style={{ padding: '7px 6px', textAlign: 'center', ...(i < s.cells.length - 1 ? { borderRight: `.6px dashed rgba(${accentRgb},0.5)` } : {}) }}>
+                <div style={{ fontFamily: DISPLAY_SERIF, fontSize: cell.field === 'decision' || cell.field === 'classification' ? 12 : 15.5, fontWeight: 'bold', color: cell.field === 'decision' ? '#1b7a4b' : '#8a6516' }}>
+                  {resolveStat(cell.field)}
+                </div>
+                <div style={{ fontSize: 6.6, letterSpacing: 1.1, textTransform: 'uppercase', color: '#9a8756', marginTop: 2, fontWeight: 'bold' }}
+                  dangerouslySetInnerHTML={{ __html: localizeLabel(cell.label, lang) }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    }
+
+    // Side-by-side panels (grading scale + conduct; the two remark boxes + stamp). Children
+    // that render nothing are dropped so the row doesn't keep a gap for them.
+    if (sec.type === 'panel_row') {
+      const s = sec as PanelRowSec
+      const kids = s.children
+        .filter(child => sectionShowsOn(child, variant))
+        .map((child, i) => ({ child, node: renderSec(child), weight: s.weights?.[i] ?? 1 }))
+        .filter(k => k.node != null)
+      if (kids.length === 0) return null
+      return (
+        <div style={{ display: 'flex', gap: 9, marginBottom: 9, alignItems: 'stretch' }}>
+          {kids.map(({ child, node, weight }) => (
+            <div key={child.id} style={{ flex: weight, minWidth: 0 }}>{node}</div>
+          ))}
         </div>
       )
     }
@@ -1436,7 +1880,19 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   }
 
   return (
-    <div id="report-card-printable" style={{ fontFamily: 'Arial, sans-serif', padding: 40, maxWidth: 800, margin: '0 auto', color: '#111', fontSize: 13, position: 'relative', overflow: 'hidden', backgroundColor: cfg.bgColor || '#ffffff' }}>
+    <div id="report-card-printable" style={{
+      fontFamily: 'Carlito, Calibri, "DejaVu Sans", Arial, sans-serif',
+      // Tighter page padding than the older layouts: the redesign's own framing rule
+      // supplies the visual margin, so 40px on top of it would waste a third of the page.
+      padding: isRedesign ? '22px 28px 18px' : 40,
+      maxWidth: 800, margin: '0 auto', color: '#14213d', fontSize: 13,
+      position: 'relative', overflow: 'hidden',
+      backgroundColor: cfg.bgColor || (isRedesign ? '#fffdf9' : '#ffffff'),
+      // The mockup's double frame: a solid rule in the theme's primary with a hairline of
+      // the accent set just outside it. Redesign only — an older saved design must not
+      // suddenly grow a border it was never designed with.
+      ...(isRedesign ? { border: `2px solid ${color}`, outline: `1px solid ${accent}`, outlineOffset: 3 } : {}),
+    }}>
       <Watermark cfg={cfg} schoolLogo={school.logo} schoolName={school.name} variant={variant} />
       {/* Sections scoped to the OTHER copy are dropped entirely — this is what makes one
           saved design print both the sealed official document and the student copy. */}
@@ -1444,13 +1900,60 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         const ts = sec.type === 'marks_table' ? (sec as MarksTableSec).transcriptSemester : undefined
         const resitSubjects = ts ? (props.transcriptSemesters?.[ts]?.subjects ?? []) : subjects
         const resitEntries  = ts ? (props.transcriptSemesters?.[ts]?.entries ?? []) : entries
+        // Fallback for a layout with NO 'summary' section — the transcript's default is
+        // exactly this case. Placed right before the signature block (the natural end of
+        // the document's figures) rather than after everything, since a layout that DOES
+        // have a summary section already showed it next to Average/Position above and
+        // sets decisionRendered, so this never double-prints.
+        const needsFallback = sec.type === 'signatures' && !decisionRendered
+          && cfg.showDecision === true && school.type !== 'UNIVERSITY' && annualAverage != null
+        if (needsFallback) decisionRendered = true
         return (
           <div key={sec.id}>
+            {needsFallback && (
+              <div style={{ display: 'grid', gridTemplateColumns: annualPosition != null ? '1fr 1fr 1fr' : '1fr 1fr', gap: 10, marginBottom: 16 }}>
+                <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualAverage!.toFixed(1)}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{t('Annual Average')}</div>
+                </div>
+                {annualPosition != null && (
+                  <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+                    <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualPosition}{annualClassSize ? `/${annualClassSize}` : ''}</div>
+                    <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{t('Annual Position')}</div>
+                  </div>
+                )}
+                <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{resolveStat('decision')}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{t('Decision')}</div>
+                </div>
+              </div>
+            )}
             {renderSec(sec)}
             {sec.type === 'marks_table' && renderResitAppendix(resitSubjects, resitEntries)}
           </div>
         )
       })}
+      {/* Last-resort fallback: a layout with neither a 'summary' nor a 'signatures'
+          section (unusual, but not impossible for a heavily customized design) would
+          otherwise silently never show Decision even with the toggle on. */}
+      {!decisionRendered && cfg.showDecision === true && school.type !== 'UNIVERSITY' && annualAverage != null && (
+        <div style={{ display: 'grid', gridTemplateColumns: annualPosition != null ? '1fr 1fr 1fr' : '1fr 1fr', gap: 10, marginBottom: 16 }}>
+          <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+            <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualAverage.toFixed(1)}</div>
+            <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{t('Annual Average')}</div>
+          </div>
+          {annualPosition != null && (
+            <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+              <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{annualPosition}{annualClassSize ? `/${annualClassSize}` : ''}</div>
+              <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{t('Annual Position')}</div>
+            </div>
+          )}
+          <div style={{ border: `1px solid rgba(${rgb},0.3)`, padding: 10, textAlign: 'center' }}>
+            <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{resolveStat('decision')}</div>
+            <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>{t('Decision')}</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

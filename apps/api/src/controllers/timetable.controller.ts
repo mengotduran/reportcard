@@ -3,7 +3,7 @@ import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { emitToUser } from '../config/socket'
 import { NotificationLink } from '../utils/notificationLink'
-import { timeToMinutes, dateStringToDayOfWeek, todayAtSchool } from '../utils/teachingHours'
+import { timeToMinutes, dateStringToDayOfWeek, todayAtSchool, periodMinutesFor } from '../utils/teachingHours'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const DAY_SET = new Set(DAY_ORDER)
@@ -130,11 +130,12 @@ export const getPeriods = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const [periods, school] = await Promise.all([
       prisma.timetablePeriod.findMany({ where: { schoolId } }),
-      prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
     ])
     res.json({
       periods: periods.sort((a, b) => a.startTime.localeCompare(b.startTime)),
-      periodMinutes: school?.periodMinutes ?? null,
+      dayPeriodMinutes: school?.dayPeriodMinutes ?? null,
+      eveningPeriodMinutes: school?.eveningPeriodMinutes ?? null,
     })
   } catch (error) {
     console.error(error)
@@ -142,27 +143,37 @@ export const getPeriods = async (req: AuthRequest, res: Response) => {
   }
 }
 
-// Replace-all, same pattern as saveTimetable. Admin-only. Also persists the school-wide
-// periodMinutes ("minutes per teaching period"), which every non-break period must match.
+// Replace-all, same pattern as saveTimetable. Admin-only. Also persists the two
+// sittings' own periodMinutes ("minutes per teaching period"), which every non-break
+// period of that sitting must match. Day and Evening are independent bell schedules —
+// no more "whole school" period — so shape rules (minute-multiple, overlap) are judged
+// separately within each sitting's own list.
 export const savePeriods = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
 
-    const rawMinutes = req.body.periodMinutes
-    const periodMinutes = rawMinutes === null || rawMinutes === undefined || rawMinutes === '' ? null : Number(rawMinutes)
-    if (periodMinutes !== null && (!Number.isInteger(periodMinutes) || periodMinutes <= 0)) {
-      res.status(400).json({ message: 'Minutes per period must be a positive whole number' }); return
+    const parseMinutes = (raw: unknown): number | null => {
+      const n = raw === null || raw === undefined || raw === '' ? null : Number(raw)
+      return n
+    }
+    const dayPeriodMinutes = parseMinutes(req.body.dayPeriodMinutes)
+    const eveningPeriodMinutes = parseMinutes(req.body.eveningPeriodMinutes)
+    if (dayPeriodMinutes !== null && (!Number.isInteger(dayPeriodMinutes) || dayPeriodMinutes <= 0)) {
+      res.status(400).json({ message: 'Minutes per Day period must be a positive whole number' }); return
+    }
+    if (eveningPeriodMinutes !== null && (!Number.isInteger(eveningPeriodMinutes) || eveningPeriodMinutes <= 0)) {
+      res.status(400).json({ message: 'Minutes per Evening period must be a positive whole number' }); return
     }
 
-    type PeriodRow = { startTime: string; endTime: string; isBreak: boolean; programme: 'DAY' | 'EVENING' | null }
+    type PeriodRow = { startTime: string; endTime: string; isBreak: boolean; programme: 'DAY' | 'EVENING' }
     const rawPeriods = Array.isArray(req.body.periods) ? req.body.periods : []
     const periods: PeriodRow[] = rawPeriods.map((p: Record<string, unknown>) => ({
       startTime: String(p.startTime ?? ''),
       endTime: String(p.endTime ?? ''),
       isBreak: !!p.isBreak,
-      // Anything but DAY/EVENING means shared by both sittings, the sane default for a
-      // value that is simply absent. Same convention as SchoolHoliday (see holiday.controller).
-      programme: p.programme === 'DAY' || p.programme === 'EVENING' ? p.programme : null,
+      // No more null/"whole school" — every row now belongs to one sitting. Anything
+      // unrecognised falls back to DAY, matching the schema column default.
+      programme: p.programme === 'EVENING' ? 'EVENING' : 'DAY',
     }))
 
     for (const p of periods) {
@@ -170,30 +181,37 @@ export const savePeriods = async (req: AuthRequest, res: Response) => {
         res.status(400).json({ message: 'Each period needs a valid start time before its end time' }); return
       }
     }
-    // Every teaching (non-break) period must be a whole multiple of one period. How many
-    // is up to the admin and can differ row by row — the first row of the day can be a
-    // double period and the next a single — so a class is measured in whole periods
-    // either way. Breaks are exempt — they can be any length.
-    if (periodMinutes !== null) {
+    // Every teaching (non-break) period must be a whole multiple of ITS OWN sitting's
+    // period length. How many is up to the admin and can differ row by row — the first
+    // row of the day can be a double period and the next a single — so a class is
+    // measured in whole periods either way. Breaks are exempt — they can be any length.
+    for (const [sitting, minutes] of [['DAY', dayPeriodMinutes], ['EVENING', eveningPeriodMinutes]] as const) {
+      if (minutes === null) continue
       // Every offending row at once. Reporting only the first sends the admin round the
       // save loop once per bad row, and a school that set its period length after building
       // its grid can easily have several.
       const bad = periods
-        .filter((p) => !p.isBreak && (timeToMinutes(p.endTime) - timeToMinutes(p.startTime)) % periodMinutes !== 0)
+        .filter((p) => p.programme === sitting && !p.isBreak && (timeToMinutes(p.endTime) - timeToMinutes(p.startTime)) % minutes !== 0)
         .map((p) => `${p.startTime}-${p.endTime} (${timeToMinutes(p.endTime) - timeToMinutes(p.startTime)} min)`)
       if (bad.length > 0) {
-        res.status(400).json({ message: `Each teaching period must be a whole multiple of ${periodMinutes} minutes. Fix: ${bad.join(', ')}. (Breaks can be any length.)` }); return
+        res.status(400).json({ message: `Each ${sitting === 'EVENING' ? 'Evening' : 'Day'} teaching period must be a whole multiple of ${minutes} minutes. Fix: ${bad.join(', ')}. (Breaks can be any length.)` }); return
+      }
+    }
+    // Overlap is judged within each sitting only — Day and Evening are independent
+    // schedules, so nothing stops their clock windows from overlapping (in practice
+    // Evening simply starts once Day is over).
+    for (const sitting of ['DAY', 'EVENING'] as const) {
+      const sittingSorted = periods.filter((p) => p.programme === sitting).sort((a, b) => a.startTime.localeCompare(b.startTime))
+      for (let i = 1; i < sittingSorted.length; i++) {
+        if (sittingSorted[i].startTime < sittingSorted[i - 1].endTime) {
+          res.status(400).json({
+            message: `Overlapping ${sitting === 'EVENING' ? 'Evening' : 'Day'} periods: ${sittingSorted[i - 1].startTime}-${sittingSorted[i - 1].endTime} and ${sittingSorted[i].startTime}-${sittingSorted[i].endTime}`,
+          })
+          return
+        }
       }
     }
     const sorted = [...periods].sort((a, b) => a.startTime.localeCompare(b.startTime))
-    for (let i = 1; i < sorted.length; i++) {
-      if (sorted[i].startTime < sorted[i - 1].endTime) {
-        res.status(400).json({
-          message: `Overlapping periods: ${sorted[i - 1].startTime}-${sorted[i - 1].endTime} and ${sorted[i].startTime}-${sorted[i].endTime}`,
-        })
-        return
-      }
-    }
 
     // A teaching period whose time actually moved (whether the admin edited it in place
     // or deleted it and added a differently-timed one — this can't tell the two apart,
@@ -274,7 +292,7 @@ export const savePeriods = async (req: AuthRequest, res: Response) => {
 
     const shiftArchivedAt = new Date()
     await prisma.$transaction([
-      prisma.school.update({ where: { id: schoolId }, data: { periodMinutes } }),
+      prisma.school.update({ where: { id: schoolId }, data: { dayPeriodMinutes, eveningPeriodMinutes } }),
       prisma.timetablePeriod.deleteMany({ where: { schoolId } }),
       ...(periods.length > 0 ? [prisma.timetablePeriod.createMany({ data: periods.map((p: typeof periods[number]) => ({ ...p, schoolId })) })] : []),
       ...(slotShifts.length > 0
@@ -389,10 +407,36 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
     }
 
     const [school, breakPeriods] = await Promise.all([
-      prisma.school.findUnique({ where: { id: schoolId }, select: { periodMinutes: true } }),
+      prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
       prisma.timetablePeriod.findMany({ where: { schoolId, isBreak: true }, select: { startTime: true, endTime: true } }),
     ])
-    const periodMinutes = school?.periodMinutes ?? null
+
+    // Resolved up front (not just for the "assigned to this teacher" / "period sitting
+    // matches class sitting" checks further down) because the minute-multiple check right
+    // below needs to know EACH slot's own sitting: Day and Evening now have their own
+    // period length, and a slot must be measured against the one its class actually runs on.
+    const subjectIds = [...new Set(slots.filter((s) => s.subjectId).map((s) => s.subjectId as string))]
+    let subjectClassLevel = new Map<string, string>()
+    let subjectName = new Map<string, string>()
+    let classProgramme = new Map<string, string>()
+    if (subjectIds.length > 0) {
+      const subjectRows = await prisma.subject.findMany({ where: { id: { in: subjectIds }, schoolId }, select: { id: true, classLevel: true, name: true } })
+      if (subjectRows.length !== subjectIds.length) {
+        res.status(400).json({ message: 'One or more subjects were not found' }); return
+      }
+      subjectClassLevel = new Map(subjectRows.map((r) => [r.id, r.classLevel]))
+      subjectName = new Map(subjectRows.map((r) => [r.id, r.name]))
+      const classLevelRows = await prisma.classLevel.findMany({
+        where: { schoolId, name: { in: [...new Set(subjectClassLevel.values())] } },
+        select: { name: true, programme: true },
+      })
+      classProgramme = new Map(classLevelRows.map((c) => [c.name, c.programme]))
+    }
+    const periodMinutesForSlot = (s: { subjectId: string | null }): number | null => {
+      const classLevel = s.subjectId ? subjectClassLevel.get(s.subjectId) : undefined
+      const programme = classLevel ? classProgramme.get(classLevel) : undefined
+      return periodMinutesFor({ dayPeriodMinutes: school?.dayPeriodMinutes ?? null, eveningPeriodMinutes: school?.eveningPeriodMinutes ?? null }, programme)
+    }
 
     // Every slot already on this teacher's live timetable, by timing. The period-shape rules
     // below apply to what the admin is adding or retiming NOW, not to what is already there:
@@ -439,14 +483,18 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
           return
         }
       }
-      // A class (subject slot) must be a whole number of periods. Private slots (label,
-      // no subject) are exempt — extra/after-hours classes can be any length. So are
-      // Saturday/Sunday classes: weekend schedules routinely don't follow the same
-      // period grid as the weekday timetable.
-      if (s.subjectId && periodMinutes && !preExisting && !WEEKEND_DAYS.has(s.dayOfWeek)) {
-        const dur = timeToMinutes(s.endTime) - timeToMinutes(s.startTime)
-        if (dur % periodMinutes !== 0) {
-          res.status(400).json({ message: `A class must be a whole number of ${periodMinutes}-minute periods — ${s.startTime}-${s.endTime} is ${dur} minutes.` }); return
+      // A class (subject slot) must be a whole number of periods, measured against ITS
+      // OWN sitting's period length — an Evening class is never held to the Day minutes,
+      // or the reverse. Private slots (label, no subject) are exempt — extra/after-hours
+      // classes can be any length. So are Saturday/Sunday classes: weekend schedules
+      // routinely don't follow the same period grid as the weekday timetable.
+      if (s.subjectId && !preExisting && !WEEKEND_DAYS.has(s.dayOfWeek)) {
+        const slotMinutes = periodMinutesForSlot(s)
+        if (slotMinutes) {
+          const dur = timeToMinutes(s.endTime) - timeToMinutes(s.startTime)
+          if (dur % slotMinutes !== 0) {
+            res.status(400).json({ message: `A class must be a whole number of ${slotMinutes}-minute periods — ${s.startTime}-${s.endTime} is ${dur} minutes.` }); return
+          }
         }
       }
       // A class may never run across a break: a "double period" that reaches into one is
@@ -486,15 +534,9 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
     // new course is a separate, deliberate act on the Teachers page (which is also where
     // the "a university course has exactly one lecturer" hand-over is enforced, see
     // assignTeacherSubjects). Private slots (label-only) skip this entirely.
-    const subjectIds = [...new Set(slots.filter((s) => s.subjectId).map((s) => s.subjectId as string))]
-    let subjectClassLevel = new Map<string, string>()
+    // (subjectClassLevel/subjectName/classProgramme were already resolved above, for the
+    // minute-multiple check.)
     if (subjectIds.length > 0) {
-      const subjectRows = await prisma.subject.findMany({ where: { id: { in: subjectIds }, schoolId }, select: { id: true, classLevel: true, name: true } })
-      if (subjectRows.length !== subjectIds.length) {
-        res.status(400).json({ message: 'One or more subjects were not found' }); return
-      }
-      subjectClassLevel = new Map(subjectRows.map((r) => [r.id, r.classLevel]))
-
       // Pairs already on this teacher's live timetable are grandfathered: schools that
       // built timetables under the old "any course in the department" rule have slots for
       // courses since unassigned, and refusing those would make an existing timetable
@@ -508,10 +550,10 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
         ...assigned.map((a) => a.subjectId),
         ...alreadyScheduled.map((s) => s.subjectId as string),
       ])
-      const notAllowed = subjectRows.filter((r) => !allowed.has(r.id))
+      const notAllowed = subjectIds.filter((id) => !allowed.has(id))
       if (notAllowed.length > 0) {
         res.status(400).json({
-          message: `This teacher is not assigned to ${notAllowed.map((r) => r.name).join(', ')}. Assign the course on the Teachers page first, then schedule it here.`,
+          message: `This teacher is not assigned to ${notAllowed.map((id) => subjectName.get(id) ?? id).join(', ')}. Assign the course on the Teachers page first, then schedule it here.`,
         })
         return
       }
@@ -521,13 +563,8 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
       // the reverse. Only NEW or RETIMED slots are judged, same grandfathering as the
       // period-shape rules above: a school that tags a period after building its grid must
       // still be able to re-save the timetable it already has.
-      const classLevelRows = await prisma.classLevel.findMany({
-        where: { schoolId, name: { in: [...new Set(subjectClassLevel.values())] } },
-        select: { name: true, programme: true },
-      })
-      const classProgramme = new Map(classLevelRows.map((c) => [c.name, c.programme]))
       const taggedPeriods = await prisma.timetablePeriod.findMany({
-        where: { schoolId, isBreak: false, programme: { not: null } },
+        where: { schoolId, isBreak: false },
         select: { startTime: true, endTime: true, programme: true },
       })
       if (taggedPeriods.length > 0) {

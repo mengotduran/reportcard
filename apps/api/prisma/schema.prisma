@@ -42,7 +42,6 @@ model School {
   coverImages        String[]            @default([])
   acronym            String?
   batch              Int?
-  repeatThreshold    Float?
   authorizationNumber String?
   // How many minutes the school counts as one teaching period ("school hour"), e.g. 50.
   // Set on the Set Up Periods screen and required before timetable/attendance features
@@ -50,7 +49,12 @@ model School {
   // in real 60-min hours, but a teacher's *attendance* (periods missed) is counted in
   // these periods — missing a 100-min class with a 50-min period is 2 periods missed.
   // Nullable so existing schools are prompted to set it rather than silently defaulted.
-  periodMinutes      Int?
+  // Day and Evening are separate sittings with their own bell schedule (see
+  // TimetablePeriod.programme), so each gets its own period length — an evening course
+  // runs its own curriculum with its own evaluations, and lumping its missed-period count
+  // in with the day's would count time against the wrong programme entirely.
+  dayPeriodMinutes     Int?
+  eveningPeriodMinutes Int?
   // Minutes after a period STARTS before the teacher counts as having missed it. Once this
   // is up, an absence logged against that period is final: nobody, admin included, can
   // mark them present again. Judged per period, so on a double period a late arrival loses
@@ -72,6 +76,7 @@ model School {
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
   gradingScale             GradingScale?
+  promotionScale           PromotionScale?
   reportCards        ReportCard[]
   reportCardTemplate ReportCardTemplate?
   parentSchool       ParentSchool?       @relation(fields: [parentSchoolId], references: [id])
@@ -94,6 +99,24 @@ model GradingScale {
   ranges    Json     @default("[]")
   updatedAt DateTime @updatedAt
   school    School   @relation(fields: [schoolId], references: [id])
+}
+
+// The real pass/fail decision an admin can influence: below the school's true pass mark
+// (10/20 for non-university, fixed; the school's own GradingScale classification "Pass"
+// band for university) but at or above trialMinimum, a student still advances but the
+// report-cards list shows trialLabel instead of passLabel — different schools word this
+// differently ("promoted on trial", "conditional pass", etc). trialMinimum null = no trial
+// band at all, same as the old repeatThreshold being unset: endAcademicYear writes no
+// decisions.
+model PromotionScale {
+  id           String   @id @default(uuid())
+  schoolId     String   @unique
+  trialMinimum Float?
+  passLabel    String   @default("Pass")
+  trialLabel   String   @default("This student was promoted on trial")
+  repeatLabel  String   @default("Repeat")
+  updatedAt    DateTime @updatedAt
+  school       School   @relation(fields: [schoolId], references: [id])
 }
 
 model ReportCardTemplate {
@@ -223,6 +246,9 @@ model Student {
   dateOfBirth         String?
   placeOfBirth        String?
   status              StudentStatus @default(ACTIVE)
+  // Uploaded file URL, same "/uploads/<file>" shape as School.logo/stamp. Absent = the
+  // report card's identity box prints an empty labelled photo frame instead of an image.
+  photo                    String?
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
   reportCards              ReportCard[]
@@ -451,11 +477,12 @@ model TimetablePeriod {
   startTime String
   endTime   String
   isBreak   Boolean @default(false)
-  // Which sitting this slot is for. NULL = shared by both, which is what every existing
-  // period means and stays the default — a school with no evening programme never sets
-  // this. Same convention as SchoolHoliday.programme. Evening currently exists for
-  // universities only, so this is a no-op everywhere else.
-  programme Programme?
+  // Which sitting this period belongs to. Day and Evening are two fully independent bell
+  // schedules (own periods, own breaks, own period length) rather than one shared list, so
+  // there is no "whole school" option any more — every row picks one. Defaults to DAY,
+  // which is a no-op for every school type except university (the only one with an
+  // Evening sitting today).
+  programme Programme @default(DAY)
   school    School  @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])

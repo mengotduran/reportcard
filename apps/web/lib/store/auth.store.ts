@@ -26,7 +26,6 @@ interface School {
   marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
   coverImage: string | null
   coverImages: string[]
-  repeatThreshold?: number | null
   /** Minutes after a period starts before it counts as missed and the record becomes
    *  final. null keeps the older rule: changeable until the period ends. */
   absenceGraceMinutes?: number | null

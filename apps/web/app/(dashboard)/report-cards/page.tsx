@@ -27,6 +27,7 @@ import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classLi
 import Pagination from '@/components/ui/Pagination'
 import { usePagination } from '@/lib/usePagination'
 import { getGradingScaleApi, GradeRange } from '@/lib/api/gradingScale'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { useT } from '@/lib/i18n'
 import { ExcelTemplate, listExcelTemplatesApi, downloadExcelTranscriptApi, fetchExcelPreviewHtmlApi } from '@/lib/api/excelTemplates'
 
@@ -36,10 +37,10 @@ interface RawEntry {
 }
 interface RawRC {
   id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
-  classSize?: number | null; classAverage?: number | null
+  classSize?: number | null; classAverage?: number | null; bestAverage?: number | null
   annualAverage?: number | null; annualPosition?: number | null; annualClassSize?: number | null
   decision?: string | null
-  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; isActive?: boolean }
+  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; gender?: string; isActive?: boolean; photo?: string | null }
   term: { id: string; name: string; session: string }
   entries: RawEntry[]
 }
@@ -126,8 +127,10 @@ function TeacherClassesView() {
   const [bulkPublishing, setBulkPublishing] = useState<string | null>(null)
   const [bulkResult, setBulkResult] = useState<{ classLevel: string; published: number; skipped: number; issues: { student: string; reason: string }[] } | null>(null)
   const [gradeBands, setGradeBands] = useState<GradeRange[]>([])
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
 
   useEffect(() => { getGradingScaleApi().then(d => setGradeBands(d.ranges)).catch(() => {}) }, [])
+  useEffect(() => { getPromotionScaleApi().then(setPromotionScale).catch(() => {}) }, [])
 
   useEffect(() => {
     if (!printJob) return
@@ -359,9 +362,12 @@ function TeacherClassesView() {
                 position={rc.position ?? null}
                 classSize={rc.classSize ?? undefined}
                 classAverage={rc.classAverage ?? undefined}
+                bestAverage={rc.bestAverage ?? undefined}
+                studentPhoto={rc.student.photo ?? undefined}
                 annualAverage={rc.annualAverage ?? undefined}
                 annualPosition={rc.annualPosition ?? undefined}
                 annualClassSize={rc.annualClassSize ?? undefined}
+                promotionScale={promotionScale}
                 config={printJob.config}
                 variant={printJob.variant}
                 gradeBands={gradeBands}
@@ -471,9 +477,13 @@ export default function ReportCardsPage() {
   const [downloadingExcel, setDownloadingExcel] = useState<string | null>(null)
   const [excelPreview, setExcelPreview] = useState<{ html: string; studentId: string; studentName: string; classLevel: string; session: string } | null>(null)
   const [loadingPreview, setLoadingPreview] = useState<string | null>(null)
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
   useEffect(() => { getGradingScaleApi().then(d => setGradeBands(d.ranges)).catch(() => {}) }, [])
+  // Labels only — the Decision VALUE (PASS/TRIAL/REPEAT) already comes back on each report
+  // card from endAcademicYear; this just resolves it to the school's own custom wording.
+  useEffect(() => { getPromotionScaleApi().then(setPromotionScale).catch(() => {}) }, [])
   // The class row is the source of truth for the sitting; this table only holds name strings.
   useEffect(() => { getClassLevelsFullApi().then(d => setClassDefs(d.classLevels)).catch(() => {}) }, [])
   useEffect(() => {
@@ -953,11 +963,17 @@ export default function ReportCardsPage() {
                       : (rc.average != null ? `${rc.average.toFixed(1)} / 20` : '—')}
                   </td>
                   <td className="px-4 py-3">
+                    {/* Admin-authored wording (see /promotion-scale), rendered verbatim like
+                        a remark — not run through tr(), since the admin already picked the
+                        language it should read in. */}
                     {rc.decision === 'PASS' && (
-                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded-full">PASS</span>
+                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded-full">{promotionScale?.passLabel ?? 'Pass'}</span>
+                    )}
+                    {rc.decision === 'TRIAL' && (
+                      <span className="text-xs font-semibold text-amber-700 bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded-full">{promotionScale?.trialLabel ?? 'This student was promoted on trial'}</span>
                     )}
                     {rc.decision === 'REPEAT' && (
-                      <span className="text-xs font-semibold text-red-700 bg-red-100 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded-full">REPEAT</span>
+                      <span className="text-xs font-semibold text-red-700 bg-red-100 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded-full">{promotionScale?.repeatLabel ?? 'Repeat'}</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -1197,9 +1213,12 @@ export default function ReportCardsPage() {
                 position={rc.position ?? null}
                 classSize={rc.classSize ?? undefined}
                 classAverage={rc.classAverage ?? undefined}
+                bestAverage={rc.bestAverage ?? undefined}
+                studentPhoto={rc.student.photo ?? undefined}
                 annualAverage={rc.annualAverage ?? undefined}
                 annualPosition={rc.annualPosition ?? undefined}
                 annualClassSize={rc.annualClassSize ?? undefined}
+                promotionScale={promotionScale}
                 config={printJob.config}
                 variant={printJob.variant}
                 gradeBands={gradeBands}

@@ -202,12 +202,15 @@ export interface TranscriptReportCard {
   entries: TranscriptEntry[]
   average?: number | null
   remarks?: string | null
+  // Stamped identically onto every card in the session once endAcademicYear has run — see
+  // PromotionScale. Null until then.
+  decision?: string | null
 }
 
 export interface StudentTranscript {
   student: {
     id: string; name: string; studentId: string; classLevel: string; gender?: string | null
-    dateOfBirth?: string | null; nationality?: string | null
+    dateOfBirth?: string | null; nationality?: string | null; photo?: string | null
   }
   // `stamp` is the official seal, printed on official copies via the designer's stamp
   // section (the endpoint selects it explicitly, see getStudentTranscript).

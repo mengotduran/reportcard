@@ -1,10 +1,10 @@
 'use client'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
   getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, StudentStatus,
-  bulkPromoteStudentsApi,
+  bulkPromoteStudentsApi, uploadStudentPhotoApi, removeStudentPhotoApi,
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
@@ -31,6 +31,7 @@ interface Student {
   guardianPhone?: string; guardianEmail?: string
   status?: StudentStatus
   directLevel2Entry?: boolean
+  photo?: string | null
 }
 
 const STATUS_TABS: { value: StudentStatus; label: string }[] = [
@@ -126,6 +127,9 @@ export default function StudentsPage() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingPhoto, setEditingPhoto] = useState<string | null>(null)
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const photoInputRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -352,6 +356,7 @@ export default function StudentsPage() {
   const openAdd = () => {
     setEditingId(null)
     setForm(emptyForm)
+    setEditingPhoto(null)
     setError('')
     setShowModal(true)
   }
@@ -378,6 +383,7 @@ export default function StudentsPage() {
       secDept: isSecondary ? (deptIdOfClass(baseClass) ?? '') : '',
       directLevel2Entry: (s as { directLevel2Entry?: boolean }).directLevel2Entry ?? false,
     })
+    setEditingPhoto(s.photo ?? null)
     setError('')
     setShowModal(true)
   }
@@ -385,8 +391,32 @@ export default function StudentsPage() {
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
+    setEditingPhoto(null)
     setError('')
     setForm(emptyForm)
+  }
+
+  const handlePhotoUpload = async (file: File) => {
+    if (!editingId) return
+    setUploadingPhoto(true)
+    try {
+      const res = await uploadStudentPhotoApi(editingId, file)
+      setEditingPhoto(res.student.photo)
+      setStudents(prev => prev.map(x => x.id === editingId ? { ...x, photo: res.student.photo } : x))
+      showToast(t('Photo updated successfully'))
+    } catch {
+      showToast(t('Upload failed. Make sure the file is an image under 5MB.'), 'error')
+    } finally { setUploadingPhoto(false) }
+  }
+
+  const handlePhotoRemove = async () => {
+    if (!editingId) return
+    try {
+      await removeStudentPhotoApi(editingId)
+      setEditingPhoto(null)
+      setStudents(prev => prev.map(x => x.id === editingId ? { ...x, photo: null } : x))
+      showToast(t('Photo removed'))
+    } catch { showToast(t('Failed to remove photo'), 'error') }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -950,6 +980,34 @@ export default function StudentsPage() {
               </button>
             </div>
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
+            {/* Photo prints in the identity box at the top of the report card, in the frame
+                that otherwise sits empty. Only available once the student exists (upload
+                needs an id) — a brand new "Add Student" form has nothing to attach it to yet. */}
+            {editingId ? (
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-16 h-20 rounded-lg border border-border bg-muted flex items-center justify-center overflow-hidden shrink-0">
+                  {editingPhoto
+                    ? <img src={editingPhoto} alt="" className="w-full h-full object-cover" />
+                    : <span className="text-[9px] uppercase tracking-wide text-muted-foreground text-center px-1">{t('No Photo')}</span>}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <button type="button" onClick={() => photoInputRef.current?.click()} disabled={uploadingPhoto}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-50">
+                    {uploadingPhoto ? t('Uploading...') : editingPhoto ? t('Change Photo') : t('Upload Photo')}
+                  </button>
+                  {editingPhoto && (
+                    <button type="button" onClick={handlePhotoRemove}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-destructive hover:bg-destructive/10">
+                      {t('Remove Photo')}
+                    </button>
+                  )}
+                  <input ref={photoInputRef} type="file" accept="image/*" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhotoUpload(f); e.target.value = '' }} />
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground mb-4">{t('You can add a photo once the student is saved.')}</p>
+            )}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')} <span className="text-destructive">*</span></label>

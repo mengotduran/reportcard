@@ -5,6 +5,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi } from '@/lib/api/reportcards'
 import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
 interface RawEntry {
@@ -14,8 +15,11 @@ interface RawEntry {
 interface RawRC {
   id: string; status: string; remarks?: string; average?: number | null
   position?: number | null; cgpa?: number | null
-  classSize?: number | null; classAverage?: number | null
-  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
+  classSize?: number | null; classAverage?: number | null; bestAverage?: number | null
+  // Only non-null on the session's final (third) term's card — see annualAverage in
+  // reportcard.controller.ts. Gates Decision's live computation in PrintableReportCard.
+  annualAverage?: number | null
+  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; photo?: string | null }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
   entries: RawEntry[]
 }
@@ -31,16 +35,19 @@ export default function PrintClassPage() {
   const [config, setConfig] = useState<TemplateConfig | null>(null)
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [classBands, setClassBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
   const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready' | 'blocked'>('loading')
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [rcData, tplData, scaleData] = await Promise.all([
+        const [rcData, tplData, scaleData, promoScale] = await Promise.all([
           getReportCardsApi({ termId, classLevel }),
           getTemplateApi().catch(() => ({ config: {} })),
           getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: [], legendRows: [] })),
+          getPromotionScaleApi().catch(() => null),
         ])
+        setPromotionScale(promoScale)
         const published: RawRC[] = rcData.reportCards.filter((rc: RawRC) => rc.status === 'PUBLISHED')
         if (published.length === 0) { setStatus('empty'); return }
         if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
@@ -138,6 +145,9 @@ export default function PrintClassPage() {
               position={rc.position ?? null}
               classSize={rc.classSize ?? null}
               classAverage={rc.classAverage ?? null}
+              bestAverage={rc.bestAverage ?? undefined}
+              studentPhoto={rc.student.photo ?? undefined}
+              annualAverage={rc.annualAverage ?? undefined}
               config={config}
               // A whole-class print run is the end-of-term hand-out, so these are STUDENT
               // copies. Official copies are printed per student, sealed and sent by the school.
@@ -146,6 +156,7 @@ export default function PrintClassPage() {
               classificationBands={classBands}
               cgpa={rc.cgpa ?? undefined}
               subjectStats={classSubjectStats}
+              promotionScale={promotionScale}
             />
           </div>
         )
