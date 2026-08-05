@@ -13,7 +13,7 @@ import {
   SpreadsheetTable, SheetRow, seedMarksTableSection, seedTranscriptMarksTable, buildOfficialContactLine,
   officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT,
   TranscriptPeriod, transcriptPeriodsFor, transcriptPeriodLabel,
-  DocVariant, sectionShowsOn, ensureBirthRows,
+  DocVariant, sectionShowsOn, ensureBirthRows, ensureStampSection,
   ConductSec, AnnualBandSec, PanelRowSec,
   SELECTABLE_THEMES, THEME_PALETTES, accentOf, parseHeaderLines, headerLineStyle,
   STUDENT_PHOTO_SIZE_DEFAULT, STUDENT_PHOTO_SIZE_MIN, STUDENT_PHOTO_SIZE_MAX, clampStudentPhotoSize,
@@ -503,6 +503,20 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               onChange={e => update({ ...sec, showTitleRibbon: e.target.checked })} />
             {t('Title ribbon')}
           </label>
+          {sec.showTitleRibbon !== false && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={t('Term chip colour — independent of the Accent swatch above')}>
+              {t('Chip colour:')}
+              <input type="color" value={sec.termChipColor || accent}
+                onChange={e => update({ ...sec, termChipColor: e.target.value })}
+                style={{ width: 20, height: 20, padding: 0, border: '1px solid #d1d5db', borderRadius: 3, cursor: 'pointer' }} />
+              {sec.termChipColor && (
+                <button onClick={() => update({ ...sec, termChipColor: undefined })}
+                  style={{ fontSize: 10, color: '#94a3b8', textDecoration: 'underline', cursor: 'pointer' }}>
+                  {t('reset')}
+                </button>
+              )}
+            </label>
+          )}
         </>}
       </div>
 
@@ -568,7 +582,7 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                 style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 13, letterSpacing: 5, fontWeight: 'bold', color: '#fff' }} />
             </div>
-            <div style={{ background: accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+            <div style={{ background: sec.termChipColor || accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               {t('First Term')} · 2025/2026
             </div>
           </div>
@@ -602,8 +616,9 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               <div style={{ flex: 1, textAlign: 'center' }}>
                 <div style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 25, letterSpacing: 1.4, color, lineHeight: 1.05, fontWeight: 'bold' }}>{schoolName}</div>
                 {sec.showSchoolType && (
-                  <div style={{ fontSize: 9.2, letterSpacing: 4.2, color: accent, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 3 }}>
-                    {schoolType} {t('Section')}
+                  <div style={{ fontSize: 9.2, letterSpacing: 4.2, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 3 }}>
+                    <ColorableCell sampleText={`${schoolType} ${t('Section')}`} color={sec.schoolTypeColor || accent}
+                      onColorChange={c => update({ ...sec, schoolTypeColor: c })} />
                   </div>
                 )}
               </div>
@@ -1820,6 +1835,10 @@ export default function ReportCardDesignPage() {
       // only reach designs built after they changed, so an existing layout would never
       // show them. Once only, and the admin still has to Save.
       Object.assign(merged, ensureBirthRows(merged, sType))
+      // Same idea: an already-saved Ledger (or a legacy top-level-stored transcript) never
+      // picked up the Stamp/Seal section Ledger/Annual defaults gained after the Official/
+      // Student copy split. Standard already had it from day one, so it's excluded.
+      Object.assign(merged, ensureStampSection(merged, merged.template === 'ledger' || merged.layoutType === 'transcript'))
       // "Failing marks in red" is stored school-wide at the top level (see handleSave),
       // so stamp it onto whichever layout loaded — the checkbox must read the same in
       // every view, not whatever a layout happened to be saved with.
@@ -1946,6 +1965,7 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = saved?.template === 'ledger' ? buildMergedConfig(saved, lang, sType) : null
     const layout = restored ?? ensureMarksTables(localizeLayout({ ...getLedgerLayout(sType), layoutType: 'ledger' as const }, lang), sType)
+    Object.assign(layout, ensureStampSection(layout, true))
     setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))
@@ -1967,7 +1987,7 @@ export default function ReportCardDesignPage() {
     const layout = hasTranscriptSections
       ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
       : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
-    const seeded = ensureBirthRows(layout, schoolType)
+    const seeded = ensureStampSection(ensureBirthRows(layout, schoolType), true)
     setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))

@@ -885,7 +885,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             <div style={{ flex: 1, background: color, color: '#fff', textAlign: 'center', padding: '6px 0', fontFamily: DISPLAY_SERIF, fontSize: 13, letterSpacing: 5, fontWeight: 'bold' }}>
               {t(s.reportTitle)}
             </div>
-            <div style={{ background: accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+            <div style={{ background: s.termChipColor || accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               {t(term.name)} · {term.session}
             </div>
           </div>
@@ -948,6 +948,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
               </div>
               {contactStrip}
               {titleRibbon}
+              {variantLabel('center')}
             </div>
           )
         }
@@ -966,7 +967,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
               <div style={{ flex: 1, textAlign: 'center' }}>
                 <div style={{ fontSize: 25, letterSpacing: 1.4, color, lineHeight: 1.05, fontWeight: 'bold' }}>{school.name}</div>
                 {s.showSchoolType && (
-                  <div style={{ fontSize: 9.2, letterSpacing: 4.2, color: accent, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 3 }}>
+                  <div style={{ fontSize: 9.2, letterSpacing: 4.2, color: s.schoolTypeColor || accent, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 3 }}>
                     {t(school.type)} {t('Section')}
                   </div>
                 )}
@@ -976,6 +977,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             </div>
             {contactStrip}
             {titleRibbon}
+            {variantLabel('center')}
           </div>
         )
       }

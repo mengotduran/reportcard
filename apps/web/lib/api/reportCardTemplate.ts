@@ -154,6 +154,13 @@ export interface TemplateConfig {
    * Lives inside each design, so the report card and the transcript are marked separately.
    */
   birthRowsSeeded?: boolean
+  /**
+   * One-time marker: a Stamp/Seal section has been offered to this design. Ledger and
+   * Annual only got a stamp in their built-in defaults after the Official/Student copy
+   * split shipped, so a Ledger or Annual design saved before then would never see one —
+   * same backfill idiom as birthRowsSeeded (see ensureStampSection).
+   */
+  stampSeeded?: boolean
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -214,7 +221,10 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   /** Ruled contact line under the letterhead (P.O. Box · Tel · email · website). */
   showContactLine?: boolean
   /** The dark title ribbon with the term/session chip on its right. */
-  showTitleRibbon?: boolean }
+  showTitleRibbon?: boolean
+  /** Term/session chip background, independent of the shared accent colour. Unset =
+   *  follows accent (unchanged look for every design saved before this existed). */
+  termChipColor?: string }
 
 // Official header only: the left/right text blocks auto-scale with the logo size
 // (bigger logo -> bigger text, so they stay visually balanced), on top of the
@@ -1170,6 +1180,9 @@ export function getLedgerLayout(schoolType?: string): TemplateConfig & { section
     // classification/CGPA side table only makes sense for a university.
     { id: uid('leg'), type: 'grading_legend', title: `Grading Scale${isUni ? ' · Classification' : ''}`, showGradeSystem: true, showClassification: isUni, showLegend: false },
     { id: uid('rem'), type: 'remarks', label: 'General Remarks' },
+    // Official-copy-only, same as Standard's — without this, previewing "Official" on
+    // Ledger looked identical to "Student copy" and gave no way to place a seal.
+    { id: uid('stp'), type: 'stamp', size: 92, align: 'right', label: 'School Stamp', showOn: 'official' },
     {
       id: uid('sig'), type: 'signatures',
       lines: isUni
@@ -1239,6 +1252,9 @@ export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig 
         ],
       }],
     },
+    // Official-copy-only, same as Standard's — without this, previewing "Official" on
+    // the transcript looked identical to "Student copy" and gave no way to place a seal.
+    { id: uid('stp'), type: 'stamp', size: 92, align: 'right', label: 'School Stamp', showOn: 'official' },
     {
       id: uid('sig'), type: 'signatures',
       lines: [
@@ -1288,6 +1304,9 @@ function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sectio
         ],
       }],
     },
+    // Official-copy-only, same as Standard's — without this, previewing "Official" on
+    // the transcript looked identical to "Student copy" and gave no way to place a seal.
+    { id: uid('stp'), type: 'stamp', size: 92, align: 'right', label: 'School Stamp', showOn: 'official' },
     {
       id: uid('sig'), type: 'signatures',
       lines: [
@@ -1337,6 +1356,29 @@ export function ensureBirthRows<T extends Partial<TemplateConfig>>(cfg: T, schoo
   const next = [...sections]
   next[idx] = { ...info, rows }
   return { ...cfg, sections: next, birthRowsSeeded: true }
+}
+
+/**
+ * Give an already-saved Ledger or Annual design the Stamp/Seal section, once — same
+ * reasoning and idiom as ensureBirthRows above. `kind` picks which layout's defaults to
+ * match (Ledger's stamp sits before its signatures block; Annual's does too), and callers
+ * pass `false` for Standard/never-applicable configs so the marker still gets set and this
+ * doesn't re-run every load.
+ */
+export function ensureStampSection<T extends Partial<TemplateConfig>>(cfg: T, applies: boolean): T {
+  if (cfg.stampSeeded) return cfg
+  if (!applies) return { ...cfg, stampSeeded: true }
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, stampSeeded: true }
+  if (sections.some(s => s.type === 'stamp')) return { ...cfg, stampSeeded: true }
+
+  const stamp: StampSec & SectionVariant = { id: uid('stp'), type: 'stamp', size: 92, align: 'right', label: 'School Stamp', showOn: 'official' }
+  // Same slot as the fresh defaults: right before Signatures, so a backfilled design
+  // reads the same as one built after this existed, instead of tacking it on the end.
+  const idx = sections.findIndex(s => s.type === 'signatures')
+  const next = [...sections]
+  next.splice(idx < 0 ? next.length : idx, 0, stamp)
+  return { ...cfg, sections: next, stampSeeded: true }
 }
 
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {

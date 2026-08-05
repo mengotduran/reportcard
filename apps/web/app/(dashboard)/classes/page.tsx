@@ -856,8 +856,10 @@ export default function ClassesPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               {/* Which SECTION the class belongs to, not what time it is taught. Level 3
                   runs in the evening by the clock but follows the day curriculum, so it is a
-                  Day class. The word never reaches a printed report card. */}
-              <div>
+                  Day class. The word never reaches a printed report card.
+                  University-only: primary/secondary schools use private classes for their
+                  extra/one-off teaching instead, so they never see this at all. */}
+              {isUniversity && <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('Section')}</label>
                 {/* Fixed once the department exists, so editing shows which section you are in
                     rather than offering a move. The section is only ever taken one way, from
@@ -1013,7 +1015,7 @@ export default function ClassesPage() {
                   </div>
                 )}
 
-              </div>
+              </div>}
 
 
               {/* University: department name + level picker */}

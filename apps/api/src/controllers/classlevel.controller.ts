@@ -33,12 +33,19 @@ async function resolveDepartmentId(
 // Day or Evening sitting. Anything unrecognised falls back to DAY rather than 400ing:
 // every school that has no evening programme never sends this field at all, and a class is
 // far better off in the default sitting than rejected outright.
+//
+// EVENING is a UNIVERSITY-only section: primary/secondary schools use "private classes"
+// for extra/one-off teaching instead (a separate feature), so any non-university caller
+// is forced to DAY regardless of what it sends — this is enforced here, not just hidden
+// in the web UI, so a direct API call can't create one either.
 const PROGRAMMES = ['DAY', 'EVENING'] as const
 type ProgrammeValue = (typeof PROGRAMMES)[number]
-const resolveProgramme = (value: unknown): ProgrammeValue =>
-  typeof value === 'string' && (PROGRAMMES as readonly string[]).includes(value.toUpperCase())
+const resolveProgramme = (value: unknown, schoolType?: string): ProgrammeValue => {
+  if (schoolType !== 'UNIVERSITY') return 'DAY'
+  return typeof value === 'string' && (PROGRAMMES as readonly string[]).includes(value.toUpperCase())
     ? (value.toUpperCase() as ProgrammeValue)
     : 'DAY'
+}
 
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
@@ -98,7 +105,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0),
         hndRegistrationFee: regFee,
         departmentId: resolvedDepartmentId,
-        programme: resolveProgramme(programme),
+        programme: resolveProgramme(programme, school?.type),
       },
     })
     res.status(201).json({ message: 'Class created', classLevel: level })
@@ -141,7 +148,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
       school?.type === 'UNIVERSITY' &&
       level.programme === 'EVENING' &&
       programme !== undefined &&
-      resolveProgramme(programme) === 'DAY'
+      resolveProgramme(programme, school?.type) === 'DAY'
     ) {
       res.status(400).json({
         message: 'An evening department cannot be moved to the day section. Create the department in the Day section instead.',
@@ -192,7 +199,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         ? { hndRegistrationFee: !regEligible || hndRegistrationFee === null || hndRegistrationFee === '' ? null : Math.max(0, Math.round(Number(hndRegistrationFee)) || 0) }
         : {}),
       ...(resolvedDepartmentId !== undefined ? { departmentId: resolvedDepartmentId } : {}),
-      ...(programme !== undefined ? { programme: resolveProgramme(programme) } : {}),
+      ...(programme !== undefined ? { programme: resolveProgramme(programme, school?.type) } : {}),
     }
 
     const moved = { students: 0, subjects: 0, classMasters: 0, templates: templateRewrites.length }
