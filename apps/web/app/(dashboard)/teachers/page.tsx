@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getTeachersApi, createTeacherApi, updateTeacherApi, deleteTeacherApi, getTeacherSubjectsApi, assignTeacherSubjectsApi } from '@/lib/api/teachers'
 import { getSubjectsApi } from '@/lib/api/subjects'
-import { getClassLevelsApi } from '@/lib/api/classLevels'
+import { getClassLevelsApi, removeTeacherFromClassApi } from '@/lib/api/classLevels'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 
 // Secondary non-default departments store classes with a " (Department)" suffix.
@@ -72,6 +72,7 @@ export default function TeachersPage() {
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [allSubjects, setAllSubjects] = useState<Subject[]>([])
   const [classLevels, setClassLevels] = useState<string[]>([])
+  const [classLevelIdByName, setClassLevelIdByName] = useState<Record<string, string>>({})
   const [availableTerms, setAvailableTerms] = useState<string[]>([])
   const [selectedTerm, setSelectedTerm] = useState<string>('')
   const [loading, setLoading] = useState(true)
@@ -81,6 +82,10 @@ export default function TeachersPage() {
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  // Primary only — removing one teacher from one of their classes, without reopening that
+  // class's full "Set Teachers" picker.
+  const [removeFromClassTarget, setRemoveFromClassTarget] = useState<{ teacherId: string; teacherName: string; className: string } | null>(null)
+  const [removingFromClass, setRemovingFromClass] = useState(false)
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
   const [editForm, setEditForm] = useState({ role: '', masterClassLevel: '', departments: [] as string[] })
   const [editSaving, setEditSaving] = useState(false)
@@ -121,6 +126,8 @@ export default function TeachersPage() {
       const [sd, clData] = await Promise.all([getSubjectsApi(), getClassLevelsApi()])
       setAllSubjects(sd.subjects)
       setClassLevels(clData.classLevels.sort((a: any, b: any) => a.order - b.order).map((cl: any) => cl.name))
+      // Primary only — the "Remove from class" action needs the class id, not just its name.
+      setClassLevelIdByName(Object.fromEntries(clData.classLevels.map((cl: any) => [cl.name, cl.id])))
       // Secondary: map each class to its department so the assignment modal can
       // group subjects by department (a teacher may span several departments).
       if (isSecondary) {
@@ -208,6 +215,24 @@ export default function TeachersPage() {
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
       showToast(e.response?.data?.message || tr('Failed to remove teacher'), 'error')
+    }
+  }
+
+  const handleRemoveFromClass = async () => {
+    if (!removeFromClassTarget) return
+    const classLevelId = classLevelIdByName[removeFromClassTarget.className]
+    if (!classLevelId) { showToast(tr('Could not find that class'), 'error'); return }
+    setRemovingFromClass(true)
+    try {
+      await removeTeacherFromClassApi(classLevelId, removeFromClassTarget.teacherId)
+      setRemoveFromClassTarget(null)
+      fetchAll()
+      showToast(tr('Removed from class'))
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || tr('Failed to remove from class'), 'error')
+    } finally {
+      setRemovingFromClass(false)
     }
   }
 
@@ -527,10 +552,25 @@ export default function TeachersPage() {
                       {/* Primary's class teachers (not Vice Principal) are entirely
                           team-managed — per-subject assignment and the generic role editor
                           would both let an admin quietly break the "every teacher on a
-                          class teaches every subject in it" invariant. Reassignment lives
-                          on the Classes page's "Set Teachers" instead. */}
+                          class teaches every subject in it" invariant. Adding/moving them
+                          between classes still lives on the Classes page's "Set Teachers";
+                          this is just the direct "take them off this one" action, so removing
+                          someone doesn't require reopening that whole picker. */}
                       {isPrimary && t.role !== 'VICE_PRINCIPAL' ? (
-                        <span className="text-xs text-muted-foreground italic">{tr('Manage from Classes page')}</span>
+                        [...new Set([...(t.classLevels ?? []), ...(t.departments ?? [])])].length === 0 ? (
+                          <span className="text-xs text-muted-foreground italic">{tr('Not on a class yet')}</span>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {[...new Set([...(t.classLevels ?? []), ...(t.departments ?? [])])].map((cls) => (
+                              <button key={cls} type="button"
+                                onClick={() => setRemoveFromClassTarget({ teacherId: t.id, teacherName: t.name, className: cls })}
+                                title={tr('Remove from')}
+                                className="flex items-center gap-1 text-xs bg-muted hover:bg-destructive/10 hover:text-destructive text-muted-foreground px-2 py-1 rounded-full transition">
+                                {cls} <X size={10} />
+                              </button>
+                            ))}
+                          </div>
+                        )
                       ) : (
                         <>
                           <button onClick={() => openAssignModal(t)}
@@ -945,6 +985,11 @@ export default function TeachersPage() {
         message={`${tr('Are you sure you want to delete')} ${deleteTarget?.name}?`}
         confirmLabel={tr('Remove')} confirmColor="red"
         onConfirm={handleDeleteConfirm} onCancel={() => setDeleteTarget(null)} />
+
+      <ConfirmModal isOpen={!!removeFromClassTarget} title={tr('Remove from Class')}
+        message={removeFromClassTarget ? `${tr('Remove')} ${removeFromClassTarget.teacherName} ${tr('from')} ${removeFromClassTarget.className}? ${tr('They will no longer teach any of its subjects.')}` : ''}
+        confirmLabel={removingFromClass ? tr('Removing…') : tr('Remove')} confirmColor="red"
+        onConfirm={handleRemoveFromClass} onCancel={() => setRemoveFromClassTarget(null)} />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

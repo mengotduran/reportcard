@@ -540,15 +540,69 @@ export async function applyClassTeachingTeam(schoolId: string, level: { name: st
 }
 
 /**
+ * A teacher is on one class by default — moving them to a different class's team (rather
+ * than explicitly opting to manage both, see setClassTeachers' keepDualClass) takes them off
+ * whatever OTHER class they were on. Ends their TeacherSubject rows for that other class's
+ * subjects and drops it from their roster. If they were that class's master: the sole
+ * remaining teacher there auto-becomes master (same "solo = auto master" rule as everywhere
+ * else); with 2+ remaining and no master among them, the class is simply left masterless —
+ * same as any other team change, the admin revisits Set Teachers there to pick one, this
+ * never blocks the move itself. A class down to zero teachers just has the row cleared
+ * directly, since applyClassTeachingTeam requires at least one member.
+ *
+ * Exported: also the direct "Remove from class" action on the Teachers page (see
+ * removeTeacherFromClass below), not just the internal move-on-conflict path inside
+ * setClassTeachers.
+ */
+export async function removeTeacherFromClassTeam(schoolId: string, className: string, teacherId: string): Promise<void> {
+  const level = await prisma.classLevel.findFirst({ where: { schoolId, name: className }, select: { name: true } })
+  if (!level) return // class was renamed/deleted since — nothing left to clean up
+
+  const roster = await classTeamRoster(schoolId, className)
+  const remainingIds = roster.map((t) => t.id).filter((tid) => tid !== teacherId)
+
+  if (remainingIds.length === 0) {
+    const subjectIds = (await prisma.subject.findMany({ where: { schoolId, classLevel: level.name }, select: { id: true } })).map((s) => s.id)
+    if (subjectIds.length) {
+      await prisma.teacherSubject.updateMany({ where: { userId: teacherId, subjectId: { in: subjectIds }, endedAt: null }, data: { endedAt: new Date() } })
+    }
+    const departing = await prisma.user.findUnique({ where: { id: teacherId }, select: { departments: true, masterClassLevel: true } })
+    const wasMaster = departing?.masterClassLevel === level.name
+    await prisma.user.update({
+      where: { id: teacherId },
+      data: {
+        departments: ((departing?.departments as string[] | undefined) ?? []).filter((d) => d !== level.name),
+        ...(wasMaster ? { masterClassLevel: null, role: 'CLASS_TEACHER' } : {}),
+      },
+    })
+    return
+  }
+
+  const currentMaster = await prisma.user.findFirst({ where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: level.name }, select: { id: true } })
+  const newMasterId = currentMaster && remainingIds.includes(currentMaster.id) ? currentMaster.id : remainingIds[0]
+  await applyClassTeachingTeam(schoolId, level, remainingIds, newMasterId)
+}
+
+/**
  * A team of 1 auto-becomes that teacher's Class Master. A team of 2 or 3 REQUIRES
  * masterTeacherId in the same request — this is the one thing the admin must decide, so it
  * is refused rather than left to default to whoever happened to be picked first.
+ *
+ * A teacher already on a DIFFERENT class is, by default, MOVED here (removed from that
+ * other class's team) rather than ending up on both — see removeTeacherFromClassTeam.
+ * `keepDualClass` is the admin's explicit opt-in for a teacher who genuinely manages two
+ * classes at once; anyone whose id is in that list keeps their other-class membership
+ * untouched. Capped at 2 classes total, though: a teacher already on 2 OTHER classes can't
+ * be kept-both onto a 3rd — refused with a message naming both, so the admin removes them
+ * from one first (the Teachers page's own "Remove from class" chips). The frontend is what
+ * surfaces the move/keep-both choice before calling this endpoint (it already has every
+ * teacher's current classes from GET /teachers).
  */
 export const setClassTeachers = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { teacherIds, masterTeacherId } = req.body as { teacherIds?: unknown; masterTeacherId?: unknown }
+    const { teacherIds, masterTeacherId, keepDualClass } = req.body as { teacherIds?: unknown; masterTeacherId?: unknown; keepDualClass?: unknown }
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) { res.status(404).json({ message: 'Class not found' }); return }
@@ -565,7 +619,7 @@ export const setClassTeachers = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const teachers = await prisma.user.findMany({ where: { id: { in: ids }, schoolId, isActive: true } })
+    const teachers = await prisma.user.findMany({ where: { id: { in: ids }, schoolId, isActive: true }, select: { id: true, name: true, departments: true } })
     if (teachers.length !== ids.length) {
       res.status(400).json({ message: 'One or more selected teachers were not found' })
       return
@@ -586,9 +640,82 @@ export const setClassTeachers = async (req: AuthRequest, res: Response) => {
       masterId = requestedMaster
     }
 
+    // Newcomers to THIS class who are also on a different class: move them (default) or
+    // leave them on both if the admin explicitly said so via keepDualClass. A teacher manages
+    // at most 2 classes total — keepDualClass on someone already at that cap is refused
+    // outright rather than silently pushing them to 3; the admin removes them from one of
+    // their existing classes first (the Teachers page's own "Remove from class" chips are
+    // exactly that action), then retries. The frontend is expected to steer around this by
+    // checking classLevels/departments before ever offering "keep both", but it's enforced
+    // here too since that's the real gate.
+    const priorRoster = await classTeamRoster(schoolId, level.name)
+    const priorIds = new Set(priorRoster.map((t) => t.id))
+    const keepSet = new Set(Array.isArray(keepDualClass) ? keepDualClass.map(String) : [])
+    const newcomers = teachers
+      .filter((teacher) => !priorIds.has(teacher.id))
+      .map((teacher) => ({ teacher, otherClasses: ((teacher.departments as string[] | undefined) ?? []).filter((d) => d !== level.name) }))
+      .filter((n) => n.otherClasses.length > 0)
+
+    // Validate the whole batch BEFORE touching any other class — a failure partway through
+    // must never leave some teachers already moved and others not.
+    for (const { teacher, otherClasses } of newcomers) {
+      if (keepSet.has(teacher.id) && otherClasses.length >= 2) {
+        res.status(400).json({
+          message: `${teacher.name} already manages the maximum of 2 classes (${otherClasses.join(', ')}). Remove them from one first.`,
+        })
+        return
+      }
+    }
+    for (const { teacher, otherClasses } of newcomers) {
+      if (keepSet.has(teacher.id)) continue // otherClasses.length === 1 here — within the 2-class cap
+      for (const otherClass of otherClasses) {
+        await removeTeacherFromClassTeam(schoolId, otherClass, teacher.id)
+      }
+    }
+
     await applyClassTeachingTeam(schoolId, level, ids, masterId)
 
     res.json({ message: 'Class teaching team updated' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+/**
+ * DELETE /api/class-levels/:id/teachers/:teacherId
+ * Primary only. Direct "Remove from class" — the Teachers page's own action, rather than
+ * making an admin reopen the class's full "Set Teachers" picker just to drop one person.
+ * Reuses removeTeacherFromClassTeam, so a solo departure leaves the class with nobody, a
+ * departing master hands off to whoever's left (auto if solo, masterless if 2+ with no
+ * obvious pick — same as everywhere else this logic runs).
+ */
+export const removeTeacherFromClass = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const teacherId = String(req.params.teacherId)
+    const schoolId = req.user!.schoolId!
+
+    const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
+    if (!level) { res.status(404).json({ message: 'Class not found' }); return }
+
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    if (school?.type !== 'PRIMARY') {
+      res.status(400).json({ message: 'A shared class teaching team only applies to primary schools' })
+      return
+    }
+
+    const teacher = await prisma.user.findFirst({ where: { id: teacherId, schoolId }, select: { id: true } })
+    if (!teacher) { res.status(404).json({ message: 'Teacher not found' }); return }
+
+    const onThisClass = await classTeamRoster(schoolId, level.name)
+    if (!onThisClass.some((t) => t.id === teacherId)) {
+      res.status(400).json({ message: 'That teacher is not on this class' })
+      return
+    }
+
+    await removeTeacherFromClassTeam(schoolId, level.name, teacherId)
+    res.json({ message: 'Teacher removed from class' })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

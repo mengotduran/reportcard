@@ -63,9 +63,18 @@ export const deleteClassLevelApi = async (id: string, confirmName?: string) => {
 }
 
 // Primary-only: the class's 1-3 shared teachers, who between them teach every subject in the
-// class. masterTeacherId is required unless teacherIds has exactly one entry.
-export const setClassTeachersApi = async (id: string, data: { teacherIds: string[]; masterTeacherId?: string }) => {
+// class. masterTeacherId is required unless teacherIds has exactly one entry. A newcomer
+// already on a different class is MOVED here by default (removed from that other class) —
+// keepDualClass lists teacher ids who should keep managing both instead.
+export const setClassTeachersApi = async (id: string, data: { teacherIds: string[]; masterTeacherId?: string; keepDualClass?: string[] }) => {
   const res = await api.put(`/class-levels/${id}/teachers`, data)
+  return res.data
+}
+
+// Primary-only: direct "remove this one teacher from this one class" — the Teachers page's
+// own action, without reopening the class's full Set Teachers picker.
+export const removeTeacherFromClassApi = async (classLevelId: string, teacherId: string) => {
+  const res = await api.delete(`/class-levels/${classLevelId}/teachers/${teacherId}`)
   return res.data
 }
 

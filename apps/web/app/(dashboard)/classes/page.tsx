@@ -2,7 +2,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, setClassTeachersApi, seedDefaultPrimaryClassesApi, ClassLevel, DeleteImpact } from '@/lib/api/classLevels'
+import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, setClassTeachersApi, removeTeacherFromClassApi, seedDefaultPrimaryClassesApi, ClassLevel, DeleteImpact } from '@/lib/api/classLevels'
 import { getDepartmentsApi, createDepartmentApi, updateDepartmentApi, deleteDepartmentApi, Department } from '@/lib/api/departments'
 import { copySubjectsApi, getSubjectsApi } from '@/lib/api/subjects'
 import { getStudentsApi } from '@/lib/api/students'
@@ -81,6 +81,8 @@ function isExamRegistrationClass(name: string): boolean {
   return /^Form\s?5\b/i.test(n) || /^Upper\s?Sixth\b/i.test(n) || /^Class\s?(Six|6)\b/i.test(n) || /^CM2\b/i.test(n)
 }
 const GCE_DEFAULT_FEE = '20000'
+// Mirrors FSLC_REGISTRATION_FEE in hndRegistration.controller.ts.
+const FSLC_DEFAULT_FEE = '15000'
 
 // ── Form shape ───────────────────────────────────────────────────────────────
 type FormState = {
@@ -103,8 +105,9 @@ type FormState = {
 // number as a hint — this just stops it from also being the submitted value.
 const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  testMaxScore: '30', feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY' }
 const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', testMaxScore: '30', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY' }
-// Primary defaults to a raw /100 Test+Exam scale (30 Test / 70 Exam), unlike secondary's /20.
-const PRIMARY_EMPTY: FormState = { ...STD_EMPTY, maxScore: '100' }
+// Primary defaults to a raw /100 Test+Exam scale (30 Test / 70 Exam), unlike secondary's /20,
+// and its own default FSLC (not GCE) registration fee.
+const PRIMARY_EMPTY: FormState = { ...STD_EMPTY, maxScore: '100', hndRegistrationFee: FSLC_DEFAULT_FEE }
 
 export default function ClassesPage() {
   const router = useRouter()
@@ -146,6 +149,14 @@ export default function ClassesPage() {
   const [teamMasterId, setTeamMasterId] = useState('')
   const [savingTeam, setSavingTeam] = useState(false)
   const [teamError, setTeamError] = useState('')
+  // The team as loaded, so Save can tell a genuine newcomer apart from someone already here.
+  const [originalTeamIds, setOriginalTeamIds] = useState<string[]>([])
+  // A teacher is on one class by default — checking one who's already on a DIFFERENT class
+  // surfaces this confirmation step before the actual save: move them (default) or let them
+  // manage both. null = not showing; otherwise one row per conflicting teacher.
+  const [teamMoveConfirm, setTeamMoveConfirm] = useState<{ id: string; name: string; otherClasses: string[]; keepBoth: boolean }[] | null>(null)
+  // In-flight "quick remove one of two classes" within the confirm step — `${teacherId}:${className}`.
+  const [removingConflictClass, setRemovingConflictClass] = useState<string | null>(null)
 
   // ── Secondary departments ──
   const [departments, setDepartments]   = useState<Department[]>([])
@@ -402,7 +413,7 @@ export default function ClassesPage() {
         maxScore: String(cls.maxScore ?? (isPrimary ? 100 : 20)),
         testMaxScore: String(cls.testMaxScore ?? 30),
         feeAmount: String(cls.feeAmount ?? 0),
-        hndRegistrationFee: String(cls.hndRegistrationFee ?? GCE_DEFAULT_FEE),
+        hndRegistrationFee: String(cls.hndRegistrationFee ?? (isPrimary ? FSLC_DEFAULT_FEE : GCE_DEFAULT_FEE)),
         programme: cls.programme ?? 'DAY',
       })
     }
@@ -570,6 +581,7 @@ export default function ClassesPage() {
     setTeamError('')
     setTeamIds([])
     setTeamMasterId('')
+    setTeamMoveConfirm(null)
     try {
       const data = await getTeachersApi()
       const list: Teacher[] = data.teachers ?? []
@@ -578,7 +590,9 @@ export default function ClassesPage() {
       // subject-less class beyond its master — departments is the roster of record for
       // primary teams (see classTeamRoster in classlevel.controller.ts).
       const current = list.filter((tch) => (tch.classLevels ?? []).includes(cls.name) || (tch.departments ?? []).includes(cls.name))
-      setTeamIds(current.map((tch) => tch.id))
+      const currentIds = current.map((tch) => tch.id)
+      setTeamIds(currentIds)
+      setOriginalTeamIds(currentIds)
       const master = current.find((tch) => tch.role === 'CLASS_MASTER' && tch.masterClassLevel === cls.name)
       setTeamMasterId(master?.id ?? '')
     } catch {
@@ -586,7 +600,7 @@ export default function ClassesPage() {
     }
   }
 
-  const closeTeachers = () => { setTeachersTarget(null); setTeamError('') }
+  const closeTeachers = () => { setTeachersTarget(null); setTeamError(''); setTeamMoveConfirm(null) }
 
   const toggleTeamMember = (id: string) => {
     setTeamIds((prev) => {
@@ -599,23 +613,80 @@ export default function ClassesPage() {
     })
   }
 
-  const handleSaveTeam = async () => {
+  // Every OTHER class (besides the one this modal is open for) a teacher is currently on —
+  // same roster + derived signal openTeachers uses, minus the current class.
+  const otherClassesFor = (tch: Teacher): string[] => {
+    if (!teachersTarget) return []
+    const all = new Set([...(tch.classLevels ?? []), ...(tch.departments ?? [])])
+    all.delete(teachersTarget.name)
+    return [...all]
+  }
+
+  const saveTeam = async (keepDualClass?: string[]) => {
     if (!teachersTarget) return
-    if (teamIds.length < 1) { setTeamError(t('Pick at least one teacher')); return }
-    if (teamIds.length >= 2 && !teamMasterId) { setTeamError(t('Choose a class master before saving')); return }
     setSavingTeam(true)
     setTeamError('')
     try {
       await setClassTeachersApi(teachersTarget.id, {
         teacherIds: teamIds,
         masterTeacherId: teamIds.length === 1 ? teamIds[0] : teamMasterId,
+        ...(keepDualClass?.length ? { keepDualClass } : {}),
       })
       showToast(t('Class teaching team updated'))
       setTeachersTarget(null)
+      setTeamMoveConfirm(null)
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
       setTeamError(e.response?.data?.message || t('Could not update the teaching team'))
     } finally { setSavingTeam(false) }
+  }
+
+  const handleSaveTeam = async () => {
+    if (!teachersTarget) return
+    if (teamIds.length < 1) { setTeamError(t('Pick at least one teacher')); return }
+    if (teamIds.length >= 2 && !teamMasterId) { setTeamError(t('Choose a class master before saving')); return }
+
+    // A teacher is on one class by default — a newcomer (not on the team when this modal
+    // opened) who's already on a DIFFERENT class needs an explicit move-or-keep-both
+    // decision before the save actually happens.
+    const conflicts = teamIds
+      .filter((tid) => !originalTeamIds.includes(tid))
+      .map((tid) => allTeachers.find((tch) => tch.id === tid))
+      .filter((tch): tch is Teacher => !!tch)
+      .map((tch) => ({ tch, otherClasses: otherClassesFor(tch) }))
+      .filter((c) => c.otherClasses.length > 0)
+
+    if (conflicts.length > 0) {
+      setTeamMoveConfirm(conflicts.map((c) => ({ id: c.tch.id, name: c.tch.name, otherClasses: c.otherClasses, keepBoth: false })))
+      return
+    }
+    await saveTeam()
+  }
+
+  const handleConfirmMove = async () => {
+    if (!teamMoveConfirm) return
+    // "Keep both" only ever applies to someone down to exactly 1 other class — a teacher
+    // still at the 2-class cap here just gets the default move (dropping both), since the
+    // backend refuses keepDualClass past the cap anyway.
+    await saveTeam(teamMoveConfirm.filter((c) => c.keepBoth && c.otherClasses.length === 1).map((c) => c.id))
+  }
+
+  // Quick "remove from just this one" inside the confirm step — a teacher at the 2-class cap
+  // uses this to drop to 1 other class, which turns their row into the normal move/keep-both
+  // choice instead of forcing the default "move, dropping both" outcome.
+  const handleQuickRemoveConflictClass = async (teacherId: string, className: string) => {
+    const classId = classes.find((c) => c.name === className)?.id
+    if (!classId) return
+    setRemovingConflictClass(`${teacherId}:${className}`)
+    try {
+      await removeTeacherFromClassApi(classId, teacherId)
+      setTeamMoveConfirm((prev) => prev ? prev.map((c) => c.id === teacherId ? { ...c, otherClasses: c.otherClasses.filter((oc) => oc !== className) } : c) : prev)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to remove from class'), 'error')
+    } finally {
+      setRemovingConflictClass(null)
+    }
   }
 
   // Reorder within the currently displayed list by swapping the two classes' order values.
@@ -840,7 +911,7 @@ export default function ClassesPage() {
                   {isPrimary && (
                     <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">FSLC Reg. Fee</th>
                   )}
-                  {!isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>}
+                  {isSecondary && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>}
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
                 </tr>
               </thead>
@@ -918,7 +989,7 @@ export default function ClassesPage() {
                               : <span className="text-xs text-amber-600">not set</span>}
                         </td>
                       )}
-                      {!isUniversity && (
+                      {isSecondary && (
                         <td className="px-4 py-3">
                           {cls.hasStream
                             ? <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">{t('Arts')} / {t('Science')}</span>
@@ -1411,20 +1482,21 @@ export default function ClassesPage() {
                 </div>
               )}
 
-              {/* GCE Registration Fee — only for secondary Form 5 / Upper Sixth classes */}
+              {/* GCE/FSLC Registration Fee — secondary Form 5 / Upper Sixth, or primary Class Six */}
               {!isUniversity && isExamRegistrationClass(composeClassName(form.name)) && (
                 <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">GCE Registration Fee (XAF) <span className="text-destructive">*</span></label>
-                  <input type="number" min="0" step="any" placeholder={GCE_DEFAULT_FEE} required
+                  <label className="block text-xs font-medium text-foreground mb-1">{isPrimary ? 'FSLC Registration Fee (XAF)' : 'GCE Registration Fee (XAF)'} <span className="text-destructive">*</span></label>
+                  <input type="number" min="0" step="any" placeholder={isPrimary ? FSLC_DEFAULT_FEE : GCE_DEFAULT_FEE} required
                     value={form.hndRegistrationFee}
                     onChange={(e) => setForm({ ...form, hndRegistrationFee: e.target.value })}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
-                  <p className="text-xs text-muted-foreground mt-1">One-time GCE exam registration fee for this class. Tracked separately from school fees.</p>
+                  <p className="text-xs text-muted-foreground mt-1">{isPrimary ? 'One-time FSLC exam registration fee for this class. Tracked separately from school fees.' : 'One-time GCE exam registration fee for this class. Tracked separately from school fees.'}</p>
                 </div>
               )}
 
-              {/* Stream toggle — non-university only */}
-              {!isUniversity && (
+              {/* Stream toggle — secondary only. Arts/Science is a secondary concept
+                  (upper Forms splitting by stream); primary schools have no equivalent. */}
+              {isSecondary && (
                 <div>
                   <label className="flex items-center gap-3 cursor-pointer">
                     <div onClick={() => setForm({ ...form, hasStream: !form.hasStream })}
@@ -1611,7 +1683,7 @@ export default function ClassesPage() {
 
       {/* Primary: shared class teaching team. 1-3 teachers who between them teach every
           subject in the class, exactly one of whom is Class Master. */}
-      {teachersTarget && (
+      {teachersTarget && !teamMoveConfirm && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4 animate-fade-in">
           <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-scale-in max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
@@ -1634,14 +1706,17 @@ export default function ClassesPage() {
               ) : allTeachers.map((tch) => {
                 const checked = teamIds.includes(tch.id)
                 const disabled = !checked && teamIds.length >= 3
+                const otherClasses = otherClassesFor(tch)
                 return (
                   <label key={tch.id} className={`flex items-center gap-2.5 px-3 py-2 ${disabled ? 'opacity-40' : 'cursor-pointer hover:bg-hover/40'}`}>
                     <input type="checkbox" checked={checked} disabled={disabled}
                       onChange={() => toggleTeamMember(tch.id)}
                       className="accent-primary w-4 h-4 flex-shrink-0" />
                     <span className="text-sm text-foreground flex-1">{tch.name}</span>
-                    {tch.masterClassLevel && tch.masterClassLevel !== teachersTarget.name && (
-                      <span className="text-[10px] text-muted-foreground">{t('Master of')} {tch.masterClassLevel}</span>
+                    {otherClasses.length > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {otherClasses.length === 1 && tch.masterClassLevel === otherClasses[0] ? t('Master of') : t('Also on')} {otherClasses.join(', ')}
+                      </span>
                     )}
                   </label>
                 )
@@ -1682,6 +1757,67 @@ export default function ClassesPage() {
               <button onClick={handleSaveTeam} disabled={savingTeam || teamIds.length === 0}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition disabled:opacity-50">
                 {savingTeam ? t('Saving…') : t('Save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* A teacher manages at most 2 classes. This confirms what happens to anyone newly
+          added here who's already on another class: move them (default), let them manage
+          both (only possible up to the 2-class cap), or — already at the cap — drop one of
+          their two existing classes first. */}
+      {teachersTarget && teamMoveConfirm && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-scale-in">
+            <h3 className="font-semibold text-foreground mb-1">{t('Already teaching another class')}</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              {t('A teacher manages at most 2 classes. By default, moving them here removes them from their other class.')}
+            </p>
+            <div className="space-y-3 mb-5">
+              {teamMoveConfirm.map((c) => (
+                <div key={c.id} className="border border-border rounded-lg p-3">
+                  <p className="text-sm font-medium text-foreground mb-2">
+                    {c.name} <span className="text-xs text-muted-foreground font-normal">— {t('currently on')} {c.otherClasses.join(', ')}</span>
+                  </p>
+                  {c.otherClasses.length >= 2 ? (
+                    <>
+                      <p className="text-xs text-amber-600 mb-2">{t('Already at the 2-class limit. Moving here leaves both — or drop just one below to keep the other.')}</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {c.otherClasses.map((oc) => (
+                          <button key={oc} type="button" disabled={removingConflictClass === `${c.id}:${oc}`}
+                            onClick={() => handleQuickRemoveConflictClass(c.id, oc)}
+                            className="flex-1 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:border-destructive hover:text-destructive transition disabled:opacity-50">
+                            {removingConflictClass === `${c.id}:${oc}` ? t('Removing…') : `${t('Remove from')} ${oc}`}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button type="button"
+                        onClick={() => setTeamMoveConfirm((prev) => prev!.map((x) => x.id === c.id ? { ...x, keepBoth: false } : x))}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${!c.keepBoth ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                        {t('Move here')} ({t('leave')} {c.otherClasses[0]})
+                      </button>
+                      <button type="button"
+                        onClick={() => setTeamMoveConfirm((prev) => prev!.map((x) => x.id === c.id ? { ...x, keepBoth: true } : x))}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${c.keepBoth ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
+                        {t('Manage both classes')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setTeamMoveConfirm(null)} disabled={savingTeam}
+                className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-hover transition disabled:opacity-50">
+                {t('Back')}
+              </button>
+              <button onClick={handleConfirmMove} disabled={savingTeam}
+                className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition disabled:opacity-50">
+                {savingTeam ? t('Saving…') : t('Confirm')}
               </button>
             </div>
           </div>
