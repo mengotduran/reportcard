@@ -6,12 +6,12 @@ export interface PasswordCheck {
   met: boolean
 }
 
+// Length only, deliberately — no required letter/digit/special-character mix. Many of the
+// people setting these passwords aren't tech-savvy, and complexity rules trade a marginal
+// security gain for real friction. Mirrors apps/api/src/utils/passwordValidation.ts.
 export function passwordChecks(password: string): PasswordCheck[] {
   return [
     { label: 'At least 8 characters', met: password.length >= 8 },
-    { label: 'At least one letter', met: /[A-Za-z]/.test(password) },
-    { label: 'At least one number', met: /[0-9]/.test(password) },
-    { label: 'At least one special character', met: /[^A-Za-z0-9]/.test(password) },
   ]
 }
 

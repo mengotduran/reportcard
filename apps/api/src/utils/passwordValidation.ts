@@ -6,15 +6,12 @@
 // Mirrored in apps/web/lib/passwordValidation.ts for live client-side feedback — keep the two
 // rules in sync by hand; there's no shared package between the two apps to import from.
 
-const SPECIAL_CHAR = /[^A-Za-z0-9]/
-const LETTER = /[A-Za-z]/
-const DIGIT = /[0-9]/
-
+// Length only, deliberately — no required letter/digit/special-character mix. Many of the
+// people setting these passwords (teachers, some admins) aren't tech-savvy, and complexity
+// rules trade a marginal security gain for real friction and support burden. Kept as its own
+// function (rather than inlined at each call site) so the rule can still change in one place.
 export function validateNewPassword(password: string): string | null {
   if (!password || password.length < 8) return 'Password must be at least 8 characters'
-  if (!LETTER.test(password)) return 'Password must include at least one letter'
-  if (!DIGIT.test(password)) return 'Password must include at least one number'
-  if (!SPECIAL_CHAR.test(password)) return 'Password must include at least one special character'
   return null
 }
 
