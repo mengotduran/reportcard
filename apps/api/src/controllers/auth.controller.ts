@@ -270,8 +270,15 @@ export const resetUserPassword = async (req: AuthRequest, res: Response) => {
     }
 
     // Offline builds never have email delivery, and a username-based account (no email on
-    // file) has nowhere to receive a setup link either way — both take the direct-set branch.
-    if (IS_OFFLINE_BUILD || !target.email) {
+    // file) has nowhere to receive a setup link either way — both are forced onto the
+    // direct-set branch regardless of what the caller asked for. Someone who still has an
+    // email ON FILE but has lost access to that inbox (changed jobs, forgot ITS password,
+    // account deleted…) is otherwise a dead end: re-sending a link to an address they can't
+    // reach doesn't help. `mode: 'direct'` is the admin's explicit escape hatch for exactly
+    // that case — only meaningful when an email exists, since it's ignored (always direct)
+    // when there's none to begin with.
+    const wantsDirect = IS_OFFLINE_BUILD || !target.email || req.body.mode === 'direct'
+    if (wantsDirect) {
       const { newPassword } = req.body
       const passwordError = validateNewPassword(String(newPassword ?? ''))
       if (passwordError) { res.status(400).json({ message: passwordError }); return }
@@ -281,8 +288,11 @@ export const resetUserPassword = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Online, with an email on file: no password taken from the requester at all — a fresh
-    // setup link is emailed to the target user, same as a brand-new teacher invite.
+    // Online, with an email on file and no direct override requested: no password taken
+    // from the requester at all — a fresh setup link is emailed to the target user, same
+    // as a brand-new teacher invite. wantsDirect is false here, which per the OR above
+    // guarantees target.email is set — the check still narrows the type for TypeScript.
+    if (!target.email) { res.status(400).json({ message: 'This account has no email on file' }); return }
     const inviteToken = generateRawToken()
     await prisma.user.update({
       where: { id: userId },

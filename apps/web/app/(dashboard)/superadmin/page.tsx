@@ -174,6 +174,8 @@ export default function SuperAdminPage() {
   const [resetAdminSaving, setResetAdminSaving] = useState(false)
   const [resetAdminError, setResetAdminError] = useState('')
   const [showResetAdminPw, setShowResetAdminPw] = useState(false)
+  // Only meaningful when the target has an email — override for "can't reach that inbox".
+  const [resetAdminOverrideDirect, setResetAdminOverrideDirect] = useState(false)
   const [editEmailTarget, setEditEmailTarget] = useState<{ id: string; name: string } | null>(null)
   const [editEmailValue, setEditEmailValue] = useState('')
   const [editEmailSaving, setEditEmailSaving] = useState(false)
@@ -254,7 +256,8 @@ export default function SuperAdminPage() {
     }
   }
 
-  const resetAdminIsDirect = isOfflineInstall || !resetAdminTarget?.email
+  const resetAdminHasEmail = !isOfflineInstall && !!resetAdminTarget?.email
+  const resetAdminIsDirect = isOfflineInstall || !resetAdminTarget?.email || resetAdminOverrideDirect
 
   const handleResetAdminPassword = async () => {
     if (!resetAdminTarget) return
@@ -262,10 +265,11 @@ export default function SuperAdminPage() {
     setResetAdminSaving(true)
     setResetAdminError('')
     try {
-      await resetUserPasswordApi(resetAdminTarget.id, resetAdminIsDirect ? resetAdminPw : undefined)
+      await resetUserPasswordApi(resetAdminTarget.id, resetAdminIsDirect ? resetAdminPw : undefined, resetAdminHasEmail && resetAdminOverrideDirect ? 'direct' : undefined)
       showToast(resetAdminIsDirect ? `Password updated for ${resetAdminTarget.name}` : `Setup email sent to ${resetAdminTarget.name}`)
       setResetAdminTarget(null)
       setResetAdminPw('')
+      setResetAdminOverrideDirect(false)
     } catch (e: any) {
       setResetAdminError(e.response?.data?.message || 'Failed to reset password')
     } finally {
@@ -1009,7 +1013,7 @@ export default function SuperAdminPage() {
                         <Pencil size={12} /> Change Email
                       </button>
                       <button
-                        onClick={() => { setResetAdminTarget(admin); setResetAdminPw(''); setResetAdminError(''); setShowResetAdminPw(false); setEditEmailTarget(null) }}
+                        onClick={() => { setResetAdminTarget(admin); setResetAdminPw(''); setResetAdminError(''); setShowResetAdminPw(false); setResetAdminOverrideDirect(false); setEditEmailTarget(null) }}
                         className="flex items-center gap-1.5 text-xs text-orange-600 hover:text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg transition"
                       >
                         <KeyRound size={12} /> Reset Password
@@ -1051,6 +1055,12 @@ export default function SuperAdminPage() {
             {resetAdminTarget && (
               <div className="border-t border-border pt-4 mt-2">
                 {resetAdminError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5 mb-2">{resetAdminError}</p>}
+                {resetAdminHasEmail && (
+                  <button type="button" onClick={() => setResetAdminOverrideDirect(v => !v)}
+                    className="text-xs text-primary hover:underline mb-3 block">
+                    {resetAdminOverrideDirect ? 'Send a setup link instead' : "Can't reach their email? Set a password directly"}
+                  </button>
+                )}
                 {resetAdminIsDirect ? (
                   <>
                     <p className="text-xs font-medium text-foreground mb-2">Set new password for <span className="text-primary">{resetAdminTarget.name}</span></p>

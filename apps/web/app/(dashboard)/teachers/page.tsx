@@ -90,6 +90,10 @@ export default function TeachersPage() {
   const [resetSaving, setResetSaving] = useState(false)
   const [resetError, setResetError] = useState('')
   const [showResetPw, setShowResetPw] = useState(false)
+  // Only meaningful when the target has an email — the admin's explicit override for
+  // "they still have an email on file but can't reach that inbox", so a reset doesn't
+  // become a dead end of re-sending a link nobody can open.
+  const [resetOverrideDirect, setResetOverrideDirect] = useState(false)
   const [assignTarget, setAssignTarget] = useState<Teacher | null>(null)
   const [assignedIds, setAssignedIds] = useState<string[]>([])
   const [assignedLoading, setAssignedLoading] = useState(false)
@@ -208,8 +212,11 @@ export default function TeachersPage() {
   }
 
   // Same reasoning as createTeacher: a target with no email has nowhere to receive a
-  // setup link either way, so they always take the direct-set branch too.
-  const resetIsDirect = isOfflineInstall || !resetTarget?.email
+  // setup link either way, so they always take the direct-set branch too. When they DO
+  // have an email, the admin can still override to direct-set — e.g. the target has lost
+  // access to that inbox, so re-sending a link there would be a dead end.
+  const resetHasEmail = !isOfflineInstall && !!resetTarget?.email
+  const resetIsDirect = isOfflineInstall || !resetTarget?.email || resetOverrideDirect
 
   const handleResetPassword = async () => {
     if (!resetTarget) return
@@ -217,10 +224,11 @@ export default function TeachersPage() {
     setResetSaving(true)
     setResetError('')
     try {
-      await resetUserPasswordApi(resetTarget.id, resetIsDirect ? resetPassword : undefined)
+      await resetUserPasswordApi(resetTarget.id, resetIsDirect ? resetPassword : undefined, resetHasEmail && resetOverrideDirect ? 'direct' : undefined)
       showToast(resetIsDirect ? `${tr('Password updated for')} ${resetTarget.name}` : `${tr('Setup email sent to')} ${resetTarget.name}`)
       setResetTarget(null)
       setResetPassword('')
+      setResetOverrideDirect(false)
     } catch (e: any) {
       setResetError(e.response?.data?.message || tr('Failed to reset password'))
     } finally {
@@ -535,7 +543,7 @@ export default function TeachersPage() {
                           </button>
                         </>
                       )}
-                      <button onClick={() => { setResetTarget(t); setResetPassword(''); setResetError(''); setShowResetPw(false) }}
+                      <button onClick={() => { setResetTarget(t); setResetPassword(''); setResetError(''); setShowResetPw(false); setResetOverrideDirect(false) }}
                         className="p-1.5 text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10 rounded transition" title={tr('Reset Password')}>
                         <KeyRound size={14} />
                       </button>
@@ -889,6 +897,12 @@ export default function TeachersPage() {
               </button>
             </div>
             {resetError && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">{resetError}</p>}
+            {resetHasEmail && (
+              <button type="button" onClick={() => setResetOverrideDirect(v => !v)}
+                className="text-xs text-primary hover:underline mb-3 block">
+                {resetOverrideDirect ? tr('Send a setup link instead') : tr("Can't reach their email? Set a password directly")}
+              </button>
+            )}
             {resetIsDirect ? (
               <>
                 <label className="block text-xs font-medium text-foreground mb-1">{tr('New Password')} <span className="text-destructive">*</span></label>
