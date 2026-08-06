@@ -29,14 +29,16 @@ import { resetUserPasswordApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 import { usePagination } from '@/lib/usePagination'
 import { stripProgrammeSuffix, programmeFromName } from '@/lib/programme'
+import { validateUsername, isPasswordValid, suggestUsername } from '@/lib/passwordValidation'
+import PasswordChecklist from '@/components/ui/PasswordChecklist'
 
-interface Teacher { id: string; name: string; email: string; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean
+interface Teacher { id: string; name: string; email: string | null; username?: string | null; role: string; masterClassLevel?: string | null; createdAt: string; classLevels?: string[]; departments?: string[]; pendingSetup?: boolean
   /** Which sitting(s) they actually teach, derived server-side from their live course
    *  assignments. Universities only in practice — every other school type is all-DAY. */
   programmes?: ('DAY' | 'EVENING')[] }
 interface Subject { id: string; name: string; classLevel: string; term?: string | null }
 
-const emptyForm = { name: '', email: '', password: '', role: 'CLASS_TEACHER', masterClassLevel: '', departments: [] as string[] }
+const emptyForm = { name: '', email: '', username: '', hasEmail: true, password: '', role: 'CLASS_TEACHER', masterClassLevel: '', departments: [] as string[], classLevel: '' }
 
 const roleLabels: Record<string, string> = {
   CLASS_TEACHER: 'Class Teacher',
@@ -57,6 +59,7 @@ export default function TeachersPage() {
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  const isPrimary = school?.type === 'PRIMARY'
   // Offline installs have no internet-facing mail path, so admins still set
   // teacher passwords directly there. Online schools never see/set them —
   // teachers get an emailed link to set their own (see teacher.controller.ts).
@@ -148,19 +151,33 @@ export default function TeachersPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (form.role === 'CLASS_MASTER' && !form.masterClassLevel) {
+    if (isPrimary) {
+      if (form.role !== 'VICE_PRINCIPAL' && !form.classLevel) {
+        setError(tr('Select which class this teacher teaches'))
+        return
+      }
+    } else if (form.role === 'CLASS_MASTER' && !form.masterClassLevel) {
       setError(tr('Please select the class this person is master of'))
       return
+    }
+    // No-email path: a username + password are required regardless of build type (offline
+    // installs already always take a direct password; this just extends that to online too,
+    // gated by "has no email" instead of "is offline").
+    if (!form.hasEmail) {
+      const usernameError = validateUsername(form.username)
+      if (usernameError) { setError(usernameError); return }
+      if (!isPasswordValid(form.password)) { setError(tr('Password does not meet the requirements below')); return }
     }
     setSaving(true)
     try {
       await createTeacherApi({
         name: form.name,
-        email: form.email,
-        ...(isOfflineInstall ? { password: form.password } : {}),
+        ...(form.hasEmail ? { email: form.email } : { username: form.username }),
+        ...(isOfflineInstall || !form.hasEmail ? { password: form.password } : {}),
         role: form.role,
-        masterClassLevel: form.role === 'CLASS_MASTER' ? form.masterClassLevel : undefined,
-        departments: form.departments,
+        ...(isPrimary
+          ? { classLevel: form.role === 'VICE_PRINCIPAL' ? undefined : form.classLevel }
+          : { masterClassLevel: form.role === 'CLASS_MASTER' ? form.masterClassLevel : undefined, departments: form.departments }),
         // University only: keeps a teacher scoped to the semester they were added
         // under, until they're actually assigned a course (see getTeachers).
         ...(isUniversity && selectedTerm ? { term: selectedTerm } : {}),
@@ -190,14 +207,18 @@ export default function TeachersPage() {
     }
   }
 
+  // Same reasoning as createTeacher: a target with no email has nowhere to receive a
+  // setup link either way, so they always take the direct-set branch too.
+  const resetIsDirect = isOfflineInstall || !resetTarget?.email
+
   const handleResetPassword = async () => {
     if (!resetTarget) return
-    if (isOfflineInstall && resetPassword.length < 6) { setResetError(tr('Password must be at least 6 characters')); return }
+    if (resetIsDirect && !isPasswordValid(resetPassword)) { setResetError(tr('Password does not meet the requirements below')); return }
     setResetSaving(true)
     setResetError('')
     try {
-      await resetUserPasswordApi(resetTarget.id, isOfflineInstall ? resetPassword : undefined)
-      showToast(isOfflineInstall ? `${tr('Password updated for')} ${resetTarget.name}` : `${tr('Setup email sent to')} ${resetTarget.name}`)
+      await resetUserPasswordApi(resetTarget.id, resetIsDirect ? resetPassword : undefined)
+      showToast(resetIsDirect ? `${tr('Password updated for')} ${resetTarget.name}` : `${tr('Setup email sent to')} ${resetTarget.name}`)
       setResetTarget(null)
       setResetPassword('')
     } catch (e: any) {
@@ -444,7 +465,7 @@ export default function TeachersPage() {
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Name')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Email')}</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Email / Username')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Role')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Master Of')}</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{tr('Joined')}</th>
@@ -479,7 +500,9 @@ export default function TeachersPage() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{t.email}</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    {t.email ?? (t.username ? <span title={tr('Signs in with a username, no email on file')}>{t.username} <span className="text-xs">({tr('username')})</span></span> : '—')}
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full font-medium ${roleColors[t.role] || 'bg-muted text-muted-foreground'}`}>
                       {tr(roleLabels[t.role] || t.role)}
@@ -493,14 +516,25 @@ export default function TeachersPage() {
                   <td className="px-4 py-3 text-sm text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <button onClick={() => openAssignModal(t)}
-                        className="flex items-center gap-1 text-xs text-primary bg-primary/10 hover:bg-primary/10 px-2 py-1.5 rounded transition">
-                        <BookOpen size={12} /> {tr(isUniversity ? 'Courses' : 'Subjects')}
-                      </button>
-                      <button onClick={() => openEditModal(t)}
-                        className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('Edit')}>
-                        <Pencil size={14} />
-                      </button>
+                      {/* Primary's class teachers (not Vice Principal) are entirely
+                          team-managed — per-subject assignment and the generic role editor
+                          would both let an admin quietly break the "every teacher on a
+                          class teaches every subject in it" invariant. Reassignment lives
+                          on the Classes page's "Set Teachers" instead. */}
+                      {isPrimary && t.role !== 'VICE_PRINCIPAL' ? (
+                        <span className="text-xs text-muted-foreground italic">{tr('Manage from Classes page')}</span>
+                      ) : (
+                        <>
+                          <button onClick={() => openAssignModal(t)}
+                            className="flex items-center gap-1 text-xs text-primary bg-primary/10 hover:bg-primary/10 px-2 py-1.5 rounded transition">
+                            <BookOpen size={12} /> {tr(isUniversity ? 'Courses' : 'Subjects')}
+                          </button>
+                          <button onClick={() => openEditModal(t)}
+                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition" title={tr('Edit')}>
+                            <Pencil size={14} />
+                          </button>
+                        </>
+                      )}
                       <button onClick={() => { setResetTarget(t); setResetPassword(''); setResetError(''); setShowResetPw(false) }}
                         className="p-1.5 text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10 rounded transition" title={tr('Reset Password')}>
                         <KeyRound size={14} />
@@ -537,14 +571,33 @@ export default function TeachersPage() {
                   className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Email')} <span className="text-destructive">*</span></label>
-                <input type="email" placeholder="jane@school.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
-                {!isOfflineInstall && (
-                  <p className="text-xs text-muted-foreground mt-1">{tr('A setup email will be sent to this address.')}</p>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground">
+                    {form.hasEmail ? tr('Email') : tr('Username')} <span className="text-destructive">*</span>
+                  </label>
+                  <button type="button"
+                    onClick={() => setForm({ ...form, hasEmail: !form.hasEmail, username: !form.hasEmail ? form.username : (form.username || suggestUsername(form.name)) })}
+                    className="text-xs text-primary hover:underline">
+                    {form.hasEmail ? tr("Doesn't have an email?") : tr('Use an email instead')}
+                  </button>
+                </div>
+                {form.hasEmail ? (
+                  <>
+                    <input type="email" placeholder="jane@school.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                    {!isOfflineInstall && (
+                      <p className="text-xs text-muted-foreground mt-1">{tr('A setup email will be sent to this address.')}</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <input type="text" placeholder="janedoe123" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                    <p className="text-xs text-muted-foreground mt-1">{tr('At least 8 characters, no spaces. They sign in with this instead of an email.')}</p>
+                  </>
                 )}
               </div>
-              {isOfflineInstall && (
+              {(isOfflineInstall || !form.hasEmail) && (
                 <div>
                   <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Password')} <span className="text-destructive">*</span></label>
                   <div className="relative">
@@ -554,18 +607,59 @@ export default function TeachersPage() {
                       {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                   </div>
+                  <PasswordChecklist password={form.password} />
                 </div>
               )}
-              <div>
-                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Role')}</label>
-                <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, masterClassLevel: '' })}
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="CLASS_TEACHER">{tr('Class Teacher')}</option>
-                  {/* Class Master is a primary/secondary concept — one teacher overseeing
-                      a single class of students all day. Universities have no equivalent. */}
-                  {!isUniversity && <option value="CLASS_MASTER">{tr('Class Master')}</option>}
-                </select>
-              </div>
+              {isPrimary ? (
+                <>
+                  {/* Primary has no role picker — a teacher joins a class's shared team
+                      (max 3, Class Master derived from the team) instead of being handed
+                      Class Teacher/Class Master/Subject Teacher directly. Vice Principal
+                      is the one exception, an admin-tier role with no class of its own. */}
+                  <div>
+                    <label className="block text-xs font-medium text-foreground mb-1.5">{tr('Type')}</label>
+                    <div className="flex gap-2">
+                      {(['TEACHER', 'VICE_PRINCIPAL'] as const).map((opt) => (
+                        <button key={opt} type="button"
+                          onClick={() => setForm({ ...form, role: opt === 'VICE_PRINCIPAL' ? 'VICE_PRINCIPAL' : 'CLASS_TEACHER', classLevel: '' })}
+                          className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
+                            (opt === 'VICE_PRINCIPAL' ? form.role === 'VICE_PRINCIPAL' : form.role !== 'VICE_PRINCIPAL')
+                              ? 'bg-primary text-white border-primary'
+                              : 'border-border text-muted-foreground hover:border-primary'
+                          }`}>
+                          {opt === 'VICE_PRINCIPAL' ? tr('Vice Principal') : tr('Teacher')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {form.role !== 'VICE_PRINCIPAL' && (
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">{tr('Which class do they teach?')} <span className="text-destructive">*</span></label>
+                      <select value={form.classLevel} onChange={(e) => setForm({ ...form, classLevel: e.target.value })} required
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring bg-background">
+                        <option value="">{tr('Select a class')}</option>
+                        {classLevels.map((cl) => (
+                          <option key={cl} value={cl}>{cl}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {tr('A class has up to 3 teachers who together teach every subject in it. The first teacher on a class automatically becomes its Class Master.')}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Role')}</label>
+                  <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, masterClassLevel: '' })}
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="CLASS_TEACHER">{tr('Class Teacher')}</option>
+                    {/* Class Master is a primary/secondary concept — one teacher overseeing
+                        a single class of students all day. Universities have no equivalent. */}
+                    {!isUniversity && <option value="CLASS_MASTER">{tr('Class Master')}</option>}
+                  </select>
+                </div>
+              )}
               {hasDeptView && deptNames.length > 0 && (
                 <div>
                   <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1.5">{tr('Departments')}</label>
@@ -795,13 +889,13 @@ export default function TeachersPage() {
               </button>
             </div>
             {resetError && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">{resetError}</p>}
-            {isOfflineInstall ? (
+            {resetIsDirect ? (
               <>
                 <label className="block text-xs font-medium text-foreground mb-1">{tr('New Password')} <span className="text-destructive">*</span></label>
-                <div className="relative mb-4">
+                <div className="relative mb-1">
                   <input
                     type={showResetPw ? 'text' : 'password'}
-                    placeholder={tr('New password (min 6 characters)')}
+                    placeholder={tr('New password')}
                     required
                     value={resetPassword}
                     onChange={e => setResetPassword(e.target.value)}
@@ -812,6 +906,7 @@ export default function TeachersPage() {
                     {showResetPw ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
+                <div className="mb-3"><PasswordChecklist password={resetPassword} /></div>
               </>
             ) : (
               <p className="text-sm text-muted-foreground mb-4">
@@ -825,7 +920,7 @@ export default function TeachersPage() {
               </button>
               <button onClick={handleResetPassword} disabled={resetSaving}
                 className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
-                {resetSaving ? tr('Saving…') : isOfflineInstall ? tr('Set Password') : tr('Send')}
+                {resetSaving ? tr('Saving…') : resetIsDirect ? tr('Set Password') : tr('Send')}
               </button>
             </div>
           </div>

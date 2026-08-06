@@ -1575,9 +1575,10 @@ function newSection(type: AddSectionType, color: string, schoolType?: string): L
   }
   if (type === 'annual_band') {
     const uni = schoolType === 'UNIVERSITY'
+    const primary = schoolType === 'PRIMARY'
     const cells = uni
       ? [{ label: 'Cumulative GPA', field: 'cgpa' }, { label: 'Total Credits', field: 'credits' }, { label: 'Classification', field: 'classification' }]
-      : [{ label: 'Annual Average /20', field: 'annualAverage' }, { label: 'Annual Position', field: 'annualPosition' }, { label: 'Annual Class Average', field: 'annualClassAverage' }, { label: 'Final Decision', field: 'decision' }]
+      : [{ label: `Annual Average /${primary ? 100 : 20}`, field: 'annualAverage' }, { label: 'Annual Position', field: 'annualPosition' }, { label: 'Annual Class Average', field: 'annualClassAverage' }, { label: 'Final Decision', field: 'decision' }]
     return { id, type, tag: 'End of Year', cells: cells.map((c, i) => ({ id: `ac_${Date.now()}_${i}`, ...c })) }
   }
   if (type === 'panel_row') return { id, type, children: [], weights: [] }

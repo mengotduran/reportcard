@@ -17,10 +17,11 @@ export default function PromotionScalePage() {
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isPrimary = school?.type === 'PRIMARY'
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [truePassMark, setTruePassMark] = useState(isUniversity ? 2.0 : 10)
+  const [truePassMark, setTruePassMark] = useState(isUniversity ? 2.0 : isPrimary ? 50 : 10)
   const [trialMinimum, setTrialMinimum] = useState('')
   const [passLabel, setPassLabel] = useState('Pass')
   const [trialLabel, setTrialLabel] = useState('This student was promoted on trial')
@@ -89,7 +90,9 @@ export default function PromotionScalePage() {
         <p className="text-xs text-blue-700 dark:text-blue-400">
           {isUniversity
             ? t('The real pass mark below is not editable here — it comes from the Pass band on your Grading Scale.')
-            : t('The real pass mark is fixed at 10/20 and cannot be lowered — it is the same for every school.')}
+            : isPrimary
+              ? t('The real pass mark is fixed at 50/100 and cannot be lowered — it is the same for every school.')
+              : t('The real pass mark is fixed at 10/20 and cannot be lowered — it is the same for every school.')}
         </p>
       </div>
 

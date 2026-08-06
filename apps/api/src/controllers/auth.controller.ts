@@ -5,6 +5,7 @@ import { generateToken } from '../utils/jwt'
 import { AuthRequest } from '../middleware/auth'
 import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
 import { sendPasswordSetupEmail } from '../utils/email'
+import { validateNewPassword, validateUsername } from '../utils/passwordValidation'
 
 // Register a new school + admin account
 export const registerSchool = async (req: Request, res: Response) => {
@@ -79,12 +80,19 @@ export const registerSchool = async (req: Request, res: Response) => {
 // Login
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body
+    // Body key stays `email` for every existing caller — treated as "identifier" now that
+    // an account with no email logs in with `username` instead (see the User model). Email
+    // is tried first since that's still the common case; the username lookup only runs if
+    // it misses, so this costs a second query only for username-based logins.
+    const { email: identifier, password } = req.body
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: { school: true }
-    })
+    const user = (await prisma.user.findUnique({
+      where: { email: identifier },
+      include: { school: true },
+    })) ?? (await prisma.user.findUnique({
+      where: { username: identifier },
+      include: { school: true },
+    }))
 
     if (!user || !user.isActive) {
       res.status(401).json({ message: 'Invalid credentials' })
@@ -110,6 +118,7 @@ export const login = async (req: Request, res: Response) => {
         id: user.id,
         name: user.name,
         email: user.email,
+        username: user.username,
         role: user.role,
         masterClassLevel: user.masterClassLevel ?? null,
         preferredLanguage: user.preferredLanguage,
@@ -139,6 +148,7 @@ export const getMe = async (req: AuthRequest, res: Response) => {
       id: user.id,
       name: user.name,
       email: user.email,
+      username: user.username,
       role: user.role,
       masterClassLevel: user.masterClassLevel ?? null,
       preferredLanguage: user.preferredLanguage,
@@ -191,7 +201,8 @@ export const changeMyPassword = async (req: AuthRequest, res: Response) => {
     const currentPassword = String(req.body.currentPassword ?? '')
     const newPassword = String(req.body.newPassword ?? '')
     if (!currentPassword) { res.status(400).json({ message: 'Current password is required' }); return }
-    if (newPassword.length < 6) { res.status(400).json({ message: 'New password must be at least 6 characters' }); return }
+    const passwordError = validateNewPassword(newPassword)
+    if (passwordError) { res.status(400).json({ message: passwordError }); return }
 
     const user = await prisma.user.findUnique({ where: { id: req.user!.id } })
     if (!user) { res.status(404).json({ message: 'User not found' }); return }
@@ -220,10 +231,8 @@ export const resetSuperAdminPassword = async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Email is required' })
       return
     }
-    if (!newPassword || newPassword.length < 6) {
-      res.status(400).json({ message: 'Password must be at least 6 characters' })
-      return
-    }
+    const passwordError = validateNewPassword(String(newPassword ?? ''))
+    if (passwordError) { res.status(400).json({ message: passwordError }); return }
     const superAdmin = await prisma.user.findFirst({ where: { email, role: 'SUPERADMIN' } })
     if (!superAdmin) { res.status(404).json({ message: 'No superadmin found with that email' }); return }
     const hashed = await bcrypt.hash(newPassword, 12)
@@ -260,19 +269,20 @@ export const resetUserPassword = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    if (IS_OFFLINE_BUILD) {
+    // Offline builds never have email delivery, and a username-based account (no email on
+    // file) has nowhere to receive a setup link either way — both take the direct-set branch.
+    if (IS_OFFLINE_BUILD || !target.email) {
       const { newPassword } = req.body
-      if (!newPassword || newPassword.length < 6) {
-        res.status(400).json({ message: 'Password must be at least 6 characters' }); return
-      }
+      const passwordError = validateNewPassword(String(newPassword ?? ''))
+      if (passwordError) { res.status(400).json({ message: passwordError }); return }
       const hashed = await bcrypt.hash(newPassword, 12)
-      await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
+      await prisma.user.update({ where: { id: userId }, data: { password: hashed, passwordSetAt: new Date() } })
       res.json({ message: 'Password reset successfully' })
       return
     }
 
-    // Online: no password taken from the requester at all — a fresh setup link
-    // is emailed to the target user, same as a brand-new teacher invite.
+    // Online, with an email on file: no password taken from the requester at all — a fresh
+    // setup link is emailed to the target user, same as a brand-new teacher invite.
     const inviteToken = generateRawToken()
     await prisma.user.update({
       where: { id: userId },

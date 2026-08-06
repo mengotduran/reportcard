@@ -69,14 +69,15 @@ export const createSubject = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Inherit maxScore from the class definition
+    // Inherit maxScore (and, for primary, testMaxScore) from the class definition
     const classLevel_ = await prisma.classLevel.findUnique({
       where: { schoolId_name: { schoolId, name: classLevel } }
     })
     const maxScore = classLevel_?.maxScore ?? 20
+    const testMaxScore = classLevel_?.testMaxScore ?? 30
 
     const subject = await prisma.subject.create({
-      data: { schoolId, name, classLevel, maxScore, coefficient: coefficient ? Number(coefficient) : 1,
+      data: { schoolId, name, classLevel, maxScore, testMaxScore, coefficient: coefficient ? Number(coefficient) : 1,
         code: code?.trim().toUpperCase() || null,
         credit: credit != null && credit !== '' ? Number(credit) : null, term: termValue,
         requiredHours: requiredHours != null && requiredHours !== '' ? Number(requiredHours) : null,
@@ -247,7 +248,7 @@ export const copySubjects = async (req: AuthRequest, res: Response) => {
       await prisma.subject.createMany({
         data: toCreate.map((s) => ({
           schoolId, name: s.name, code: s.code, classLevel: toClassLevel,
-          maxScore: s.maxScore, coefficient: s.coefficient, compulsory: s.compulsory,
+          maxScore: s.maxScore, testMaxScore: s.testMaxScore, coefficient: s.coefficient, compulsory: s.compulsory,
           credit: s.credit, term: s.term, requiredHours: s.requiredHours,
         })),
       })

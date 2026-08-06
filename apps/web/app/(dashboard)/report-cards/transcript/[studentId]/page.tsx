@@ -114,6 +114,7 @@ export default function AnnualTranscriptPage() {
     </div>
   )
   const isUniversity = (data.school.type ?? 'UNIVERSITY') === 'UNIVERSITY'
+  const isPrimary = data.school.type === 'PRIMARY'
   const periodWord = isUniversity ? 'semester' : 'term'
   // Safety net for direct URL access — the report-cards list already disables its
   // transcript button until every period is published, but nothing stops someone
@@ -141,9 +142,17 @@ export default function AnnualTranscriptPage() {
   // (Credits/CGPA/Remark at a university, Annual Average/Grade elsewhere).
   const allSubjects = periods.flatMap(p => p.subjects)
   const allEntries = periods.flatMap(p => p.entries)
-  // Annual average = mean of the year's term averages, each coefficient-weighted.
+  // Annual average = mean of the year's term averages. Secondary weights each term's
+  // average by subject coefficient; primary (Test+Exam, no coefficient — see
+  // reportcard.controller.ts saveEntries) takes a plain mean of subject totals instead.
   // University transcripts summarise by CGPA instead and ignore this.
   const termAverages = periods.map(p => {
+    if (isPrimary) {
+      const filled = p.subjects
+        .map(subj => p.entries.find(x => x.subjectId === subj.id))
+        .filter((e): e is typeof p.entries[number] => e?.score != null)
+      return filled.length > 0 ? filled.reduce((s, e) => s + e.score!, 0) / filled.length : 0
+    }
     let coef = 0, weighted = 0
     for (const subj of p.subjects) {
       const e = p.entries.find(x => x.subjectId === subj.id)

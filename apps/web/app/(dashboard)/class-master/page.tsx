@@ -20,9 +20,10 @@ interface Student {
 
 export default function ClassMasterPage() {
   const router = useRouter()
-  const { isAuthenticated, user, updateUser } = useAuthStore()
+  const { isAuthenticated, user, updateUser, school } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  const isPrimary = school?.type === 'PRIMARY'
 
   const masterClass = user?.masterClassLevel ?? ''
   const [term, setTerm] = useState<{ id: string; name: string; session: string } | null>(null)
@@ -241,7 +242,7 @@ export default function ClassMasterPage() {
             </div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-muted-foreground">
-                {t('Average:')} {editTarget.reportCard?.average != null ? editTarget.reportCard.average.toFixed(1) : '—'}/20 · {schoolLang === 'FR' ? t('French') : t('English')}
+                {t('Average:')} {editTarget.reportCard?.average != null ? editTarget.reportCard.average.toFixed(1) : '—'}/{isPrimary ? 100 : 20} · {schoolLang === 'FR' ? t('French') : t('English')}
               </span>
               <button
                 onClick={handleGenerate}

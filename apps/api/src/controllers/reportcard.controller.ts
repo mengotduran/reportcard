@@ -774,6 +774,10 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
 
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, marksEntryMode: true } })
     const isUniversity = school?.type === 'UNIVERSITY'
+    // Primary: Test + Exam on a raw 0-maxScore scale (like university's CA/Exam), but the
+    // overall average stays a PLAIN mean of subject totals — no coefficient weighting. See
+    // the average calculation below for where this actually diverges from university.
+    const isPrimary = school?.type === 'PRIMARY'
 
     const role = req.user!.role
     const userId = req.user!.id
@@ -906,11 +910,12 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // scale carries, is exactly what resit eligibility turns on.
     let gradeRanges = parseStoredScale(gradingScale?.ranges).ranges
     // For secondary schools, discard any stale 0–100 percent-scale ranges (boundary > 20).
-    // University ranges are intentionally 0–100 and must NOT be stripped.
-    if (!isUniversity && gradeRanges.some(r => Number(r?.maxScore) > 20 || Number(r?.minScore) > 20)) gradeRanges = []
+    // University AND primary ranges are intentionally 0–100 (raw Test+Exam scale) and must
+    // NOT be stripped.
+    if (!isUniversity && !isPrimary && gradeRanges.some(r => Number(r?.maxScore) > 20 || Number(r?.minScore) > 20)) gradeRanges = []
 
-    // Secondary fallback (0–20 scale); university defaults are 0–100.
-    const DEFAULT_API_RANGES = isUniversity
+    // Secondary fallback (0–20 scale); university/primary defaults are 0–100.
+    const DEFAULT_API_RANGES = (isUniversity || isPrimary)
       ? [
           { minScore: 80, maxScore: 100, grade: 'A',  remark: 'Excellent' },
           { minScore: 70, maxScore: 79,  grade: 'B+', remark: 'Very Good' },
@@ -935,7 +940,7 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       return sorted.find(r => score >= r.minScore && score <= r.maxScore)
     }
     const getAutoRemark = (score: number): string => matchRange(score)?.remark ?? ''
-    const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade(isUniversity ? score : (score / 20) * 100)
+    const getGradeLetter = (score: number): string => matchRange(score)?.grade ?? calculateGrade((isUniversity || isPrimary) ? score : (score / 20) * 100)
 
     // ── Resit eligibility (university) ───────────────────────────────────────────
     // A resit may be recorded for any student who FAILED THE COURSE, whatever their exam
@@ -1005,15 +1010,17 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
         // Secondary keeps averaging over the two sequence slots for the same reason — one
         // sequence sat out of two is half the term's marks, not a term that did not happen.
         const anyComponent = seq1 !== null || effectiveSeq2 !== null
+        // Primary: Test (seq1) + Exam (seq2), direct sum, same shape as university's CA+Exam
+        // — both components are already on their own scale (testMaxScore / maxScore-testMaxScore).
         const finalScore: number | null = entry.score !== undefined
           ? entry.score
           : anyComponent
-            ? isUniversity ? (seq1 ?? 0) + (effectiveSeq2 ?? 0) : ((seq1 ?? 0) + (effectiveSeq2 ?? 0)) / 2
+            ? (isUniversity || isPrimary) ? (seq1 ?? 0) + (effectiveSeq2 ?? 0) : ((seq1 ?? 0) + (effectiveSeq2 ?? 0)) / 2
             : null
         const sub = subjectMap[entry.subjectId]
-        // University: match raw 0-100 score against 0-100 ranges.
+        // University/primary: match raw score against the school's raw-scale ranges.
         // Secondary: normalise to /20 then match against 0-20 ranges.
-        const scoreForGrade = isUniversity
+        const scoreForGrade = (isUniversity || isPrimary)
           ? finalScore
           : (finalScore !== null && sub && sub.maxScore > 0 ? (finalScore / sub.maxScore) * 20 : null)
         const autoRemark = scoreForGrade !== null ? getAutoRemark(scoreForGrade) : ''
@@ -1032,19 +1039,30 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       })
     )
 
-    // Weighted average out of maxScore (e.g. 14.4/20)
+    // Primary: PLAIN average — Overall Total / Number of subjects, no coefficient weighting
+    // (the doc's stated formula; coefficient stays on Subject as a field but isn't read here).
+    // Everyone else: weighted average out of maxScore (e.g. 14.4/20) —
     // average = Σ(score × coeff) / Σ(coeff)
-    let totalWeighted = 0
-    let totalCoeff = 0
-    for (const e of createdEntries) {
-      if (e.score == null) continue // skip unfilled subjects
-      const sub = subjectMap[e.subjectId]
-      const coeff = sub?.coefficient ?? 1
-      totalWeighted += e.score * coeff
-      totalCoeff += coeff
+    let average: number | null
+    let totalScore: number
+    if (isPrimary) {
+      const filled = createdEntries.filter((e) => e.score != null)
+      const sum = filled.reduce((s, e) => s + e.score!, 0)
+      average = filled.length > 0 ? sum / filled.length : null
+      totalScore = sum
+    } else {
+      let totalWeighted = 0
+      let totalCoeff = 0
+      for (const e of createdEntries) {
+        if (e.score == null) continue // skip unfilled subjects
+        const sub = subjectMap[e.subjectId]
+        const coeff = sub?.coefficient ?? 1
+        totalWeighted += e.score * coeff
+        totalCoeff += coeff
+      }
+      average = totalCoeff > 0 ? totalWeighted / totalCoeff : null
+      totalScore = totalWeighted // Σ(score × coeff) for filled subjects only
     }
-    const average = totalCoeff > 0 ? totalWeighted / totalCoeff : null
-    const totalScore = totalWeighted // Σ(score × coeff) for filled subjects only
 
     await prisma.reportCard.update({
       where: { id },

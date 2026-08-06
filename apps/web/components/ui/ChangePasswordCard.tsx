@@ -3,7 +3,9 @@ import { useState } from 'react'
 import { KeyRound, Eye, EyeOff } from 'lucide-react'
 import { changeMyPasswordApi } from '@/lib/api/auth'
 import { useToast } from '@/lib/useToast'
+import { isPasswordValid } from '@/lib/passwordValidation'
 import Toast from './Toast'
+import PasswordChecklist from './PasswordChecklist'
 
 const FIELD = 'w-full border border-border rounded-lg px-3 py-2 pr-9 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50'
 
@@ -19,11 +21,11 @@ export default function ChangePasswordCard() {
   const [show, setShow] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const canSubmit = current.length > 0 && next.length >= 6 && next === confirm
+  const canSubmit = current.length > 0 && isPasswordValid(next) && next === confirm
 
   const handleSubmit = async () => {
     if (!canSubmit) return
-    if (next.length < 6) { showToast('New password must be at least 6 characters', 'error'); return }
+    if (!isPasswordValid(next)) { showToast('New password does not meet the requirements below', 'error'); return }
     if (next !== confirm) { showToast('New passwords do not match', 'error'); return }
     setSaving(true)
     try {
@@ -75,6 +77,7 @@ export default function ChangePasswordCard() {
             className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             autoComplete="new-password"
           />
+          <PasswordChecklist password={next} />
         </div>
         <div>
           <label className="text-xs font-medium text-muted-foreground mb-1 block">Confirm New Password</label>

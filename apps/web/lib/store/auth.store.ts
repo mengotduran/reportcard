@@ -4,7 +4,10 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 interface User {
   id: string
   name: string
-  email: string
+  // Nullable: a username-only account (no email on file) has this null instead — see
+  // the User model's own comment for the full rationale.
+  email: string | null
+  username?: string | null
   role: string
   masterClassLevel?: string | null
   preferredLanguage?: string | null

@@ -9,6 +9,7 @@ export interface ClassLevel {
   hasStream: boolean
   order: number
   maxScore: number
+  testMaxScore: number
   feeAmount: number
   hndRegistrationFee?: number | null
   departmentId?: string | null
@@ -22,12 +23,12 @@ export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }
   return res.data
 }
 
-export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme }) => {
+export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }
 
-export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme }) => {
+export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme }) => {
   const res = await api.put(`/class-levels/${id}`, data)
   return res.data
 }
@@ -58,5 +59,19 @@ export const getClassLevelDeleteImpactApi = async (id: string): Promise<DeleteIm
 // the class name exactly, so no other caller can wipe a roster with a bare DELETE.
 export const deleteClassLevelApi = async (id: string, confirmName?: string) => {
   const res = await api.delete(`/class-levels/${id}`, confirmName ? { data: { confirmName } } : undefined)
+  return res.data
+}
+
+// Primary-only: the class's 1-3 shared teachers, who between them teach every subject in the
+// class. masterTeacherId is required unless teacherIds has exactly one entry.
+export const setClassTeachersApi = async (id: string, data: { teacherIds: string[]; masterTeacherId?: string }) => {
+  const res = await api.put(`/class-levels/${id}/teachers`, data)
+  return res.data
+}
+
+// Primary-only: creates whichever of the 9 standard classes (Pre-Nursery through Class 6)
+// don't already exist for this school yet — safe to call more than once.
+export const seedDefaultPrimaryClassesApi = async (): Promise<{ message: string; created: number }> => {
+  const res = await api.post('/class-levels/seed-defaults')
   return res.data
 }

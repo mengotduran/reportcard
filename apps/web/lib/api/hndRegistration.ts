@@ -36,7 +36,7 @@ export interface HndRegDetail {
   totalPaid: number
   balance: number
   status: RegStatus
-  payments: FeePayment[]
+  payments: (FeePayment & { examNumber?: string | null })[]
 }
 
 export const getHndRegistrationListApi = async (): Promise<HndRegList> => {
@@ -51,7 +51,7 @@ export const getStudentHndRegistrationApi = async (studentId: string): Promise<H
 
 export const addHndRegistrationPaymentApi = async (
   studentId: string,
-  data: { amount: number; paidOn?: string; note?: string },
+  data: { amount: number; paidOn?: string; note?: string; examNumber?: string },
 ): Promise<HndRegDetail> => {
   const res = await api.post(`/hnd-registration/student/${studentId}/payments`, data)
   return res.data

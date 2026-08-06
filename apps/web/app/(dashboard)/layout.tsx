@@ -121,8 +121,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const SECONDARY_NAV_LABELS: Record<string, string> = {
     'HND Registration': 'GCE Registration',
   }
+  // Primary schools track exam (FSLC) registration for Class Six — same feature again.
+  const PRIMARY_NAV_LABELS: Record<string, string> = {
+    'HND Registration': 'FSLC Registration',
+  }
   const navItems = baseNavItems
-    .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY')
+    .filter((item) => !(item as { examRegistration?: boolean }).examRegistration || school?.type === 'UNIVERSITY' || school?.type === 'SECONDARY' || school?.type === 'PRIMARY')
     .map((item) => {
       if (school?.type === 'UNIVERSITY' && (UNIVERSITY_NAV_LABELS[item.label] || UNIVERSITY_NAV_HREFS[item.href])) {
         return {
@@ -132,6 +136,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         }
       }
       if (school?.type === 'SECONDARY' && SECONDARY_NAV_LABELS[item.label]) return { ...item, label: SECONDARY_NAV_LABELS[item.label] }
+      if (school?.type === 'PRIMARY' && PRIMARY_NAV_LABELS[item.label]) return { ...item, label: PRIMARY_NAV_LABELS[item.label] }
       return item
     })
 

@@ -51,6 +51,7 @@ export default function MarksEntryPage() {
   const termName = searchParams.get('termName') ?? ''
   const lang = useLang()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isPrimary = school?.type === 'PRIMARY'
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   // True when the signed-in user isn't who this school's policy lets record marks: a
   // teacher when the school routes entry through the administration, or an admin
@@ -68,9 +69,9 @@ export default function MarksEntryPage() {
   // branch: adminOnlyMarks already means something different for them (see above).
   const caExemptForTeacher = !isAdminRole && isUniversity && seqIndex === 0 && adminOnlyMarks
   const isResit = isUniversity && seqIndex === 2
-  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
-  const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
-  const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
+  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : isPrimary ? (seqIndex === 0 ? 'Test' : 'Exam') : seqFull(termName, seqIndex, lang)
+  const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : isPrimary ? (seqIndex === 0 ? 'Exam' : 'Test') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
+  const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : isPrimary ? (seqIndex === 0 ? 'Exam' : 'Test') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
 
   const [rows, setRows] = useState<Row[]>([])
   // Scores exactly as last loaded from the server, keyed by student. `rows` is the EDIT
@@ -82,7 +83,13 @@ export default function MarksEntryPage() {
   // to refetch over the top of typing, so the user is offered the reload instead.
   const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [maxScore, setMaxScore] = useState(20)
-  const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
+  // Primary only — the Test component's ceiling; Exam ceiling is maxScore - testMaxScore.
+  const [testMaxScore, setTestMaxScore] = useState(30)
+  const effectiveMax = isUniversity
+    ? (seqIndex === 0 ? 30 : 70)
+    : isPrimary
+      ? (seqIndex === 0 ? testMaxScore : maxScore - testMaxScore)
+      : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -141,6 +148,7 @@ export default function MarksEntryPage() {
     ])
     const subject = subjectData.subjects.find((s: any) => s.id === subjectId)
     if (subject?.maxScore) setMaxScore(subject.maxScore)
+    if (subject?.testMaxScore) setTestMaxScore(subject.testMaxScore)
     if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
 
     // One request for the whole class — entries come straight off the overview response
@@ -613,7 +621,11 @@ export default function MarksEntryPage() {
                 className={`text-xs px-2.5 py-1.5 rounded-lg border transition ${seqIndex === i
                   ? 'border-primary bg-primary/10 text-primary font-semibold'
                   : 'border-border text-muted-foreground hover:text-foreground'}`}>
-                {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqShort(termName, i, lang)}
+                {isUniversity
+                  ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit'))
+                  : isPrimary
+                    ? (i === 0 ? `${t('Test')} (${testMaxScore})` : `${t('Exam')} (${maxScore - testMaxScore})`)
+                    : seqShort(termName, i, lang)}
               </button>
             ))}
           </div>
@@ -677,18 +689,18 @@ export default function MarksEntryPage() {
           (and would look like a back door around ADMIN_ONLY) to show a "fill this in"
           shortcut on a tab this user has no editable rows on at all.
 
-          NOT shown for universities at all. CA and Exam are marked out of different totals
-          (effectiveMax: 30 and 70), so one is never a sensible starting point for the other:
-          copying CA into Exam silently halves every student, and copying Exam into CA writes
-          scores above the CA maximum. Primary/secondary sequences share one maxScore, which
-          is the only case where "same marks again" is a meaningful shortcut. */}
+          NOT shown for universities OR primary schools. CA/Test and Exam are marked out of
+          different totals there (e.g. 30 and 70), so one is never a sensible starting point
+          for the other: copying Test into Exam silently halves every student, and copying
+          Exam into Test writes scores above the Test maximum. Secondary sequences share one
+          maxScore, which is the only case where "same marks again" is a meaningful shortcut. */}
       {isResit ? (
         <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
           <span className="flex-1 text-sm text-sky-700">
             {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
           </span>
         </div>
-      ) : editableRows.length > 0 && !isUniversity && (
+      ) : editableRows.length > 0 && !isUniversity && !isPrimary && (
         <button
           onClick={handleCopyFromOther}
           className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"
@@ -752,7 +764,11 @@ export default function MarksEntryPage() {
                 <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
                 <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">{t('STUDENT NAME')}</th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white w-44 border-r border-white/10">
-                  {isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}
+                  {isUniversity
+                    ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70')
+                    : isPrimary
+                      ? `${seqIndex === 0 ? t('TEST') : t('EXAM')} / ${effectiveMax}`
+                      : `${t('MARKS /')} ${effectiveMax}`}
                 </th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white">{t('PERFORMANCE')}</th>
               </tr>

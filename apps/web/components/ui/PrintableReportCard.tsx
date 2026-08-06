@@ -766,7 +766,9 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     if (field === 'average')        return average.toFixed(1)
     if (field === 'position')       return position != null ? `${ordinalPos(position)}${classSize ? `/${classSize}` : ''}` : '—'
     if (field === 'classAverage')   return classAverage != null ? classAverage.toFixed(1) : '—'
-    if (field === 'grade')          return calculateGrade((average / 20) * 100)
+    // University/primary average is already a raw 0-100 mark; secondary's is /20 and
+    // needs scaling up to the 0-100 range calculateGrade expects.
+    if (field === 'grade')          return calculateGrade((school.type === 'UNIVERSITY' || school.type === 'PRIMARY') ? average : (average / 20) * 100)
     if (field === 'classSize')      return classSize != null ? String(classSize) : '—'
     // Annual figures: present only on the session's FINAL term (see annualAverage in
     // reportcard.controller.ts), so these dash out on a First/Second Term card.
@@ -1135,7 +1137,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       // band on coefficients and the term's own coefficient-weighted average — hence
       // both sets are computed here regardless of school type.
       const scopedAgg = s.transcriptSemester ? (() => {
-        let credit = 0, gpaCredit = 0, mark = 0, gp = 0, wp = 0, coef = 0, weightedMark = 0
+        let credit = 0, gpaCredit = 0, mark = 0, gp = 0, wp = 0, coef = 0, weightedMark = 0, filled = 0
         for (const subj of scopedSubjects) {
           const e = scopedEntries.find(x => x.subjectId === subj.id)
           const c = subj.credit ?? 0
@@ -1151,23 +1153,29 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           //             marks had not been entered yet.
           credit += c
           if (g != null) { gpaCredit += c; gp += g; wp += g * c }
-          if (e?.score != null) { coef += cf; weightedMark += e.score * cf }
+          if (e?.score != null) { coef += cf; weightedMark += e.score * cf; filled++ }
         }
-        return { credit, gpaCredit, mark, gp, wp, coef, weightedMark }
+        return { credit, gpaCredit, mark, gp, wp, coef, weightedMark, filled }
       })() : null
+      const isPrimary = school.type === 'PRIMARY'
       const statResolver = (field: string): React.ReactNode => {
         if (scopedAgg) {
           if (field === 'credits')   return String(scopedAgg.credit)
           if (field === 'total')     return scopedAgg.mark % 1 === 0 ? String(scopedAgg.mark) : scopedAgg.mark.toFixed(1)
           if (field === 'gpTotal')   return scopedAgg.gp % 1 === 0 ? String(scopedAgg.gp) : scopedAgg.gp.toFixed(1)
-          // University bands on grade-point × credit; everyone else on avg × coefficient
+          // University bands on grade-point × credit; secondary on avg × coefficient
           // (subjects here carry a coefficient, not credit hours — scopedAgg.wp is always
           // credit-based, so it silently zeroed out for non-university until this branch).
+          // Primary has no coefficient weighting at all — see the 'average' branch below.
           if (field === 'wpTotal')   return (school.type === 'UNIVERSITY' ? scopedAgg.wp : scopedAgg.weightedMark).toFixed(2)
           if (field === 'gpa')       return (scopedAgg.gpaCredit > 0 ? scopedAgg.wp / scopedAgg.gpaCredit : 0).toFixed(2)
           if (field === 'coefTotal') return String(scopedAgg.coef)
           // Scoped to this period — the document-level 'average' is the ANNUAL one.
-          if (field === 'average')   return (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(2)
+          // Primary: plain mean of subject totals (Overall Total / Number of subjects),
+          // no coefficient weighting — see reportcard.controller.ts saveEntries.
+          if (field === 'average')   return isPrimary
+            ? (scopedAgg.filled > 0 ? scopedAgg.mark / scopedAgg.filled : 0).toFixed(2)
+            : (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(2)
         }
         return resolveStat(field)
       }

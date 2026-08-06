@@ -104,10 +104,10 @@ export default function LoginPage() {
         <div className="bg-card border border-border rounded-xl p-6 space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-              Email
+              Email or Username
             </label>
             <input
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => handleEmailChange(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && document.getElementById('pw-input')?.focus()}

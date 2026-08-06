@@ -64,7 +64,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
 export const createClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee, departmentId, programme } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, testMaxScore, feeAmount, hndRegistrationFee, departmentId, programme } = req.body
 
     if (!name?.trim()) {
       res.status(400).json({ message: 'Class name is required' })
@@ -102,6 +102,9 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         hasStream: hasStream ?? false,
         order: order ?? 0,
         maxScore: maxScore ? Number(maxScore) : 20,
+        // Primary only in practice (Test/Exam split); harmless default elsewhere since
+        // secondary/university never read this field.
+        testMaxScore: testMaxScore ? Number(testMaxScore) : 30,
         feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0),
         hndRegistrationFee: regFee,
         departmentId: resolvedDepartmentId,
@@ -119,7 +122,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, feeAmount, hndRegistrationFee, departmentId, programme } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, testMaxScore, feeAmount, hndRegistrationFee, departmentId, programme } = req.body
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) {
@@ -194,6 +197,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
       ...(hasStream !== undefined ? { hasStream } : {}),
       ...(order !== undefined ? { order } : {}),
       ...(maxScore !== undefined ? { maxScore: Number(maxScore) } : {}),
+      ...(testMaxScore !== undefined ? { testMaxScore: Number(testMaxScore) } : {}),
       ...(feeAmount !== undefined ? { feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0) } : {}),
       ...(hndRegistrationFee !== undefined
         ? { hndRegistrationFee: !regEligible || hndRegistrationFee === null || hndRegistrationFee === '' ? null : Math.max(0, Math.round(Number(hndRegistrationFee)) || 0) }
@@ -438,6 +442,206 @@ export const deleteClassLevel = async (req: AuthRequest, res: Response) => {
       cleared.templates && `removed from ${cleared.templates} Excel template${cleared.templates === 1 ? '' : 's'}`,
     ].filter(Boolean).join(', ')
     res.json({ message: alsoCleared ? `Class deleted. Also: ${alsoCleared}.` : 'Class deleted', cleared })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// Who's currently on a class's team, independent of whether it has any subjects yet.
+// TeacherSubject rows only exist once a class has subjects, so a brand-new class (created,
+// staffed, subjects added later — a completely normal order) would otherwise make every
+// non-master member invisible, undercounting the team and letting a 4th teacher slip past
+// the 1-3 cap. `departments` is primary schools' otherwise-unused equivalent of the
+// secondary/university "explicit placement" field (see its own doc comment on the User
+// model) — repurposed here to hold class names a teacher is on the team for. Read/written
+// as a whole array rather than via array-mutation operators (`has`/`push`) because it's a
+// native Postgres String[] online but a JSON column on the SQLite offline build, which
+// supports neither — same reasoning as the Excel-template class list elsewhere in this file.
+export async function classTeamRoster(schoolId: string, className: string): Promise<{ id: string; departments: string[] }[]> {
+  const teachers = await prisma.user.findMany({
+    where: { schoolId, isActive: true, role: { in: ['CLASS_TEACHER', 'CLASS_MASTER'] } },
+    select: { id: true, departments: true },
+  })
+  return teachers
+    .map((t) => ({ id: t.id, departments: (Array.isArray(t.departments) ? t.departments : []) as string[] }))
+    .filter((t) => t.departments.includes(className))
+}
+
+/**
+ * Primary-only: a class has 1-3 teachers who between them can teach EVERY subject in that
+ * class (unlike secondary/university, where one course belongs to one teacher). Replaces the
+ * whole team in one call — every subject in the class gets an active TeacherSubject row for
+ * every teacher in the new team, and anyone dropped from the team has their rows for THIS
+ * class's subjects (only) ended, never deleted, so hours already taught stay on record. The
+ * roster itself (see classTeamRoster above) is also kept in sync so it stays correct with or
+ * without subjects.
+ *
+ * Shared by the Classes page's "Set Teachers" modal (setClassTeachers below) AND teacher
+ * creation (teacher.controller.ts createTeacher, which builds newIds/masterId itself — a
+ * new hire joins as a non-master unless the class had nobody on it yet — then calls this
+ * same function so the two paths can never drift apart).
+ */
+export async function applyClassTeachingTeam(schoolId: string, level: { name: string }, ids: string[], masterId: string): Promise<void> {
+  const subjects = await prisma.subject.findMany({ where: { schoolId, classLevel: level.name }, select: { id: true } })
+  const subjectIds = subjects.map((s) => s.id)
+  const now = new Date()
+
+  if (subjectIds.length > 0) {
+    const active = await prisma.teacherSubject.findMany({
+      where: { subjectId: { in: subjectIds }, endedAt: null },
+      select: { id: true, userId: true, subjectId: true },
+    })
+    const haveKey = new Set(active.map((a) => `${a.userId}:${a.subjectId}`))
+
+    // Ended, not deleted, same as a normal handover — the hours already taught under this
+    // row still belong to whoever taught them.
+    const toEnd = active.filter((a) => !ids.includes(a.userId)).map((a) => a.id)
+    // One row per (teacher, subject) pair not already active — an existing pair is left
+    // completely untouched, so its original startedAt (and the hours already accrued
+    // against it) survive a re-save of an unchanged team.
+    const toAdd = ids.flatMap((uid) => subjectIds.filter((sid) => !haveKey.has(`${uid}:${sid}`)).map((sid) => ({ userId: uid, subjectId: sid, startedAt: now })))
+
+    await prisma.$transaction([
+      ...(toEnd.length ? [prisma.teacherSubject.updateMany({ where: { id: { in: toEnd } }, data: { endedAt: now } })] : []),
+      ...(toAdd.length ? [prisma.teacherSubject.createMany({ data: toAdd })] : []),
+    ])
+  }
+
+  // Roster: add level.name for every kept/new member who doesn't already have it, drop it
+  // for anyone on the prior roster who isn't in the new team.
+  const priorRoster = await classTeamRoster(schoolId, level.name)
+  const priorIds = new Set(priorRoster.map((t) => t.id))
+  const droppedFromRoster = priorRoster.filter((t) => !ids.includes(t.id))
+  const newToRoster = await prisma.user.findMany({
+    where: { id: { in: ids.filter((uid) => !priorIds.has(uid)) } },
+    select: { id: true, departments: true },
+  })
+  await prisma.$transaction([
+    ...newToRoster.map((t) => prisma.user.update({
+      where: { id: t.id },
+      data: { departments: [...(Array.isArray(t.departments) ? t.departments as string[] : []), level.name] },
+    })),
+    ...droppedFromRoster.map((t) => prisma.user.update({
+      where: { id: t.id },
+      data: { departments: t.departments.filter((d) => d !== level.name) },
+    })),
+  ])
+
+  // Demote whoever currently masters THIS class if someone else is taking over — a
+  // teacher's mastery of a DIFFERENT class is never touched here.
+  const currentMaster = await prisma.user.findFirst({
+    where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: level.name, id: { not: masterId } },
+  })
+  if (currentMaster) {
+    await prisma.user.update({ where: { id: currentMaster.id }, data: { role: 'CLASS_TEACHER', masterClassLevel: null } })
+  }
+  await prisma.user.update({ where: { id: masterId }, data: { role: 'CLASS_MASTER', masterClassLevel: level.name } })
+}
+
+/**
+ * A team of 1 auto-becomes that teacher's Class Master. A team of 2 or 3 REQUIRES
+ * masterTeacherId in the same request — this is the one thing the admin must decide, so it
+ * is refused rather than left to default to whoever happened to be picked first.
+ */
+export const setClassTeachers = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+    const { teacherIds, masterTeacherId } = req.body as { teacherIds?: unknown; masterTeacherId?: unknown }
+
+    const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
+    if (!level) { res.status(404).json({ message: 'Class not found' }); return }
+
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    if (school?.type !== 'PRIMARY') {
+      res.status(400).json({ message: 'A shared class teaching team only applies to primary schools' })
+      return
+    }
+
+    const ids = Array.isArray(teacherIds) ? [...new Set(teacherIds.map(String))] : []
+    if (ids.length < 1 || ids.length > 3) {
+      res.status(400).json({ message: 'A class needs between 1 and 3 teachers' })
+      return
+    }
+
+    const teachers = await prisma.user.findMany({ where: { id: { in: ids }, schoolId, isActive: true } })
+    if (teachers.length !== ids.length) {
+      res.status(400).json({ message: 'One or more selected teachers were not found' })
+      return
+    }
+
+    // Auto for a solo teacher; otherwise the admin must say which one, every time this is
+    // saved — adding a 2nd teacher to a previously-solo class does not let the first one
+    // keep the role by default, since that default might not be who the admin actually wants.
+    let masterId: string
+    if (ids.length === 1) {
+      masterId = ids[0]
+    } else {
+      const requestedMaster = typeof masterTeacherId === 'string' ? masterTeacherId : ''
+      if (!requestedMaster || !ids.includes(requestedMaster)) {
+        res.status(400).json({ message: 'Choose a class master before saving' })
+        return
+      }
+      masterId = requestedMaster
+    }
+
+    await applyClassTeachingTeam(schoolId, level, ids, masterId)
+
+    res.json({ message: 'Class teaching team updated' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// The standard Cameroon primary structure, in teaching order. Nothing else in this app
+// auto-creates classes for a school (every type's admin adds them by hand) — this is a
+// one-click convenience for primary specifically, not a background/on-signup step, so a
+// school that doesn't run pre-primary can just delete the ones it doesn't want afterward.
+const DEFAULT_PRIMARY_CLASSES = [
+  'Pre-Nursery', 'Nursery 1', 'Nursery 2',
+  'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6',
+]
+
+/**
+ * POST /api/class-levels/seed-defaults
+ * Primary only. Creates whichever of the 9 standard classes don't already exist for this
+ * school (by name) — safe to click more than once, and safe after the admin has already
+ * created some of them by hand. Fee starts at 0, same as any manually-created class (no
+ * stock prefill — see School Onboarding Safeguards).
+ */
+export const seedDefaultPrimaryClasses = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    if (school?.type !== 'PRIMARY') {
+      res.status(400).json({ message: 'Default classes are only available for primary schools' })
+      return
+    }
+
+    const existing = await prisma.classLevel.findMany({ where: { schoolId }, select: { name: true } })
+    const existingNames = new Set(existing.map((c) => c.name))
+    const toCreate = DEFAULT_PRIMARY_CLASSES
+      .map((name, i) => ({ name, order: i }))
+      .filter((c) => !existingNames.has(c.name))
+
+    if (toCreate.length === 0) {
+      res.json({ message: 'All default classes already exist', created: 0 })
+      return
+    }
+
+    // Order continues after whatever classes already exist, so a partial backfill doesn't
+    // interleave with (or overwrite the ordering of) classes the admin already set up.
+    const baseOrder = existing.length
+    await prisma.classLevel.createMany({
+      data: toCreate.map((c, i) => ({
+        schoolId, name: c.name, order: baseOrder + i,
+        maxScore: 100, testMaxScore: 30, feeAmount: 0, programme: 'DAY',
+      })),
+    })
+
+    res.json({ message: `${toCreate.length} class${toCreate.length === 1 ? '' : 'es'} created`, created: toCreate.length })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

@@ -318,6 +318,7 @@ export default function ReportCardDetailPage() {
   if (!reportCard) return <div className="text-center py-12 text-muted-foreground text-sm">Report card not found.</div>
 
   const isUniversity = reportCard.school.type === 'UNIVERSITY'
+  const isPrimary = reportCard.school.type === 'PRIMARY'
 
   // Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors PrintableReportCard logic
   const semGpaInfo = (() => {
@@ -799,7 +800,7 @@ export default function ReportCardDetailPage() {
             {(() => { const isFr = reportCard.school.language === 'FR'; return (canEditRemarks || canAdminEditRemarks) ? (
               <>
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs text-muted-foreground">{tr('Average:')} {reportCard.average != null ? reportCard.average.toFixed(1) : '—'}/20 · {tr('Language:')} {isFr ? tr('French') : tr('English')}</span>
+                  <span className="text-xs text-muted-foreground">{tr('Average:')} {reportCard.average != null ? reportCard.average.toFixed(1) : '—'}/{isPrimary ? 100 : 20} · {tr('Language:')} {isFr ? tr('French') : tr('English')}</span>
                   <button
                     onClick={handleGenerateRemarks}
                     disabled={generatingRemarks || reportCard.average == null}

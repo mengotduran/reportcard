@@ -200,6 +200,7 @@ model ClassLevel {
   hasStream          Boolean  @default(false)
   order              Int      @default(0)
   maxScore           Int      @default(20)
+  testMaxScore       Int      @default(30) // primary only — Test ceiling out of maxScore, Exam = maxScore - testMaxScore
   feeAmount          Int      @default(0) // total fee for this class per academic session, in XAF
   hndRegistrationFee Int?
   departmentId       String?
@@ -217,7 +218,11 @@ model User {
   id                String   @id @default(uuid())
   schoolId          String?
   name              String
-  email             String   @unique
+  // Nullable: a no-email account logs in with `username` instead — see below.
+  email             String?  @unique
+  // Alternative login identifier for someone with no email. See schema.prisma's User model
+  // for the full rationale (identical here).
+  username          String?  @unique
   password          String
   role              UserRole
   masterClassLevel  String?
@@ -311,6 +316,7 @@ model HndRegistrationPayment {
   amount     Int
   paidOn     DateTime
   note       String?
+  examNumber String? // government exam registration number (FSLC/GCE/HND), optional
   recordedBy String?
   createdAt  DateTime @default(now())
 
@@ -339,6 +345,7 @@ model Subject {
   code        String?
   classLevel  String
   maxScore    Int      @default(20)
+  testMaxScore Int     @default(30) // primary only — see ClassLevel.testMaxScore
   coefficient Int      @default(1)
   credit      Int?     // credit hours (university GPA courses)
   compulsory  Boolean  @default(true) // optional subjects: a student may not take them

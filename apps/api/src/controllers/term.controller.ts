@@ -139,11 +139,15 @@ export const setCurrentTerm = async (req: AuthRequest, res: Response) => {
   }
 }
 
-// The real pass mark for non-university schools — fixed at 10/20 (Cameroon-style), never
-// admin-editable. University has no equivalent constant: its true pass mark is derived live
-// from the school's own GradingScale classification bands (see truePassCgpaFor), since a
-// CGPA scale's "passing" point already varies by what each school configured there.
-const TRUE_PASS_MARK_NON_UNIVERSITY = 10
+// The real pass mark for secondary schools — fixed at 10/20 (Cameroon-style), never
+// admin-editable. Primary is graded on a raw Test+Exam /100 scale instead (see
+// reportcard.controller.ts saveEntries), so its fixed pass mark is 50/100 — the same
+// point on the scale, just not /20. University has no equivalent constant: its true pass
+// mark is derived live from the school's own GradingScale classification bands (see
+// truePassCgpaFor), since a CGPA scale's "passing" point already varies by what each
+// school configured there.
+const TRUE_PASS_MARK_SECONDARY = 10
+const TRUE_PASS_MARK_PRIMARY = 50
 
 /** Pass / Trial / Repeat from a figure (annual average or CGPA) against the real pass mark
  *  and the school's own admin-configured trial floor. Trial still counts as promoted — only
@@ -263,9 +267,10 @@ export const endAcademicYear = async (req: AuthRequest, res: Response) => {
           byStudent.set(c.studentId, entry)
         }
 
+        const truePassMark = school?.type === 'PRIMARY' ? TRUE_PASS_MARK_PRIMARY : TRUE_PASS_MARK_SECONDARY
         for (const { ids, sum, count } of byStudent.values()) {
           const annualAvg = sum / count
-          const decision = decisionFor(annualAvg, TRUE_PASS_MARK_NON_UNIVERSITY, trialMinimum)
+          const decision = decisionFor(annualAvg, truePassMark, trialMinimum)
           await prisma.reportCard.updateMany({ where: { id: { in: ids } }, data: { decision } })
           decisionsSet += ids.length
         }

@@ -428,6 +428,8 @@ export default function ReportCardsPage() {
   const { isAuthenticated, user, school, activeSession } = useAuthStore()
   // A university teaches courses, not subjects, and its year is split into semesters.
   const isUniversity = school?.type === 'UNIVERSITY'
+  // Primary grades on a raw Test+Exam /100 total now, same display convention as university.
+  const isPrimary = school?.type === 'PRIMARY'
   // Same relabelling the sidebar does (UNIVERSITY_NAV_LABELS in the dashboard layout): the
   // data is a Term either way, only the word the school uses for it changes.
   const ts = (termStr: string, semesterStr: string) => tr(isUniversity ? semesterStr : termStr)
@@ -764,7 +766,7 @@ export default function ReportCardsPage() {
           ...data.subjects.map((subj) => ({ label: subj, value: (s: MarksExportStudent) => s.scores[subj] ?? '' })),
           // This export reads ReportCard.average, which for a university is a weighted
           // mark out of 100, not a /20 average — label it for what it actually is.
-          { label: isUniversity ? tr('Total / 100') : tr('Average / 20'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
+          { label: (isUniversity || isPrimary) ? tr('Total / 100') : tr('Average / 20'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
           { label: tr('Rank'), value: (s) => s.position ?? '' },
         ])
         files.push({ name: datedFilename(`school-marks-${data.term.name}`), content: csv })
@@ -960,7 +962,7 @@ export default function ReportCardsPage() {
                   <td className="px-4 py-3 text-sm font-medium text-foreground">
                     {isUniversity
                       ? (rc.gpa != null ? rc.gpa.toFixed(2) : '—')
-                      : (rc.average != null ? `${rc.average.toFixed(1)} / 20` : '—')}
+                      : (rc.average != null ? `${rc.average.toFixed(1)} / ${isPrimary ? 100 : 20}` : '—')}
                   </td>
                   <td className="px-4 py-3">
                     {/* Admin-authored wording (see /promotion-scale), rendered verbatim like

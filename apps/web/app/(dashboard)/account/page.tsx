@@ -1,6 +1,7 @@
 'use client'
 import { useAuthStore } from '@/lib/store/auth.store'
 import ChangePasswordCard from '@/components/ui/ChangePasswordCard'
+import AccountEmailCard from '@/components/ui/AccountEmailCard'
 import { UserCircle } from 'lucide-react'
 import { useT } from '@/lib/i18n'
 
@@ -26,11 +27,14 @@ export default function AccountPage() {
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-foreground">{user?.name}</h3>
-            <p className="text-sm text-muted-foreground mt-0.5">{user?.email}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {user?.email ?? (user?.username ? `${user.username} (${t('username')})` : '')}
+            </p>
           </div>
         </div>
       </div>
 
+      {!user?.email && <AccountEmailCard />}
       <ChangePasswordCard />
     </div>
   )

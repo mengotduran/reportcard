@@ -4,6 +4,8 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import { resetPasswordApi } from '@/lib/api/auth'
 import ThemeToggle from '@/components/ui/ThemeToggle'
 import AuthBackground from '@/components/ui/AuthBackground'
+import PasswordChecklist from '@/components/ui/PasswordChecklist'
+import { isPasswordValid } from '@/lib/passwordValidation'
 import { Eye, EyeOff, AlertCircle, CheckCircle2, GraduationCap } from 'lucide-react'
 
 function ResetPasswordForm() {
@@ -20,7 +22,7 @@ function ResetPasswordForm() {
 
   const handleSubmit = async () => {
     setError('')
-    if (password.length < 6) { setError('Password must be at least 6 characters'); return }
+    if (!isPasswordValid(password)) { setError('Password does not meet the requirements below'); return }
     if (password !== confirm) { setError('Passwords do not match'); return }
     setLoading(true)
     try {
@@ -88,6 +90,7 @@ function ResetPasswordForm() {
                       {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
+                  <PasswordChecklist password={password} />
                 </div>
 
                 <div>
@@ -113,7 +116,7 @@ function ResetPasswordForm() {
                 <button
                   type="button"
                   onClick={handleSubmit}
-                  disabled={loading || !password || !confirm}
+                  disabled={loading || !isPasswordValid(password) || !confirm}
                   className="w-full bg-primary text-primary-foreground py-2.5 rounded-lg text-sm font-semibold hover:bg-[#d63429] disabled:opacity-50 transition-colors"
                 >
                   {loading ? 'Saving…' : 'Reset password'}

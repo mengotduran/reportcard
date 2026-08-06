@@ -36,11 +36,13 @@ export default function HndRegistrationModal({
   const locale = useLocaleCode()
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isPrimary = school?.type === 'PRIMARY'
   const [data, setData] = useState<HndRegDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [amount, setAmount] = useState('')
   const [paidOn, setPaidOn] = useState(() => new Date().toISOString().slice(0, 10))
   const [note, setNote] = useState('')
+  const [examNumber, setExamNumber] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -64,10 +66,11 @@ export default function HndRegistrationModal({
     if (!Number.isFinite(amt) || amt <= 0) { setError('Enter a payment amount greater than zero'); return }
     setSaving(true)
     try {
-      const updated = await addHndRegistrationPaymentApi(studentId, { amount: amt, paidOn, note: note.trim() || undefined })
+      const updated = await addHndRegistrationPaymentApi(studentId, { amount: amt, paidOn, note: note.trim() || undefined, examNumber: examNumber.trim() || undefined })
       setData(updated)
       setAmount('')
       setNote('')
+      setExamNumber('')
       onChanged?.()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
@@ -100,7 +103,7 @@ export default function HndRegistrationModal({
           <div className="flex items-center gap-2">
             <BookMarked size={20} className="text-primary" />
             <div>
-              <h3 className="font-semibold text-foreground text-lg leading-tight">{isUniversity ? 'HND Registration' : 'GCE Registration'}</h3>
+              <h3 className="font-semibold text-foreground text-lg leading-tight">{isUniversity ? 'HND Registration' : isPrimary ? 'FSLC Registration' : 'GCE Registration'}</h3>
               <p className="text-xs text-muted-foreground">{studentName}{data?.session ? ` · ${data.session}` : ''}</p>
             </div>
           </div>
@@ -168,12 +171,13 @@ export default function HndRegistrationModal({
                     <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground uppercase">Amount paid</th>
                     <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground uppercase">Balance left</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase">Note</th>
+                    {isPrimary && <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase">Exam #</th>}
                     <th className="px-3 py-2 w-8"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {data.payments.length === 0 ? (
-                    <tr><td colSpan={6} className="text-center py-6 text-muted-foreground text-sm">No payments recorded yet.</td></tr>
+                    <tr><td colSpan={isPrimary ? 7 : 6} className="text-center py-6 text-muted-foreground text-sm">No payments recorded yet.</td></tr>
                   ) : data.payments.map((p, i) => {
                     cumulative += p.amount
                     const left = Math.max(0, data.fee - cumulative)
@@ -184,6 +188,7 @@ export default function HndRegistrationModal({
                         <td className="px-3 py-2 text-right font-medium text-emerald-600">{formatXAF(p.amount)}</td>
                         <td className="px-3 py-2 text-right text-foreground">{formatXAF(left)}</td>
                         <td className="px-3 py-2 text-muted-foreground">{p.note || '—'}</td>
+                        {isPrimary && <td className="px-3 py-2 text-muted-foreground">{p.examNumber || '—'}</td>}
                         <td className="px-3 py-2">
                           <button onClick={() => handleDelete(p.id)}
                             className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition">
@@ -218,6 +223,14 @@ export default function HndRegistrationModal({
                       onChange={(e) => setNote(e.target.value)}
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                   </div>
+                  {isPrimary && (
+                    <div className="flex-1 min-w-[120px]">
+                      <label className="block text-xs text-muted-foreground mb-1">Exam number (optional)</label>
+                      <input type="text" placeholder="If assigned yet" value={examNumber}
+                        onChange={(e) => setExamNumber(e.target.value)}
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                  )}
                   <button type="submit" disabled={saving}
                     className="flex items-center gap-1 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                     <Plus size={14} /> {saving ? 'Saving...' : 'Add'}

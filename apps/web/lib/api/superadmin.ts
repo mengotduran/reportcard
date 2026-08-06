@@ -47,7 +47,8 @@ export const toggleParentSchoolActiveApi = async (id: string) => {
 
 export const createStandaloneSchoolApi = async (data: {
   schoolName: string; schoolType: string; schoolEmail: string; subdomain: string
-  adminName: string; adminEmail: string; adminPassword?: string; phone?: string; city?: string; language?: string
+  // Exactly one of adminEmail/adminUsername — a no-email admin logs in with a username.
+  adminName: string; adminEmail?: string; adminUsername?: string; adminPassword?: string; phone?: string; city?: string; language?: string
 }) => {
   const res = await api.post('/superadmin/schools', data)
   return res.data
@@ -55,14 +56,14 @@ export const createStandaloneSchoolApi = async (data: {
 
 export const createParentSchoolApi = async (data: {
   name: string; city?: string; country?: string
-  sections: { type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword?: string }[]
+  sections: { type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail?: string; adminUsername?: string; adminPassword?: string }[]
 }) => {
   const res = await api.post('/superadmin/parent-schools', data)
   return res.data
 }
 
 export const addSectionToSchoolApi = async (id: string, data: {
-  type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword?: string
+  type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail?: string; adminUsername?: string; adminPassword?: string
 }) => {
   const res = await api.post(`/superadmin/schools/${id}/sections`, data)
   return res.data
@@ -89,14 +90,14 @@ export const deleteParentSchoolApi = async (id: string) => {
 }
 
 export const addSectionToParentApi = async (parentId: string, data: {
-  type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail: string; adminPassword?: string
+  type: string; language?: string; subdomain: string; schoolEmail: string; adminName: string; adminEmail?: string; adminUsername?: string; adminPassword?: string
 }) => {
   const res = await api.post(`/superadmin/parent-schools/${parentId}/sections`, data)
   return res.data
 }
 
 export const getSchoolAdminsApi = async (schoolId: string): Promise<{
-  admins: { id: string; name: string; email: string; role: string; isActive: boolean; pendingSetup: boolean }[]
+  admins: { id: string; name: string; email: string | null; username?: string | null; role: string; isActive: boolean; pendingSetup: boolean }[]
 }> => {
   const res = await api.get(`/superadmin/schools/${schoolId}/admins`)
   return res.data

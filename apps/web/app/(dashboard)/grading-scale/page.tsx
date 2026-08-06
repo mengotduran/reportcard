@@ -19,7 +19,10 @@ export default function GradingScalePage() {
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const isUniversity = school?.type === 'UNIVERSITY'
-  const maxMark = isUniversity ? 100 : 20
+  // Primary now grades on the raw Test+Exam total (like university's CA+Exam), not a /20
+  // normalised sequence average — see reportcard.controller.ts saveEntries.
+  const isPrimary = school?.type === 'PRIMARY'
+  const maxMark = (isUniversity || isPrimary) ? 100 : 20
 
   const emptyRange = (): GradeRange => ({
     id: `r_${Date.now()}`,
@@ -53,7 +56,7 @@ export default function GradingScalePage() {
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
     getGradingScaleApi().then(({ ranges: r, classificationBands: cb, legendRows: lr }) => {
-      setRanges(r.length > 0 ? r : (isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES))
+      setRanges(r.length > 0 ? r : ((isUniversity || isPrimary) ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES))
       setClassificationBands(
         isUniversity
           ? (cb.length > 0 ? cb : DEFAULT_CLASSIFICATION_BANDS)
@@ -146,7 +149,7 @@ export default function GradingScalePage() {
 
   const resetToDefault = () => {
     if (confirm(t('Reset to default grading scale? This will overwrite your current scale.'))) {
-      setRanges((isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES).map(r => ({ ...r, id: `r_${Date.now()}_${r.grade}` })))
+      setRanges(((isUniversity || isPrimary) ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES).map(r => ({ ...r, id: `r_${Date.now()}_${r.grade}` })))
       if (isUniversity) setClassificationBands(DEFAULT_CLASSIFICATION_BANDS)
     }
   }
@@ -154,7 +157,7 @@ export default function GradingScalePage() {
   const testResult = testScore !== '' ? gradeForScore20(Number(testScore), ranges) : null
 
   // Coverage warning
-  const step = isUniversity ? 1 : 0.5
+  const step = (isUniversity || isPrimary) ? 1 : 0.5
   const warnings: string[] = []
   let uncovered = 0
   for (let s = 0; s <= maxMark; s += step) {
@@ -403,7 +406,7 @@ export default function GradingScalePage() {
       </div>}
 
       {/* Live tester */}
-      {!isUniversity && (
+      {!isUniversity && !isPrimary && (
         <div className="bg-card rounded-xl border border-border p-4">
           <h3 className="text-sm font-semibold text-foreground mb-3">{t('Test the Scale')}</h3>
           <div className="flex items-center gap-3">
@@ -430,8 +433,8 @@ export default function GradingScalePage() {
         </div>
       )}
 
-      {/* University: live tester for /100 */}
-      {isUniversity && (
+      {/* University/primary: live tester for /100 */}
+      {(isUniversity || isPrimary) && (
         <div className="bg-card rounded-xl border border-border p-4">
           <h3 className="text-sm font-semibold text-foreground mb-3">{t('Test the Scale')}</h3>
           <div className="flex items-center gap-3">
@@ -455,7 +458,9 @@ export default function GradingScalePage() {
                   </span>
                   <div>
                     <p className="text-sm font-medium text-foreground">{match.remark}</p>
-                    <p className="text-xs text-muted-foreground">GP: {match.gradePoint?.toFixed(2) ?? '—'} · {testScore} / 100</p>
+                    <p className="text-xs text-muted-foreground">
+                      {isUniversity && <>GP: {match.gradePoint?.toFixed(2) ?? '—'} · </>}{testScore} / 100
+                    </p>
                   </div>
                 </div>
               )
@@ -480,17 +485,17 @@ export default function GradingScalePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
-                    {isUniversity ? t('Min Mark (/100)') : t('Min Mark (/20)')}
+                    {(isUniversity || isPrimary) ? t('Min Mark (/100)') : t('Min Mark (/20)')}
                   </label>
-                  <input type="number" min="0" max={maxMark} step={isUniversity ? 1 : 0.5} value={editForm.minScore}
+                  <input type="number" min="0" max={maxMark} step={(isUniversity || isPrimary) ? 1 : 0.5} value={editForm.minScore}
                     onChange={e => setEditForm(f => ({ ...f, minScore: Number(e.target.value) }))}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
-                    {isUniversity ? t('Max Mark (/100)') : t('Max Mark (/20)')}
+                    {(isUniversity || isPrimary) ? t('Max Mark (/100)') : t('Max Mark (/20)')}
                   </label>
-                  <input type="number" min="0" max={maxMark} step={isUniversity ? 1 : 0.5} value={editForm.maxScore}
+                  <input type="number" min="0" max={maxMark} step={(isUniversity || isPrimary) ? 1 : 0.5} value={editForm.maxScore}
                     onChange={e => setEditForm(f => ({ ...f, maxScore: Number(e.target.value) }))}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>

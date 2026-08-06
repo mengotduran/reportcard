@@ -6,6 +6,8 @@ import { demoLimitBlock } from '../config/demo'
 import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
 import { sendPasswordSetupEmail } from '../utils/email'
 import { takeCoursesFromOtherTeachers } from '../utils/courseAssignment'
+import { applyClassTeachingTeam, classTeamRoster } from './classlevel.controller'
+import { validateNewPassword, validateUsername } from '../utils/passwordValidation'
 
 // Trims, drops blanks, and dedupes — a stray empty string or repeated entry from the
 // client shouldn't end up stored.
@@ -45,7 +47,7 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
           : {}),
       },
       select: {
-        id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true,
+        id: true, name: true, email: true, username: true, role: true, masterClassLevel: true, createdAt: true, departments: true,
         passwordSetAt: true,
         // Active only: a course handed over should stop appearing against this teacher.
         teacherSubjects: { where: { endedAt: null }, select: { subject: { select: { classLevel: true } } } },
@@ -95,17 +97,57 @@ export const getTeachers = async (req: AuthRequest, res: Response) => {
 export const createTeacher = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, password, role, masterClassLevel, departments, term } = req.body
+    const { name, email, username, password, role, masterClassLevel, departments, term, classLevel } = req.body
 
-    if (role === 'CLASS_MASTER' && !masterClassLevel) {
-      res.status(400).json({ message: 'masterClassLevel is required for Class Master' })
+    // Exactly one identifier — a username is for someone with no email at all, not an
+    // extra field alongside one.
+    const hasEmail = typeof email === 'string' && email.trim().length > 0
+    const hasUsername = typeof username === 'string' && username.trim().length > 0
+    if (hasEmail === hasUsername) {
+      res.status(400).json({ message: hasEmail ? 'Provide either an email or a username, not both' : 'An email or a username is required' })
       return
     }
-    // Class Master is a primary/secondary concept (one teacher overseeing a single class
-    // of students all day) — a university has no equivalent, courses are taken across
-    // departments/levels with no single "class" a teacher masters.
-    if (role === 'CLASS_MASTER') {
-      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+    if (hasUsername) {
+      const usernameError = validateUsername(username.trim())
+      if (usernameError) { res.status(400).json({ message: usernameError }); return }
+    }
+
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, language: true } })
+
+    // Primary: no role picker — a teacher joins a class's shared team (see
+    // classlevel.controller.ts applyClassTeachingTeam) instead of being handed
+    // Class Teacher/Class Master/Subject Teacher directly. Vice Principal is the one
+    // exception: an admin-tier role with no class of its own, created exactly like
+    // every other school type already does below.
+    let primaryTeam: { level: { id: string; name: string }; ids: string[]; masterId: string } | null = null
+    if (school?.type === 'PRIMARY' && role !== 'VICE_PRINCIPAL') {
+      if (!classLevel || typeof classLevel !== 'string') {
+        res.status(400).json({ message: 'Select which class this teacher teaches' })
+        return
+      }
+      const level = await prisma.classLevel.findFirst({ where: { schoolId, name: classLevel }, select: { id: true, name: true } })
+      if (!level) { res.status(400).json({ message: 'Select a valid class' }); return }
+
+      // Current team — see classTeamRoster's own comment for why this can't just be
+      // derived from TeacherSubject rows (a class with no subjects yet would undercount).
+      const roster = await classTeamRoster(schoolId, level.name)
+      const currentTeamIds = roster.map((t) => t.id)
+      if (currentTeamIds.length >= 3) {
+        res.status(400).json({ message: `${level.name} already has 3 teachers, the maximum for a class. Remove one from the Classes page first.` })
+        return
+      }
+      const currentMaster = await prisma.user.findFirst({ where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: level.name }, select: { id: true } })
+      // A new hire joins as a non-master unless the class had nobody on it yet — the
+      // existing master (if any) keeps the role rather than being re-decided on every hire.
+      primaryTeam = { level, ids: currentTeamIds, masterId: currentMaster?.id ?? '' }
+    } else if (role === 'CLASS_MASTER') {
+      if (!masterClassLevel) {
+        res.status(400).json({ message: 'masterClassLevel is required for Class Master' })
+        return
+      }
+      // Class Master is a primary/secondary concept (one teacher overseeing a single class
+      // of students all day) — a university has no equivalent, courses are taken across
+      // departments/levels with no single "class" a teacher masters.
       if (school?.type === 'UNIVERSITY') {
         res.status(400).json({ message: 'Class Master does not apply to universities' })
         return
@@ -115,13 +157,15 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
     const limit = await demoLimitBlock(schoolId, 'teachers')
     if (limit) { res.status(403).json({ message: limit }); return }
 
-    const existing = await prisma.user.findUnique({ where: { email } })
+    const existing = hasEmail
+      ? await prisma.user.findUnique({ where: { email } })
+      : await prisma.user.findUnique({ where: { username } })
 
-    // Only an ACTIVE user with this email is a real conflict. A soft-deleted
-    // user (isActive: false) still holds the unique email, so re-creating a
+    // Only an ACTIVE user with this identifier is a real conflict. A soft-deleted
+    // user (isActive: false) still holds the unique value, so re-creating a
     // previously deleted teacher would otherwise fail — reactivate it instead.
     if (existing && existing.isActive) {
-      res.status(400).json({ message: 'Email already exists' })
+      res.status(400).json({ message: hasEmail ? 'Email already exists' : 'Username already exists' })
       return
     }
 
@@ -129,22 +173,27 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
     let inviteToken: string | null = null
     let passwordSetAt: Date | null = null
 
-    if (IS_OFFLINE_BUILD) {
+    // A username-based account has nowhere to receive an emailed setup link either way —
+    // same direct-set branch offline builds already use, gated by build type there.
+    if (IS_OFFLINE_BUILD || hasUsername) {
+      const passwordError = validateNewPassword(String(password ?? ''))
+      if (passwordError) { res.status(400).json({ message: passwordError }); return }
       hashedPassword = await bcrypt.hash(password, 12)
       // The admin hands them a real, working password directly — nothing pending.
       passwordSetAt = new Date()
     } else {
-      // Online: the admin never sets or knows a teacher's password — a random
-      // unusable placeholder is stored and the teacher picks their own via the
-      // emailed setup link (see sendPasswordSetupEmail below). passwordSetAt stays
-      // null until they actually complete that flow (passwordReset.controller.ts).
+      // Online, with an email on file: the admin never sets or knows a teacher's password —
+      // a random unusable placeholder is stored and the teacher picks their own via the
+      // emailed setup link (see sendPasswordSetupEmail below). passwordSetAt stays null
+      // until they actually complete that flow (passwordReset.controller.ts).
       hashedPassword = await bcrypt.hash(generateRawToken(), 12)
       inviteToken = generateRawToken()
     }
 
     const data = {
-      name, email, password: hashedPassword, role, schoolId,
-      masterClassLevel: masterClassLevel ?? null,
+      name, email: hasEmail ? email : null, username: hasUsername ? username.trim() : null,
+      password: hashedPassword, role: primaryTeam ? 'CLASS_TEACHER' : role, schoolId,
+      masterClassLevel: primaryTeam ? null : (masterClassLevel ?? null),
       departments: sanitizeDepartments(departments),
       passwordSetAt,
       // Only meaningful for a teacher with zero course assignments yet (see
@@ -154,14 +203,27 @@ export const createTeacher = async (req: AuthRequest, res: Response) => {
         ? { resetTokenHash: hashToken(inviteToken), resetTokenExpiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) }
         : {}),
     }
-    const select = { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
+    const select = { id: true, name: true, email: true, username: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
 
-    const teacher = existing
+    let teacher = existing
       ? await prisma.user.update({ where: { id: existing.id }, data: { ...data, isActive: true }, select })
       : await prisma.user.create({ data, select })
 
-    if (inviteToken) {
-      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { language: true } })
+    // Fold the new hire into the class's team — sets their (and, if they're now solo,
+    // their own) role/masterClassLevel correctly, and fans TeacherSubject rows out to
+    // every subject in the class, same as the Classes page's "Set Teachers" modal.
+    // Re-read afterward: applyClassTeachingTeam updates role/masterClassLevel/departments
+    // in the database, and the response must reflect that, not the pre-team snapshot above.
+    if (primaryTeam) {
+      const ids = [...primaryTeam.ids, teacher.id]
+      const masterId = primaryTeam.masterId || teacher.id
+      await applyClassTeachingTeam(schoolId, primaryTeam.level, ids, masterId)
+      teacher = await prisma.user.findUniqueOrThrow({ where: { id: teacher.id }, select })
+    }
+
+    // inviteToken is only ever set in the email branch above, so teacher.email is
+    // guaranteed non-null here — the check still narrows the type for TypeScript.
+    if (inviteToken && teacher.email) {
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '')
       const setupUrl = `${frontendUrl}/reset-password?token=${inviteToken}`
       await sendPasswordSetupEmail({ to: teacher.email, resetUrl: setupUrl, lang: school?.language === 'FR' ? 'FR' : 'EN' })

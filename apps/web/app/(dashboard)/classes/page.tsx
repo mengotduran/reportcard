@@ -2,11 +2,12 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, ClassLevel, DeleteImpact } from '@/lib/api/classLevels'
+import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, setClassTeachersApi, seedDefaultPrimaryClassesApi, ClassLevel, DeleteImpact } from '@/lib/api/classLevels'
 import { getDepartmentsApi, createDepartmentApi, updateDepartmentApi, deleteDepartmentApi, Department } from '@/lib/api/departments'
 import { copySubjectsApi, getSubjectsApi } from '@/lib/api/subjects'
 import { getStudentsApi } from '@/lib/api/students'
-import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers, AlertTriangle } from 'lucide-react'
+import { getTeachersApi } from '@/lib/api/teachers'
+import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers, AlertTriangle, Users, Sparkles } from 'lucide-react'
 import { EveningBadge } from '@/components/ui/ProgrammeFilter'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
@@ -46,6 +47,8 @@ function buildClassName(dept: string, level: UniLevel): string {
   return `Degree ${dept}`
 }
 
+interface Teacher { id: string; name: string; role: string; masterClassLevel?: string | null; classLevels?: string[]; departments?: string[] }
+
 const UNI_LEVELS: UniLevel[] = ['Level 1', 'Level 2', 'Level 3']
 // Level 3 is the Degree year. It runs once, follows the day curriculum and continues from
 // Level 2 day, so it belongs to the day section even though it is taught in the evening.
@@ -71,8 +74,11 @@ function stripDeptSuffix(name: string): string {
 
 // Secondary schools track GCE exam registration for Form 5 (O Level) and Upper
 // Sixth (A Level) classes — including stream/department suffixes, e.g. "Form 5 Science".
+// Primary schools track FSLC registration for Class Six — mirrors isRegistrationClass
+// in the API's hndRegistration.controller.ts.
 function isExamRegistrationClass(name: string): boolean {
-  return /^Form\s?5\b/i.test(name.trim()) || /^Upper\s?Sixth\b/i.test(name.trim())
+  const n = name.trim()
+  return /^Form\s?5\b/i.test(n) || /^Upper\s?Sixth\b/i.test(n) || /^Class\s?(Six|6)\b/i.test(n) || /^CM2\b/i.test(n)
 }
 const GCE_DEFAULT_FEE = '20000'
 
@@ -84,6 +90,7 @@ type FormState = {
   abbreviation: string
   hasStream: boolean
   maxScore: string
+  testMaxScore: string // primary only — see ClassLevel.testMaxScore
   feeAmount: string
   hndRegistrationFee: string
   programme: Programme
@@ -94,8 +101,10 @@ type FormState = {
 // text), so a distracted admin could save every class with a fee that has nothing to do
 // with their school's actual tuition. The input's placeholder already shows the same
 // number as a hint — this just stops it from also being the submitted value.
-const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY' }
-const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY' }
+const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  testMaxScore: '30', feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY' }
+const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', testMaxScore: '30', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY' }
+// Primary defaults to a raw /100 Test+Exam scale (30 Test / 70 Exam), unlike secondary's /20.
+const PRIMARY_EMPTY: FormState = { ...STD_EMPTY, maxScore: '100' }
 
 export default function ClassesPage() {
   const router = useRouter()
@@ -104,10 +113,12 @@ export default function ClassesPage() {
   const t = useT()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  const isPrimary = school?.type === 'PRIMARY'
   const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
 
   const [classes, setClasses]         = useState<ClassLevel[]>([])
   const [loading, setLoading]         = useState(true)
+  const [seedingDefaults, setSeedingDefaults] = useState(false)
   const [showModal, setShowModal]     = useState(false)
   const [editing, setEditing]         = useState<ClassLevel | null>(null)
   const [form, setForm]               = useState<FormState>(STD_EMPTY)
@@ -126,6 +137,15 @@ export default function ClassesPage() {
   // Day/Evening filter. 'ALL' by default so a school with no evening programme sees no
   // change at all, and the chips only earn their place once an evening class exists.
   const [programmeFilter, setProgrammeFilter] = useState<Programme | 'ALL'>('ALL')
+
+  // ── Primary: shared class teaching team (1-3 teachers who between them teach every
+  // subject in the class) ──
+  const [teachersTarget, setTeachersTarget] = useState<ClassLevel | null>(null)
+  const [allTeachers, setAllTeachers] = useState<Teacher[]>([])
+  const [teamIds, setTeamIds] = useState<string[]>([])
+  const [teamMasterId, setTeamMasterId] = useState('')
+  const [savingTeam, setSavingTeam] = useState(false)
+  const [teamError, setTeamError] = useState('')
 
   // ── Secondary departments ──
   const [departments, setDepartments]   = useState<Department[]>([])
@@ -177,6 +197,20 @@ export default function ClassesPage() {
       setClasses(data.classLevels)
     } catch { console.error('Failed to fetch classes') }
     finally { setLoading(false) }
+  }
+
+  const handleSeedDefaults = async () => {
+    setSeedingDefaults(true)
+    try {
+      const result = await seedDefaultPrimaryClassesApi()
+      showToast(result.message)
+      await fetchClasses()
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to set up default classes'), 'error')
+    } finally {
+      setSeedingDefaults(false)
+    }
   }
 
   const fetchSubjects = async () => {
@@ -320,7 +354,7 @@ export default function ClassesPage() {
     const seedLevel: UniLevel = seedProgramme === 'EVENING' && activeLevel === 'Level 3' ? 'Level 1' : activeLevel
     setForm(isUniversity
       ? { ...UNI_EMPTY, uniLevel: seedLevel, feeAmount: seedLevel === 'Level 2' ? '' : UNI_EMPTY.feeAmount, hndRegistrationFee: '', programme: seedProgramme }
-      : { ...STD_EMPTY, hndRegistrationFee: '', programme: seedProgramme })
+      : { ...(isPrimary ? PRIMARY_EMPTY : STD_EMPTY), hndRegistrationFee: '', programme: seedProgramme })
     setSections([])
     setCopyFrom('')
     setBaseClass('')
@@ -353,6 +387,7 @@ export default function ClassesPage() {
         abbreviation: cls.abbreviation ?? '',
         hasStream: false,
         maxScore: String(cls.maxScore ?? 100),
+        testMaxScore: '30',
         feeAmount: String(cls.feeAmount ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? 65000),
         programme: cls.programme ?? 'DAY',
@@ -364,7 +399,8 @@ export default function ClassesPage() {
         uniLevel: 'Level 1',
         abbreviation: cls.abbreviation ?? '',
         hasStream: cls.hasStream,
-        maxScore: String(cls.maxScore ?? 20),
+        maxScore: String(cls.maxScore ?? (isPrimary ? 100 : 20)),
+        testMaxScore: String(cls.testMaxScore ?? 30),
         feeAmount: String(cls.feeAmount ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? GCE_DEFAULT_FEE),
         programme: cls.programme ?? 'DAY',
@@ -399,12 +435,13 @@ export default function ClassesPage() {
         setError(t('Level 3 runs once, on the day curriculum. Create it in the Day section.')); return
       }
       finalNames = [withProgrammeSuffix(buildClassName(form.deptName.trim(), form.uniLevel), form.programme)]
-    } else if (isSecondary) {
+    } else if (isSecondary || isPrimary) {
       if (!secBase) { setError(t('Class name is required.')); return }
       finalNames = (editing
         ? [composeClassName(secBase)]
-        // No section letters selected → one bare class, e.g. "Form 1". A school with
-        // enough students to split a class picks letters instead, one class per letter.
+        // No section letters selected → one bare class, e.g. "Form 1" / "Class 1". A
+        // school with enough pupils to split a class picks letters instead, one class
+        // per letter. composeClassName no-ops (no department suffix) for primary.
         : sections.length
           ? sections.map((l) => composeClassName(`${secBase} ${l}`))
           : [composeClassName(secBase)]
@@ -429,6 +466,7 @@ export default function ClassesPage() {
         abbreviation: form.abbreviation.trim() || undefined,
         hasStream: isUniversity ? false : form.hasStream,
         maxScore: Number(form.maxScore),
+        ...(isPrimary ? { testMaxScore: Number(form.testMaxScore) } : {}),
         feeAmount: Number(form.feeAmount) || 0,
         hndRegistrationFee: isExamReg ? (Number(form.hndRegistrationFee) || 0) : null,
         ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
@@ -470,7 +508,7 @@ export default function ClassesPage() {
           const ids = [...pickedCourses]
           const results = await Promise.all(toCreate.map((nm) => copySubjectsApi(baseClass, nm, ids).catch(() => ({ copied: 0 }))))
           copied = results.reduce((sum, r) => sum + (r?.copied ?? 0), 0)
-        } else if (isSecondary && copyFrom) {
+        } else if ((isSecondary || isPrimary) && copyFrom) {
           const results = await Promise.all(toCreate.map((nm) => copySubjectsApi(copyFrom, nm).catch(() => ({ copied: 0 }))))
           copied = results.reduce((sum, r) => sum + (r?.copied ?? 0), 0)
         }
@@ -524,6 +562,60 @@ export default function ClassesPage() {
       const e = err as { response?: { data?: { message?: string } } }
       showToast(e.response?.data?.message || tt('Failed to delete class', 'Failed to delete department'), 'error')
     } finally { setDeleting(false) }
+  }
+
+  // ── Primary: shared class teaching team ──
+  const openTeachers = async (cls: ClassLevel) => {
+    setTeachersTarget(cls)
+    setTeamError('')
+    setTeamIds([])
+    setTeamMasterId('')
+    try {
+      const data = await getTeachersApi()
+      const list: Teacher[] = data.teachers ?? []
+      setAllTeachers(list)
+      // classLevels alone (TeacherSubject + masterClassLevel) goes blind for a member of a
+      // subject-less class beyond its master — departments is the roster of record for
+      // primary teams (see classTeamRoster in classlevel.controller.ts).
+      const current = list.filter((tch) => (tch.classLevels ?? []).includes(cls.name) || (tch.departments ?? []).includes(cls.name))
+      setTeamIds(current.map((tch) => tch.id))
+      const master = current.find((tch) => tch.role === 'CLASS_MASTER' && tch.masterClassLevel === cls.name)
+      setTeamMasterId(master?.id ?? '')
+    } catch {
+      setTeamError(t('Could not load teachers. Try again.'))
+    }
+  }
+
+  const closeTeachers = () => { setTeachersTarget(null); setTeamError('') }
+
+  const toggleTeamMember = (id: string) => {
+    setTeamIds((prev) => {
+      if (prev.includes(id)) {
+        if (teamMasterId === id) setTeamMasterId('')
+        return prev.filter((x) => x !== id)
+      }
+      if (prev.length >= 3) return prev
+      return [...prev, id]
+    })
+  }
+
+  const handleSaveTeam = async () => {
+    if (!teachersTarget) return
+    if (teamIds.length < 1) { setTeamError(t('Pick at least one teacher')); return }
+    if (teamIds.length >= 2 && !teamMasterId) { setTeamError(t('Choose a class master before saving')); return }
+    setSavingTeam(true)
+    setTeamError('')
+    try {
+      await setClassTeachersApi(teachersTarget.id, {
+        teacherIds: teamIds,
+        masterTeacherId: teamIds.length === 1 ? teamIds[0] : teamMasterId,
+      })
+      showToast(t('Class teaching team updated'))
+      setTeachersTarget(null)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      setTeamError(e.response?.data?.message || t('Could not update the teaching team'))
+    } finally { setSavingTeam(false) }
   }
 
   // Reorder within the currently displayed list by swapping the two classes' order values.
@@ -602,10 +694,19 @@ export default function ClassesPage() {
           <h2 className="text-2xl font-bold text-foreground">{tt('Classes', 'Departments')}</h2>
           <p className="text-muted-foreground text-sm mt-1">{headerCount}</p>
         </div>
-        <button onClick={openAdd}
-          className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition active:scale-95">
-          <Plus size={16} /> {tt('Add Class', 'Add Department')}
-        </button>
+        <div className="flex items-center gap-2">
+          {isPrimary && (
+            <button onClick={handleSeedDefaults} disabled={seedingDefaults}
+              title={t('Creates Pre-Nursery, Nursery 1, Nursery 2 and Class 1 through Class 6 — skips any that already exist')}
+              className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition active:scale-95 disabled:opacity-50">
+              <Sparkles size={16} /> {seedingDefaults ? t('Setting up...') : t('Set Up Default Classes')}
+            </button>
+          )}
+          <button onClick={openAdd}
+            className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition active:scale-95">
+            <Plus size={16} /> {tt('Add Class', 'Add Department')}
+          </button>
+        </div>
       </div>
 
       {/* ── Day / Evening sitting ──
@@ -736,6 +837,9 @@ export default function ClassesPage() {
                   {isSecondary && (
                     <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">GCE Reg. Fee</th>
                   )}
+                  {isPrimary && (
+                    <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">FSLC Reg. Fee</th>
+                  )}
                   {!isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Stream')}</th>}
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
                 </tr>
@@ -805,6 +909,15 @@ export default function ClassesPage() {
                               : <span className="text-xs text-amber-600">not set</span>}
                         </td>
                       )}
+                      {isPrimary && (
+                        <td className="px-4 py-3 text-right">
+                          {!isExamRegistrationClass(cls.name)
+                            ? <span className="text-muted-foreground text-sm">—</span>
+                            : cls.hndRegistrationFee != null
+                              ? <span className="text-sm font-medium text-indigo-600">{formatXAF(cls.hndRegistrationFee)}</span>
+                              : <span className="text-xs text-amber-600">not set</span>}
+                        </td>
+                      )}
                       {!isUniversity && (
                         <td className="px-4 py-3">
                           {cls.hasStream
@@ -814,6 +927,12 @@ export default function ClassesPage() {
                       )}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
+                          {isPrimary && (
+                            <button onClick={() => openTeachers(cls)} title={t('Class teaching team')}
+                              className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
+                              <Users size={14} />
+                            </button>
+                          )}
                           <button onClick={() => openEdit(cls)}
                             className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
                             <Pencil size={14} />
@@ -1102,18 +1221,19 @@ export default function ClassesPage() {
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
                     {t('Class Name')}
-                    {isSecondary && !editing && <span className="text-muted-foreground font-normal"> ({t('without section')})</span>}
+                    {(isSecondary || isPrimary) && !editing && <span className="text-muted-foreground font-normal"> ({t('without section')})</span>}
                     {' '}<span className="text-destructive">*</span>
                   </label>
-                  <input type="text" placeholder={isSecondary ? 'e.g. Form 1, Lower Sixth Science' : 'e.g. Form 3, Class 5, Lower Sixth'}
+                  <input type="text" placeholder={isSecondary ? 'e.g. Form 1, Lower Sixth Science' : isPrimary ? 'e.g. Class 1, Nursery 2' : 'e.g. Form 3, Class 5, Lower Sixth'}
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
                     required
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
 
-                  {/* Section letters — secondary, create only, optional. Each selected letter
-                      becomes its own class; leaving none selected creates a single bare class. */}
-                  {isSecondary && !editing && (
+                  {/* Section letters — secondary/primary, create only, optional. Each selected
+                      letter becomes its own class; leaving none selected creates a single
+                      bare class. */}
+                  {(isSecondary || isPrimary) && !editing && (
                     <div className="mt-3">
                       <label className="block text-xs font-medium text-foreground mb-1.5">
                         {t('Sections')} <span className="text-muted-foreground font-normal">({t('optional')})</span>
@@ -1133,12 +1253,15 @@ export default function ClassesPage() {
                       <p className="text-xs text-muted-foreground mt-1.5">
                         {form.name.trim()
                           ? <>{t('Creates')}: <span className="font-medium text-foreground">{(sections.length ? sections.map((l) => `${stripDeptSuffix(form.name)} ${l}`) : [stripDeptSuffix(form.name)]).join(', ')}</span></>
-                          : t('Only pick letters if this class is split into streams — most classes need none.')}
+                          : t(isSecondary
+                              ? 'Only pick letters if this class is split into streams — most classes need none.'
+                              : 'Only pick letters if this class is split into sections — most classes need none.')}
                       </p>
                     </div>
                   )}
 
-                  {/* Copy subjects from an existing class in this department (optional) */}
+                  {/* Copy subjects from an existing class in this department (secondary), or
+                      any existing primary class (no department concept there) — optional. */}
                   {isSecondary && !editing && classes.some((c) => c.departmentId === activeDeptId) && (
                     <div className="mt-3">
                       <label className="block text-xs font-medium text-foreground mb-1">
@@ -1149,6 +1272,21 @@ export default function ClassesPage() {
                         <option value="">{t('Start empty')}</option>
                         {classes.filter((c) => c.departmentId === activeDeptId).map((c) => (
                           <option key={c.id} value={c.name}>{stripDeptSuffix(c.name)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {isPrimary && !editing && classes.length > 0 && (
+                    <div className="mt-3">
+                      <label className="block text-xs font-medium text-foreground mb-1">
+                        {t('Copy subjects from')} <span className="text-muted-foreground font-normal">({t('optional')})</span>
+                      </label>
+                      <select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)}
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring">
+                        <option value="">{t('Start empty')}</option>
+                        {classes.map((c) => (
+                          <option key={c.id} value={c.name}>{c.name}</option>
                         ))}
                       </select>
                     </div>
@@ -1187,6 +1325,24 @@ export default function ClassesPage() {
                     className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
               </div>
+
+              {/* Test max score (primary only) — Exam gets whatever's left of Max Score. */}
+              {isPrimary && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Test Max Score')} <span className="text-destructive">*</span></label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">{t('out of')}</span>
+                    <input type="number" min="1" max={Math.max(1, Number(form.maxScore) - 1) || 99} placeholder="30"
+                      value={form.testMaxScore}
+                      onChange={(e) => setForm({ ...form, testMaxScore: e.target.value })}
+                      required
+                      className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                    <span className="text-xs text-muted-foreground">
+                      {t('Exam is out of')} {Math.max(0, (Number(form.maxScore) || 0) - (Number(form.testMaxScore) || 0))}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* School fee */}
               {isUniversity && form.uniLevel === 'Level 2' ? (() => {
@@ -1448,6 +1604,85 @@ export default function ClassesPage() {
                   {deleting ? t('Deleting…') : t('Delete')}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Primary: shared class teaching team. 1-3 teachers who between them teach every
+          subject in the class, exactly one of whom is Class Master. */}
+      {teachersTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-scale-in max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold text-foreground">{t('Class Teaching Team')}</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">{displayClassName(teachersTarget)}</p>
+              </div>
+              <button onClick={closeTeachers} className="text-muted-foreground hover:text-foreground"><X size={20} /></button>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-3">
+              {t('Pick 1 to 3 teachers. Any of them can teach every subject in this class.')}
+            </p>
+
+            {teamError && <div className="mb-3 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{teamError}</div>}
+
+            <div className="border border-border rounded-lg divide-y divide-border max-h-56 overflow-y-auto mb-4">
+              {allTeachers.length === 0 ? (
+                <p className="text-sm text-muted-foreground p-3">{t('No teachers yet. Add one from the Teachers page first.')}</p>
+              ) : allTeachers.map((tch) => {
+                const checked = teamIds.includes(tch.id)
+                const disabled = !checked && teamIds.length >= 3
+                return (
+                  <label key={tch.id} className={`flex items-center gap-2.5 px-3 py-2 ${disabled ? 'opacity-40' : 'cursor-pointer hover:bg-hover/40'}`}>
+                    <input type="checkbox" checked={checked} disabled={disabled}
+                      onChange={() => toggleTeamMember(tch.id)}
+                      className="accent-primary w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm text-foreground flex-1">{tch.name}</span>
+                    {tch.masterClassLevel && tch.masterClassLevel !== teachersTarget.name && (
+                      <span className="text-[10px] text-muted-foreground">{t('Master of')} {tch.masterClassLevel}</span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+
+            {teamIds.length >= 2 && (
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-foreground mb-1.5">{t('Class Master')}</label>
+                <div className="space-y-1.5">
+                  {teamIds.map((id) => {
+                    const tch = allTeachers.find((x) => x.id === id)
+                    if (!tch) return null
+                    return (
+                      <label key={id} className="flex items-center gap-2.5 cursor-pointer">
+                        <input type="radio" name="teamMaster" checked={teamMasterId === id}
+                          onChange={() => setTeamMasterId(id)}
+                          className="accent-primary w-4 h-4 flex-shrink-0" />
+                        <span className="text-sm text-foreground">{tch.name}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {teamIds.length === 1 && (
+              <p className="text-xs text-muted-foreground mb-4">
+                {t('With one teacher, they automatically become Class Master.')}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button onClick={closeTeachers} disabled={savingTeam}
+                className="flex-1 border border-border text-muted-foreground py-2 rounded-lg text-sm hover:bg-hover transition disabled:opacity-50">
+                {t('Cancel')}
+              </button>
+              <button onClick={handleSaveTeam} disabled={savingTeam || teamIds.length === 0}
+                className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] transition disabled:opacity-50">
+                {savingTeam ? t('Saving…') : t('Save')}
+              </button>
             </div>
           </div>
         </div>

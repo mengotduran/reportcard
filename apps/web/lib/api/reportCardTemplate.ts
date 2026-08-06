@@ -436,7 +436,9 @@ export function marksColumnOrder(sec: Pick<MarksTableSec, 'columnOrder' | 'showS
 
 /** Build a SpreadsheetTable for a marks section. Used both at design time and when adding new sections. */
 export function seedMarksTableSection(sec: MarksTableSec, color: string, schoolType?: string): SpreadsheetTable {
-  const cols = marksColumnOrder(sec).filter(k => !(schoolType === 'UNIVERSITY' && k === 'coef'))
+  // Neither university (CA/Exam, no coefficient) nor primary (Test/Exam, plain average, no
+  // coefficient) ever weight a subject by coefficient — see reportcard.controller.ts.
+  const cols = marksColumnOrder(sec).filter(k => !((schoolType === 'UNIVERSITY' || schoolType === 'PRIMARY') && k === 'coef'))
   const hdrs = sec.headers || {}
   const cc   = sec.colColors || {}
   const ts   = Date.now()
@@ -477,7 +479,7 @@ export function seedMarksTableSection(sec: MarksTableSec, color: string, schoolT
  *  `wpTotal`/`gpa`) resolve scoped to THIS section's own semester — see the
  *  transcriptSemester-aware resolver in PrintableReportCard.tsx. */
 export function seedTranscriptMarksTable(color: string, schoolType?: string): SpreadsheetTable {
-  if (schoolType && schoolType !== 'UNIVERSITY') return seedTranscriptTermMarksTable(color)
+  if (schoolType && schoolType !== 'UNIVERSITY') return seedTranscriptTermMarksTable(color, schoolType)
   const cols = ['code', 'subject', 'credit', 'score', 'grade', 'gradePoint', 'weighted'] as const
   const labels: Record<string, string> = { code: 'CODE', subject: 'TITLE', credit: 'CREDIT', score: 'MARK /100', grade: 'GRADE', gradePoint: 'GRADE POINT', weighted: 'WEIGHTED POINT' }
   const ts = Date.now()
@@ -528,12 +530,18 @@ export function seedTranscriptMarksTable(color: string, schoolType?: string): Sp
 }
 
 /** Primary/secondary counterpart of seedTranscriptMarksTable — one term's marks on the
- *  annual transcript. No GPA machinery (that's university-only): subjects carry a
- *  coefficient rather than credit hours, and the hero line is the term's own
- *  coefficient-weighted average out of 20, not a GPA. */
-function seedTranscriptTermMarksTable(color: string): SpreadsheetTable {
-  const cols = ['subject', 'coef', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const
-  const labels: Record<string, string> = { subject: 'SUBJECT', coef: 'COEF', seq1: 'SEQ 1', seq2: 'SEQ 2', score: 'AVERAGE', grade: 'GRADE', remarks: 'REMARKS' }
+ *  annual transcript. No GPA machinery (that's university-only): secondary subjects carry
+ *  a coefficient and the hero line is the term's own coefficient-weighted average out of
+ *  20; primary subjects carry no coefficient (Test+Exam, plain average, out of 100 — see
+ *  reportcard.controller.ts saveEntries). */
+function seedTranscriptTermMarksTable(color: string, schoolType?: string): SpreadsheetTable {
+  const isPrimary = schoolType === 'PRIMARY'
+  const cols = isPrimary
+    ? (['subject', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const)
+    : (['subject', 'coef', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const)
+  const labels: Record<string, string> = isPrimary
+    ? { subject: 'SUBJECT', seq1: 'TEST', seq2: 'EXAM', score: 'TOTAL', grade: 'GRADE', remarks: 'REMARKS' }
+    : { subject: 'SUBJECT', coef: 'COEF', seq1: 'SEQ 1', seq2: 'SEQ 2', score: 'AVERAGE', grade: 'GRADE', remarks: 'REMARKS' }
   const ts = Date.now()
   const bandBg = '#f1f5f9'
   const bandFg = '#111827'
@@ -557,29 +565,41 @@ function seedTranscriptTermMarksTable(color: string): SpreadsheetTable {
           ...(k === 'score' || k === 'grade' ? { bold: true } : {}),
         })),
       } as SheetRow,
-      // TOTAL row — coefficient and weighted-point sums, scoped to this table's term.
-      // wpTotal here is Σ(avg × coef) (see the school-type branch in statResolver's
-      // scopedAgg handling), not the raw Σ of averages 'total' would give. Spans are
-      // sized against this table's own column widths (NARROW_PX in
+      // TOTAL row. Secondary: coefficient and weighted-point sums, scoped to this table's
+      // term — wpTotal here is Σ(avg × coef) (see the school-type branch in statResolver's
+      // scopedAgg handling), not the raw Σ of averages 'total' would give. Primary has no
+      // coefficient at all, so it's just the plain Overall Total (Σ of subject totals).
+      // Spans are sized against this table's own column widths (NARROW_PX in
       // PrintableReportCard.tsx) — a label defaulting to colSpan 1 on a narrow numeric
       // column clips its own text.
       {
         id: `mfoot_${ts + 2}`,
-        cells: [
-          { text: 'TOTAL:', bold: true, align: 'right', bgColor: bandBg, textColor: bandFg },
-          { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
-          { text: 'TOTAL POINTS:', bold: true, colSpan: 4, align: 'right', bgColor: bandBg, textColor: bandFg },
-          { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
-        ],
+        cells: isPrimary
+          ? [
+              { text: 'TOTAL:', bold: true, colSpan: 5, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+            ]
+          : [
+              { text: 'TOTAL:', bold: true, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+              { text: 'TOTAL POINTS:', bold: true, colSpan: 4, align: 'right', bgColor: bandBg, textColor: bandFg },
+              { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+            ],
       } as SheetRow,
       // Hero line — this term's own average.
       {
         id: `mfoot_${ts + 3}`,
-        cells: [
-          { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
-          { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
-          { text: '', colSpan: 2 },
-        ],
+        cells: isPrimary
+          ? [
+              { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+              { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
+              { text: '', colSpan: 1 },
+            ]
+          : [
+              { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+              { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
+              { text: '', colSpan: 2 },
+            ],
       } as SheetRow,
     ],
   }
@@ -772,15 +792,20 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
   const learner = isPrimary ? 'Pupil' : 'Student'
   const periodWord = isUni ? 'Semester' : 'Term'
 
-  // University marks on a /100 course scale with credits and grade points; everyone else
-  // on the Cameroon /20 sequence-and-coefficient grid. Same table either way — only the
-  // columns and their headers differ.
+  // University marks on a /100 course scale with credits and grade points; secondary on the
+  // Cameroon /20 sequence-and-coefficient grid; primary on a raw Test+Exam /100 scale with
+  // NO coefficient weighting (plain average — see reportcard.controller.ts saveEntries).
+  // Same table either way — only the columns and their headers differ.
   const cols = isUni
     ? ['sn', 'code', 'subject', 'credit', 'seq1', 'seq2', 'score', 'grade', 'gradePoint', 'weighted', 'visa']
-    : ['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks', 'visa']
+    : isPrimary
+      ? ['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks', 'visa']
+      : ['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks', 'visa']
   const headers: Record<string, string> = isUni
     ? { subject: 'Course Title', credit: 'Credits', seq1: 'CA', seq2: 'Exam', score: 'Total /100', gradePoint: 'GP', weighted: 'WGP' }
-    : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
+    : isPrimary
+      ? { subject: 'Subject', seq1: 'Test', seq2: 'Exam', score: 'Total /100', remarks: 'Remark' }
+      : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
 
   const ts = Date.now()
   const bandBg = '#f1f5f9'
@@ -857,8 +882,8 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
         { label: 'Classification', field: 'classification' },
       ]
     : [
-        { label: `${periodWord} Average /20`, field: 'average' },
-        { label: 'Class Average /20', field: 'classAverage' },
+        { label: `${periodWord} Average /${isPrimary ? 100 : 20}`, field: 'average' },
+        { label: `Class Average /${isPrimary ? 100 : 20}`, field: 'classAverage' },
         { label: 'Position in Class', field: 'position' },
         { label: 'Best Average', field: 'bestAverage' },
         { label: 'Appreciation', field: 'appreciation' },
@@ -880,7 +905,7 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
       id: uid('tbl'), type: 'marks_table',
       caption: `Academic Record — {term}`,
       showSeq1: true, showSeq2: true, showGrade: true, showRemarks: !isUni,
-      showCoef: !isUni, columnOrder: cols, headers,
+      showCoef: !isUni && !isPrimary, columnOrder: cols, headers,
       template: marksTemplate,
     },
     { id: uid('sum'), type: 'summary', boxes: summaryBoxes.map((b) => ({ id: uid('b'), label: b.label, field: b.field })) },
@@ -895,7 +920,7 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
             { label: 'Classification', field: 'classification' },
           ]
         : [
-            { label: 'Annual Average /20', field: 'annualAverage' },
+            { label: `Annual Average /${isPrimary ? 100 : 20}`, field: 'annualAverage' },
             { label: 'Annual Position', field: 'annualPosition' },
             { label: 'Annual Class Average', field: 'annualClassAverage' },
             { label: 'Final Decision', field: 'decision' },
@@ -1042,12 +1067,17 @@ function buildLayout(opts: {
 export function getLedgerLayout(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   const color = '#0f172a'
   const isUni = schoolType === 'UNIVERSITY'
+  const isPrimary = schoolType === 'PRIMARY'
   const cols = isUni
     ? (['sn', 'code', 'subject', 'credit', 'score', 'gradePoint', 'grade', 'weighted'] as const)
-    : (['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks'] as const)
+    : isPrimary
+      ? (['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks'] as const)
+      : (['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks'] as const)
   const headers: Record<string, string> = isUni
     ? { subject: 'Course Title', score: 'Mark /100', gradePoint: 'GP', weighted: 'WGP' }
-    : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
+    : isPrimary
+      ? { subject: 'Subject', seq1: 'Test', seq2: 'Exam', score: 'Total /100', remarks: 'Remark' }
+      : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
   const ts = Date.now()
 
   // CITEC-transcript-style banding: near-black full-width term banner on top,

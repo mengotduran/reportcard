@@ -158,6 +158,11 @@ model ClassLevel {
   createdAt    DateTime @default(now())
   feeAmount            Int      @default(0)
   maxScore             Int      @default(20)
+  // Primary only: the Test component's ceiling out of `maxScore` (Exam ceiling is
+  // maxScore - testMaxScore, derived rather than stored — same relationship as university's
+  // hardcoded 30/70 CA/Exam split, just school-configurable here). Ignored by
+  // secondary/university, which keep the sequence/CA-Exam split they already have.
+  testMaxScore         Int      @default(30)
   hndRegistrationFee   Int?
   departmentId         String?
   // Day or Evening sitting. Existing classes are all DAY, which keeps every school that
@@ -173,7 +178,16 @@ model User {
   id                String           @id @default(uuid())
   schoolId          String?
   name              String
-  email             String           @unique
+  // Nullable: a person with no email account (common for teachers/admins) logs in with
+  // `username` instead — see below. Postgres treats every NULL as distinct under a unique
+  // index, so any number of no-email accounts coexist without colliding on this column.
+  email             String?          @unique
+  // Alternative login identifier for someone with no email. 8+ chars, no whitespace,
+  // validated in utils/passwordValidation.ts. Exactly one of email/username is required at
+  // creation (enforced in each creation path, not at the DB level — see createTeacher,
+  // buildAdminAccount). Once a username-only account adds a real email (self-service, see
+  // updateMyEmail), BOTH remain valid login identifiers — the username is never cleared.
+  username          String?          @unique
   password          String
   role              UserRole
   isActive          Boolean          @default(true)
@@ -282,6 +296,10 @@ model HndRegistrationPayment {
   amount     Int
   paidOn     DateTime
   note       String?
+  // Government exam registration number (FSLC/GCE/HND), once the school or exam body has
+  // assigned one. Nullable on purpose — a school registering a student before the number
+  // exists must not be blocked from recording the payment.
+  examNumber String?
   recordedBy String?
   createdAt  DateTime @default(now())
   school     School   @relation(fields: [schoolId], references: [id])
@@ -298,6 +316,9 @@ model Subject {
   classLevel      String
   createdAt       DateTime         @default(now())
   maxScore        Int              @default(20)
+  // Primary only — see ClassLevel.testMaxScore. Inherited from the class at creation time,
+  // same as maxScore.
+  testMaxScore    Int              @default(30)
   coefficient     Int              @default(1)
   compulsory      Boolean          @default(true)
   credit          Int?

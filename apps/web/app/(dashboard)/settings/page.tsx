@@ -467,7 +467,10 @@ export default function SettingsPage() {
 
             {/* My Account */}
             <div className={CARD}>
-              <CardHead icon={UserCircle} title={t('My Account')} desc={t('Used to sign in — not the same as the school email below')} />
+              <CardHead icon={UserCircle} title={t('My Account')}
+                desc={user?.email
+                  ? t('Used to sign in — not the same as the school email below')
+                  : `${t('You currently sign in with the username')} "${(user as any)?.username}". ${t('Add an email below to also enable email-based password recovery.')}`} />
               <div className="mt-5">
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')} <span className="text-destructive">*</span></label>
                 <input

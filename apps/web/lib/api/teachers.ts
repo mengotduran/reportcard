@@ -7,12 +7,18 @@ export const getTeachersApi = async (params?: { term?: string }) => {
 
 export const createTeacherApi = async (data: {
   name: string
-  email: string
-  // Offline installs only — online schools email the teacher a setup link instead.
+  // Exactly one of these two — a person with no email logs in with a username instead.
+  email?: string
+  username?: string
+  // Offline installs, or anyone with no email — online schools with an email instead get
+  // an emailed setup link.
   password?: string
   role: string
   masterClassLevel?: string
   departments?: string[]
+  // Primary only — which class's shared teaching team (max 3) this teacher joins.
+  // Omitted for a Vice Principal, who has no class of their own.
+  classLevel?: string
   // University only — the semester this teacher was added under.
   term?: string
 }) => {
