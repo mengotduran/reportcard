@@ -47,6 +47,19 @@ const resolveProgramme = (value: unknown, schoolType?: string): ProgrammeValue =
     : 'DAY'
 }
 
+// COMPETENCY (a rating per subject, no marks — nursery/pre-primary) is offered to PRIMARY
+// schools only, same shape as resolveProgramme's university-only gate above: a secondary or
+// university class sending it is forced back to NUMERIC rather than refused, since it can
+// only be a client sending a field that does not apply to it.
+const GRADING_MODES = ['NUMERIC', 'COMPETENCY'] as const
+type GradingModeValue = (typeof GRADING_MODES)[number]
+const resolveGradingMode = (value: unknown, schoolType?: string): GradingModeValue => {
+  if (schoolType !== 'PRIMARY') return 'NUMERIC'
+  return typeof value === 'string' && (GRADING_MODES as readonly string[]).includes(value.toUpperCase())
+    ? (value.toUpperCase() as GradingModeValue)
+    : 'NUMERIC'
+}
+
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -64,7 +77,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
 export const createClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, testMaxScore, feeAmount, hndRegistrationFee, departmentId, programme } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, testMaxScore, feeAmount, hndRegistrationFee, departmentId, programme, gradingMode } = req.body
 
     if (!name?.trim()) {
       res.status(400).json({ message: 'Class name is required' })
@@ -109,6 +122,7 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         hndRegistrationFee: regFee,
         departmentId: resolvedDepartmentId,
         programme: resolveProgramme(programme, school?.type),
+        gradingMode: resolveGradingMode(gradingMode, school?.type),
       },
     })
     res.status(201).json({ message: 'Class created', classLevel: level })
@@ -122,7 +136,7 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { name, abbreviation, hasStream, order, maxScore, testMaxScore, feeAmount, hndRegistrationFee, departmentId, programme } = req.body
+    const { name, abbreviation, hasStream, order, maxScore, testMaxScore, feeAmount, hndRegistrationFee, departmentId, programme, gradingMode } = req.body
 
     const level = await prisma.classLevel.findFirst({ where: { id, schoolId } })
     if (!level) {
@@ -204,6 +218,12 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         : {}),
       ...(resolvedDepartmentId !== undefined ? { departmentId: resolvedDepartmentId } : {}),
       ...(programme !== undefined ? { programme: resolveProgramme(programme, school?.type) } : {}),
+      // Freely switchable both ways, unlike `programme` above. Marks and ratings live in
+      // separate columns on ReportEntry (score/seq vs grade), so flipping the mode hides the
+      // other one's data rather than destroying it, and flipping back restores it. Existing
+      // cards keep whatever average/position they had until their marks are next saved,
+      // which is when saveEntries clears them.
+      ...(gradingMode !== undefined ? { gradingMode: resolveGradingMode(gradingMode, school?.type) } : {}),
     }
 
     const moved = { students: 0, subjects: 0, classMasters: 0, templates: templateRewrites.length }

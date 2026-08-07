@@ -2,7 +2,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, setClassTeachersApi, removeTeacherFromClassApi, seedDefaultPrimaryClassesApi, ClassLevel, DeleteImpact } from '@/lib/api/classLevels'
+import { getClassLevelsApi, createClassLevelApi, updateClassLevelApi, deleteClassLevelApi, getClassLevelDeleteImpactApi, setClassTeachersApi, removeTeacherFromClassApi, seedDefaultPrimaryClassesApi, ClassLevel, DeleteImpact, GradingMode } from '@/lib/api/classLevels'
 import { getDepartmentsApi, createDepartmentApi, updateDepartmentApi, deleteDepartmentApi, Department } from '@/lib/api/departments'
 import { copySubjectsApi, getSubjectsApi } from '@/lib/api/subjects'
 import { getStudentsApi } from '@/lib/api/students'
@@ -96,6 +96,7 @@ type FormState = {
   feeAmount: string
   hndRegistrationFee: string
   programme: Programme
+  gradingMode: GradingMode // primary only — see ClassLevel.gradingMode
 }
 
 // feeAmount deliberately starts empty, not a real number: it used to default to a stock
@@ -103,8 +104,8 @@ type FormState = {
 // text), so a distracted admin could save every class with a fee that has nothing to do
 // with their school's actual tuition. The input's placeholder already shows the same
 // number as a hint — this just stops it from also being the submitted value.
-const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  testMaxScore: '30', feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY' }
-const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', testMaxScore: '30', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY' }
+const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  testMaxScore: '30', feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY', gradingMode: 'NUMERIC' }
+const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', testMaxScore: '30', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY', gradingMode: 'NUMERIC' }
 // Primary defaults to a raw /100 Test+Exam scale (30 Test / 70 Exam), unlike secondary's /20,
 // and its own default FSLC (not GCE) registration fee.
 const PRIMARY_EMPTY: FormState = { ...STD_EMPTY, maxScore: '100', hndRegistrationFee: FSLC_DEFAULT_FEE }
@@ -402,6 +403,7 @@ export default function ClassesPage() {
         feeAmount: String(cls.feeAmount ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? 65000),
         programme: cls.programme ?? 'DAY',
+        gradingMode: 'NUMERIC', // university is never rated
       })
     } else {
       setForm({
@@ -415,6 +417,7 @@ export default function ClassesPage() {
         feeAmount: String(cls.feeAmount ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? (isPrimary ? FSLC_DEFAULT_FEE : GCE_DEFAULT_FEE)),
         programme: cls.programme ?? 'DAY',
+        gradingMode: cls.gradingMode ?? 'NUMERIC',
       })
     }
     setError('')
@@ -482,6 +485,7 @@ export default function ClassesPage() {
         hndRegistrationFee: isExamReg ? (Number(form.hndRegistrationFee) || 0) : null,
         ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
         programme: form.programme,
+        ...(isPrimary ? { gradingMode: form.gradingMode } : {}),
       }
     }
 
@@ -1384,7 +1388,33 @@ export default function ClassesPage() {
                 </div>
               )}
 
-              {/* Max score */}
+              {/* How this class is assessed (primary only). Nursery/pre-primary is not marked
+                  out of anything, so choosing Ratings hides the mark-scale fields entirely
+                  rather than leaving an admin to wonder what they do. */}
+              {isPrimary && (
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">{t('Assessment')}</label>
+                  <div className="flex gap-2">
+                    {(['NUMERIC', 'COMPETENCY'] as const).map((m) => (
+                      <button key={m} type="button" onClick={() => setForm({ ...form, gradingMode: m })}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition ${
+                          form.gradingMode === m
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'bg-background text-foreground border-border hover:bg-hover'}`}>
+                        {t(m === 'NUMERIC' ? 'Marks' : 'Ratings')}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {form.gradingMode === 'COMPETENCY'
+                      ? t('For nursery and pre-primary. Each subject is rated Attained, Developing or Not Yet Attained. The report card carries no marks, no average and no position in class.')
+                      : t('Marked out of a score, with a Test and an Exam. The report card shows an average out of 20 and a position in class.')}
+                  </p>
+                </div>
+              )}
+
+              {/* Max score — meaningless for a class that is rated rather than marked. */}
+              {form.gradingMode !== 'COMPETENCY' && (<>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <span className="text-destructive">*</span></label>
                 <div className="flex items-center gap-2">
@@ -1414,6 +1444,7 @@ export default function ClassesPage() {
                   </div>
                 </div>
               )}
+              </>)}
 
               {/* School fee */}
               {isUniversity && form.uniLevel === 'Level 2' ? (() => {

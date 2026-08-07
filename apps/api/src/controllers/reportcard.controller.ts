@@ -3,6 +3,7 @@ import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 import { parseStoredScale } from '../utils/gradingScale'
+import { COMPETENCY_RATINGS, isCompetencyRating } from '../utils/competency'
 import { emitToSchool } from '../config/socket'
 
 // Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
@@ -85,15 +86,20 @@ async function findPublishBlockers(
   const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
   if (school?.type === 'UNIVERSITY') return []
 
-  const [students, subjects, reportCards] = await Promise.all([
+  const [students, subjects, reportCards, level] = await Promise.all([
     prisma.student.findMany({ where: { schoolId, classLevel, isActive: true }, select: { id: true, name: true } }),
     prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(termName) }, select: { id: true, name: true, compulsory: true } }),
     prisma.reportCard.findMany({
       where: { schoolId, termId, student: { classLevel, isActive: true } },
       include: { entries: true, student: { select: { id: true, name: true } } },
     }),
+    prisma.classLevel.findFirst({ where: { schoolId, name: classLevel }, select: { gradingMode: true } }),
   ])
   if (subjects.length === 0) return []
+  // A competency class has no sequences at all, so "complete" means every subject carries a
+  // RATING. Judging it on seq1/seq2 (which are null there by design) would have made a
+  // nursery card impossible to publish, ever.
+  const isCompetency = level?.gradingMode === 'COMPETENCY'
 
   const issues: { studentId: string; student: string; reason: string }[] = []
   for (const student of students) {
@@ -107,10 +113,11 @@ async function findPublishBlockers(
     const missingSubjects = subjects.filter((s) => {
       const e = rc.entries.find((en) => en.subjectId === s.id)
       if (!e) return s.compulsory !== false
-      return e.seq1Score == null || e.seq2Score == null
+      return isCompetency ? !e.grade?.trim() : (e.seq1Score == null || e.seq2Score == null)
     })
     if (missingSubjects.length > 0) {
-      issues.push({ studentId: student.id, student: student.name, reason: `Missing sequences for: ${missingSubjects.slice(0, 3).map((s) => s.name).join(', ')}${missingSubjects.length > 3 ? '…' : ''}` })
+      const what = isCompetency ? 'Missing ratings for' : 'Missing sequences for'
+      issues.push({ studentId: student.id, student: student.name, reason: `${what}: ${missingSubjects.slice(0, 3).map((s) => s.name).join(', ')}${missingSubjects.length > 3 ? '…' : ''}` })
       continue
     }
 
@@ -720,7 +727,14 @@ export const getReportCard = async (req: AuthRequest, res: Response) => {
     // take — and, at a university, zero them.
     const excludedSubjectIds = [...((await excludedSubjectIdsFor([reportCard.studentId])).get(reportCard.studentId) ?? new Set<string>())]
 
-    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, bestAverage, annualAverage, annualPosition, annualClassSize, excludedSubjectIds })
+    // How this card is assessed, so a client knows whether to render marks or ratings
+    // without having to fetch the class list separately and match on name.
+    const cardLevel = await prisma.classLevel.findFirst({
+      where: { schoolId, name: reportCard.student.classLevel },
+      select: { gradingMode: true },
+    })
+
+    res.json({ ...reportCard, subjectStats, cgpa, classSize, classAverage, bestAverage, annualAverage, annualPosition, annualClassSize, excludedSubjectIds, gradingMode: cardLevel?.gradingMode ?? 'NUMERIC' })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -765,7 +779,7 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
 
     const reportCard = await prisma.reportCard.findFirst({
       where: { id, schoolId },
-      include: { term: { select: { isCurrent: true } } },
+      include: { term: { select: { isCurrent: true } }, student: { select: { classLevel: true } } },
     })
     if (!reportCard) {
       res.status(404).json({ message: 'Report card not found' })
@@ -774,10 +788,18 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
 
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, marksEntryMode: true } })
     const isUniversity = school?.type === 'UNIVERSITY'
-    // Primary: Test + Exam on a raw 0-maxScore scale (like university's CA/Exam), but the
-    // overall average stays a PLAIN mean of subject totals — no coefficient weighting. See
-    // the average calculation below for where this actually diverges from university.
+    // Primary: Test + Exam on a raw 0-maxScore scale (like university's CA/Exam). The
+    // overall average is coefficient-weighted and normalised to /20 — see the average
+    // calculation below.
     const isPrimary = school?.type === 'PRIMARY'
+    // Nursery/pre-primary: a developmental RATING per subject instead of marks. Resolved
+    // from the class, not the school, since one primary school runs both modes at once —
+    // its nursery classes are COMPETENCY while Class 1-6 stay NUMERIC.
+    const classLevelRow = await prisma.classLevel.findFirst({
+      where: { schoolId, name: reportCard.student.classLevel },
+      select: { gradingMode: true },
+    })
+    const isCompetency = classLevelRow?.gradingMode === 'COMPETENCY'
 
     const role = req.user!.role
     const userId = req.user!.id
@@ -836,7 +858,9 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // only against marks that are actually being added or changed (see below).
     const priorEntries = await prisma.reportEntry.findMany({
       where: { reportCardId: id },
-      select: { subjectId: true, score: true, seq1Score: true, seq2Score: true, resitScore: true },
+      // `grade` too: for a competency class it holds the RATING, which the save below has
+      // to be able to carry forward when the caller doesn't mention it.
+      select: { subjectId: true, score: true, seq1Score: true, seq2Score: true, resitScore: true, grade: true },
     })
     const priorResit = new Map(priorEntries.map(e => [e.subjectId, e.resitScore]))
     const priorSeq2 = new Map(priorEntries.map(e => [e.subjectId, e.seq2Score]))
@@ -982,6 +1006,67 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
         })
         return
       }
+    }
+
+    // ── Competency (nursery) ─────────────────────────────────────────────────────
+    // A wholly separate, much shorter path: one rating per subject, no arithmetic at all.
+    // Returns early rather than threading `isCompetency` through the scoring code below,
+    // which is entirely about marks this mode does not have.
+    if (isCompetency) {
+      const incoming = entries as { subjectId: string; rating?: unknown; remarks?: string }[]
+      // Validated against the fixed set, not trusted from the client: `grade` is free text
+      // at the database level, so an unchecked value would put arbitrary strings on a
+      // printed report card. An empty/absent rating is allowed and means "not yet recorded".
+      const invalid = incoming.filter((e) => {
+        const r = e.rating
+        return r != null && String(r).trim() !== '' && !isCompetencyRating(r)
+      })
+      if (invalid.length > 0) {
+        res.status(400).json({
+          message: `Invalid rating. Must be one of: ${COMPETENCY_RATINGS.join(', ')}.`,
+        })
+        return
+      }
+
+      // Carry forward any rating the caller did not mention, keyed off whether `rating` is
+      // PRESENT rather than truthy. This is what stops a numeric marks grid — which knows
+      // nothing about ratings and re-sends every subject with seq1/seq2 only — from wiping a
+      // whole class's ratings the moment a teacher opens it on a nursery subject and saves.
+      // An explicit `rating: null`/'' still clears one, so "unset this" remains expressible.
+      // Same principle the mark paths already use: a re-sent, untouched value passes through.
+      const priorRating = new Map(priorEntries.map((e) => [e.subjectId, e.grade]))
+      const resolveRating = (e: { subjectId: string; rating?: unknown }): string | null => {
+        if (!('rating' in e)) return priorRating.get(e.subjectId) ?? null
+        return isCompetencyRating(e.rating) ? e.rating : null
+      }
+
+      await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
+      await prisma.reportEntry.createMany({
+        data: incoming.map((e) => ({
+          reportCardId: id,
+          subjectId: e.subjectId,
+          // score/seq1/seq2 stay null — that is what keeps the average, the total and the
+          // class position empty without the arithmetic needing to know this mode exists.
+          score: null, seq1Score: null, seq2Score: null, resitScore: null,
+          grade: resolveRating(e),
+          remarks: typeof e.remarks === 'string' ? e.remarks : '',
+        })),
+      })
+
+      await prisma.reportCard.update({
+        where: { id },
+        data: {
+          // Explicitly cleared, not left alone: a class switched from NUMERIC to COMPETENCY
+          // would otherwise keep displaying the average and position it had as a marked class.
+          totalScore: null, average: null, position: null,
+          ...(remarks !== undefined ? { remarks } : {}),
+        },
+      })
+
+      const competencyEntries = await prisma.reportEntry.findMany({ where: { reportCardId: id } })
+      emitToSchool(schoolId, 'marks:changed')
+      res.json({ message: 'Ratings saved', entries: competencyEntries })
+      return
     }
 
     // Delete existing entries and recreate. Deliberately after every validation above:
@@ -1172,7 +1257,7 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
     const reportCard = await prisma.reportCard.findFirst({
       where: { id, schoolId },
       include: {
-        entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
+        entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, grade: true } },
         student: { select: { classLevel: true } },
         term: { select: { name: true } },
       },
@@ -1183,10 +1268,15 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
     }
 
     const classLevel = reportCard.student.classLevel
-    const [subjects, classMaster] = await Promise.all([
+    const [subjects, classMaster, levelRow] = await Promise.all([
       prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(reportCard.term.name) }, select: { id: true, name: true, compulsory: true } }),
       prisma.user.findFirst({ where: { schoolId, role: 'CLASS_MASTER', masterClassLevel: classLevel, isActive: true } }),
+      prisma.classLevel.findFirst({ where: { schoolId, name: classLevel }, select: { gradingMode: true } }),
     ])
+    // Third and last place this "is the card complete" rule is written — the other two are
+    // findPublishBlockers and getReadinessDetail. A competency class has no sequences, so
+    // completeness there means every subject carries a RATING.
+    const isCompetency = levelRow?.gradingMode === 'COMPETENCY'
 
     // Rule 1 — a class with no subjects cannot be published
     if (subjects.length === 0) {
@@ -1203,10 +1293,11 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
       if (excludedHere.has(s.id)) return false
       const e = reportCard.entries.find(en => en.subjectId === s.id)
       if (!e) return s.compulsory !== false
-      return e.seq1Score == null || e.seq2Score == null
+      return isCompetency ? !e.grade?.trim() : (e.seq1Score == null || e.seq2Score == null)
     })
     if (missing.length > 0) {
-      res.status(400).json({ message: `Cannot publish — missing marks for: ${missing.map(s => s.name).slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` })
+      const what = isCompetency ? 'missing ratings for' : 'missing marks for'
+      res.status(400).json({ message: `Cannot publish — ${what}: ${missing.map(s => s.name).slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` })
       return
     }
 
@@ -1630,13 +1721,18 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
       prisma.subject.findMany({ where: { schoolId, ...subjectTermFilter(term.name) }, select: { id: true, classLevel: true, compulsory: true } }),
       prisma.reportCard.findMany({
         where: { schoolId, termId },
-        select: { id: true, status: true, remarks: true, remarksFr: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } }
+        select: { id: true, status: true, remarks: true, remarksFr: true, student: { select: { id: true, classLevel: true } }, entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, grade: true } }
         }
       }),
     ])
 
     // Class levels present in this term
     const classLevels = [...new Set(students.map(s => s.classLevel))]
+    // Per CLASS, not per school: one primary school runs both modes at once (nursery on
+    // COMPETENCY, Class 1-6 on NUMERIC), so completeness has to be asked class by class.
+    const competencyClasses = new Set(
+      (await prisma.classLevel.findMany({ where: { schoolId, gradingMode: 'COMPETENCY' }, select: { name: true } })).map((c) => c.name)
+    )
 
     const result: Record<string, { ready: boolean; missingSeqs: number; missingRemarks: number; total: number; noSubjects: boolean }> = {}
 
@@ -1664,7 +1760,9 @@ export const getClassReadiness = async (req: AuthRequest, res: Response) => {
         for (const subject of classSubjects) {
           if (excludedForThisStudent.has(subject.id)) continue
           const entry = rc.entries.find(e => e.subjectId === subject.id)
-          const isMissing = entry ? (entry.seq1Score == null || entry.seq2Score == null) : subject.compulsory !== false
+          const isMissing = entry
+            ? (competencyClasses.has(classLevel) ? !entry.grade?.trim() : (entry.seq1Score == null || entry.seq2Score == null))
+            : subject.compulsory !== false
           if (isMissing) {
             missingSeqs++
             break // count once per student
@@ -1705,7 +1803,7 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
     const rc = await prisma.reportCard.findFirst({
       where: { id, schoolId },
       include: {
-        entries: { select: { subjectId: true, seq1Score: true, seq2Score: true } },
+        entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, grade: true } },
         student: { select: { classLevel: true } },
         term: { select: { name: true } },
       },
@@ -1713,6 +1811,11 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
     if (!rc) { res.status(404).json({ message: 'Not found' }); return }
 
     const classLevel = rc.student.classLevel
+
+    // Same rule as findPublishBlockers: a competency class is complete when every subject
+    // has a RATING, since it has no sequences to fill.
+    const levelRow = await prisma.classLevel.findFirst({ where: { schoolId, name: classLevel }, select: { gradingMode: true } })
+    const isCompetency = levelRow?.gradingMode === 'COMPETENCY'
 
     const [subjects, teacherSubjects, classMaster] = await Promise.all([
       prisma.subject.findMany({ where: { schoolId, classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, name: true, compulsory: true } }),
@@ -1734,7 +1837,7 @@ export const getReadinessDetail = async (req: AuthRequest, res: Response) => {
       .filter(s => {
         const entry = rc.entries.find(e => e.subjectId === s.id)
         if (!entry) return s.compulsory !== false
-        return entry.seq1Score == null || entry.seq2Score == null
+        return isCompetency ? !entry.grade?.trim() : (entry.seq1Score == null || entry.seq2Score == null)
       })
       .map(s => {
         const assignment = teacherSubjects.find(ts => ts.subject.id === s.id)

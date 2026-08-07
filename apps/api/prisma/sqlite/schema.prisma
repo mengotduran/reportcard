@@ -55,6 +55,12 @@ enum Programme {
   EVENING
 }
 
+/// How a class is assessed — see ClassLevel.gradingMode.
+enum GradingMode {
+  NUMERIC
+  COMPETENCY
+}
+
 model ParentSchool {
   id        String   @id @default(uuid())
   name      String
@@ -206,6 +212,10 @@ model ClassLevel {
   departmentId       String?
   // Day or Evening sitting; existing classes are all DAY.
   programme          Programme @default(DAY)
+  // How this class is assessed: NUMERIC (score + average + position) or COMPETENCY
+  // (nursery — a developmental rating per subject, no average, total or position).
+  // Mirrors the Postgres schema; see the full note there.
+  gradingMode        GradingMode @default(NUMERIC)
   createdAt          DateTime @default(now())
 
   school     School      @relation(fields: [schoolId], references: [id])

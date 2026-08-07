@@ -168,6 +168,18 @@ model ClassLevel {
   // Day or Evening sitting. Existing classes are all DAY, which keeps every school that
   // has no evening programme exactly as it was.
   programme            Programme @default(DAY)
+  // How this class is assessed. NUMERIC is everything that came before: Test+Exam (primary)
+  // or sequences (secondary) producing a score, an average and a class position.
+  //
+  // COMPETENCY is for nursery/pre-primary, which is not marked out of anything: each subject
+  // gets a developmental rating (Attained / Developing / Not Yet Attained) and the card
+  // carries no average, no total and no position — ranking three-year-olds is the thing this
+  // mode exists to avoid. Stored per CLASS rather than inferred from the class NAME (the way
+  // isRegistrationClass detects Class Six for FSLC) because class names are free text: a
+  // French section names these Maternelle, a school may name them anything at all, and a
+  // school that wants Class 1 assessed this way can simply say so. Admin-set on the Classes
+  // page, primary-only in the UI though nothing here is type-specific.
+  gradingMode          GradingMode @default(NUMERIC)
   department           Department? @relation(fields: [departmentId], references: [id])
   school               School   @relation(fields: [schoolId], references: [id])
 
@@ -684,6 +696,12 @@ enum MarksEntryMode {
 enum Programme {
   DAY
   EVENING
+}
+
+/// How a class is assessed — see ClassLevel.gradingMode.
+enum GradingMode {
+  NUMERIC
+  COMPETENCY
 }
 
 /**

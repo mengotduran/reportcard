@@ -1,6 +1,9 @@
 import api from './client'
 
 export type Programme = 'DAY' | 'EVENING'
+/** How a class is assessed. COMPETENCY (nursery: a rating per subject, no marks, no average
+ *  and no position) is offered to primary schools only — see ClassLevel.gradingMode. */
+export type GradingMode = 'NUMERIC' | 'COMPETENCY'
 
 export interface ClassLevel {
   id: string
@@ -16,6 +19,7 @@ export interface ClassLevel {
   // Day or Evening sitting. A university runs the same programme twice with the same
   // lecturers and different students, each sitting being its own class.
   programme?: Programme
+  gradingMode?: GradingMode
 }
 
 export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }> => {
@@ -23,12 +27,12 @@ export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }
   return res.data
 }
 
-export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme }) => {
+export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme; gradingMode?: GradingMode }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }
 
-export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme }) => {
+export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme; gradingMode?: GradingMode }) => {
   const res = await api.put(`/class-levels/${id}`, data)
   return res.data
 }
