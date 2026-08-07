@@ -1,6 +1,7 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-07-31 (an admin-recorded absence is never the teacher's to retract · the copy-marks shortcut is primary/secondary only, CA /30 and Exam /70 cannot fill each other · teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
+> Last updated: 2026-08-07 (**primary marking & averaging documented**: Test + Exam on a raw scale, average always coefficient-weighted and normalised to /20, pass mark 10/20, `recomputePrimaryAverages.ts` migration · the 0–20 default grading scale is secondary-only, primary defaults to 0–100 · **primary shared teaching teams**: hours split equally, a period is only missed when every member is absent · **an absence is reviewed by an explicit action, never by a background refetch** — reading the notification counts)
+> Previously (2026-07-31): an admin-recorded absence is never the teacher's to retract · the copy-marks shortcut is primary/secondary only, CA /30 and Exam /70 cannot fill each other · teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities
 > This document is updated every time a new feature or change is made.
 
 ---
@@ -191,7 +192,8 @@ Base URL: `http://localhost:5000/api`
 | Method | Route | Roles | Description |
 |--------|-------|-------|-------------|
 | GET | `/teacher-absences/me` | Any teacher | Own logged absences (optional `from`/`to`) |
-| GET | `/teacher-absences` | Admin, VP | A given `teacherId`'s absences |
+| GET | `/teacher-absences` | Admin, VP | A given `teacherId`'s absences. **Pure read — never marks anything reviewed** (see §20 Absences) |
+| POST | `/teacher-absences/mark-seen` | Admin, VP | Mark that `teacherId`'s absences **reviewed**, locking the teacher out of retracting them. The one and only writer of `seenByAdmin`; also called when an admin reads the `TEACHER_ABSENCE` notification |
 | POST | `/teacher-absences` | Any teacher (self), Admin/VP (on a teacher's behalf via `teacherId`) | Log an absence for a `date` — `wholeDay: true` (every real slot that weekday) or specific `timetableSlotIds`. Accepts a `days` array for a multi-day report |
 | DELETE | `/teacher-absences/:id` | Own (teacher) or Admin/VP | Remove a logged absence — clears **every period of that class on that date**, not just the row named |
 | GET | `/teacher-absences/counts` | Admin, VP | Every teacher's absence total in one query, for the By Teacher view |
@@ -296,13 +298,22 @@ See §19 Demo Tenant for the full picture.
 
 ## 7. Grading & Mark Calculation
 
-### Per-subject marks (teacher fills in)
+Three school types, three marking models. This section describes **secondary**; primary is
+in *Primary marking & averaging* below and university in *University GPA Algorithm* after
+that. What they share: the letter grade and remark always come from the school's own
+grading scale, never hardcoded thresholds.
+
+### Per-subject marks (teacher fills in) — secondary
 
 The teacher fills in marks for **Sequence 1** and **Sequence 2**, both out of the subject's `maxScore` (default 20).
 
 ```
 Subject average = (Seq1 + Seq2) / 2   →   e.g. 15/20
 ```
+
+One component is enough: a subject with a Seq 1 and no Seq 2 counts the missing half as 0
+rather than vanishing from the average. `null` means **neither** was entered — that subject
+is unmarked and stays out of the average entirely (it is not a zero).
 
 ### Per-subject grade & remark (auto-filled)
 
@@ -321,7 +332,7 @@ The letter grade and remark both come from the school's grading-scale ranges (th
 
 **Badge style**: squared corners (borderRadius 4px), not circular pills — applied on both web and mobile.
 
-### Final (weighted) average
+### Final (weighted) average — secondary
 
 ```
 Note coefficientée = subject_average × coefficient
@@ -358,10 +369,128 @@ Overall % = (14.4 / 20) × 100 = 72%  →  "Good"
 | 8–9 | 40–49% | D | Below Average |
 | 0–7 | 0–39% | F | Fail |
 
+**This 0–20 default is for SECONDARY only.** Primary and university both default to the
+0–100 scale (`DEFAULT_UNIVERSITY_RANGES`), because both mark on a raw /100 scale. `GET
+/grading-scale` auto-migrates a stale 0–100 scale back to this 0–20 default — but **only for
+secondary**; doing it for primary silently wiped a correct primary scale on every page load.
+
+Readers must also cope with the column holding **two shapes**: a bare array (legacy) or
+`{ ranges, classificationBands, legendRows }` (what saves write today). Always parse via
+`utils/gradingScale.ts` → `parseStoredScale`, never read `GradingScale.ranges` directly.
+
 ### Class position
 
 Shown as ordinal: **1st**, **2nd**, **3rd**, etc.
 Auto-recalculated for all students in the same class/term every time any teacher saves marks.
+
+---
+
+### Primary marking & averaging (Test + Exam, average always /20)
+
+Primary is neither of the other two. Its subjects are marked on a **raw scale** like a
+university, but its report card states the average **out of 20** like a secondary one — the
+two are independent, and conflating them is the bug this design exists to prevent.
+
+#### Per-subject marks
+
+Two components per subject, stored in the same `seq1Score` / `seq2Score` columns everything
+else uses:
+
+| Component | Column | Out of |
+|---|---|---|
+| **Test** | `seq1Score` | `ClassLevel.testMaxScore` (default 30) |
+| **Exam** | `seq2Score` | `maxScore − testMaxScore` (derived, default 70) |
+| **Total** | `score` | `ClassLevel.maxScore` (default 100) |
+
+```
+Subject total = Test + Exam        →  e.g. 21 + 50 = 71/100
+```
+
+A direct sum, not an average of the two — the same shape as university's CA + Exam, and
+unlike secondary, where the two sequences are averaged. The Exam ceiling is **derived, never
+stored**: there is one `testMaxScore` and the rest of `maxScore` is the exam, so the two can
+never drift out of sync. Both are inherited from the class by `Subject` at creation time.
+
+The letter grade and remark are matched against the school's grading scale on the **raw
+0–100 scale** (primary scales are written 0–100, like a university's — see *Default grading
+scale* caveat below).
+
+#### Term average — coefficient-weighted, normalised to /20
+
+```
+Average = Σ( (score / maxScore) × 20 × coefficient ) / Σ(coefficient)
+```
+
+Two independent things are happening here:
+
+1. **Coefficients are applied.** Primary used to take a plain unweighted mean. Cameroon
+   primary has no national coefficient table (that is a GCE/secondary thing), but schools of
+   this kind do weight the core subjects — English/French/Maths above Arts/PE — and
+   `Subject.coefficient` was already stored and set per subject, just never read for primary.
+   It is now.
+2. **Each subject is normalised to /20 *before* weighting.** The average a Cameroonian
+   primary report card states is always out of 20, whatever scale the subjects were marked
+   on. Normalising per subject rather than on the final total means a class mixing
+   `maxScore`s (a /10 subject beside a /100 one) still averages correctly.
+
+Worked example — the Class 6 card used to verify this:
+
+| Subject | Score /100 | → /20 | Coeff | Weighted |
+|---|---|---|---|---|
+| English | 71 | 14.2 | 5 | 71.0 |
+| French | 76 | 15.2 | 5 | 76.0 |
+| Mathematics | 66 | 13.2 | 5 | 66.0 |
+| Science & Technology | 72 | 14.4 | 3 | 43.2 |
+| Social Studies | 70 | 14.0 | 3 | 42.0 |
+| Citizenship | 67 | 13.4 | 2 | 26.8 |
+| ICT | 77 | 15.4 | 2 | 30.8 |
+| Health Science | 70 | 14.0 | 2 | 28.0 |
+| Physical Education | 80 | 16.0 | 1 | 16.0 |
+| Music & Arts | 69 | 13.8 | 1 | 13.8 |
+| **Total** | **718** | | **29** | **413.6** |
+
+Average = 413.6 ÷ 29 = **14.26 / 20**
+
+**`totalScore` deliberately stays the RAW sum** (718 here), not the weighted figure: it is
+the "Overall Total" a teacher adds up by hand, and normalising it would make it reconcile
+with nothing else on the page.
+
+#### What inherits the /20
+
+`classAverage`, `bestAverage` and `annualAverage` are all means/maxes over the same
+`ReportCard.average` column, so they became /20 automatically — there is no separate
+conversion for any of them, and there must not be.
+
+Two consequences worth stating, because both were live defects until they were fixed:
+
+- **The pass mark is 10/20**, not 50/100 (`TRUE_PASS_MARK_PRIMARY` in `term.controller.ts`
+  and `promotionScale.controller.ts` — the same value as secondary's, kept under its own
+  name so the two stay independently adjustable).
+- **Anything matching the AVERAGE against the grading scale must scale it back up**, because
+  a primary scale is written 0–100 while its average is /20. This affects the overall `grade`
+  field and the `appreciation` field on the printed card, and `avgMaxScore` on the report
+  card screens. Getting it wrong reads a perfectly good 14.26/20 as 14.26/100, i.e. an F.
+  Per-**subject** grades are unaffected — those are raw /100 and match directly.
+
+The web and mobile report card screens **recompute this average client-side** as marks are
+typed, so their formula must mirror `saveEntries` exactly or the figure jumps the moment it
+is saved.
+
+#### Migration
+
+`apps/api/src/scripts/recomputePrimaryAverages.ts` rewrites `average`, `totalScore` and
+`position` for every primary school under the current rule (dry-run by default, `--apply` to
+write). Cards written under the old plain-/100-mean rule store a figure the whole app now
+reads as /20 — 69.4 would print as 69.4/20 and clear every threshold in sight. **Positions
+are re-derived too**: a uniform rescale preserves rank order, but introducing coefficients
+does not.
+
+#### Nursery / Pre-Nursery
+
+Not yet modelled separately — they currently use the same numeric Test+Exam marks and
+coefficient-weighted /20 average as Class 1–6. Cameroon nursery is normally
+competency-based (Attained / Developing / Not Yet Attained) with no numeric average at all.
+This is a known interim, deliberately deferred rather than half-built.
 
 ---
 
@@ -534,11 +663,14 @@ School-wide toggle in Report Card Design (`highlightFailingRed`, default **on**,
 Each subject has:
 - **Name** — e.g. "Mathematics"
 - **Class Level** — selected from existing classes (dropdown)
-- **Max Score** — what marks are entered out of (default 20)
-- **Coefficient** — weight in the final average (default 1)
+- **Max Score** — what marks are entered out of. Default 20 (secondary); **100 for primary and university**. Inherited from the `ClassLevel` at creation.
+- **Test Max Score** — **primary only**: the Test component's ceiling out of `maxScore` (default 30). The Exam ceiling is `maxScore − testMaxScore`, derived rather than stored. Ignored by secondary/university. See §7 → *Primary marking & averaging*.
+- **Coefficient** — weight in the final average (default 1). Read by **secondary and primary**; a university weights by `credit` instead.
 - **Required Hours** (optional) — target teaching hours: per semester for universities (the row is already semester-scoped via `term`), per academic year for primary/secondary. Drives §20 Teaching Hours Coverage; leave blank to skip tracking a subject entirely.
 
 **Subject exclusivity**: each subject in a class belongs to exactly one teacher. Assigning it to a new teacher automatically removes it from the previous one. Admin sees a yellow notice listing what was reassigned.
+
+**Primary is the exception**: a primary class is taught by a shared **team of 1–3 teachers**, all of whom hold every subject in that class at once. That is a team, not a handover, and coverage/absences treat it as one — see §20 → *Primary shared teaching teams*.
 
 ---
 
@@ -901,7 +1033,7 @@ Enforced server-side in `apps/api/src/config/demo.ts` (`demoLimitBlock`) — ret
 Tracks whether a teacher actually covers the hours a Subject/Course is supposed to take — per **semester** for universities, per **academic year** for primary/secondary — computed from the existing weekly timetable rather than a separate day-by-day attendance register.
 
 ### How the numbers are computed
-- `Subject.requiredHours` (optional Int) is the target, and it belongs to the **course**, not to a teacher. Two lecturers sharing a 30-hour course are at 30 between them, never 30 each. A university course row is already scoped to one semester via `Subject.term`; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
+- `Subject.requiredHours` (optional Int) is the target, and it belongs to the **course**, not to a teacher. Two lecturers sharing a 30-hour course are at 30 between them, never 30 each. (How that 30 is *split* between them differs for a primary teaching team — see *Primary shared teaching teams* below.) A university course row is already scoped to one semester via `Subject.term`; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
 - **A coverage row is one COURSE**, with a `contributors[]` breakdown naming who taught what and over which window, and a `gaps[]` list naming any stretch nobody held it. Status and `isFinal` are computed at course level, never taken from a contributor: each contributor measured its own slice against the full target, which is only right when there is exactly one of them.
 - **Scheduled hours** = for each term the course scopes to, how many times the slot's weekday occurs between the term's start/end dates × the slot's duration — **minus school closures** (see Holidays below), and **clamped to the window the teacher actually held the course**.
 - **Taught hours** = scheduled hours elapsed so far, minus any `TeacherAbsence` hours in that span.
@@ -909,6 +1041,29 @@ Tracks whether a teacher actually covers the hours a Subject/Course is supposed 
 - Status is `NO_TARGET`, `UNDER`, `EXACT`, or `OVER`, compared against the projected/final total (0.5h tolerance for "exact").
 - Counting runs **only inside real term dates**. The By Teacher totals used to collapse a whole session into one span, which counted the breaks *between* terms as teaching weeks; they now iterate the actual `Term` rows.
 - All arithmetic lives in one place: `apps/api/src/utils/teachingHours.ts` (`computeCoverage`, `resolveScopeTerms`, `countTeachingWeekdays`, `mergeDateRanges`), shared by both the admin and teacher-facing endpoints so the numbers can never drift apart between the two views.
+
+### Primary shared teaching teams (primary only)
+A primary class is taught by a **team of 1–3 teachers who hold every subject together** — not
+a handover, which is what `startedAt`/`endedAt` model everywhere else. Where 2+ teachers are
+*currently and concurrently* assigned to the same subject (`endedAt: null`), coverage treats
+them as one team:
+
+- **Hours are shared, not duplicated.** The class's periods are de-duplicated across the team
+  (each member holds their own `TimetableSlot` row for what is really the same class period,
+  so they are matched by day + time + window, never by row id), and each member is credited
+  an **equal share**: 2 teachers on a 30-hour class are at 15 each, 3 at 10 each. The shares
+  sum back to the class's real total, so no aggregation elsewhere had to change.
+- **A period is only missed when EVERY member is absent for it.** One teacher covering for
+  another is not a lost class, so the team's missed periods are the **intersection** of the
+  members' reports, not the union. Below 100% absence the hours are untouched.
+- **An individual's own absence still stands on their record** even when a teammate covered —
+  it is visible on their contributor line, it just does not dock the class's taught hours.
+- A teacher who has since **left** a shared class (`endedAt` set) drops out of the team and is
+  measured individually again, exactly like any ordinary handover.
+
+For this to mean anything the team must actually be **scheduled for the same periods** — a
+day-split timetable (one teacher Mondays, another Tuesdays) never produces a shared period, so
+"both absent at once" can never occur and the rule is inert.
 
 ### Which courses appear
 A course earns a row by having an hours target **or** by having absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed.
@@ -954,7 +1109,13 @@ Anything **before a course's first-ever assignment is not a gap**. That stretch 
 
 The cutoff is judged on the whole class, not on each period inside it. "Whole day" quietly skips classes past the cutoff and reports the rest; explicitly-picked ones are rejected outright, naming the date.
 
-`seenByAdmin` is written when an admin **views** a teacher's list — a read, which writes no notification — so the teacher's screen is told over the realtime channel, or it would keep offering a delete the API now refuses.
+`seenByAdmin` is written by an **explicit review action**, `POST /teacher-absences/mark-seen`, never as a side effect of fetching. Reviewing writes no notification (it is a read on the admin's side), so the teacher's screen is told over the realtime channel instead, or it would keep offering a delete the API now refuses.
+
+**What counts as a review** — either of:
+- An admin **opening** the teacher's absences: the per-teacher drill-down modal on Teaching Hours, or landing on `/teacher-timetable`. Fired from a genuine focus/open event only.
+- An admin **reading the `TEACHER_ABSENCE` notification**, individually or via *mark all read*. An admin who reads the notification and acts on it some other way (a phone call, a word in the corridor) has reviewed it; requiring the deeper drill-down left the teacher able to delete a report the admin had already dealt with.
+
+**What does NOT count**: any background refetch. `GET /teacher-absences` is a **pure read with no side effect**, which it had to become — the realtime `absences:changed` listener calls it, and both routers keep a screen mounted after you navigate away from it (pushed underneath whatever is on top now). Its listener therefore stays live and refetched every time *anyone* in the school reported an absence, which marked that teacher's absences reviewed within milliseconds of creation, routinely before an admin had opened the app at all. **A background sync must keep data current without ever counting as a review** — that split is the whole point, and collapsing it back reintroduces the bug.
 
 An absence an **admin recorded** is never the teacher's to retract, from the moment it is written and regardless of how far off the class is. `seenByAdmin` does not cover this on its own: it starts false on a record the teacher never filed, so until an admin next happened to open the list the subject of the record could quietly erase it, including before ever opening the notification that told them it existed. The test is `recordedById !== teacherId` (derived, no stored field), judged across the whole class because deleting clears every period of it. Teacher-facing lists show a padlock reading "recorded by admin"; admins are unaffected and still delete until the class ends.
 
