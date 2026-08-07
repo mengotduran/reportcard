@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getMarksExportApi, MarksExportStudent, getClassOverviewApi } from '@/lib/api/reportcards'
+import { getClassLevelsApi } from '@/lib/api/classLevels'
 import { ArrowLeft, BookOpen, Download } from 'lucide-react'
 import { seqFull } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
@@ -30,6 +31,9 @@ export default function ClassSubjectsPage() {
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [studentCount, setStudentCount] = useState<number | null>(null)
+  // A nursery class is rated, not marked: it has no sequences to choose between, so the
+  // selector below is hidden rather than shown with two meaningless options.
+  const [isCompetency, setIsCompetency] = useState(false)
   const { toast, showToast, hideToast } = useToast()
   const noStudents = studentCount === 0
 
@@ -40,7 +44,12 @@ export default function ClassSubjectsPage() {
         // a subject with no term (primary/secondary) always counts — see Subject.term.
         .then((data) => setSubjects(data.subjects.filter((s: Subject) => s.classLevel === classLevel && (s.term == null || s.term === termName)))),
       // Whether there's anyone to grade — gates whether a subject below can be entered at all.
-      termId ? getClassOverviewApi(termId, classLevel).then((r) => setStudentCount(r.students.length)) : Promise.resolve(),
+      termId ? getClassOverviewApi(termId, classLevel).then((r) => {
+        setStudentCount(r.students.length)
+        setIsCompetency(r.gradingMode === 'COMPETENCY')
+      }) : getClassLevelsApi().then((r) => {
+        setIsCompetency(r.classLevels.find((c) => c.name === classLevel)?.gradingMode === 'COMPETENCY')
+      }).catch(() => {}),
     ]).finally(() => setLoading(false))
   }, [classLevel, termName, termId])
 
@@ -85,7 +94,9 @@ export default function ClassSubjectsPage() {
                 <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">{termName}</span>
               )}
             </div>
-            <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
+            <p className="text-sm text-muted-foreground">
+              {isCompetency ? t('Select a subject to record ratings') : t('Select a sequence and subject to enter marks')}
+            </p>
           </div>
           <button onClick={handleExportMarks} disabled={exporting}
             className="flex items-center justify-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 transition flex-shrink-0 sm:ml-auto">
@@ -95,6 +106,7 @@ export default function ClassSubjectsPage() {
       </div>
 
       {/* Sequence selector */}
+      {!isCompetency && (
       <div className="bg-card rounded-xl border border-border p-5 mb-5">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
           {isUniversity ? t('Select Assessment') : t('Select Sequence')}
@@ -112,6 +124,7 @@ export default function ClassSubjectsPage() {
           ))}
         </div>
       </div>
+      )}
 
       {/* No students yet — every subject below would open onto an empty marks sheet, so
           say so up front rather than letting the admin discover it one click at a time. */}

@@ -3,6 +3,7 @@ import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePoin
 import { gradeForScore20 } from '@/lib/grading'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { translate } from '@/lib/i18n'
+import { isCompetencyRating } from '@/lib/competency'
 
 export interface PrintEntry {
   subjectId: string
@@ -17,7 +18,9 @@ export interface PrintEntry {
   remarks: string
 }
 
-interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number }
+/** `maxScore` — the subject's own ceiling. Only PRIMARY reads it (its grading scale is
+ *  written 0-100 while its classes may be marked out of anything); absent everywhere else. */
+interface PrintSubject { id: string; name: string; code?: string | null; coefficient?: number; credit?: number; maxScore?: number }
 
 export interface PrintableReportCardProps {
   school: { name: string; type: string; logo?: string | null; stamp?: string | null; language?: string; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
@@ -62,6 +65,15 @@ export interface PrintableReportCardProps {
    *  out at the end of a term. Chosen per print, never saved into the design. Defaults
    *  to 'official' = show everything, so callers that don't care are unaffected. */
   variant?: DocVariant
+  /**
+   * How the CLASS is assessed (ClassLevel.gradingMode), not the school: one primary
+   * school prints rated nursery cards and marked Class 1-6 cards from the SAME saved
+   * design. COMPETENCY drops every column and every band that measures something —
+   * scores, coefficients, totals, the average, the position, the grading legend — and
+   * prints the rating in the grade column instead. Defaults to NUMERIC, so every
+   * existing caller and every marked class is untouched.
+   */
+  gradingMode?: 'NUMERIC' | 'COMPETENCY'
 }
 
 // Colour a failed subject's marks print in when the admin enables it school-wide.
@@ -161,13 +173,37 @@ function Logo({ url, size, color }: { url?: string | null; size: number; color: 
   return null
 }
 
-function entryGrade(e: PrintEntry | undefined, bands: GradeRange[]): string {
+/**
+ * `outOf` — PRIMARY only: the subject's own `maxScore`, so the mark is put onto the scale's
+ * units before it is looked up. A primary grading scale is written 0-100 but a primary class
+ * is marked out of whatever the admin set, so matching raw silently assumed every class was
+ * out of 100: a subject marked out of 40 scored 36 printed an F for a clean 90%, while the
+ * report card screen (which has always normalised) showed an A for the same mark.
+ *
+ * Left undefined everywhere else, which keeps the raw match secondary and university have
+ * always used — a secondary mark and its 0-20 scale already share units, and so do a
+ * university's /100 course and its 0-100 scale.
+ */
+function entryGrade(e: PrintEntry | undefined, bands: GradeRange[], lang: 'EN' | 'FR' = 'EN', outOf?: number): string {
+  // A competency (nursery) entry has no score at all — its rating IS the grade, stored
+  // verbatim in English and translated here, at print time. Checked before the score so
+  // it prints on any layout, including the older non-section ones.
+  if (isCompetencyRating(e?.grade)) return translate(e!.grade as string, lang)
   if (!e || e.score == null) return '—'
-  return gradeForScore20(e.score, bands).grade || '—'
+  return gradeForScore20(onBandScale(e.score, bands, outOf), bands).grade || '—'
 }
-function entryRemark(e: PrintEntry | undefined, bands: GradeRange[]): string {
+function entryRemark(e: PrintEntry | undefined, bands: GradeRange[], outOf?: number): string {
   if (!e || e.score == null) return '—'
-  return gradeForScore20(e.score, bands).remark || '—'
+  return gradeForScore20(onBandScale(e.score, bands, outOf), bands).remark || '—'
+}
+
+/** A mark expressed in the grading scale's own units. `outOf` absent = already there. */
+function onBandScale(score: number, bands: GradeRange[], outOf?: number): number {
+  if (!outOf || outOf <= 0) return score
+  // The scale's top read from the bands themselves, exactly as lib/grading's gradeFromScore
+  // reads it, so the printed card and the screen can never disagree about the ruler.
+  const top = bands.some(b => b.maxScore > 20) ? 100 : 20
+  return (score / outOf) * top
 }
 
 // University transcript only: a marks_table section with `transcriptSemester` set
@@ -184,6 +220,8 @@ export interface TranscriptSemesterData {
 // ─── Classic ─────────────────────────────────────────────────────────────────
 function Classic({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
+  // Primary marks are normalised onto the scale's units before being graded — see entryGrade.
+  const isPrimaryCard = school.type === 'PRIMARY'
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
@@ -230,8 +268,8 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
                 {cfg.showSeq1 && <td style={cell({ textAlign: 'center' })}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={cell({ textAlign: 'center' })}>{e?.seq2Score ?? '—'}</td>}
                 <td style={cell({ textAlign: 'center', fontWeight: 'bold' })}>{e?.score ?? '—'}</td>
-                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{entryGrade(e, bands)}</td>}
-                {cfg.showRemarks && <td style={cell({ color: '#555' })}>{entryRemark(e, bands)}</td>}
+                {cfg.showGrade && <td style={cell({ textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor })}>{entryGrade(e, bands, school.language === 'FR' ? 'FR' : 'EN', isPrimaryCard ? s.maxScore : undefined)}</td>}
+                {cfg.showRemarks && <td style={cell({ color: '#555' })}>{entryRemark(e, bands, isPrimaryCard ? s.maxScore : undefined)}</td>}
               </tr>
             )
           })}
@@ -293,6 +331,8 @@ function Classic({ school, student, term, subjects, entries, generalRemarks, gen
 // ─── Bilingual ────────────────────────────────────────────────────────────────
 function Bilingual({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
+  // Primary marks are normalised onto the scale's units before being graded — see entryGrade.
+  const isPrimaryCard = school.type === 'PRIMARY'
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
@@ -341,8 +381,8 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', borderRight: '1px solid #e5e7eb' }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', borderRight: '1px solid #e5e7eb' }}>{e?.score ?? '—'}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{entryGrade(e, bands)}</td>}
-                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{entryRemark(e, bands)}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', color: cfg.primaryColor, borderRight: '1px solid #e5e7eb' }}>{entryGrade(e, bands, school.language === 'FR' ? 'FR' : 'EN', isPrimaryCard ? s.maxScore : undefined)}</td>}
+                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555' }}>{entryRemark(e, bands, isPrimaryCard ? s.maxScore : undefined)}</td>}
               </tr>
             )
           })}
@@ -406,6 +446,8 @@ function Bilingual({ school, student, term, subjects, entries, generalRemarks, g
 // ─── Modern ───────────────────────────────────────────────────────────────────
 function Modern({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
+  // Primary marks are normalised onto the scale's units before being graded — see entryGrade.
+  const isPrimaryCard = school.type === 'PRIMARY'
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
@@ -465,9 +507,9 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
                   {cfg.showSeq2 && <td style={{ padding: '9px 8px', textAlign: 'center', color: '#6b7280' }}>{e?.seq2Score ?? '—'}</td>}
                   <td style={{ padding: '9px 8px', textAlign: 'center', fontWeight: '700', color: cfg.primaryColor }}>{e?.score ?? '—'}</td>
                   {cfg.showGrade && <td style={{ padding: '9px 8px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{entryGrade(e, bands)}</span>
+                    <span style={{ backgroundColor: `rgba(${rgb},0.1)`, color: cfg.primaryColor, borderRadius: '4px', padding: '2px 10px', fontWeight: '600', fontSize: '12px' }}>{entryGrade(e, bands, school.language === 'FR' ? 'FR' : 'EN', isPrimaryCard ? s.maxScore : undefined)}</span>
                   </td>}
-                  {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{entryRemark(e, bands)}</td>}
+                  {cfg.showRemarks && <td style={{ padding: '9px 0', color: '#6b7280', fontSize: '12px' }}>{entryRemark(e, bands, isPrimaryCard ? s.maxScore : undefined)}</td>}
                 </tr>
               )
             })}
@@ -530,6 +572,8 @@ function Modern({ school, student, term, subjects, entries, generalRemarks, gene
 // ─── Official ─────────────────────────────────────────────────────────────────
 function Official({ school, student, term, subjects, entries, generalRemarks, generalRemarksFr, average, position, classSize, annualAverage, annualPosition, annualClassSize, cfg, gradeBands }: any) {
   const bands: GradeRange[] = gradeBands ?? []
+  // Primary marks are normalised onto the scale's units before being graded — see entryGrade.
+  const isPrimaryCard = school.type === 'PRIMARY'
   const t = (en: string) => translate(en, school.language === 'FR' ? 'FR' : 'EN')
   const rgb = hexToRgb(cfg.primaryColor)
   const total = entries.reduce((s: number, e: PrintEntry) => s + (e.score ?? 0), 0)
@@ -590,8 +634,8 @@ function Official({ school, student, term, subjects, entries, generalRemarks, ge
                 {cfg.showSeq1 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq1Score ?? '—'}</td>}
                 {cfg.showSeq2 && <td style={{ padding: '6px 8px', textAlign: 'center', border }}>{e?.seq2Score ?? '—'}</td>}
                 <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{e?.score ?? '—'}</td>
-                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{entryGrade(e, bands)}</td>}
-                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{entryRemark(e, bands)}</td>}
+                {cfg.showGrade && <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 'bold', border }}>{entryGrade(e, bands, school.language === 'FR' ? 'FR' : 'EN', isPrimaryCard ? s.maxScore : undefined)}</td>}
+                {cfg.showRemarks && <td style={{ padding: '6px 10px', color: '#555', border }}>{entryRemark(e, bands, isPrimaryCard ? s.maxScore : undefined)}</td>}
               </tr>
             )
           })}
@@ -693,6 +737,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const bands = props.gradeBands ?? []
   const classBands = props.classificationBands ?? DEFAULT_CLASSIFICATION_BANDS
   const subjectStats = props.subjectStats ?? {}
+  // Nursery: this card measures nothing. See the gradingMode prop for what that removes.
+  const isCompetency = props.gradingMode === 'COMPETENCY'
+  // The columns a rated card has no value for. Everything else the design asks for
+  // (row number, subject, subject_fr, grade) still prints, so the table keeps the
+  // school's own look rather than becoming a second, unstyled table.
+  const COMPETENCY_DROP_COLS = new Set([
+    'coef', 'seq1', 'seq2', 'score', 'remarks', 'credit', 'gradePoint',
+    'weighted', 'evaluation', 'juryDecision', 'min', 'avg', 'max',
+  ])
 
   // Semester GPA (university): Σ(grade point × credit) / Σ(credit) over graded
   // courses, computed from the actual marks so live cards match the seed. Credits
@@ -1195,7 +1248,14 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         const h = hdrs[k]; if (!h) return fallback
         return h.replace(/<[^>]*>/g, '') // strip any color spans for print header text
       }
-      const cols = marksColumnOrder(s)
+      // A rated card keeps only the columns that say something about a child: the subject
+      // and its rating. If the design never had a grade column (it was showing marks
+      // instead), one is added — otherwise the table would print subject names and
+      // nothing else.
+      const cols = (() => {
+        const kept = marksColumnOrder(s).filter(k => !isCompetency || !COMPETENCY_DROP_COLS.has(k))
+        return isCompetency && !kept.includes('grade') ? [...kept, 'grade'] : kept
+      })()
       const META: Record<string, { fb: string; align: 'left' | 'center' }> = {
         subject: { fb: 'Subject', align: 'left' }, coef: { fb: 'Coef', align: 'center' },
         seq1: { fb: 'Seq 1', align: 'center' }, seq2: { fb: 'Seq 2', align: 'center' },
@@ -1234,8 +1294,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           case 'seq1':         return e?.seq1Score ?? '—'
           case 'seq2':         return renderSeq2(e)
           case 'score':        return renderScore(e)
-          case 'grade':        return entryGrade(e, bands)
-          case 'remarks':      return entryRemark(e, bands)
+          case 'grade':        return entryGrade(e, bands, lang, isPrimary ? subj.maxScore : undefined)
+          case 'remarks':      return entryRemark(e, bands, isPrimary ? subj.maxScore : undefined)
           case 'code':         return courseCode(subj, i)
           case 'credit':       return subj.credit ?? '—'
           case 'gradePoint':   { const gp = gradePointOf(e); return gp == null ? '—' : gp.toFixed(1) }
@@ -1267,9 +1327,41 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       if (s.template) {
         const tpl = s.template
         const dataRowIdx = tpl.rows.findIndex((r: SheetRow) => r._isDataRow)
-        const headerRows = tpl.rows.slice(0, dataRowIdx >= 0 ? dataRowIdx : tpl.rows.length)
-        const dataRowTpl = dataRowIdx >= 0 ? tpl.rows[dataRowIdx] : null
-        const footerRows = dataRowIdx >= 0 ? tpl.rows.slice(dataRowIdx + 1) : []
+        const rawHeaderRows = tpl.rows.slice(0, dataRowIdx >= 0 ? dataRowIdx : tpl.rows.length)
+        const rawDataRowTpl = dataRowIdx >= 0 ? tpl.rows[dataRowIdx] : null
+        const rawFooterRows = dataRowIdx >= 0 ? tpl.rows.slice(dataRowIdx + 1) : []
+
+        // ── Nursery: take the measuring columns out of the SAVED design ──────────
+        // A spreadsheet template places cells by column, so dropping a column means
+        // dropping the cell at that index in every row and narrowing any header cell
+        // that spanned it. The footer bands go entirely: TOTAL, TERM AVERAGE and CLASS
+        // POSITION are all figures a rated card does not have.
+        const dropCols = new Set<number>()
+        if (isCompetency) {
+          (rawDataRowTpl?.cells ?? []).forEach((c: SheetCell, i: number) => {
+            const f = c.field ?? ''
+            if (f.startsWith('m:') && COMPETENCY_DROP_COLS.has(f.slice(2))) dropCols.add(i)
+          })
+        }
+        const stripRow = (row: SheetRow): SheetRow => {
+          if (dropCols.size === 0) return row
+          const cells: SheetCell[] = []
+          let col = 0
+          for (const c of row.cells) {
+            // A cell covered by a rowSpan from above occupies no column of its own here
+            // (the renderer skips it), so it neither shifts the count nor gets dropped.
+            if (c._consumed) { cells.push(c); continue }
+            const span = c.colSpan ?? 1
+            let dropped = 0
+            for (let i = col; i < col + span; i++) if (dropCols.has(i)) dropped++
+            if (dropped < span) cells.push(dropped > 0 ? { ...c, colSpan: span - dropped } : c)
+            col += span
+          }
+          return { ...row, cells }
+        }
+        const headerRows = rawHeaderRows.map(stripRow)
+        const dataRowTpl = rawDataRowTpl ? stripRow(rawDataRowTpl) : null
+        const footerRows = isCompetency ? [] : rawFooterRows
 
         const resolveMarksField = (field: string, subj: PrintSubject, e: PrintEntry | undefined, si: number): React.ReactNode => {
           if (!field.startsWith('m:')) return resolveStat(field)
@@ -1370,7 +1462,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           </tr>
         )
 
-        const colCount = tpl.colCount || (dataRowTpl?.cells.length ?? 1)
+        const colCount = Math.max(1, (tpl.colCount || (rawDataRowTpl?.cells.length ?? 1)) - dropCols.size)
         // Ledger-style layouts (TOTAL / CLASS AVERAGE / CLASS POSITION / TERM AVERAGE
         // bands, no separate 'summary' section) get Decision appended as one more band
         // here, right after Term Average — this is what "close to the terms average or
@@ -1501,6 +1593,9 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'summary') {
       const s = sec as SummarySec
+      // Every box here is a measurement (average, position, class average, total). On a
+      // rated card they would all print dashes, so the whole strip goes.
+      if (isCompetency) return null
       // Promotion Decision is a per-design toggle (cfg.showDecision, the "Show Decision"
       // checkbox in the designer), not a box the admin adds per-section — appended here,
       // next to Average/Position, whenever a summary section is present. Primary/secondary
@@ -1708,6 +1803,9 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'grading_legend') {
       const s = sec as GradingLegendSec
+      // The legend explains mark bands, and a rated card has no marks to look up. Its
+      // three ratings say what they mean in words, so nothing replaces it.
+      if (isCompetency) return null
       // University grading scales carry a gradePoint (/4.0) per band; a plain
       // secondary/primary scale doesn't, so it isn't filtered — every band is
       // shown as-is (grade, mark range, remark) with no GPA-specific columns.
@@ -1888,7 +1986,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
                   <td style={num}>{e.seq2Score ?? '—'}</td>
                   <td style={num}>{e.resitScore}<sup>*</sup></td>
                   <td style={{ ...num, fontWeight: 'bold' }}>{e.score}</td>
-                  <td style={{ ...resitTd, fontWeight: 'bold', color: failed ? FAIL_RED : color }}>{entryGrade(e, bands)}</td>
+                  <td style={{ ...resitTd, fontWeight: 'bold', color: failed ? FAIL_RED : color }}>{entryGrade(e, bands, school.language === 'FR' ? 'FR' : 'EN')}</td>
                 </tr>
               )
             })}

@@ -16,11 +16,51 @@ import { onRealtimeDebounced } from '@/lib/socket'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getMeApi } from '@/lib/api/auth'
 import { useT, useLang } from '@/lib/i18n'
+import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
+import CompetencyEntryPage from './CompetencyEntry'
 
 // University marking split: CA is out of 30, the exam out of 70, the course out of 100.
 // The same numbers the column headers below print.
 const EXAM_MAX = 70
 const COURSE_MAX = 100
+
+/**
+ * Which sheet this class gets: the numeric spreadsheet below, or the rating picker in
+ * CompetencyEntry. Decided here rather than inside the grid because the two share almost
+ * nothing — a competency class has no score, no sequence, no maximum and no grade, so the
+ * numeric grid's entire row model and save payload are wrong for it.
+ *
+ * Resolved from the class list rather than guessed from the class NAME: names are free
+ * text (a French section calls these Maternelle), which is the whole reason gradingMode
+ * is a stored field. An unknown class falls back to NUMERIC, matching the API's default.
+ */
+export default function MarksEntryPage() {
+  const params = useParams()
+  const classLevel = decodeURIComponent(String(params.classLevel))
+  const [mode, setMode] = useState<GradingMode | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getClassLevelsApi()
+      .then(({ classLevels }) => {
+        if (!cancelled) setMode(classLevels.find((c) => c.name === classLevel)?.gradingMode ?? 'NUMERIC')
+      })
+      .catch(() => { if (!cancelled) setMode('NUMERIC') })
+    return () => { cancelled = true }
+  }, [classLevel])
+
+  // Neither sheet, briefly: rendering the numeric one first and swapping would flash a
+  // marks grid at a nursery teacher every single time.
+  if (mode === null) return (
+    <div className="space-y-3" style={{ minHeight: 'calc(100vh - 120px)' }}>
+      <div className="h-8 w-56 rounded bg-muted animate-pulse" />
+      <div className="h-11 w-full rounded bg-muted animate-pulse" />
+      <div className="h-64 w-full rounded-xl bg-muted animate-pulse" />
+    </div>
+  )
+
+  return mode === 'COMPETENCY' ? <CompetencyEntryPage /> : <NumericMarksEntry />
+}
 
 interface Row {
   studentId: string
@@ -38,7 +78,7 @@ interface Row {
   resitEligible?: boolean
 }
 
-export default function MarksEntryPage() {
+function NumericMarksEntry() {
   const router = useRouter()
   const params = useParams()
   const { user, school, updateSchool } = useAuthStore()

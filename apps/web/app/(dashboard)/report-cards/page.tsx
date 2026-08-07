@@ -33,7 +33,9 @@ import { ExcelTemplate, listExcelTemplatesApi, downloadExcelTranscriptApi, fetch
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
-  grade: string; remarks: string; subject: { id: string; name: string; coefficient?: number; credit?: number }
+  // maxScore: PRIMARY normalises a mark onto the grading scale's units before grading it,
+  // so the subject's own ceiling has to reach the printed card (see entryGrade).
+  grade: string; remarks: string; subject: { id: string; name: string; coefficient?: number; credit?: number; maxScore?: number }
 }
 interface RawRC {
   id: string; status: string; remarks?: string; remarksFr?: string | null; average?: number | null; position?: number | null
@@ -354,7 +356,7 @@ function TeacherClassesView() {
                 school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber, officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr, officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
-                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
+                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit, maxScore: e.subject.maxScore }))}
                 entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, resitScore: e.resitScore ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
@@ -371,6 +373,7 @@ function TeacherClassesView() {
                 config={printJob.config}
                 variant={printJob.variant}
                 gradeBands={gradeBands}
+                gradingMode={classDefs.find((c) => c.name === rc.student.classLevel)?.gradingMode}
               />
             </div>
           ))}
@@ -1207,7 +1210,7 @@ export default function ReportCardsPage() {
                 school={{ name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null, language: school?.language, email: school?.email, phone: school?.phone, address: school?.address, website: school?.website, authorizationNumber: school?.authorizationNumber, officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr, officialRightTextEn: school?.officialRightTextEn, officialRightTextFr: school?.officialRightTextFr }}
                 student={{ name: rc.student.name, studentId: rc.student.studentId, classLevel: rc.student.classLevel, guardianName: rc.student.guardianName, gender: rc.student.gender }}
                 term={{ name: rc.term.name, session: rc.term.session }}
-                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit }))}
+                subjects={rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, coefficient: e.subject.coefficient, credit: e.subject.credit, maxScore: e.subject.maxScore }))}
                 entries={rc.entries.map(e => ({ subjectId: e.subject.id, score: e.score, seq1Score: e.seq1Score ?? null, seq2Score: e.seq2Score ?? null, resitScore: e.resitScore ?? null, grade: e.grade, remarks: e.remarks ?? '' } as PrintEntry))}
                 generalRemarks={rc.remarks ?? ''}
                 generalRemarksFr={rc.remarksFr ?? ''}
@@ -1224,6 +1227,7 @@ export default function ReportCardsPage() {
                 config={printJob.config}
                 variant={printJob.variant}
                 gradeBands={gradeBands}
+                gradingMode={classDefs.find((c) => c.name === rc.student.classLevel)?.gradingMode}
               />
             </div>
           ))}

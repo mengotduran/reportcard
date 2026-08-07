@@ -958,6 +958,12 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
           { minScore: 0,  maxScore: 10, grade: 'F',  remark: 'Fail' },
         ]
     const effectiveRanges = gradeRanges.length > 0 ? gradeRanges : DEFAULT_API_RANGES
+    // What the school's scale is written OUT OF, read from the bands themselves rather than
+    // assumed: a band above 20 can only belong to a 0-100 scale. Primary marks are
+    // normalised onto this before being looked up (see scoreForGrade below), which is what
+    // lets a class be marked out of anything at all. Detected exactly the way the web's
+    // gradeFromScore detects it, so screen and server can never disagree about the ruler.
+    const primaryScaleTop = effectiveRanges.some(r => Number(r.maxScore) > 20) ? 100 : 20
     // A boundary mark goes to the higher grade (sorted by min desc).
     const matchRange = (score: number) => {
       const sorted = [...effectiveRanges].sort((a, b) => b.minScore - a.minScore)
@@ -1103,11 +1109,23 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
             ? (isUniversity || isPrimary) ? (seq1 ?? 0) + (effectiveSeq2 ?? 0) : ((seq1 ?? 0) + (effectiveSeq2 ?? 0)) / 2
             : null
         const sub = subjectMap[entry.subjectId]
-        // University/primary: match raw score against the school's raw-scale ranges.
-        // Secondary: normalise to /20 then match against 0-20 ranges.
-        const scoreForGrade = (isUniversity || isPrimary)
-          ? finalScore
-          : (finalScore !== null && sub && sub.maxScore > 0 ? (finalScore / sub.maxScore) * 20 : null)
+        // University: match the raw score against the school's raw-scale ranges. A course is
+        // marked out of 100 and the scale is written 0-100, so the two already agree.
+        //
+        // Primary: normalise onto the scale's own top FIRST. Primary scales are written
+        // 0-100 like a university's, but a primary class's `maxScore` is whatever the admin
+        // set — 100 by default (Test 30 + Exam 70), and anything else the moment they change
+        // the split's total. Matching raw assumed maxScore was always 100: a subject marked
+        // out of 40 scored 36 (a clean 90%) was looked up as "36" and stored an F, while the
+        // report card SCREEN normalised the same mark and showed an A. Dividing by the
+        // subject's own maxScore is what makes any ceiling behave.
+        //
+        // Secondary: unchanged — normalise to /20 and match against its 0-20 ranges.
+        const scoreForGrade = finalScore === null
+          ? null
+          : isUniversity
+            ? finalScore
+            : (sub && sub.maxScore > 0 ? (finalScore / sub.maxScore) * (isPrimary ? primaryScaleTop : 20) : null)
         const autoRemark = scoreForGrade !== null ? getAutoRemark(scoreForGrade) : ''
         return prisma.reportEntry.create({
           data: {
@@ -1382,7 +1400,7 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
     }
 
     // Fetch students + their entries, subject count, and the teacher's assigned subjects for this class
-    const [students, subjectCount, teacherSubjects] = await Promise.all([
+    const [students, subjectCount, teacherSubjects, level] = await Promise.all([
       prisma.student.findMany({
         where: { schoolId, classLevel: String(classLevel), isActive: true },
         include: {
@@ -1391,7 +1409,9 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
             select: {
               id: true, status: true, average: true,
               marksEditGrantedTo: true, remarksEditGrantedTo: true,
-              entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, resitScore: true } },
+              // `grade` holds the RATING on a competency class, which is what its marks
+              // sheet loads its rows from — same one-request rule as the scores below.
+              entries: { select: { subjectId: true, seq1Score: true, seq2Score: true, resitScore: true, grade: true } },
             },
           },
         },
@@ -1404,20 +1424,28 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
         where: { userId: req.user!.id, endedAt: null, subject: { classLevel: String(classLevel), ...subjectTermFilter(term.name) } },
         select: { subjectId: true },
       }),
+      // How this class is assessed. Read per class, not per school: one primary school
+      // runs both modes at once, its nursery classes rated and Class 1-6 marked.
+      prisma.classLevel.findFirst({ where: { schoolId, name: String(classLevel) }, select: { gradingMode: true } }),
     ])
 
     // IDs of subjects this teacher is responsible for in this class
     const teacherSubjectIds = teacherSubjects.map(ts => ts.subjectId)
+    const isCompetency = level?.gradingMode === 'COMPETENCY'
 
     const result = students.map((s) => {
       const rc = s.reportCards[0] ?? null
       // marksFilled: teacher has entries for ALL of their assigned subjects AND every entry has both seqs.
       // This prevents a student from appearing "filled" just because another teacher's subjects are complete.
+      //
+      // A competency class has no sequences at all, so "filled" there means every subject
+      // carries a rating. Judged the same way — against the teacher's own subjects only.
       let marksFilled: boolean
       if (rc !== null && teacherSubjectIds.length > 0) {
         const myEntries = rc.entries.filter(e => teacherSubjectIds.includes(e.subjectId))
-        marksFilled = myEntries.length === teacherSubjectIds.length &&
-          myEntries.every(e => e.seq1Score != null && e.seq2Score != null)
+        marksFilled = myEntries.length === teacherSubjectIds.length && (isCompetency
+          ? myEntries.every(e => e.grade != null && e.grade !== '')
+          : myEntries.every(e => e.seq1Score != null && e.seq2Score != null))
       } else {
         marksFilled = false
       }
@@ -1444,7 +1472,13 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
     // teacherSubjectCount = how many of this class's subjects the caller teaches
     // (0 for admins/VPs, who don't have TeacherSubject rows). Lets the teacher
     // classes view hide classes where the teacher teaches nothing.
-    res.json({ students: result, subjectCount, teacherSubjectCount: teacherSubjectIds.length, isCurrentTerm: term.isCurrent, pastTermEditGranted })
+    res.json({
+      students: result, subjectCount, teacherSubjectCount: teacherSubjectIds.length,
+      isCurrentTerm: term.isCurrent, pastTermEditGranted,
+      // So a marks sheet knows whether to show marks or ratings from this same response,
+      // without a second round trip to the class list.
+      gradingMode: level?.gradingMode ?? 'NUMERIC',
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -1911,7 +1945,9 @@ export const getStudentTranscript = async (req: AuthRequest, res: Response) => {
           entries: {
             // coefficient drives the term tables + annual average on primary/secondary
             // transcripts (credit is the university's equivalent).
-            include: { subject: { select: { id: true, name: true, code: true, credit: true, coefficient: true, term: true, classLevel: true } } },
+            // maxScore rides along for PRIMARY: its grading scale is written 0-100 while its
+            // classes may be marked out of anything, so a mark is normalised before grading.
+            include: { subject: { select: { id: true, name: true, code: true, credit: true, coefficient: true, term: true, classLevel: true, maxScore: true } } },
             orderBy: [{ subject: { name: 'asc' } }],
           },
         },

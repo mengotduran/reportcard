@@ -598,7 +598,7 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
 
     if (!school) { res.status(404).json({ message: 'School not found' }); return }
 
-    const [classCounts, usersByRole, subjectCount, rcByStatus, terms] = await Promise.all([
+    const [classCounts, usersByRole, subjectCount, rcByStatus, terms, classLevels] = await Promise.all([
       prisma.student.groupBy({
         by: ['classLevel'],
         where: { schoolId, isActive: true },
@@ -620,6 +620,14 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
         where: { schoolId },
         select: { id: true, name: true, session: true, isCurrent: true, printingEnabled: true },
         orderBy: [{ session: 'desc' }, { startDate: 'asc' }],
+      }),
+      // The real class rows (not the student groupBy above, which only has names): the
+      // superadmin needs their ids to unlock a frozen mark ceiling, and their ceilings to
+      // see what is actually being unlocked.
+      prisma.classLevel.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, maxScore: true, testMaxScore: true, scaleUnlockedAt: true },
+        orderBy: [{ order: 'asc' }, { name: 'asc' }],
       }),
     ])
 
@@ -648,6 +656,7 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
       subjects: subjectCount,
       reportCards: rcByStatus.map(r => ({ status: r.status, count: r._count })),
       terms,
+      classLevels,
     })
   } catch (error) {
     console.error(error)
@@ -656,6 +665,45 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
 }
 
 /** PATCH /api/superadmin/terms/:termId/printing — enable or disable report card printing for a term. */
+/**
+ * The only way past a class's frozen assessment settings.
+ *
+ * A class's mark totals (`maxScore`, and primary's `testMaxScore`) AND its marks-vs-ratings
+ * `gradingMode` are settled for the academic year once that class has published cards in a
+ * term of the year that has closed — see frozenScaleClasses in classlevel.controller. A
+ * school that has to correct one genuinely wrong setting asks the superadmin, who unlocks
+ * the class here; the school then makes the change itself, and doing so SPENDS the grant.
+ * Deliberately not a "superadmin edits the value" endpoint: the school knows what the
+ * setting should be, the superadmin is only deciding that changing it is warranted.
+ *
+ * Turning it off again is the same call with `unlocked: false`, for a grant given by mistake.
+ */
+export const toggleClassScaleUnlock = async (req: Request, res: Response) => {
+  const id = String(req.params.classLevelId)
+  const { unlocked } = req.body
+  if (typeof unlocked !== 'boolean') {
+    res.status(400).json({ message: 'unlocked must be a boolean' })
+    return
+  }
+  try {
+    const level = await prisma.classLevel.findUnique({ where: { id } })
+    if (!level) { res.status(404).json({ message: 'Class not found' }); return }
+    const updated = await prisma.classLevel.update({
+      where: { id },
+      data: { scaleUnlockedAt: unlocked ? new Date() : null },
+    })
+    res.json({
+      message: unlocked
+        ? 'Assessment settings unlocked for this class. The school can now change them once.'
+        : 'Assessment settings locked again.',
+      classLevel: { id: updated.id, name: updated.name, scaleUnlockedAt: updated.scaleUnlockedAt },
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const toggleTermPrinting = async (req: Request, res: Response) => {
   const termId = String(req.params.termId)
   const { printingEnabled } = req.body

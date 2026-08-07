@@ -1,6 +1,10 @@
 import api from './client'
 import { Programme } from '../programme'
 
+/** How a class is assessed. COMPETENCY (nursery: a rating per subject, no marks, no
+ *  average and no position) is offered to primary schools only. */
+export type GradingMode = 'NUMERIC' | 'COMPETENCY'
+
 export interface ClassLevel {
   id: string
   name: string
@@ -12,6 +16,7 @@ export interface ClassLevel {
   // Day or Evening sitting. A university runs the same programme twice with the same
   // lecturers and different students, each sitting being its own class.
   programme?: Programme
+  gradingMode?: GradingMode
 }
 
 export const getClasses = async (): Promise<{ classLevels: ClassLevel[] }> => {
@@ -19,7 +24,7 @@ export const getClasses = async (): Promise<{ classLevels: ClassLevel[] }> => {
   return res.data
 }
 
-export const createClass = async (data: { name: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number; departmentId?: string | null }) => {
+export const createClass = async (data: { name: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number; departmentId?: string | null; gradingMode?: GradingMode }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }

@@ -8,6 +8,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { ArrowLeft, Printer } from 'lucide-react'
 import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor, DocVariant } from '@/lib/api/reportCardTemplate'
 import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
+import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 
 // Build a per-semester bundle (subjects + entries, PrintableReportCard's shapes) from
 // one transcript report card. `subjects` is derived from the entries themselves since
@@ -16,7 +17,7 @@ function toSemesterData(card?: TranscriptReportCard): TranscriptSemesterData | u
   if (!card) return undefined
   return {
     term: { name: card.term.name, session: card.term.session },
-    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined, coefficient: e.subject.coefficient ?? undefined })),
+    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined, coefficient: e.subject.coefficient ?? undefined, maxScore: e.subject.maxScore ?? undefined })),
     entries: card.entries.map((e): PrintEntry => ({
       subjectId: e.subject.id, score: e.score ?? 0, seq1Score: e.seq1Score, seq2Score: e.seq2Score,
       resitScore: e.resitScore, grade: e.grade ?? '', remarks: '',
@@ -40,6 +41,8 @@ export default function AnnualTranscriptPage() {
   const [variant, setVariant] = useState<DocVariant>('student')
   const [pendingPrint, setPendingPrint] = useState(false)
   const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
+  // A nursery transcript is three terms of ratings — no marks, no averages, no ranking.
+  const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
   const printRef = useRef<HTMLDivElement>(null)
 
   const session = searchParams.get('session') ?? undefined
@@ -50,10 +53,12 @@ export default function AnnualTranscriptPage() {
       getStudentTranscriptApi(studentId, session),
       getTemplateApi().catch(() => ({ config: {} })),
       getPromotionScaleApi().catch(() => null),
+      getClassLevelsApi().catch(() => ({ classLevels: [] })),
     ])
-      .then(([transcript, tpl, promoScale]) => {
+      .then(([transcript, tpl, promoScale, levels]) => {
         setData(transcript)
         setPromotionScale(promoScale)
+        setGradingMode(levels.classLevels.find((c) => c.name === transcript.student.classLevel)?.gradingMode ?? 'NUMERIC')
         const saved = tpl.config as Partial<TemplateConfig> | undefined
         // The school's transcript design lives under saved.transcript (the top
         // level holds the standard/ledger report-card design; legacy rows from
@@ -197,6 +202,7 @@ export default function AnnualTranscriptPage() {
     transcriptSemesters: periodData,
     variant,
     promotionScale,
+    gradingMode,
   }
 
   return (

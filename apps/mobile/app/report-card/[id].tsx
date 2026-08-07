@@ -15,6 +15,7 @@ import {
 import { getGradingScale, gradeFromScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { onRealtimeDebounced } from '@/lib/socket'
+import { isCompetencyRating, RATING_COLORS, CompetencyRating } from '@/lib/competency'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 
@@ -300,11 +301,20 @@ export default function ReportCardDetailScreen() {
   const isDraft = reportCard.status === 'DRAFT'
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isUniversity = reportCard.school?.type === 'UNIVERSITY'
+  // Nursery: a rating per subject and nothing else. Read from the CLASS, not the school —
+  // one primary school runs both modes at once. Ratings are recorded on the class sheet,
+  // never typed here, so this card stays read-only for them.
+  const isCompetency = reportCard.gradingMode === 'COMPETENCY'
+  const ratedCount = entries.filter((e) => isCompetencyRating(e.grade)).length
 
   // Publish readiness — same rules as admin and web. Prefer the backend's
   // readiness detail once loaded, since it also catches subjects with zero
   // entries at all, not just entries with a missing sequence score.
-  const localSeqsFilled = entries.length > 0 && entries.every(e => e.score !== '' && e.score != null)
+  // A competency card has no sequences at all, so "complete" there means every subject
+  // carries a rating — the same rule the API's own publish gate applies.
+  const localSeqsFilled = entries.length > 0 && (reportCard.gradingMode === 'COMPETENCY'
+    ? entries.every(e => isCompetencyRating(e.grade))
+    : entries.every(e => e.score !== '' && e.score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
   // Positions are class-relative — every other active student in this class + term
@@ -404,9 +414,16 @@ export default function ReportCardDetailScreen() {
         </View>
       </View>
 
-      {/* Summary */}
+      {/* Summary. A rated card gets progress instead of figures: it has no average, no
+          grade and no position, and printing dashes where they would be reads as data
+          that failed to load rather than a deliberate absence. */}
       <View style={styles.summaryRow}>
-        {(isUniversity
+        {(isCompetency
+          ? [
+              { label: t('Subjects'), value: String(subjects.length) },
+              { label: t('rated'), value: `${ratedCount}/${subjects.length}` },
+            ]
+          : isUniversity
           ? [
               { label: t('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
               // CGPA is the year-end figure, so only the closing semester carries it.
@@ -432,12 +449,30 @@ export default function ReportCardDetailScreen() {
 
       {/* Subjects */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{isUniversity ? t('Course Scores') : t('Subject Scores')}</Text>
+        <Text style={styles.sectionTitle}>{isCompetency ? t('Subject Ratings') : isUniversity ? t('Course Scores') : t('Subject Scores')}</Text>
         {subjects.map((subject) => {
           const entry = entries.find((e) => e.subjectId === subject.id)
           const isFilled = entry?.score !== '' && entry?.score != null
           const score = isFilled ? Number(entry!.score) : 0
           const g = isFilled ? gradeFromScore(score, subject.maxScore, gradingRanges) : null
+          // A rating is recorded on the class sheet, never typed here — there is no
+          // number to type, and a picker per subject on a read-only card would be a
+          // second, competing place to change one.
+          if (isCompetency) {
+            const rating = entry?.grade
+            return (
+              <View key={subject.id} style={styles.subjectRow}>
+                <Text style={styles.subjectName}>{subject.name}</Text>
+                {isCompetencyRating(rating) ? (
+                  <View style={[styles.gradePill, { backgroundColor: `${RATING_COLORS[rating]}18` }]}>
+                    <Text style={[styles.gradeText, { color: RATING_COLORS[rating] }]}>{t(rating)}</Text>
+                  </View>
+                ) : (
+                  <Text style={{ fontSize: 12, color: colors.textMuted }}>{t('Not recorded')}</Text>
+                )}
+              </View>
+            )
+          }
           return (
             <View key={subject.id} style={styles.subjectRow}>
               <Text style={styles.subjectName}>{subject.name}</Text>
@@ -485,7 +520,7 @@ export default function ReportCardDetailScreen() {
         ) : isClassMaster && !allSeqsFilled ? (
           <View style={{ backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 8, padding: 10 }}>
             <Text style={{ fontSize: 12, color: '#d97706', fontWeight: '600' }}>{t('Cannot add remarks yet')}</Text>
-            <Text style={{ fontSize: 11, color: '#92400e', marginTop: 2 }}>{t('All subject sequences must be filled first.')}</Text>
+            <Text style={{ fontSize: 11, color: '#92400e', marginTop: 2 }}>{isCompetency ? t('Every subject must be rated first.') : t('All subject sequences must be filled first.')}</Text>
           </View>
         ) : (
           <Text style={styles.remarksReadOnly}>{reportCard.remarks || '—'}</Text>
@@ -495,22 +530,26 @@ export default function ReportCardDetailScreen() {
       {/* Actions — class master can save marks but not publish */}
       {isDraft && (
         <View style={styles.actions}>
-          <TouchableOpacity
-            style={[styles.saveBtn, saving && styles.disabled]}
-            onPress={handleSave}
-            disabled={saving}
-            activeOpacity={0.8}
-          >
-            {saving
-              ? <ActivityIndicator color="#374151" size="small" />
-              : <><Ionicons name="save-outline" size={16} color="#374151" /><Text style={styles.saveBtnText}>{t('Save Draft')}</Text></>}
-          </TouchableOpacity>
+          {/* Marks are typed here; ratings never are (they are recorded on the class
+              sheet), so a rated card has nothing for this button to save. */}
+          {!isCompetency && (
+            <TouchableOpacity
+              style={[styles.saveBtn, saving && styles.disabled]}
+              onPress={handleSave}
+              disabled={saving}
+              activeOpacity={0.8}
+            >
+              {saving
+                ? <ActivityIndicator color="#374151" size="small" />
+                : <><Ionicons name="save-outline" size={16} color="#374151" /><Text style={styles.saveBtnText}>{t('Save Draft')}</Text></>}
+            </TouchableOpacity>
+          )}
           {user?.role !== 'CLASS_MASTER' && (
             <>
               {!canPublish && (
                 <View style={{ flexDirection: 'row', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: allSeqsFilled ? '#dcfce7' : '#fee2e2' }}>
-                    <Text style={{ fontSize: 9, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>{allSeqsFilled ? '✓' : '✗'} {t('Sequences')}</Text>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>{allSeqsFilled ? '✓' : '✗'} {isCompetency ? t('Ratings') : t('Sequences')}</Text>
                   </View>
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: hasRemarks ? '#dcfce7' : '#fee2e2' }}>
                     <Text style={{ fontSize: 9, fontWeight: '700', color: hasRemarks ? '#16a34a' : '#ef4444' }}>{hasRemarks ? '✓' : '✗'} {t('Remarks')}</Text>

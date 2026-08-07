@@ -6,11 +6,12 @@ import { getReportCardsApi } from '@/lib/api/reportcards'
 import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
+import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
-  grade: string; remarks: string; subject: { id: string; name: string }
+  grade: string; remarks: string; subject: { id: string; name: string; maxScore?: number }
 }
 interface RawRC {
   id: string; status: string; remarks?: string; average?: number | null
@@ -36,18 +37,22 @@ export default function PrintClassPage() {
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [classBands, setClassBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
   const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
+  // The whole run is one class, so one mode covers every card in it.
+  const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
   const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready' | 'blocked'>('loading')
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [rcData, tplData, scaleData, promoScale] = await Promise.all([
+        const [rcData, tplData, scaleData, promoScale, levels] = await Promise.all([
           getReportCardsApi({ termId, classLevel }),
           getTemplateApi().catch(() => ({ config: {} })),
           getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: [], legendRows: [] })),
           getPromotionScaleApi().catch(() => null),
+          getClassLevelsApi().catch(() => ({ classLevels: [] })),
         ])
         setPromotionScale(promoScale)
+        setGradingMode(levels.classLevels.find((c) => c.name === classLevel)?.gradingMode ?? 'NUMERIC')
         const published: RawRC[] = rcData.reportCards.filter((rc: RawRC) => rc.status === 'PUBLISHED')
         if (published.length === 0) { setStatus('empty'); return }
         if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
@@ -122,7 +127,9 @@ export default function PrintClassPage() {
       `}</style>
 
       {cards.map((rc, i) => {
-        const subjects = rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))
+        // maxScore travels with the subject: a PRIMARY mark is normalised onto the grading
+        // scale's units before it is graded (see entryGrade in PrintableReportCard).
+        const subjects = rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, maxScore: e.subject.maxScore }))
         const entries: PrintEntry[] = rc.entries.map(e => ({
           subjectId: e.subject.id,
           score: e.score,
@@ -157,6 +164,7 @@ export default function PrintClassPage() {
               cgpa={rc.cgpa ?? undefined}
               subjectStats={classSubjectStats}
               promotionScale={promotionScale}
+              gradingMode={gradingMode}
             />
           </div>
         )

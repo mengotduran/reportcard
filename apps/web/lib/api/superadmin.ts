@@ -118,6 +118,17 @@ export interface TermRow {
   printingEnabled: boolean
 }
 
+export interface ClassLevelRow {
+  id: string
+  name: string
+  maxScore: number
+  testMaxScore: number
+  /** Non-null while the superadmin's one-shot grant to change this class's assessment
+   *  settings (mark totals, and primary's marks-vs-ratings mode) is open. The school's next
+   *  successful change spends it and sets this back to null. */
+  scaleUnlockedAt: string | null
+}
+
 export interface SchoolDetail {
   school: {
     id: string; name: string; type: string; email: string; phone: string | null
@@ -131,6 +142,7 @@ export interface SchoolDetail {
   subjects: number
   reportCards: { status: string; count: number }[]
   terms: TermRow[]
+  classLevels: ClassLevelRow[]
 }
 
 export const getSchoolDetailApi = async (schoolId: string): Promise<SchoolDetail> => {
@@ -141,4 +153,13 @@ export const getSchoolDetailApi = async (schoolId: string): Promise<SchoolDetail
 export const toggleTermPrintingApi = async (termId: string, printingEnabled: boolean): Promise<TermRow> => {
   const res = await api.patch(`/superadmin/terms/${termId}/printing`, { printingEnabled })
   return res.data.term
+}
+
+// A class's assessment settings — its mark totals, and for primary whether it is marked or
+// rated — freeze for the academic year once it has published cards in a term that has
+// closed. This is the only way past that: unlock the class, and the SCHOOL makes the change
+// itself, which spends the grant. See ClassLevel.scaleUnlockedAt.
+export const toggleClassScaleUnlockApi = async (classLevelId: string, unlocked: boolean) => {
+  const res = await api.patch(`/superadmin/class-levels/${classLevelId}/scale-unlock`, { unlocked })
+  return res.data.classLevel as { id: string; name: string; scaleUnlockedAt: string | null }
 }

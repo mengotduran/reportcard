@@ -7,7 +7,7 @@ import { getDepartmentsApi, createDepartmentApi, updateDepartmentApi, deleteDepa
 import { copySubjectsApi, getSubjectsApi } from '@/lib/api/subjects'
 import { getStudentsApi } from '@/lib/api/students'
 import { getTeachersApi } from '@/lib/api/teachers'
-import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers, AlertTriangle, Users, Sparkles } from 'lucide-react'
+import { GraduationCap, Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Layers, AlertTriangle, Users, Sparkles, Lock } from 'lucide-react'
 import { EveningBadge } from '@/components/ui/ProgrammeFilter'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
@@ -125,6 +125,9 @@ export default function ClassesPage() {
   const [seedingDefaults, setSeedingDefaults] = useState(false)
   const [showModal, setShowModal]     = useState(false)
   const [editing, setEditing]         = useState<ClassLevel | null>(null)
+  // The closed term that settled this class's mark totals for the year, if any. Only ever
+  // set for a class being EDITED: a class being created has no published history.
+  const scaleLockedBy = editing?.scaleLockedBy ?? null
   const [form, setForm]               = useState<FormState>(STD_EMPTY)
   const [saving, setSaving]           = useState(false)
   const [error, setError]             = useState('')
@@ -1391,13 +1394,29 @@ export default function ClassesPage() {
               {/* How this class is assessed (primary only). Nursery/pre-primary is not marked
                   out of anything, so choosing Ratings hides the mark-scale fields entirely
                   rather than leaving an admin to wonder what they do. */}
+              {/* Settled for the year: this class has published cards in a term that has
+                  since closed. Those cards were scored against this total and they state (or
+                  deliberately omit) an average and a position, so neither the total nor the
+                  marks/ratings choice can move until next year. Said here, with the controls
+                  disabled, rather than letting an admin set something the API will refuse.
+                  A new class is never locked — it has no published history yet. */}
+              {scaleLockedBy && (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <Lock size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-800">
+                    {t('Report cards have already been published for')} <strong>{scaleLockedBy}</strong>{t(', so how this class is assessed is fixed until the next academic year. Ask the superadmin to unlock this class if it really has to change.')}
+                  </p>
+                </div>
+              )}
+
               {isPrimary && (
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">{t('Assessment')}</label>
                   <div className="flex gap-2">
                     {(['NUMERIC', 'COMPETENCY'] as const).map((m) => (
-                      <button key={m} type="button" onClick={() => setForm({ ...form, gradingMode: m })}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition ${
+                      <button key={m} type="button" disabled={!!scaleLockedBy}
+                        onClick={() => setForm({ ...form, gradingMode: m })}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition disabled:opacity-60 disabled:cursor-not-allowed ${
                           form.gradingMode === m
                             ? 'bg-primary text-primary-foreground border-primary'
                             : 'bg-background text-foreground border-border hover:bg-hover'}`}>
@@ -1415,6 +1434,16 @@ export default function ClassesPage() {
 
               {/* Max score — meaningless for a class that is rated rather than marked. */}
               {form.gradingMode !== 'COMPETENCY' && (<>
+              {/* Same notice for a school with no assessment toggle above (secondary and
+                  university), whose totals are frozen by the same rule. */}
+              {scaleLockedBy && !isPrimary && (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <Lock size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-800">
+                    {t('Report cards have already been published for')} <strong>{scaleLockedBy}</strong>{t(', so how this class is assessed is fixed until the next academic year. Ask the superadmin to unlock this class if it really has to change.')}
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <span className="text-destructive">*</span></label>
                 <div className="flex items-center gap-2">
@@ -1423,7 +1452,8 @@ export default function ClassesPage() {
                     value={form.maxScore}
                     onChange={(e) => setForm({ ...form, maxScore: e.target.value })}
                     required
-                    className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                    disabled={!!scaleLockedBy}
+                    className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed" />
                 </div>
               </div>
 
@@ -1437,7 +1467,8 @@ export default function ClassesPage() {
                       value={form.testMaxScore}
                       onChange={(e) => setForm({ ...form, testMaxScore: e.target.value })}
                       required
-                      className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                      disabled={!!scaleLockedBy}
+                      className="w-24 border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed" />
                     <span className="text-xs text-muted-foreground">
                       {t('Exam is out of')} {Math.max(0, (Number(form.maxScore) || 0) - (Number(form.testMaxScore) || 0))}
                     </span>

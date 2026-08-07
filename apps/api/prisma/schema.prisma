@@ -180,6 +180,17 @@ model ClassLevel {
   // school that wants Class 1 assessed this way can simply say so. Admin-set on the Classes
   // page, primary-only in the UI though nothing here is type-specific.
   gradingMode          GradingMode @default(NUMERIC)
+  // A mark ceiling (`maxScore`, and primary's `testMaxScore`) is FROZEN for the rest of an
+  // academic year once this class has published cards in a term of that year which has since
+  // closed: the marks already handed out were scored against it, and a `Subject` keeps its
+  // OWN copy of the ceilings from when it was created, so a mid-year change does not
+  // re-scale anything — it leaves one class holding two different scales with nothing on
+  // screen saying so. Judged per class, so a class created mid-year is never blocked.
+  //
+  // This is that freeze's only escape hatch: a superadmin grants it, and the next successful
+  // ceiling change consumes it (set back to null). Null = locked. A timestamp rather than a
+  // boolean so the grant says when it was made.
+  scaleUnlockedAt      DateTime?
   department           Department? @relation(fields: [departmentId], references: [id])
   school               School   @relation(fields: [schoolId], references: [id])
 

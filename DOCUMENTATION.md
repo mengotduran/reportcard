@@ -103,7 +103,7 @@ npx prisma studio          # View data at localhost:5555
 | Model | Key Fields |
 |-------|-----------|
 | `Subject` | name, classLevel, **maxScore** (default 20), **coefficient** (default 1) |
-| `ClassLevel` | name, hasStream (bool), order (sort position) |
+| `ClassLevel` | name, hasStream (bool), order (sort position), **gradingMode** (`NUMERIC` default / `COMPETENCY` — primary only, see §7 → *Nursery / pre-primary*), **scaleUnlockedAt** (superadmin's one-shot key to a frozen class — see §7 → *How a class is assessed is frozen…*) |
 | `Term` | name, session, startDate, endDate, **isCurrent** (bool) |
 | `TeacherSubject` | Junction: which teacher teaches which subject (one teacher per subject per class) |
 
@@ -222,9 +222,9 @@ A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[
 ### Class Levels
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/class-levels` | List all class levels (sorted by order) |
-| POST | `/class-levels` | Create a class level |
-| PUT | `/class-levels/:id` | Edit class level |
+| GET | `/class-levels` | List all class levels (sorted by order). Each carries `scaleLockedBy`: the closed term that froze its mark total and grading mode for the year, or null |
+| POST | `/class-levels` | Create a class level. **Primary**: 400s unless the Test ceiling leaves room for an Exam (`0 < testMaxScore < maxScore`); an omitted `testMaxScore` defaults to 30% of the total |
+| PUT | `/class-levels/:id` | Edit class level. Same primary ceiling check, applied to the values the class will **end up** with (so shrinking `maxScore` under an existing `testMaxScore` is refused). **403** if the mark total or grading mode is frozen for the year and no superadmin unlock is open |
 | DELETE | `/class-levels/:id` | Delete class level |
 
 ### Terms
@@ -285,6 +285,7 @@ A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[
 | POST | `/superadmin/parent-schools` | Create a parent school group with sections |
 | PATCH | `/superadmin/schools/:id/toggle` | Activate / deactivate a school |
 | PATCH | `/superadmin/parent-schools/:id/toggle` | Activate / deactivate a parent group |
+| PATCH | `/superadmin/class-levels/:classLevelId/scale-unlock` | Hand a school a **one-shot** key to change a class's frozen mark total or grading mode (see §7 → *How a class is assessed is frozen…*). The school makes the change itself; the change spends the key |
 
 ### Demo Tenant
 | Method | Route | Description |
@@ -411,9 +412,91 @@ unlike secondary, where the two sequences are averaged. The Exam ceiling is **de
 stored**: there is one `testMaxScore` and the rest of `maxScore` is the exam, so the two can
 never drift out of sync. Both are inherited from the class by `Subject` at creation time.
 
-The letter grade and remark are matched against the school's grading scale on the **raw
-0–100 scale** (primary scales are written 0–100, like a university's — see *Default grading
-scale* caveat below).
+#### The ceilings are the admin's, and the grade is normalised onto the scale
+
+`maxScore` and `testMaxScore` are set per class, so a school can mark out of anything: 30/70
+out of 100 is the default, 50/50 out of 100 and 20/20 out of 40 are equally valid. Only two
+numbers are ever stored, and **the Exam is derived** (`maxScore − testMaxScore`), so the
+parts can never stop adding up to the whole. Changing the split is a matter of moving
+`testMaxScore`; changing the *total* means moving `maxScore` with it.
+
+Two rules make an arbitrary ceiling work:
+
+1. **The average already divides by the subject's own `maxScore`** (see the formula below),
+   so it needs nothing else. A subject out of 40 scored 36 contributes 18/20 exactly as a
+   subject out of 100 scored 90 does.
+2. **The letter grade and remark are matched after normalising the mark onto the scale's own
+   top** — the scale's top being read from its bands (any band above 20 means a 0–100
+   scale), never assumed. This is what a primary card had wrong: it matched the **raw** mark,
+   which silently assumed every class was marked out of 100. A subject out of 40 scored 36
+   was looked up as "36" and stored an **F for a clean 90%**, while the report card *screen*
+   normalised the same mark and showed an **A** — so the screen and the printed card
+   disagreed about the same pupil. Fixed in `saveEntries` (`scoreForGrade`) and in
+   `PrintableReportCard`'s `entryGrade`/`entryRemark`, which now take the subject's ceiling
+   for primary. A class marked out of 100 is unaffected: dividing by 100 and multiplying by
+   100 is what the code was already doing implicitly.
+
+The ceilings are also **validated server-side, primary only** (`validatePrimaryScale`): the
+Test must be at least 1 and strictly less than the subject total, so the Exam always has
+something left. Enforced on create AND update, and on update the pair is checked as the
+class will *end up* — cutting `maxScore` down below a `testMaxScore` set earlier is refused
+with the same message. The web form's `max` attribute was the only thing guarding this
+before, and a form is a suggestion; the endpoint is what decides. When a caller omits
+`testMaxScore` it now defaults to **30% of the total** rather than a flat 30 — identical at
+the standard `maxScore` of 100 (the familiar 30/70), and coherent below it, where a flat 30
+used to produce a Test worth more than the whole subject.
+
+A `Subject` **inherits both ceilings from its class when it is created** and keeps them.
+Changing a class's ceilings afterwards does **not** rewrite subjects that already exist, so a
+class edited mid-year can hold subjects on two different scales. The average tolerates that
+(it normalises per subject), and so do the grades now, but nothing announces it: **set the
+ceilings before creating the subjects.** Which is most of the reason for the rule below.
+
+#### How a class is assessed is frozen for the rest of the year once a term has been published
+
+**The rule (all school types):** a class's `maxScore`, its `testMaxScore` (primary) and its
+`gradingMode` — marks or nursery ratings — can no longer be changed once that class has
+**published report cards in a term of the current academic year that is no longer the current
+term**. They stay frozen until the next academic year. Enforced in `updateClassLevel`;
+`frozenScaleClasses` is the check.
+
+Why it exists, for each half:
+
+- **The ceilings.** Cards have already been handed out scored against that total, and because
+  a `Subject` keeps its own copy of the ceilings (above), changing the class's would not
+  re-scale anything — it would leave the class holding two scales at once, silently.
+- **The mode.** A card already in a parent's hands either states an average and a position,
+  or deliberately states neither. Flipping the mode afterwards makes those cards describe a
+  class that no longer exists, and leaves the year's terms disagreeing about what a report
+  card even is.
+
+The details that matter:
+
+- **Judged per class**, not per school. A class created in the second term has no published
+  history of its own and stays fully editable, which is exactly when a school is most likely
+  to be setting one up.
+- **Changing within the current term is allowed.** The term is still open, nothing about it
+  is final, and a school correcting a setup mistake in week two must not need permission.
+- **Only a real CHANGE is refused.** Every other edit (rename, fee, order, department)
+  re-sends `maxScore`/`testMaxScore`/`gradingMode` untouched, and those saves keep working —
+  the check compares against what is already stored. `gradingMode` is compared *after*
+  `resolveGradingMode`, so a client sending COMPETENCY to a secondary class (where it
+  resolves back to NUMERIC) is not refused for a change it did not make.
+- **The refusal names what was moved** — the totals, the marks/ratings choice, or both.
+- **The academic year is the current term's session**; with no current term, the newest
+  term's, so the freeze cannot silently lift in the gap between two years.
+- **The escape hatch is the superadmin's**, and it is one-shot: `PATCH
+  /superadmin/class-levels/:id/scale-unlock` sets `ClassLevel.scaleUnlockedAt`, the school
+  then makes the change itself, and the change spends the grant (back to null). The
+  superadmin deliberately does not edit the number — the school knows what the total should
+  be, the superadmin is only deciding that changing it is warranted. It is a section on the
+  superadmin's existing school detail page, beside the per-term printing toggles.
+- The Classes form **disables both fields and says which term froze them** rather than
+  letting an admin type a number the API will refuse. `GET /class-levels` returns
+  `scaleLockedBy` (the closed term's name, or null) for exactly this.
+
+One grant covers both halves: a school unlocked to fix a wrong total can also correct the
+mode in the same save, and either one spends the key.
 
 #### Term average — coefficient-weighted, normalised to /20
 
@@ -485,12 +568,103 @@ reads as /20 — 69.4 would print as 69.4/20 and clear every threshold in sight.
 are re-derived too**: a uniform rescale preserves rank order, but introducing coefficients
 does not.
 
-#### Nursery / Pre-Nursery
+#### Nursery / pre-primary — assessed by RATING, not by marks
 
-Not yet modelled separately — they currently use the same numeric Test+Exam marks and
-coefficient-weighted /20 average as Class 1–6. Cameroon nursery is normally
-competency-based (Attained / Developing / Not Yet Attained) with no numeric average at all.
-This is a known interim, deliberately deferred rather than half-built.
+A Cameroonian nursery class is not marked and is not ranked. Each subject carries a
+developmental **rating**, and the report card has no total, no average and no position —
+ranking three-year-olds is exactly what this mode exists to avoid.
+
+**The mode is a stored field on the class, not a guess from its name.**
+`ClassLevel.gradingMode` is `NUMERIC` (default, every existing class) or `COMPETENCY`.
+Name-matching `/Nursery/` was rejected outright: class names are free text, a French section
+calls these *Maternelle*, and a school may want Class 1 rated too. It is **primary-only** —
+`resolveGradingMode` in `classlevel.controller.ts` forces `NUMERIC` for secondary and
+university, the same shape as `resolveProgramme`'s university-only gate.
+
+The three ratings are **fixed, not school-configurable**:
+
+| Rating | Meaning |
+|---|---|
+| `Attained` | The child has the competency |
+| `Developing` | On the way to it |
+| `Not Yet Attained` | Not there yet |
+
+**Where a rating is stored — and why it looks odd.** It goes in `ReportEntry.grade`,
+verbatim, as the English label (`apps/api/src/utils/competency.ts` is the single source;
+`apps/web/lib/competency.ts` and `apps/mobile/lib/competency.ts` mirror it for display).
+Deliberately the human-readable label rather than a code, for two reasons: every report card
+template already resolves and prints a `grade` column, and there is no second mapping layer
+to drift out of sync. **Translation happens at display time through `t()`, never in
+storage**, so a French section reads *Acquis / En cours d'acquisition / Non acquis* over the
+same stored rows.
+
+**`score`, `seq1Score` and `seq2Score` stay NULL on a competency entry.** That is what keeps
+the average, the total and the position empty *without any of the arithmetic knowing this
+mode exists* — a null score already means "not marked" everywhere. `saveEntries` takes a
+separate short path for these classes that returns before all the mark arithmetic, validates
+the rating against the fixed set (a bad value 400s **before** the delete, so a bad payload
+can never wipe a card), and explicitly nulls `average` / `totalScore` / `position`.
+
+**The carry-forward guard (data-loss trap).** The competency save replaces a card's entries
+wholesale, so a caller must re-send every subject on the card. A subject is keyed on whether
+the `rating` key is **present**, not whether it is truthy:
+
+- `rating` absent → keep whatever rating that subject already has;
+- `rating: null` or `''` → clear it (so "unset this" stays expressible);
+- `rating: '<one of the three>'` → set it.
+
+Without this, opening a nursery subject in an old numeric grid and hitting Save would wipe
+the whole class's ratings, since that grid re-sends every subject with seq1/seq2 and no
+`rating` key at all.
+
+**"Is this card complete?" is written in FOUR places**, and all four are competency-aware or
+a nursery card could never be published: `findPublishBlockers`, `getReadinessDetail`,
+`publishReportCard`, and `getClassReadiness` — the last keyed **per class**, because one
+primary school runs both modes at once (nursery rated, Class 1–6 marked). For a rated class,
+"complete" means every subject carries a rating.
+
+**The mode is not freely switchable forever.** It can be changed at will while a term is
+still open, but it freezes with the class's mark totals once a term of the year has closed
+with published cards — see *How a class is assessed is frozen…* above. Under that freeze it
+is the superadmin's one-shot unlock or nothing.
+
+**Clients never guess the mode.** `GET /report-cards/:id` and
+`GET /report-cards/class-overview` both return `gradingMode`, and the overview's entries
+carry `grade` so a marks sheet can build its rows from that one response. `marksFilled` on
+the overview is judged on ratings for a rated class, not on seq1/seq2.
+
+**What the UI does with it** (all of it branches on the class, never the school):
+
+- **Marks entry** — a rated class opens a **rating picker** instead of the numeric
+  spreadsheet: three buttons per pupil, no Test/Exam tabs, no maximum, no keyboard on
+  mobile. Tapping the rating a pupil already has clears it. A *"Rate everyone still blank"*
+  bar fills only the unrecorded pupils, so it can never overwrite a deliberate pick and
+  needs no confirmation. Only pupils whose rating actually changed are written.
+  (`CompetencyEntry.tsx` on web, `components/CompetencyMarksEntry.tsx` on mobile; the route
+  file dispatches to it after reading the class's mode.)
+- **Report card screens** — the average / overall grade / position / class average tiles are
+  replaced by a rated count and a plain statement that this class has none; the subject
+  table shows one Rating column.
+- **Printing** — the school's **saved design is reused**, with every measuring column
+  dropped at render time (score, Test/Exam, coefficient, credit, grade point, weight,
+  remarks, min/avg/max, jury decision) and the footer bands (TOTAL / TERM AVERAGE / CLASS
+  POSITION) suppressed, leaving subject + rating. The summary strip and the grading legend
+  are skipped entirely. One saved design therefore prints correct cards for both the nursery
+  and Class 1–6 of the same school. See `PrintableReportCard`'s `gradingMode` prop.
+- **AI remarks are not offered** on a rated card: the draft is written *from* the average,
+  and there isn't one. The general remark is still required to publish, written by hand.
+
+**Locks are identical to the numeric sheet's** — a published card, the school's
+`marksEntryMode`, and a closed term all behave exactly as they do for marks.
+
+#### Converting an existing nursery class
+
+`apps/api/src/scripts/convertClassToCompetency.ts` (dry-run by default, `--apply` to write)
+flips a class to `COMPETENCY` and rewrites its existing numeric cards as ratings: ≥70%
+`Attained`, ≥50% `Developing`, else `Not Yet Attained`, then nulls the card's average,
+total and position. Percentage-based, so it is independent of whatever `maxScore` the class
+was marked on. It is idempotent — an already-converted class is left alone. Live ratings are
+never derived from a score; only this one-off migration does that.
 
 ---
 
@@ -691,7 +865,7 @@ Each subject has:
 A report card can only be published when **ALL** of these are true — checked in the API, not just the UI:
 
 1. The class has at least one **subject**.
-2. **Every subject has both sequences filled** (Seq1 AND Seq2) — i.e. every teacher has filled their marks. A subject with no assigned teacher still blocks until its marks are entered.
+2. **Every subject has both sequences filled** (Seq1 AND Seq2) — i.e. every teacher has filled their marks. A subject with no assigned teacher still blocks until its marks are entered. On a **rated (nursery) class** this rule reads "every subject carries a rating" instead — see §7 → *Nursery / pre-primary*.
 3. The report card has **general remarks** — **required for every class** (updated 2026-06-15; previously only classes with a class master).
 
 The bulk **"Publish Class"** action checks the whole class: the dropdown button is disabled until every student passes, and the API reports per-student `issues` (missing sequences / missing remarks / no subjects) for any it skips.
@@ -924,7 +1098,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 | Terms | `/terms` | Admin |
 | Report Cards list | `/report-cards` | Admin (full list), Teachers/Class Master (class view) |
 | Report Card detail | `/report-cards/:id` | Admin (read-only) |
-| Marks entry | `/report-cards/class/:class/:subjectId` | CLASS_TEACHER, CLASS_MASTER |
+| Marks entry | `/report-cards/class/:class/:subjectId` | CLASS_TEACHER, CLASS_MASTER — a **rated (nursery) class** opens the rating picker instead of the numeric grid (§7) |
 | Card Design | `/report-card-design` | Admin |
 | Class List Design | `/class-list-design` | Admin (desktop-only) |
 | Grading Scale | `/grading-scale` | Admin |
@@ -948,7 +1122,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 | Schools | `(tabs)/schools.tsx` | SUPERADMIN | All schools grouped by ParentSchool; toggle active/inactive per group/section; FAB to create standalone school |
 | Classes | `(tabs)/report-cards.tsx` | Teachers, Class Master | Class list; tapping navigates to subjects screen |
 | Class subjects | `class/[classLevel].tsx` | CLASS_TEACHER, CLASS_MASTER | Subjects + sequence selector; CLASS_MASTER sees purple "Add/Edit General Remarks" banner at top |
-| Marks entry | `marks/[subjectId].tsx` | Teachers + Admin/VP | Enter marks; in-place **CA / Exam / Resit switcher** (`router.setParams`); rows lock read-only under `ADMIN_ONLY` (for teachers) and on published cards (for everyone), with a banner naming the remedy per role |
+| Marks entry | `marks/[subjectId].tsx` | Teachers + Admin/VP | Enter marks; in-place **CA / Exam / Resit switcher** (`router.setParams`), labelled **Test / Exam** for primary, where each component is capped at its own ceiling (the phone used to cap both at the subject total); rows lock read-only under `ADMIN_ONLY` (for teachers) and on published cards (for everyone), with a banner naming the remedy per role. A **rated (nursery) class** dispatches to `components/CompetencyMarksEntry.tsx` instead: one card per pupil, three tappable ratings, no keyboard (§7) |
 | Class Master remarks | `class-master/[classLevel].tsx` | CLASS_MASTER | Students list with averages + card status; bottom sheet modal to edit per-student general remarks |
 | Report card detail | `report-card/[id].tsx` | CLASS_TEACHER, CLASS_MASTER | Grading scale loaded; per-subject badge shows remark + color (squared); summary: Average (X.X), Grade (remark), Position (ordinal) |
 | Students | `(tabs)/students.tsx` | SCHOOL_ADMIN, VICE_PRINCIPAL | Admin student list; registration form includes optional Date/Place of Birth (DOB as `YYYY-MM-DD` text, same pattern as the fees ledger) |

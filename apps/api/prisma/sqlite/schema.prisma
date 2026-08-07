@@ -216,6 +216,10 @@ model ClassLevel {
   // (nursery — a developmental rating per subject, no average, total or position).
   // Mirrors the Postgres schema; see the full note there.
   gradingMode        GradingMode @default(NUMERIC)
+  // Superadmin-granted, one-shot permission to change this class's mark ceilings after a
+  // term of the current year has closed. Null = locked. Mirrors the Postgres schema; the
+  // full reasoning lives there.
+  scaleUnlockedAt    DateTime?
   createdAt          DateTime @default(now())
 
   school     School      @relation(fields: [schoolId], references: [id])

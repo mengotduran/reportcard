@@ -23,6 +23,7 @@ import syncPeriodMinutesResetTokenSeenByAdmin from '../../prisma/sqlite/migratio
 import addPromotionScale from '../../prisma/sqlite/migrations/20260802135550_add_promotion_scale/migration.sql'
 import dropRepeatThreshold from '../../prisma/sqlite/migrations/20260802140509_drop_repeat_threshold/migration.sql'
 import addStudentPhoto from '../../prisma/sqlite/migrations/20260803165754_add_student_photo/migration.sql'
+import addClassGradingModeAndScaleUnlock from '../../prisma/sqlite/migrations/20260807120000_add_class_grading_mode_and_scale_unlock/migration.sql'
 
 export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260624111054_init', sql: init },
@@ -45,4 +46,8 @@ export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260802135550_add_promotion_scale', sql: addPromotionScale },
   { name: '20260802140509_drop_repeat_threshold', sql: dropRepeatThreshold },
   { name: '20260803165754_add_student_photo', sql: addStudentPhoto },
+  // ClassLevel.gradingMode (nursery ratings) + ClassLevel.scaleUnlockedAt (the superadmin's
+  // one-shot key to a frozen mark ceiling). One migration because both columns reached the
+  // SQLite schema together; SQLite adds columns by rebuilding the table, so they share one.
+  { name: '20260807120000_add_class_grading_mode_and_scale_unlock', sql: addClassGradingModeAndScaleUnlock },
 ]

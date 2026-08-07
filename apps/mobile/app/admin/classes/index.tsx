@@ -7,7 +7,7 @@ import {
   TextInput, Switch,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getClasses, createClass, deleteClass, getClassDeleteImpact, ClassLevel, ClassDeleteImpact } from '@/lib/api/classes'
+import { getClasses, createClass, deleteClass, getClassDeleteImpact, ClassLevel, ClassDeleteImpact, GradingMode } from '@/lib/api/classes'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getDepartments, createDepartment, deleteDepartment, Department } from '@/lib/api/departments'
@@ -173,6 +173,7 @@ export default function ClassesScreen() {
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  const isPrimary = school?.type === 'PRIMARY'
   // Universities call classes "departments" — same data/route, just different wording.
   const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [classes, setClasses] = useState<ClassLevel[]>([])
@@ -193,12 +194,18 @@ export default function ClassesScreen() {
   const [modalVisible, setModalVisible] = useState(false)
   const [newName, setNewName] = useState('')
   const [hasStream, setHasStream] = useState(false)
-  const [maxScore, setMaxScore] = useState('20')
+  // Primary marks a subject out of 100 by default (Test 30 + Exam 70), not secondary's 20 —
+  // the web form has always seeded it that way and the phone had not, so a primary class
+  // created here came out marked /20 with a Test ceiling that made no sense against it.
+  const [maxScore, setMaxScore] = useState(isPrimary ? '100' : '20')
   // Starts empty, not a real number: it used to default to a stock 150000 that looked
   // like a deliberately entered value, so a distracted admin could save every class with
   // a fee that has nothing to do with their school's actual tuition. The input's
   // placeholder shows the same number as a hint instead.
   const [feeAmount, setFeeAmount] = useState('')
+  // Primary only. A nursery class is assessed by rating, not by marks — see
+  // ClassLevel.gradingMode. Everything else stays NUMERIC, which is the API's default.
+  const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
   const [creating, setCreating] = useState(false)
 
   // Secondary departments (streams)
@@ -315,13 +322,15 @@ export default function ClassesScreen() {
         await createClass({
           name, hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0,
           ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
+          ...(isPrimary ? { gradingMode } : {}),
         })
       }
       setModalVisible(false)
       setNewName('')
       setHasStream(false)
-      setMaxScore('20')
+      setMaxScore(isPrimary ? '100' : '20')
       setFeeAmount('')
+      setGradingMode('NUMERIC')
       setSections([])
       await fetchClasses()
     } catch (err: any) {
@@ -440,6 +449,14 @@ export default function ClassesScreen() {
                 {!!item.feeAmount && item.feeAmount > 0 && (
                   <View style={styles.feeBadge}>
                     <Text style={styles.feeBadgeText}>{formatXAF(item.feeAmount)}</Text>
+                  </View>
+                )}
+                {/* Which classes are rated rather than marked. Worth saying on the list
+                    itself: the mode cannot be changed from the phone, so an admin
+                    otherwise has no way to see it here at all. */}
+                {item.gradingMode === 'COMPETENCY' && (
+                  <View style={styles.streamBadge}>
+                    <Text style={styles.streamBadgeText}>{t('Ratings')}</Text>
                   </View>
                 )}
               </View>
@@ -645,6 +662,33 @@ export default function ClassesScreen() {
               </View>
             )}
 
+            {/* How this class is assessed. Primary only: nursery classes are rated, and a
+                rating has no maximum, so the Max Score field goes with it. */}
+            {isPrimary && (
+              <>
+                <Text style={styles.label}>{t('Assessment')}</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
+                  {(['NUMERIC', 'COMPETENCY'] as GradingMode[]).map((m) => {
+                    const on = gradingMode === m
+                    return (
+                      <TouchableOpacity key={m} onPress={() => setGradingMode(m)}
+                        style={[styles.sectionBtn, { flex: 1 }, on && styles.sectionBtnActive]}>
+                        <Text style={[styles.sectionBtnText, on && styles.sectionBtnTextActive]}>
+                          {m === 'NUMERIC' ? t('Marks') : t('Ratings')}
+                        </Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+                <Text style={styles.switchHint}>
+                  {gradingMode === 'COMPETENCY'
+                    ? t('For nursery and pre-primary. Each subject is rated Attained, Developing or Not Yet Attained. The report card carries no marks, no average and no position in class.')
+                    : t('Each subject is marked out of a maximum, and the report card carries an average and a position in class.')}
+                </Text>
+              </>
+            )}
+
+            {gradingMode === 'NUMERIC' && (<>
             <Text style={styles.label}>{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
@@ -654,6 +698,7 @@ export default function ClassesScreen() {
               placeholderTextColor="#9ca3af"
               keyboardType="numeric"
             />
+            </>)}
 
             <Text style={styles.label}>{t('School Fee (XAF)')} <Text style={styles.required}>*</Text></Text>
             <TextInput

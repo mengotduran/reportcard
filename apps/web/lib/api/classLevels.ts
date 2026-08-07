@@ -20,6 +20,15 @@ export interface ClassLevel {
   // lecturers and different students, each sitting being its own class.
   programme?: Programme
   gradingMode?: GradingMode
+  /**
+   * The closed term that settled how this class is assessed — its mark totals AND its
+   * marks-vs-ratings mode — for the academic year, or null when they can still change.
+   * Set once the class has PUBLISHED cards in a term of this year that is no longer
+   * current: those cards were scored against those settings, a Subject keeps its own copy
+   * of the ceilings, and a card already handed out states an average and a position (or
+   * deliberately states neither). Only the superadmin can reopen it, once.
+   */
+  scaleLockedBy?: string | null
 }
 
 export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }> => {

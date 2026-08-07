@@ -60,14 +60,100 @@ const resolveGradingMode = (value: unknown, schoolType?: string): GradingModeVal
     : 'NUMERIC'
 }
 
+/**
+ * Which of a school's classes have their assessment settings FROZEN for the rest of the academic
+ * year, and what closed term froze each one.
+ *
+ * Covers the mark ceilings (`maxScore`, and primary's `testMaxScore`) AND `gradingMode` —
+ * everything that decides how a card is scored and what it therefore states.
+ *
+ * The rule: a class is frozen once it has a PUBLISHED report card in a term of the current
+ * session that is no longer the current term. Cards were handed out scored against those
+ * settings, so the year is committed to them.
+ *
+ * Judged per CLASS, not per school — a class created in the second term has no history of
+ * its own and must stay editable, which is exactly when a school is most likely to be
+ * setting one up.
+ *
+ * Why freezing matters more than it looks: a `Subject` copies the ceilings from its class
+ * when it is created and keeps its own copy, so changing a class's ceilings mid-year does
+ * NOT re-scale the subjects already there. It leaves one class holding two different scales,
+ * with nothing on screen saying so. Switching gradingMode has its own version of this: the
+ * cards already in parents' hands state an average and a position, or deliberately state
+ * neither, and flipping the mode makes them describe a class that no longer exists.
+ *
+ * The session is the current term's; with no current term, the newest term's — so the freeze
+ * does not silently lift in the gap between two academic years.
+ */
+async function frozenScaleClasses(schoolId: string): Promise<Map<string, string>> {
+  const anchor = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { session: true } })
+    ?? await prisma.term.findFirst({ where: { schoolId }, orderBy: { startDate: 'desc' }, select: { session: true } })
+  if (!anchor) return new Map()
+  const published = await prisma.reportCard.findMany({
+    where: { schoolId, status: 'PUBLISHED', term: { session: anchor.session, isCurrent: false } },
+    select: { student: { select: { classLevel: true } }, term: { select: { name: true } } },
+  })
+  const frozen = new Map<string, string>()
+  for (const card of published) {
+    if (!frozen.has(card.student.classLevel)) frozen.set(card.student.classLevel, card.term.name)
+  }
+  return frozen
+}
+
+/**
+ * The Test ceiling to use when a caller doesn't send one. A flat 30 was the old default and
+ * is kept exactly at the standard maxScore of 100 (the familiar 30 Test / 70 Exam), but it
+ * is nonsense on a smaller total: the mobile class form posts maxScore 20, which paired with
+ * 30 produced a Test worth more than the whole subject and an Exam ceiling of −10. Scaling
+ * the same 30% keeps every existing default identical and makes the rest coherent.
+ */
+const defaultTestMaxScore = (maxScore: number): number =>
+  Math.max(1, Math.min(30, Math.round((Number(maxScore) || 0) * 0.3)))
+
+/**
+ * The Test/Exam split, checked — PRIMARY only, since it is the only school type that reads
+ * `testMaxScore` at all (secondary marks two sequences out of the same maxScore, and a
+ * university's 30/70 CA-Exam split is fixed in code).
+ *
+ * The exam ceiling is DERIVED (`maxScore − testMaxScore`), so the one thing that must hold
+ * is that the Test leaves room for an Exam. Nothing enforced this: the web form caps the
+ * input at `maxScore − 1`, but a form is a suggestion and the endpoint is what decides — a
+ * direct call could set Test 60 of a maxScore 50 and leave every exam mark unenterable
+ * against a negative ceiling.
+ *
+ * Returns an error message, or null when the pair is fine.
+ */
+function validatePrimaryScale(schoolType: string | undefined, maxScore: unknown, testMaxScore: unknown): string | null {
+  if (schoolType !== 'PRIMARY') return null
+  const max = Number(maxScore)
+  const test = Number(testMaxScore)
+  if (!Number.isFinite(max) || max < 2) return 'The subject total must be at least 2, so the Test and the Exam can each be worth something.'
+  if (!Number.isFinite(test) || test < 1) return 'The Test must be worth at least 1 mark.'
+  if (test >= max) return `The Test (${test}) must be less than the subject total (${max}) — the Exam is what is left over, so there would be nothing to sit.`
+  return null
+}
+
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const levels = await prisma.classLevel.findMany({
-      where: { schoolId },
-      orderBy: [{ order: 'asc' }, { name: 'asc' }],
+    const [levels, frozen] = await Promise.all([
+      prisma.classLevel.findMany({
+        where: { schoolId },
+        orderBy: [{ order: 'asc' }, { name: 'asc' }],
+      }),
+      frozenScaleClasses(schoolId),
+    ])
+    // `scaleLockedBy` is the closed term that settled this class's assessment settings (its
+    // mark totals AND its marks-vs-ratings mode) for the year, or null when they are still
+    // free to change. Sent so the Classes form can lock those fields and say why, rather
+    // than letting an admin type a number or flip a mode that will be refused.
+    // An unlocked class reports null however much history it has — the grant is what counts.
+    res.json({
+      classLevels: levels.map((l) => ({
+        ...l,
+        scaleLockedBy: l.scaleUnlockedAt == null ? (frozen.get(l.name) ?? null) : null,
+      })),
     })
-    res.json({ classLevels: levels })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -98,6 +184,15 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
     }
 
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
+
+    // Primary only — the Test must leave room for an Exam. Validated against the values
+    // actually about to be written, not the raw body, so an omitted field is checked as
+    // whatever it will default to rather than skipped.
+    const resolvedMaxScore = maxScore ? Number(maxScore) : 20
+    const resolvedTestMaxScore = testMaxScore ? Number(testMaxScore) : defaultTestMaxScore(resolvedMaxScore)
+    const scaleError = validatePrimaryScale(school?.type, resolvedMaxScore, resolvedTestMaxScore)
+    if (scaleError) { res.status(400).json({ message: scaleError }); return }
+
     const regEligible = isRegistrationClass(school?.type, name.trim())
     const regFee = regEligible && hndRegistrationFee !== undefined && hndRegistrationFee !== null && hndRegistrationFee !== ''
       ? Math.max(0, Math.round(Number(hndRegistrationFee)) || 0)
@@ -114,10 +209,10 @@ export const createClassLevel = async (req: AuthRequest, res: Response) => {
         abbreviation: abbreviation?.trim() || null,
         hasStream: hasStream ?? false,
         order: order ?? 0,
-        maxScore: maxScore ? Number(maxScore) : 20,
+        maxScore: resolvedMaxScore,
         // Primary only in practice (Test/Exam split); harmless default elsewhere since
         // secondary/university never read this field.
-        testMaxScore: testMaxScore ? Number(testMaxScore) : 30,
+        testMaxScore: resolvedTestMaxScore,
         feeAmount: Math.max(0, Math.round(Number(feeAmount)) || 0),
         hndRegistrationFee: regFee,
         departmentId: resolvedDepartmentId,
@@ -173,6 +268,54 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    // Primary only — the Test must leave room for an Exam. This is a PARTIAL update, so the
+    // pair is validated as the class will actually end up: a request changing only maxScore
+    // is checked against the testMaxScore already on file, which is exactly how you would
+    // otherwise cut the total down below a Test that was set earlier.
+    const scaleError = validatePrimaryScale(
+      school?.type,
+      maxScore !== undefined ? Number(maxScore) : level.maxScore,
+      testMaxScore !== undefined ? Number(testMaxScore) : level.testMaxScore,
+    )
+    if (scaleError) { res.status(400).json({ message: scaleError }); return }
+
+    // Once a term of this academic year has closed with published cards, HOW THIS CLASS IS
+    // ASSESSED is settled for the year — see frozenScaleClasses. That covers the mark
+    // ceilings and the marks-vs-ratings mode alike: a card already handed out states an
+    // average and a position, or states ratings and deliberately states neither, and
+    // switching afterwards makes the cards still in parents' hands describe a class that no
+    // longer exists.
+    //
+    // Only a genuine CHANGE is refused. Every other edit (rename, fee, order) re-sends these
+    // fields untouched, and saving a class without moving them has to keep working.
+    const scaleChanged =
+      (maxScore !== undefined && Number(maxScore) !== level.maxScore) ||
+      (testMaxScore !== undefined && Number(testMaxScore) !== level.testMaxScore)
+    // Compared AFTER resolveGradingMode, so a client sending COMPETENCY to a secondary class
+    // (where it resolves back to NUMERIC) is not treated as a change and refused for nothing.
+    const modeChanged =
+      gradingMode !== undefined && resolveGradingMode(gradingMode, school?.type) !== level.gradingMode
+    let consumeScaleUnlock = false
+    if (scaleChanged || modeChanged) {
+      const frozenBy = (await frozenScaleClasses(schoolId)).get(level.name)
+      if (frozenBy && level.scaleUnlockedAt == null) {
+        // Name the thing they actually tried to move, so the refusal points at the field
+        // they just edited rather than at the general idea of assessment settings.
+        const what = scaleChanged && modeChanged
+          ? 'its mark totals and whether it is marked or rated'
+          : modeChanged
+            ? 'whether it is marked or rated'
+            : 'its mark totals'
+        res.status(403).json({
+          message: `Report cards for ${level.name} have already been published for ${frozenBy}, so ${what} cannot change until the next academic year. Ask the superadmin to unlock this class if it really has to.`,
+        })
+        return
+      }
+      // A grant is spent on the change it was given for, so an unlock left open cannot be
+      // used again months later.
+      consumeScaleUnlock = level.scaleUnlockedAt != null
+    }
+
     const regEligible = isRegistrationClass(school?.type, name?.trim() || level.name)
 
     // A class is referenced BY NAME everywhere in this app (`Student.classLevel`,
@@ -218,12 +361,18 @@ export const updateClassLevel = async (req: AuthRequest, res: Response) => {
         : {}),
       ...(resolvedDepartmentId !== undefined ? { departmentId: resolvedDepartmentId } : {}),
       ...(programme !== undefined ? { programme: resolveProgramme(programme, school?.type) } : {}),
-      // Freely switchable both ways, unlike `programme` above. Marks and ratings live in
-      // separate columns on ReportEntry (score/seq vs grade), so flipping the mode hides the
-      // other one's data rather than destroying it, and flipping back restores it. Existing
-      // cards keep whatever average/position they had until their marks are next saved,
-      // which is when saveEntries clears them.
+      // Switchable both ways, unlike `programme` above: marks and ratings live in separate
+      // columns on ReportEntry (score/seq vs grade), so flipping the mode hides the other
+      // one's data rather than destroying it, and flipping back restores it. Existing cards
+      // keep whatever average/position they had until their marks are next saved, which is
+      // when saveEntries clears them.
+      //
+      // Free only while the year is still open, though — once a term has closed with
+      // published cards this is frozen with the ceilings (see the check above), because the
+      // cards already handed out state an average and a position, or deliberately do not.
       ...(gradingMode !== undefined ? { gradingMode: resolveGradingMode(gradingMode, school?.type) } : {}),
+      // Spend the superadmin's grant on this change (see the freeze check above).
+      ...(consumeScaleUnlock ? { scaleUnlockedAt: null } : {}),
     }
 
     const moved = { students: 0, subjects: 0, classMasters: 0, templates: templateRewrites.length }
