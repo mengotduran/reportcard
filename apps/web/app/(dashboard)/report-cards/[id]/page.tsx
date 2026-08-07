@@ -299,7 +299,16 @@ export default function ReportCardDetailPage() {
     }
   }
 
-  const avgMaxScore = subjects[0]?.maxScore ?? 20
+  // The scale the AVERAGE is on, which is not always the scale its SUBJECTS are on — only
+  // a university states a raw average; primary and secondary both state it out of 20.
+  // (`isUniversity` proper is declared below, past the null guard; this runs before it.)
+  const avgIsUniversity = reportCard?.school?.type === 'UNIVERSITY'
+  const avgMaxScore = avgIsUniversity ? (subjects[0]?.maxScore ?? 100) : 20
+  // Recomputed live as marks are typed, so it must match the API's saveEntries exactly or
+  // the figure jumps the moment it's saved: coefficient-weighted, and normalised per
+  // subject onto /20 for primary/secondary. Primary marks its subjects raw out of 100 but
+  // states the average out of 20, so skipping the normalisation showed 69.4 where the
+  // saved card says 13.9.
   const average = (() => {
     if (!subjects.length) return 0
     let totalWeighted = 0, totalCoeff = 0
@@ -308,7 +317,9 @@ export default function ReportCardDetailPage() {
       // Skip unless BOTH sequences are filled — API only sets score when seq1 AND seq2 are non-null
       if (!entry || entry.seq1Score == null || entry.seq2Score == null) continue
       const coeff = s.coefficient ?? 1
-      totalWeighted += (entry.score ?? 0) * coeff
+      const raw = entry.score ?? 0
+      const max = s.maxScore ?? 0
+      totalWeighted += (avgIsUniversity ? raw : (max > 0 ? (raw / max) * 20 : 0)) * coeff
       totalCoeff += coeff
     }
     return totalCoeff > 0 ? totalWeighted / totalCoeff : 0

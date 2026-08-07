@@ -147,7 +147,11 @@ export const setCurrentTerm = async (req: AuthRequest, res: Response) => {
 // truePassCgpaFor), since a CGPA scale's "passing" point already varies by what each
 // school configured there.
 const TRUE_PASS_MARK_SECONDARY = 10
-const TRUE_PASS_MARK_PRIMARY = 50
+// Primary's average is ALSO out of 20 now (it used to be a raw /100 mean, which is why this
+// was 50) — see the average calculation in reportcard.controller.ts saveEntries. Same point
+// on the scale, same constant. Kept as its own name so the two remain independently
+// adjustable if a school type's rule ever diverges again.
+const TRUE_PASS_MARK_PRIMARY = 10
 
 /** Pass / Trial / Repeat from a figure (annual average or CGPA) against the real pass mark
  *  and the school's own admin-configured trial floor. Trial still counts as promoted — only

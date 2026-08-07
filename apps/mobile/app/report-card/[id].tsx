@@ -315,7 +315,14 @@ export default function ReportCardDetailScreen() {
   // Class master can only add remarks once ALL sequences are filled
   const canEditRemarks = !isClassMaster || (isDraft && allSeqsFilled)
 
-  const avgMaxScore = subjects[0]?.maxScore ?? 20
+  // The scale the AVERAGE is on, which is not always the scale its SUBJECTS are on — only
+  // a university states a raw average; primary and secondary both state it out of 20.
+  const avgMaxScore = isUniversity ? (subjects[0]?.maxScore ?? 100) : 20
+  // Recomputed live as marks are typed, so it must match the API's saveEntries exactly or
+  // the figure jumps the moment it's saved: coefficient-weighted, and normalised per
+  // subject onto /20 for primary/secondary. Primary marks its subjects raw out of 100 but
+  // states the average out of 20, so skipping the normalisation showed 69.4 where the
+  // saved card says 13.9.
   const average = (() => {
     if (!subjects.length) return 0
     let totalWeighted = 0, totalCoeff = 0
@@ -324,7 +331,9 @@ export default function ReportCardDetailScreen() {
       // Skip unfilled subjects — matches API: `if (e.score == null) continue`
       if (!entry || entry.score === '') continue
       const coeff = s.coefficient ?? 1
-      totalWeighted += Number(entry.score) * coeff
+      const raw = Number(entry.score)
+      const max = s.maxScore ?? 0
+      totalWeighted += (isUniversity ? raw : (max > 0 ? (raw / max) * 20 : 0)) * coeff
       totalCoeff += coeff
     }
     return totalCoeff > 0 ? totalWeighted / totalCoeff : 0
@@ -332,7 +341,7 @@ export default function ReportCardDetailScreen() {
 
   // University only. Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors web +
   // PrintableReportCard logic. "Terms Average"/"Overall Grade"/"Position"/"Class Average"
-  // are primary/secondary concepts (a raw 0-100 score average and a class rank) and don't
+  // are primary/secondary concepts (a /20 score average and a class rank) and don't
   // apply to a university report card, which is graded and classified by GPA instead.
   const semGpaInfo = (() => {
     let pts = 0, cr = 0

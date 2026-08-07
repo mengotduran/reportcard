@@ -426,7 +426,12 @@ export default function AdminReportCardDetail() {
   // job and naming a teacher beside it points at the wrong person.
   const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY'
   const average = reportCard.average ?? 0
-  const avgMaxScore = subjects[0]?.maxScore ?? 20
+  // The scale the AVERAGE is on, which is not always the scale its SUBJECTS are on. Only a
+  // university states a raw average (out of the course's own maxScore); primary and
+  // secondary both state it out of 20 — primary does so even though its subjects are marked
+  // raw out of 100 (see saveEntries). Reading this off `subjects[0].maxScore` therefore fed
+  // gradeFromScore 100 for a /20 primary average and graded 13.9 as if it were 13.9/100.
+  const avgMaxScore = school?.type === 'UNIVERSITY' ? (subjects[0]?.maxScore ?? 100) : 20
   const gradeResult = gradeFromScore(average, avgMaxScore, gradingRanges)
 
   // Publish readiness (same rules as web + bulk-publish) — prefer the backend's
@@ -447,7 +452,7 @@ export default function AdminReportCardDetail() {
 
   // University only. Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors web +
   // PrintableReportCard logic. "Terms Average"/"Overall Grade"/"Position"/"Class Average"
-  // are primary/secondary concepts (a raw 0-100 score average and a class rank) and don't
+  // are primary/secondary concepts (a /20 score average and a class rank) and don't
   // apply to a university report card, which is graded and classified by GPA instead.
   const semGpaInfo = (() => {
     let pts = 0, cr = 0

@@ -1039,17 +1039,51 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       })
     )
 
-    // Primary: PLAIN average — Overall Total / Number of subjects, no coefficient weighting
-    // (the doc's stated formula; coefficient stays on Subject as a field but isn't read here).
-    // Everyone else: weighted average out of maxScore (e.g. 14.4/20) —
-    // average = Σ(score × coeff) / Σ(coeff)
+    // Primary: coefficient-weighted average, ALWAYS expressed out of 20 —
+    // average = Σ(score/maxScore × 20 × coeff) / Σ(coeff)
+    //
+    // Two things are going on, and they're independent:
+    //
+    //  1. Coefficients. Primary used to take a plain unweighted mean. Cameroon primary has
+    //     no national coefficient table (unlike the GCE-tied secondary system), but schools
+    //     of this kind do weight the core subjects — English/French/Maths above Arts/PE —
+    //     and `Subject.coefficient` was already being stored and set per subject, just never
+    //     read. It is now (school's decision, 2026-08).
+    //
+    //  2. The /20 normalisation. Primary marks are raw Test+Exam out of the class's own
+    //     maxScore (typically 100 = Test 30 + Exam 70), but the AVERAGE a Cameroonian
+    //     primary report card states is always out of 20 — so each subject is normalised to
+    //     /20 before weighting, rather than the average inheriting the raw scale. Done per
+    //     subject, not on the final total, so a class mixing maxScores (a /10 subject beside
+    //     a /100 one) still averages correctly.
+    //
+    // Every figure derived from `average` — class average, best average, annual average —
+    // is therefore /20 too, since they are all means/maxes over this same column.
+    //
+    // NOTE the pass mark that judges this average is now secondary's 10/20, not the old
+    // 50/100 — see TRUE_PASS_MARK_SECONDARY in term.controller.ts / promotionScale.controller.ts.
+    //
+    // `totalScore` deliberately stays the RAW sum of marks (the "Overall Total" a teacher
+    // adds up by hand, e.g. 694 across 10 subjects marked /100), NOT the weighted figure:
+    // it is a total of what was actually scored, and normalising it would make it
+    // reconcile with nothing on the page.
     let average: number | null
     let totalScore: number
     if (isPrimary) {
-      const filled = createdEntries.filter((e) => e.score != null)
-      const sum = filled.reduce((s, e) => s + e.score!, 0)
-      average = filled.length > 0 ? sum / filled.length : null
-      totalScore = sum
+      let totalWeighted20 = 0
+      let totalCoeff = 0
+      let rawSum = 0
+      for (const e of createdEntries) {
+        if (e.score == null) continue // skip unfilled subjects
+        const sub = subjectMap[e.subjectId]
+        const coeff = sub?.coefficient ?? 1
+        const max = sub?.maxScore ?? 0
+        totalWeighted20 += (max > 0 ? (e.score / max) * 20 : 0) * coeff
+        totalCoeff += coeff
+        rawSum += e.score
+      }
+      average = totalCoeff > 0 ? totalWeighted20 / totalCoeff : null
+      totalScore = rawSum
     } else {
       let totalWeighted = 0
       let totalCoeff = 0

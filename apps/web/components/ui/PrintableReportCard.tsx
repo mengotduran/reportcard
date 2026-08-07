@@ -766,9 +766,12 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     if (field === 'average')        return average.toFixed(1)
     if (field === 'position')       return position != null ? `${ordinalPos(position)}${classSize ? `/${classSize}` : ''}` : '—'
     if (field === 'classAverage')   return classAverage != null ? classAverage.toFixed(1) : '—'
-    // University/primary average is already a raw 0-100 mark; secondary's is /20 and
-    // needs scaling up to the 0-100 range calculateGrade expects.
-    if (field === 'grade')          return calculateGrade((school.type === 'UNIVERSITY' || school.type === 'PRIMARY') ? average : (average / 20) * 100)
+    // Only a UNIVERSITY average is already a raw 0-100 mark. Primary's is normalised to /20
+    // (like secondary's) even though its individual subjects are marked on a raw scale — see
+    // saveEntries — so it scales up to the 0-100 range calculateGrade expects, exactly as
+    // secondary's does. Leaving primary on the university branch read a perfectly good
+    // 13.9/20 as 13.9/100, i.e. an F.
+    if (field === 'grade')          return calculateGrade(school.type === 'UNIVERSITY' ? average : (average / 20) * 100)
     if (field === 'classSize')      return classSize != null ? String(classSize) : '—'
     // Annual figures: present only on the session's FINAL term (see annualAverage in
     // reportcard.controller.ts), so these dash out on a First/Second Term card.
@@ -779,9 +782,16 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
     // The school's OWN wording for this term's average, taken from its grading scale —
     // matched on the band's lower bound, the same convention isFailingScore uses (a
     // coefficient-weighted average is fractional and falls through min..max containment).
+    //
+    // Normalised onto the BANDS' own units first, which is not always the average's own.
+    // A primary school marks its subjects on a raw scale (so its bands run 0-100) but
+    // states the average out of 20 — matching one against the other directly dropped every
+    // primary average into the bottom band, printing "Fail" on a card averaging 13.9/20.
     if (field === 'appreciation') {
-      const scoreFor20 = average
-      const band = [...bands].sort((a, b) => b.minScore - a.minScore).find(b => scoreFor20 >= b.minScore)
+      const bandScale = bands.some((b) => b.maxScore > 20) ? 100 : 20
+      const avgScale = school.type === 'UNIVERSITY' ? 100 : 20
+      const scoreForBands = (average / avgScale) * bandScale
+      const band = [...bands].sort((a, b) => b.minScore - a.minScore).find(b => scoreForBands >= b.minScore)
       return band?.remark?.trim() || '—'
     }
     if (field === 'gpa')            return gpaInfo.gpa.toFixed(2)

@@ -4,11 +4,12 @@ import { AuthRequest } from '../middleware/auth'
 import { parseStoredScale, truePassCgpaFor } from '../utils/gradingScale'
 
 const TRUE_PASS_MARK_SECONDARY = 10 // out of 20
-// Out of 100 — the same fixed pass mark as secondary's 10/20, scaled to primary's raw
-// Test+Exam scale (see reportcard.controller.ts saveEntries). Not derived from the
-// school's own grading scale: primary has no classificationBands (university-only), and
-// this fixed-and-not-editable design is deliberate, same as secondary's.
-const TRUE_PASS_MARK_PRIMARY = 50
+// Also out of 20: primary's average is normalised to /20 regardless of the raw Test+Exam
+// scale its subjects are marked on (see reportcard.controller.ts saveEntries). This was 50
+// while that average was a raw /100 mean. Not derived from the school's own grading scale:
+// primary has no classificationBands (university-only), and this fixed-and-not-editable
+// design is deliberate, same as secondary's.
+const TRUE_PASS_MARK_PRIMARY = 10
 
 /** Same rule endAcademicYear uses: a fixed mark for primary/secondary (10/20, 50/100),
  *  otherwise the school's own classification "Pass" band lower bound (university).
