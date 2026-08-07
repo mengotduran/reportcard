@@ -510,6 +510,18 @@ export default function MarksEntryScreen() {
             <View style={s.colRemark}><Text style={s.headerText}>{t('PERFORMANCE')}</Text></View>
           </View>
 
+          {rows.length === 0 && (
+            <View style={[s.center, { paddingTop: 60 }]}>
+              <Ionicons name="people-outline" size={40} color={colors.textMuted} />
+              <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 10 }}>
+                {t('No students in this class yet.')}
+              </Text>
+              <Text style={{ fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: 4 }}>
+                {t('Add students to')} {decodedClass} {t('before entering marks.')}
+              </Text>
+            </View>
+          )}
+
           {rows.map((row, index) => {
             const num = Number(row.score)
             const hasScore = row.score !== ''
@@ -588,14 +600,20 @@ export default function MarksEntryScreen() {
           })}
         </ScrollView>
 
-        {/* Footer */}
-        <View style={s.footer}>
-          <TouchableOpacity style={[s.saveBtn, (saving || editableRows.length === 0) && s.disabled]} onPress={handleSaveAll} disabled={saving || editableRows.length === 0} activeOpacity={0.8}>
-            {saving
-              ? <ActivityIndicator color="#fff" />
-              : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? t('All Cards Published') : t('Save All Marks')}</Text></>}
-          </TouchableOpacity>
-        </View>
+        {/* Footer — nothing to save or publish when there's no one on the roster yet,
+            so the button (which used to read "All Cards Published", a straight lie in
+            that case: 0 editable rows means either "everyone's published" OR "no
+            students exist", and those are very different things to tell a teacher) is
+            dropped entirely rather than shown disabled. */}
+        {rows.length > 0 && (
+          <View style={s.footer}>
+            <TouchableOpacity style={[s.saveBtn, (saving || editableRows.length === 0) && s.disabled]} onPress={handleSaveAll} disabled={saving || editableRows.length === 0} activeOpacity={0.8}>
+              {saving
+                ? <ActivityIndicator color="#fff" />
+                : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? t('All Cards Published') : t('Save All Marks')}</Text></>}
+            </TouchableOpacity>
+          </View>
+        )}
         </>
         )}
       </View>

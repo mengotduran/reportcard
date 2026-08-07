@@ -21,6 +21,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     paddingVertical: 14, paddingHorizontal: 14, marginBottom: 10,
   },
+  rowDisabled: { opacity: 0.55 },
   rowTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
   rowSubtitle: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   badgeRow: { flexDirection: 'row', gap: 6, marginTop: 6 },
@@ -95,7 +96,11 @@ export default function MyCoursesScreen() {
         renderItem={({ item: c }) => {
           const color = deptColor(c.departmentName ?? c.classLevelName)
           const subtitle = [c.departmentName, c.classLevelName].filter(Boolean).join(' · ')
+          // Only a marks row (c.subjectId set) actually needs students to be useful — the
+          // class-master "General Remarks" row is about the class itself, not its roster.
+          const noStudents = !!c.subjectId && c.studentCount === 0
           const goTo = () => {
+            if (noStudents) return
             if (c.subjectId && term) {
               router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
             } else if (isClassMaster) {
@@ -106,11 +111,20 @@ export default function MyCoursesScreen() {
           }
           const isCurrentTerm = !!c.term && c.term === term?.name
           return (
-            <TouchableOpacity style={[styles.row, { borderLeftColor: color }]} onPress={goTo} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={[styles.row, { borderLeftColor: color }, noStudents && styles.rowDisabled]}
+              onPress={goTo} activeOpacity={noStudents ? 1 : 0.7} disabled={noStudents}
+            >
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowTitle} numberOfLines={1}>{c.subjectName ?? t('Class Oversight')}</Text>
                 <Text style={styles.rowSubtitle} numberOfLines={1}>{subtitle}</Text>
-                {!!c.term && (
+                {noStudents ? (
+                  <View style={styles.badgeRow}>
+                    <View style={styles.termBadge}>
+                      <Text style={styles.termBadgeText}>{t('No students yet')}</Text>
+                    </View>
+                  </View>
+                ) : !!c.term && (
                   <View style={styles.badgeRow}>
                     <View style={styles.termBadge}>
                       <Text style={styles.termBadgeText}>{t(c.term)}</Text>

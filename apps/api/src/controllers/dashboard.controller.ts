@@ -5,6 +5,28 @@ import { AuthRequest } from '../middleware/auth'
 
 const WEEKS = 8
 
+/**
+ * masterClassLevel is never in the JWT (see utils/jwt.ts — id/role/schoolId only), so
+ * `req.user.masterClassLevel` is always undefined; every read of it below used to fall
+ * straight through to "no master class", silently dropping a class master's own class
+ * the moment they had zero active TeacherSubject rows on it (a brand new class, staffed
+ * before it has subjects — a completely normal order for primary). Always read fresh.
+ *
+ * `departments` is included too: for a PRIMARY school it's the class-team roster (see
+ * classTeamRoster in classlevel.controller.ts) — a non-master team member has no
+ * masterClassLevel and, on a subject-less class, no TeacherSubject rows either, so it's
+ * the only record of their membership. Secondary/university use the same field for real
+ * department placement, not class names, so it's only trusted here for PRIMARY schools.
+ */
+async function resolveTeacherClassLevels(userId: string, schoolId: string): Promise<{ masterClassLevel: string | null; primaryTeamClasses: string[] }> {
+  const [me, school] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { masterClassLevel: true, departments: true } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
+  ])
+  const primaryTeamClasses = school?.type === 'PRIMARY' && Array.isArray(me?.departments) ? me!.departments as string[] : []
+  return { masterClassLevel: me?.masterClassLevel ?? null, primaryTeamClasses }
+}
+
 function getWeekLabels(): string[] {
   const now = new Date()
   return Array.from({ length: WEEKS }, (_, i) => {
@@ -83,9 +105,10 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id
     const schoolId = req.user!.schoolId
-    const masterClassLevel = (req.user as any).masterClassLevel as string | null
 
     if (!schoolId) { res.status(400).json({ message: 'No school' }); return }
+
+    const { masterClassLevel, primaryTeamClasses } = await resolveTeacherClassLevels(userId, schoolId)
 
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - WEEKS * 7)
@@ -96,11 +119,13 @@ export const getTeacherChartStats = async (req: AuthRequest, res: Response) => {
       include: { subject: { select: { classLevel: true, name: true } } },
     })
 
-    const classLevels = [...new Set(
-      masterClassLevel
-        ? [masterClassLevel]
-        : teacherSubjects.map(ts => ts.subject.classLevel)
-    )]
+    // A union, not an either/or — a class master (or primary team member) can also teach
+    // subjects in a different class, and that class shouldn't disappear from their charts.
+    const classLevels = [...new Set([
+      ...teacherSubjects.map(ts => ts.subject.classLevel),
+      ...(masterClassLevel ? [masterClassLevel] : []),
+      ...primaryTeamClasses,
+    ])]
 
     const [studentCountRows, recentStudents, studentsBase] = await Promise.all([
       Promise.all(classLevels.map(cl =>
@@ -140,9 +165,10 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id
     const schoolId = req.user!.schoolId
-    const masterClassLevel = (req.user as any).masterClassLevel as string | null
 
     if (!schoolId) { res.status(400).json({ message: 'No school' }); return }
+
+    const { masterClassLevel, primaryTeamClasses } = await resolveTeacherClassLevels(userId, schoolId)
 
     const teacherSubjects = await prisma.teacherSubject.findMany({
       where: { userId },
@@ -170,15 +196,28 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
     const classLevelNames = [...new Set([
       ...relevantTeacherSubjects.map(ts => ts.subject.classLevel),
       ...(masterClassLevel ? [masterClassLevel] : []),
+      // A primary team member with no subject assigned yet (a brand new class, staffed
+      // before it has any) has no TeacherSubject row and, unless they're also the master,
+      // nothing else naming their class either — departments is the only record of it.
+      ...primaryTeamClasses,
     ])]
 
-    const classLevels = classLevelNames.length > 0
-      ? await prisma.classLevel.findMany({
-          where: { schoolId, name: { in: classLevelNames } },
-          include: { department: { select: { name: true } } },
-        })
-      : []
+    const [classLevels, studentCountRows] = await Promise.all([
+      classLevelNames.length > 0
+        ? prisma.classLevel.findMany({
+            where: { schoolId, name: { in: classLevelNames } },
+            include: { department: { select: { name: true } } },
+          })
+        : Promise.resolve([]),
+      // Batched once per distinct class, reused by every row for that class below — not
+      // one query per subject. Lets the app grey out "enter marks" before the teacher
+      // taps into an empty class, rather than only finding out once inside it.
+      Promise.all(classLevelNames.map(cl =>
+        prisma.student.count({ where: { schoolId, classLevel: cl, isActive: true } }).then(count => [cl, count] as const)
+      )),
+    ])
     const classLevelByName = new Map(classLevels.map(cl => [cl.name, cl]))
+    const studentCountByClass = new Map(studentCountRows)
 
     interface ClassRow {
       id: string
@@ -188,6 +227,7 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
       departmentName: string | null
       isMasterClass: boolean
       term: string | null
+      studentCount: number
     }
 
     const classes: ClassRow[] = relevantTeacherSubjects.map(ts => ({
@@ -198,18 +238,25 @@ export const getTeacherClasses = async (req: AuthRequest, res: Response) => {
       departmentName: classLevelByName.get(ts.subject.classLevel)?.department?.name ?? null,
       isMasterClass: ts.subject.classLevel === masterClassLevel,
       term: ts.subject.term,
+      studentCount: studentCountByClass.get(ts.subject.classLevel) ?? 0,
     }))
 
-    // A class master's own class stays visible even if they teach no subject there.
-    if (masterClassLevel && !classes.some(c => c.classLevelName === masterClassLevel)) {
+    // A class master's own class stays visible even if they teach no subject there —
+    // likewise a primary team member (master or not) on a class with no subjects yet.
+    const namedClasses = new Set(classes.map(c => c.classLevelName))
+    const fallbackClasses = [...new Set([...(masterClassLevel ? [masterClassLevel] : []), ...primaryTeamClasses])]
+    for (const cl of fallbackClasses) {
+      if (namedClasses.has(cl)) continue
+      namedClasses.add(cl)
       classes.push({
-        id: `master-${masterClassLevel}`,
+        id: `team-${cl}`,
         subjectId: null,
         subjectName: null,
-        classLevelName: masterClassLevel,
-        departmentName: classLevelByName.get(masterClassLevel)?.department?.name ?? null,
-        isMasterClass: true,
+        classLevelName: cl,
+        departmentName: classLevelByName.get(cl)?.department?.name ?? null,
+        isMasterClass: cl === masterClassLevel,
         term: null,
+        studentCount: studentCountByClass.get(cl) ?? 0,
       })
     }
 

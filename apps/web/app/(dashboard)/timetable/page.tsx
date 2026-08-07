@@ -540,49 +540,64 @@ export default function TimetablePage() {
     ? teachingPeriods.filter((p) => p.programme === sittingOfClass(effectiveClassLevel))
     : teachingPeriods
 
-  // How many periods actually exist back-to-back from the selected start, within THIS
+  // How many periods actually fit back-to-back from the selected start, within THIS
   // sitting's own structure — a double period can only be as long as the structure defines,
-  // never longer. Stops counting at the first gap (a break, or simply no period defined
-  // past that point), so picking the very last Evening period caps this at 1, not 20.
+  // never longer. Measured in actual continuous minutes up to the first gap (a break, or
+  // simply no period defined past that point), not in how many rows the periods table
+  // happens to be split into — a school that defines one row per 100-minute double period
+  // (rather than two 50-minute rows) still gets 2 here, not 1, as long as "minutes per
+  // period" is set to 50. Without a period length there's no unit to count in, so a single
+  // row is the most that can ever be offered.
   const maxPeriodsFromStart = (() => {
     if (!slotForm.periodId) return MAX_PERIODS_PER_ROW
     const idx = availableTeachingPeriods.findIndex((p) => p.id === slotForm.periodId)
     if (idx === -1) return MAX_PERIODS_PER_ROW
-    let count = 1
+    if (!periodLen) return 1
+    let end = availableTeachingPeriods[idx].endTime
     for (let i = idx; i < availableTeachingPeriods.length - 1; i++) {
-      if (availableTeachingPeriods[i].endTime === availableTeachingPeriods[i + 1].startTime) count++
+      if (availableTeachingPeriods[i].endTime === availableTeachingPeriods[i + 1].startTime) end = availableTeachingPeriods[i + 1].endTime
       else break
     }
-    return count
+    return Math.max(1, Math.floor(durationMinutes(availableTeachingPeriods[idx].startTime, end) / periodLen))
   })()
   const exceedsStructureMessage = (slotForm.mode === 'subject' && !WEEKEND_DAYS.has(slotForm.dayOfWeek) && slotForm.periodId && slotForm.numPeriods > maxPeriodsFromStart)
     ? `${tr('Only')} ${maxPeriodsFromStart} ${maxPeriodsFromStart === 1 ? tr('period is') : tr('periods are')} ${tr('defined from this start — add more in "Set Up Periods" first.')}`
     : ''
 
-  // Live cross-teacher clash check. The scarce thing here is a TIME SLOT for
-  // this class (a class of students can't be in two lessons at once) — not
-  // any particular course, which is why this gates the Period picker, not the
-  // Course one: whichever course gets picked next is free to be any of them.
-  const periodConflict = (p: TimetablePeriod) =>
-    (activeTeacher && effectiveClassLevel)
-      ? schoolSlots.find((o) =>
-          o.teacherId !== activeTeacher.id && o.classLevel === effectiveClassLevel &&
-          o.dayOfWeek === slotForm.dayOfWeek && timesOverlap(p.startTime, p.endTime, o.startTime, o.endTime)
-        )
-      : undefined
+  // Live clash check, for every school type: who already holds this exact time on this
+  // day. Checked in two steps, since they're two different scarce resources —
+  // 1) the CURRENT teacher's own other slots first: nobody, not even them, can be in two
+  //    places at once, whatever class or label the other slot is under.
+  // 2) then any OTHER teacher already running the SAME class then (a class of students
+  //    can't be in two lessons at once) — which is why this gates the Period picker, not
+  //    the Course one: whichever course gets picked next is free to be any of them.
+  // One function so the period dropdown and the live banner below can never drift apart.
+  const slotClash = (start: string, end: string): { self: boolean; teacherLabel: string; startTime: string; endTime: string } | undefined => {
+    const selfClash = slots.find((o) =>
+      o.id !== editingSlotId && o.dayOfWeek === slotForm.dayOfWeek && timesOverlap(start, end, o.startTime, o.endTime)
+    )
+    if (selfClash) return { self: true, teacherLabel: tr('the current teacher'), startTime: selfClash.startTime, endTime: selfClash.endTime }
+    if (!activeTeacher || !effectiveClassLevel) return undefined
+    const otherClash = schoolSlots.find((o) =>
+      o.teacherId !== activeTeacher.id && o.classLevel === effectiveClassLevel &&
+      o.dayOfWeek === slotForm.dayOfWeek && timesOverlap(start, end, o.startTime, o.endTime)
+    )
+    return otherClash ? { self: false, teacherLabel: otherClash.teacherName, startTime: otherClash.startTime, endTime: otherClash.endTime } : undefined
+  }
+
+  const periodConflict = (p: TimetablePeriod) => slotClash(p.startTime, p.endTime)
 
   // Same check against whatever period is actually selected right now — a
   // fallback safety net (e.g. editing a slot whose class just changed), since
   // the Period picker above should normally have already kept this from
   // happening by disabling the option in the first place.
-  const modalConflict = (slotForm.mode === 'subject' && activeTeacher && effectiveClassLevel && slotForm.startTime && slotForm.endTime)
-    ? schoolSlots.find((o) =>
-        o.teacherId !== activeTeacher.id && o.classLevel === effectiveClassLevel &&
-        o.dayOfWeek === slotForm.dayOfWeek && timesOverlap(slotForm.startTime, slotForm.endTime, o.startTime, o.endTime)
-      )
+  const modalConflict = (slotForm.mode === 'subject' && slotForm.startTime && slotForm.endTime)
+    ? slotClash(slotForm.startTime, slotForm.endTime)
     : undefined
   const modalConflictMessage = modalConflict
-    ? `${tr('This period is already taken')} — ${modalConflict.teacherName} ${tr('is already teaching')} ${effectiveClassLevel} ${tr('on')} ${tr(dayLabel(slotForm.dayOfWeek))} ${tr('at')} ${modalConflict.startTime}-${modalConflict.endTime}`
+    ? modalConflict.self
+      ? `${tr('This period is already taken by the current teacher')} (${modalConflict.startTime}-${modalConflict.endTime}).`
+      : `${tr('This period is already taken')} — ${modalConflict.teacherLabel} ${tr('is already teaching')} ${effectiveClassLevel} ${tr('on')} ${tr(dayLabel(slotForm.dayOfWeek))} ${tr('at')} ${modalConflict.startTime}-${modalConflict.endTime}`
     : ''
 
   // A slot already on the grid keeps its own course selectable even when that course is out
@@ -936,8 +951,9 @@ export default function TimetablePage() {
                   className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition">
                   <Clock size={15} /> {tr('History')}
                 </button>
-                <button onClick={openAddSlot}
-                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition">
+                <button onClick={openAddSlot} disabled={teachingPeriods.length === 0}
+                  title={teachingPeriods.length === 0 ? tr('Set up your period structure first ("Set Up Periods")') : undefined}
+                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent">
                   <Plus size={16} /> {tr('Add Slot')}
                 </button>
                 <button onClick={handleSaveTimetable} disabled={saving}
@@ -946,6 +962,16 @@ export default function TimetablePage() {
                 </button>
               </div>
             </div>
+
+            {teachingPeriods.length === 0 && (
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                <p className="text-sm text-amber-800">{tr("This school hasn't set up its period structure yet — slots can't be added until it is.")}</p>
+                <button onClick={() => { setPeriodsSitting('DAY'); resetPendingPeriodRow(periods.filter((p) => p.programme === 'DAY')); setShowPeriodsModal(true) }}
+                  className="flex items-center gap-2 border border-amber-300 bg-white text-amber-900 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-100 transition flex-shrink-0">
+                  <Clock size={14} /> {tr('Set Up Periods')}
+                </button>
+              </div>
+            )}
 
             {slotsLoading ? (
               <div className="text-center py-12 text-muted-foreground text-sm">{tr('Loading...')}</div>
@@ -1117,7 +1143,7 @@ export default function TimetablePage() {
                             const clash = periodConflict(p)
                             return (
                               <option key={p.id} value={p.id} disabled={!!clash}>
-                                {p.startTime}{clash ? ` (${tr('taken')} — ${clash.teacherName})` : ''}
+                                {p.startTime}{clash ? ` (${tr('taken by')} ${clash.teacherLabel})` : ''}
                               </option>
                             )
                           })}

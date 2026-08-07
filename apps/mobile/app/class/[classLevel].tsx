@@ -6,7 +6,7 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { getSubjects, Subject } from '@/lib/api/reportcards'
+import { getSubjects, Subject, getClassOverview } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { seqFull } from '@/lib/sequences'
@@ -21,6 +21,13 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     borderBottomWidth: 1, borderBottomColor: '#ede9fe',
   },
   remarksBarText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#7c3aed' },
+  noStudentsBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#fffbeb', paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#fde68a',
+  },
+  noStudentsBarText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400e' },
+  rowDisabled: { opacity: 0.55 },
   seqContainer: {
     backgroundColor: colors.card,
     padding: 16,
@@ -81,6 +88,7 @@ export default function ClassScreen() {
   const navigation = useNavigation()
   const { user, school } = useAuthStore()
   const [subjects, setSubjects] = useState<Subject[]>([])
+  const [studentCount, setStudentCount] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedSeq, setSelectedSeq] = useState(0)
 
@@ -94,15 +102,20 @@ export default function ClassScreen() {
   }, [decodedClass])
 
   useFocusEffect(useCallback(() => {
-    getSubjects()
-      .then((data) => {
+    Promise.all([
+      getSubjects().then((data) => {
         // A course scoped to one semester (university) only counts for that
         // semester; a subject with no term (primary/secondary) always counts.
         const filtered = data.subjects.filter((s) => s.classLevel === decodedClass && (s.term == null || s.term === termName))
         setSubjects(filtered)
-      })
-      .finally(() => setLoading(false))
-  }, [decodedClass, termName]))
+      }),
+      // Whether there's anyone to grade — gates whether tapping into a subject below is
+      // allowed at all, same rule as My Classes.
+      termId ? getClassOverview(termId, decodedClass).then((r) => setStudentCount(r.students.length)) : Promise.resolve(),
+    ]).finally(() => setLoading(false))
+  }, [decodedClass, termName, termId]))
+
+  const noStudents = studentCount === 0
 
   return (
     <View style={styles.container}>
@@ -153,6 +166,15 @@ export default function ClassScreen() {
         </View>
       </View>
 
+      {/* No students yet — every subject below would open onto an empty marks sheet, so
+          say so up front rather than letting the teacher discover it one tap at a time. */}
+      {noStudents && subjects.length > 0 && (
+        <View style={styles.noStudentsBar}>
+          <Ionicons name="people-outline" size={16} color="#92400e" />
+          <Text style={styles.noStudentsBarText}>{t('No students in this class yet — add students before entering marks.')}</Text>
+        </View>
+      )}
+
       {/* Subject list */}
       <FlatList
         data={subjects}
@@ -166,13 +188,15 @@ export default function ClassScreen() {
         }
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={styles.row}
-            onPress={() =>
+            style={[styles.row, noStudents && styles.rowDisabled]}
+            onPress={() => {
+              if (noStudents) return
               router.push(
                 `/marks/${encodeURIComponent(item.id)}?classLevel=${encodeURIComponent(decodedClass)}&termId=${termId}&termName=${encodeURIComponent(termName ?? '')}&subjectName=${encodeURIComponent(item.name)}&sequence=${selectedSeq}`
               )
-            }
-            activeOpacity={0.7}
+            }}
+            activeOpacity={noStudents ? 1 : 0.7}
+            disabled={noStudents}
           >
             <View style={styles.subjectIcon}>
               <Text style={styles.subjectIconText}>{item.name.charAt(0)}</Text>

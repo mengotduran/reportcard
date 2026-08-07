@@ -175,6 +175,7 @@ function TeacherHome() {
   const todayKey = now.toDateString()
 
   const goToClass = (c: TeacherClassRow) => {
+    if (c.subjectId && c.studentCount === 0) return
     if (c.subjectId && term) {
       router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
     } else if (isClassMaster) {
@@ -185,7 +186,9 @@ function TeacherHome() {
   }
 
   const initials = (school?.name ?? 'S').split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
-  const shown = classes.slice(0, 4)
+  // Nicely, not exhaustively — a teacher on many classes gets a taste here and the rest
+  // on My Classes, which already lists every one of them ("view all N" below).
+  const shown = classes.slice(0, 3)
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ paddingBottom: space.xl }} showsVerticalScrollIndicator={false}>
@@ -280,21 +283,27 @@ function TeacherHome() {
               {t("You haven't been assigned any classes yet.")}
             </Text>
           ) : (
-            shown.map((c, i) => (
-              <TouchableOpacity
-                key={c.id}
-                onPress={() => goToClass(c)}
-                activeOpacity={0.7}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, borderTopWidth: i === 0 ? 0 : hairlineWidth, borderColor: colors.hairline }}
-              >
-                <Text style={[type.microLabel, { color: colors.textFaint, width: 16 }]}>{String(i + 1).padStart(2, '0')}</Text>
-                <View style={{ flex: 1, marginLeft: space.md }}>
-                  <Text style={[type.itemTitle, { color: colors.text }]} numberOfLines={1}>{c.subjectName ?? t('Class oversight')}</Text>
-                  {!!c.departmentName && <Text style={[type.microLabel, { color: colors.textFaint, marginTop: 2 }]} numberOfLines={1}>{c.departmentName.toLowerCase()}</Text>}
-                </View>
-                <Text style={[type.microLabel, { color: colors.brassInk, marginLeft: space.sm }]}>{shortCode(c.classLevelName)}</Text>
-              </TouchableOpacity>
-            ))
+            shown.map((c, i) => {
+              const noStudents = !!c.subjectId && c.studentCount === 0
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  onPress={() => goToClass(c)}
+                  activeOpacity={noStudents ? 1 : 0.7}
+                  disabled={noStudents}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, borderTopWidth: i === 0 ? 0 : hairlineWidth, borderColor: colors.hairline, opacity: noStudents ? 0.5 : 1 }}
+                >
+                  <Text style={[type.microLabel, { color: colors.textFaint, width: 16 }]}>{String(i + 1).padStart(2, '0')}</Text>
+                  <View style={{ flex: 1, marginLeft: space.md }}>
+                    <Text style={[type.itemTitle, { color: colors.text }]} numberOfLines={1}>{c.subjectName ?? t('Class oversight')}</Text>
+                    <Text style={[type.microLabel, { color: colors.textFaint, marginTop: 2 }]} numberOfLines={1}>
+                      {noStudents ? t('No students yet') : (c.departmentName ? c.departmentName.toLowerCase() : '')}
+                    </Text>
+                  </View>
+                  <Text style={[type.microLabel, { color: colors.brassInk, marginLeft: space.sm }]}>{shortCode(c.classLevelName)}</Text>
+                </TouchableOpacity>
+              )
+            })
           )}
           {classes.length > 0 && (
             <TouchableOpacity onPress={() => router.push('/my-courses' as any)} style={{ paddingTop: space.md, paddingBottom: space.sm }}>

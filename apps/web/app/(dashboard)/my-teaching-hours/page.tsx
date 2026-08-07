@@ -10,7 +10,7 @@ import { formatHours } from '@/lib/formatHours'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
-import { CalendarOff, Trash2, X } from 'lucide-react'
+import { CalendarOff, Trash2, X, ChevronRight } from 'lucide-react'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { onRealtime } from '@/lib/socket'
 import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
@@ -115,6 +115,13 @@ export default function MyTeachingHoursPage() {
     }
   }
 
+  // One row, not one per subject — a teacher on several courses used to get the whole
+  // list rendered here before anything else on the page did. The rest live behind
+  // "See all" on /my-coverage instead. The one shown is whichever most needs a look:
+  // UNDER first, then OVER, EXACT, and finally NO_TARGET (nothing to act on) last.
+  const URGENCY: Record<CoverageStatus, number> = { UNDER: 0, OVER: 1, EXACT: 2, NO_TARGET: 3 }
+  const headline = rows.length > 0 ? [...rows].sort((a, b) => URGENCY[a.status] - URGENCY[b.status])[0] : undefined
+
   const handleDeleteAbsence = async (id: string) => {
     try {
       await deleteAbsenceApi(id)
@@ -153,49 +160,87 @@ export default function MyTeachingHoursPage() {
               <p className="text-muted-foreground text-sm">{t('No required-hours target has been set for any of your subjects yet.')}</p>
             </div>
           ) : (
-            <div className="bg-card rounded-xl border border-border overflow-hidden mb-8">
-              <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
-                <thead className="bg-muted border-b border-border">
-                  <tr>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{isUniversity ? t('Course') : t('Subject')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Required')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Taught so far')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Projected / Final')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Status')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {rows.map((r) => (
-                    <tr key={r.subjectId} className="hover:bg-hover/40 transition">
-                      <td className="px-5 py-3">
-                        <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
-                        <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(r.classLevel)}{r.term ? ` · ${r.term}` : ''}</span>
-                        {/* The figures across this row are the COURSE's, which is what the
-                            target measures. When someone else also taught it, the teacher's
-                            own share is spelled out — otherwise a teacher who joined in
-                            November looks as though they missed everything before that. */}
-                        {r.contributors.length > 1 && (() => {
-                          const mine = r.contributors.find((c) => c.teacherId === user?.id)
-                          return mine ? (
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {r.contributors.length} {t('teachers on this course')}
-                            </p>
-                          ) : null
-                        })()}
-                      </td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.projectedFinalHours)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>
-                          {t(r.status)}
-                        </span>
-                      </td>
+            <>
+              {/* Full table — desktop only. A row per course is compact enough there that
+                  the whole list never "floods" the page the way it does at phone width. */}
+              <div className="hidden md:block bg-card rounded-xl border border-border overflow-hidden mb-8">
+                <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
+                  <thead className="bg-muted border-b border-border">
+                    <tr>
+                      <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{isUniversity ? t('Course') : t('Subject')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Required')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Taught so far')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Projected / Final')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Status')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table></div>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {rows.map((r) => (
+                      <tr key={r.subjectId} className="hover:bg-hover/40 transition">
+                        <td className="px-5 py-3">
+                          <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
+                          <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(r.classLevel)}{r.term ? ` · ${r.term}` : ''}</span>
+                          {/* The figures across this row are the COURSE's, which is what the
+                              target measures. When someone else also taught it, the teacher's
+                              own share is spelled out — otherwise a teacher who joined in
+                              November looks as though they missed everything before that. */}
+                          {r.contributors.length > 1 && (() => {
+                            const mine = r.contributors.find((c) => c.teacherId === user?.id)
+                            return mine ? (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {r.contributors.length} {t('teachers on this course')}
+                              </p>
+                            ) : null
+                          })()}
+                        </td>
+                        <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
+                        <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
+                        <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.projectedFinalHours)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>
+                            {t(r.status)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table></div>
+              </div>
+
+              {/* Phone-width only — one course, not the whole list, plus a link to the
+                  full set on its own page. Same headline pick (most urgent status first)
+                  the mobile app uses on its Attendance tab. */}
+              <div className="md:hidden bg-card rounded-xl border border-border overflow-hidden mb-8">
+                {headline && (
+                  <div className="px-5 py-4">
+                    <span className="text-sm font-medium text-foreground">{headline.subjectName}</span>
+                    <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(headline.classLevel)}{headline.term ? ` · ${headline.term}` : ''}</span>
+                    <div className="flex items-center gap-5 mt-3">
+                      <div><p className="text-xs text-muted-foreground">{t('Required')}</p><p className="text-sm font-semibold text-foreground">{headline.requiredHours != null ? formatHours(headline.requiredHours) : '—'}</p></div>
+                      <div><p className="text-xs text-muted-foreground">{t('Taught so far')}</p><p className="text-sm font-semibold text-foreground">{formatHours(headline.taughtHours)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">{headline.isFinal ? t('Final') : t('Projected')}</p><p className="text-sm font-semibold text-foreground">{formatHours(headline.projectedFinalHours)}</p></div>
+                    </div>
+                    <span className={`inline-block mt-3 px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[headline.status]}`}>
+                      {t(headline.status)}
+                    </span>
+                    {headline.contributors.length > 1 && (() => {
+                      const mine = headline.contributors.find((c) => c.teacherId === user?.id)
+                      return mine ? (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {headline.contributors.length} {t('teachers on this course')}
+                        </p>
+                      ) : null
+                    })()}
+                  </div>
+                )}
+                {rows.length > 1 && (
+                  <button onClick={() => router.push('/my-coverage')}
+                    className="w-full flex items-center justify-center gap-1.5 py-3 text-sm font-medium text-primary hover:bg-hover/40 transition border-t border-border">
+                    {t('See all courses')} ({rows.length}) <ChevronRight size={16} />
+                  </button>
+                )}
+              </div>
+            </>
           )}
 
           {/* Scoped to the current period server-side (semester for university, academic

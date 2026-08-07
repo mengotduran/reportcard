@@ -774,6 +774,14 @@ export default function MarksEntryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-4 py-16 text-center">
+                    <p className="text-sm text-muted-foreground">{t('No students in this class yet.')}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{t('Add students to')} {classLevel} {t('before entering marks.')}</p>
+                  </td>
+                </tr>
+              )}
               {rows.map((row, index) => {
                 const isSelected = selectedIndices.has(index)
                 const isEditing  = editingIndex === index
@@ -862,23 +870,27 @@ export default function MarksEntryPage() {
         </div>
       </div>
 
-      {/* Save button */}
-      <div className="border border-border rounded-b-xl overflow-hidden">
-        <button
-          onClick={handleSaveAll}
-          disabled={saving || editableRows.length === 0}
-          className="w-full flex items-center justify-center gap-3 bg-primary hover:bg-[#d63429] disabled:opacity-50 text-white py-4 text-base font-bold transition"
-        >
-          <Save size={18} />
-          {saving
-            ? t('Saving...')
-            : editableRows.length === 0
-              // Nothing editable has two causes now, and blaming publishing when the real
-              // reason is school policy sends the teacher to argue with the wrong person.
-              ? (adminOnlyMarks ? (isAdminRole ? t('Teachers enter marks here') : t('Administration enters marks here')) : t('All Cards Published'))
-              : t('Save All Marks')}
-        </button>
-      </div>
+      {/* Save button — nothing to save or publish with no one on the roster yet, so the
+          button (which used to read "All Cards Published", a straight lie in that case:
+          0 editable rows means either "everyone's published" OR "no students exist", and
+          those are very different things to tell a teacher) is dropped entirely rather
+          than shown disabled. */}
+      {rows.length > 0 && (
+        <div className="border border-border rounded-b-xl overflow-hidden">
+          <button
+            onClick={handleSaveAll}
+            disabled={saving || editableRows.length === 0}
+            className="w-full flex items-center justify-center gap-3 bg-primary hover:bg-[#d63429] disabled:opacity-50 text-white py-4 text-base font-bold transition"
+          >
+            <Save size={18} />
+            {saving
+              ? t('Saving...')
+              : editableRows.length === 0
+                ? (adminOnlyMarks ? (isAdminRole ? t('Teachers enter marks here') : t('Administration enters marks here')) : t('All Cards Published'))
+                : t('Save All Marks')}
+          </button>
+        </div>
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

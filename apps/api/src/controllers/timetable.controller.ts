@@ -406,9 +406,10 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    const [school, breakPeriods] = await Promise.all([
+    const [school, breakPeriods, teachingPeriodCount] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
       prisma.timetablePeriod.findMany({ where: { schoolId, isBreak: true }, select: { startTime: true, endTime: true } }),
+      prisma.timetablePeriod.count({ where: { schoolId, isBreak: false } }),
     ])
 
     // Resolved up front (not just for the "assigned to this teacher" / "period sitting
@@ -451,6 +452,15 @@ export const saveTimetable = async (req: AuthRequest, res: Response) => {
 
     for (const s of slots) {
       const preExisting = untouchedTiming.has(slotTimingKey(s))
+      // A school with no period structure yet has nothing for a new slot to be measured
+      // against — subject or private, weekday or weekend. Existing slots (preExisting)
+      // are left alone for the same reason as every other check in this loop: a school
+      // that never got round to Set Up Periods shouldn't suddenly be unable to save
+      // edits to a timetable that predates this rule.
+      if (!preExisting && teachingPeriodCount === 0) {
+        res.status(400).json({ message: 'Set up your school\'s period structure ("Set Up Periods") before adding timetable slots.' })
+        return
+      }
       if (!DAY_SET.has(s.dayOfWeek)) { res.status(400).json({ message: `Invalid day: ${s.dayOfWeek}` }); return }
       if (!s.startTime || !s.endTime || s.endTime <= s.startTime) {
         res.status(400).json({ message: 'Each slot needs a valid start time before its end time' }); return
