@@ -793,14 +793,20 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
   const periodWord = isUni ? 'Semester' : 'Term'
 
   // University marks on a /100 course scale with credits and grade points; secondary on the
-  // Cameroon /20 sequence-and-coefficient grid; primary on a raw Test+Exam /100 scale with
-  // NO coefficient weighting (plain average — see reportcard.controller.ts saveEntries).
+  // Cameroon /20 sequence-and-coefficient grid; primary on a raw Test+Exam scale out of the
+  // class's own maxScore. Primary's SUBJECTS are raw, but its average is coefficient-weighted
+  // and normalised to /20 exactly like secondary's — see saveEntries. (This note used to say
+  // primary had "NO coefficient weighting, plain average"; that stopped being true when the
+  // weighting landed, and the /20 labels below were wrong for as long as it stood.)
   // Same table either way — only the columns and their headers differ.
+  // No `visa` column by default. It is a blank box for a teacher to initial by hand, which
+  // most schools do not use, and it padded every card with an empty right-hand column. Still
+  // available from the designer's "Add column" for a school that wants one.
   const cols = isUni
-    ? ['sn', 'code', 'subject', 'credit', 'seq1', 'seq2', 'score', 'grade', 'gradePoint', 'weighted', 'visa']
+    ? ['sn', 'code', 'subject', 'credit', 'seq1', 'seq2', 'score', 'grade', 'gradePoint', 'weighted']
     : isPrimary
-      ? ['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks', 'visa']
-      : ['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks', 'visa']
+      ? ['sn', 'subject', 'seq1', 'seq2', 'score', 'grade', 'remarks']
+      : ['sn', 'subject', 'coef', 'seq1', 'seq2', 'score', 'weighted', 'grade', 'remarks']
   const headers: Record<string, string> = isUni
     ? { subject: 'Course Title', credit: 'Credits', seq1: 'CA', seq2: 'Exam', score: 'Total /100', gradePoint: 'GP', weighted: 'WGP' }
     : isPrimary
@@ -808,7 +814,10 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
       : { score: 'Avg /20', weighted: 'Avg × Coef', remarks: 'Remark' }
 
   const ts = Date.now()
+  // Same pair the Ledger and transcript bands use — see the totals band below for why the
+  // foreground has to be dark rather than white.
   const bandBg = '#f1f5f9'
+  const bandFg = '#111827'
   const marksTemplate: SpreadsheetTable = {
     id: `marks_${ts}`,
     title: '',
@@ -832,31 +841,50 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
           ...(k === 'weighted' ? { bgColor: '#f4f1e8', bold: true } : {}),
         })),
       },
-      // Totals band. Spans are picked so each label ends on the border of the column its
-      // value sits in, which is what keeps the rule from slicing through the text.
-      {
-        id: `mfoot_${ts + 2}`,
-        cells: isUni
+      // Totals bands. One row per figure: a right-aligned label taking every column but the
+      // last, and the value in the last — so a band ALWAYS spans exactly cols.length,
+      // whatever columns the school type has or an admin later removes.
+      //
+      // This used to be one hand-spanned row per school type, and primary's was a verbatim
+      // copy of secondary's: 10 columns wide (referencing coefTotal/wpTotal, which primary
+      // has no column for) sitting under an 8-column table. A browser widens a table to fit
+      // its widest row, so the header and data rows came up two columns short — the marks
+      // grid hugged the left edge with two stray cells hanging off the totals row.
+      ...(isUni
+        ? [
+            { label: 'TOTAL CREDITS', field: 'credits' },
+            { label: 'TOTAL POINTS', field: 'wpTotal' },
+            { label: 'GPA', field: 'gpa' },
+          ]
+        : isPrimary
+          // Primary has no coefficient column of its own to total up, so it reports what it
+          // actually shows: the raw sum of the Total /100 column, then the term average —
+          // which is coefficient-weighted and stated out of 20 (see saveEntries).
           ? [
-              { text: 'TOTALS', bold: true, colSpan: 3, align: 'right', bgColor: color, textColor: '#ffffff' },
-              { field: 'credits', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
-              { text: 'TOTAL POINTS', bold: true, colSpan: 3, align: 'right', bgColor: color, textColor: '#ffffff' },
-              { field: 'wpTotal', bold: true, align: 'center', bgColor: accent, textColor: '#ffffff' },
-              { text: 'GPA', bold: true, colSpan: 2, align: 'right', bgColor: color, textColor: '#ffffff' },
-              { field: 'gpa', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
+              { label: 'OVERALL TOTAL', field: 'total' },
+              { label: 'TERM AVERAGE /20', field: 'average' },
             ]
+          // Σ(avg × coef) — the numerator of the weighted average, matching the "Avg × Coef"
+          // column above it. NOT `total` (Σ of the raw averages), which would not divide by
+          // the coefficient total to give the term average.
           : [
-              { text: 'TOTALS', bold: true, colSpan: 2, align: 'right', bgColor: color, textColor: '#ffffff' },
-              { field: 'coefTotal', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
-              // Σ(avg × coef) — the numerator of the weighted average, matching the
-              // "Avg × Coef" column above it. NOT `total` (Σ of the raw averages), which
-              // would not divide by the coefficient total to give the term average.
-              { text: 'TOTAL POINTS OBTAINED', bold: true, colSpan: 3, align: 'right', bgColor: color, textColor: '#ffffff' },
-              { field: 'wpTotal', bold: true, align: 'center', bgColor: accent, textColor: '#ffffff' },
-              { text: 'WEIGHTED AVERAGE', bold: true, colSpan: 2, align: 'right', bgColor: color, textColor: '#ffffff' },
-              { field: 'average', bold: true, align: 'center', bgColor: color, textColor: '#ffffff' },
-            ],
-      },
+              { label: 'TOTAL COEFFICIENTS', field: 'coefTotal' },
+              { label: 'TOTAL POINTS OBTAINED', field: 'wpTotal' },
+              { label: 'WEIGHTED AVERAGE /20', field: 'average' },
+            ]
+      // DARK text on a light band, never white-on-colour. The print page forces
+      // `tbody td { background-color: transparent !important }` to kill row shading, and a
+      // totals row lives in the tbody — so a coloured background is stripped at print time
+      // and white text lands on white paper, i.e. vanishes. Dark-on-light survives that
+      // (it is why the Ledger layout's bands read correctly), and still looks like a band
+      // in the designer, where the background is not stripped.
+      ).map((band, i) => ({
+        id: `mfoot_${ts + 2 + i}`,
+        cells: [
+          { text: band.label, bold: true, colSpan: Math.max(1, cols.length - 1), align: 'right' as const, bgColor: bandBg, textColor: bandFg },
+          { field: band.field, bold: true, align: 'center' as const, bgColor: band.field === 'wpTotal' ? accent : bandBg, textColor: bandFg },
+        ],
+      })),
     ],
   }
 
@@ -882,8 +910,12 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
         { label: 'Classification', field: 'classification' },
       ]
     : [
-        { label: `${periodWord} Average /${isPrimary ? 100 : 20}`, field: 'average' },
-        { label: `Class Average /${isPrimary ? 100 : 20}`, field: 'classAverage' },
+        // /20 for primary as well as secondary. A primary school marks its SUBJECTS on a
+        // raw 0-100 scale, but the average it states is coefficient-weighted and normalised
+        // to /20 (see saveEntries, and §7 of DOCUMENTATION.md) — these labels used to read
+        // "/100" for primary and sat next to a figure like 11.2, which is the /20 average.
+        { label: `${periodWord} Average /20`, field: 'average' },
+        { label: 'Class Average /20', field: 'classAverage' },
         { label: 'Position in Class', field: 'position' },
         { label: 'Best Average', field: 'bestAverage' },
         { label: 'Appreciation', field: 'appreciation' },
@@ -920,7 +952,9 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
             { label: 'Classification', field: 'classification' },
           ]
         : [
-            { label: `Annual Average /${isPrimary ? 100 : 20}`, field: 'annualAverage' },
+            // /20 for the same reason as the term average above — every figure derived
+            // from ReportCard.average inherits its scale.
+            { label: 'Annual Average /20', field: 'annualAverage' },
             { label: 'Annual Position', field: 'annualPosition' },
             { label: 'Annual Class Average', field: 'annualClassAverage' },
             { label: 'Final Decision', field: 'decision' },
@@ -947,7 +981,7 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
       panel: true, edgeColor: accent,
     },
     {
-      id: uid('row2'), type: 'panel_row', weights: [1, 1, 0.42],
+      id: uid('row2'), type: 'panel_row', weights: [1, 1],
       children: [
         {
           id: uid('rm1'), type: 'remarks',
@@ -959,9 +993,20 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
           label: isUni ? "Dean's Remark" : "Principal's Remark",
           panel: true, signatureCaption: isUni ? 'Dean' : 'Principal',
         },
-        { id: uid('stp'), type: 'stamp', size: 92, align: 'center', label: 'School Stamp' },
       ],
     },
+    // A FULL ROW to itself, same as Ledger's and the transcript's stamp — not squeezed into
+    // a panel_row alongside the two remark boxes above (a 0.42-weight column next to two
+    // 1-weight ones), which is what used to make its left/center/right align control
+    // pointless: the column is barely wider than the stamp itself, so no alignment choice
+    // visibly moved it. A section with the whole row can actually sit left, center or right
+    // across the page.
+    //
+    // Official-copy-only — the seal is what makes a printed copy official, and a student
+    // copy must never carry it (see StampSec's own doc comment). Missing entirely let it
+    // print on BOTH copies for every school on the default (Standard) layout until that was
+    // found and fixed separately from this.
+    { id: uid('stp'), type: 'stamp', size: 92, align: 'center', label: 'School Stamp', showOn: 'official' },
     {
       id: uid('ft'), type: 'text_block',
       content: t.footerText || 'This document is an official record and is invalid without the school stamp.',
@@ -1133,12 +1178,25 @@ export function getLedgerLayout(schoolType?: string): TemplateConfig & { section
               { text: 'TOTAL POINTS:', bold: true, colSpan: 3, align: 'right', bgColor: bandBg, textColor: bandFg },
               { field: 'wpTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
             ]
-          : [
-              { text: 'TOTAL:', bold: true, colSpan: 2, align: 'right', bgColor: bandBg, textColor: bandFg },
-              { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
-              { text: 'TOTAL POINTS OBTAINED:', bold: true, colSpan: 4, align: 'right', bgColor: bandBg, textColor: bandFg },
-              { field: 'wpTotal', bold: true, align: 'center', colSpan: 2, bgColor: bandBg, textColor: bandFg },
-            ],
+          : isPrimary
+            // Primary shows no Coef column here, so it reports the figures it actually
+            // displays: the raw sum of the Total /100 column, and the term average (which
+            // IS coefficient-weighted, and is stated out of 20 — see saveEntries).
+            // Its own 7 columns, not secondary's 9: these three bands used to be shared
+            // with secondary and spanned 9, which widened the table and left primary's
+            // header and marks rows two columns short of the totals underneath them.
+            ? [
+                { text: 'OVERALL TOTAL:', bold: true, colSpan: 2, align: 'right', bgColor: bandBg, textColor: bandFg },
+                { field: 'total', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+                { text: 'TERM AVERAGE /20:', bold: true, colSpan: 3, align: 'right', bgColor: bandBg, textColor: bandFg },
+                { field: 'average', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+              ]
+            : [
+                { text: 'TOTAL:', bold: true, colSpan: 2, align: 'right', bgColor: bandBg, textColor: bandFg },
+                { field: 'coefTotal', bold: true, align: 'center', bgColor: bandBg, textColor: bandFg },
+                { text: 'TOTAL POINTS OBTAINED:', bold: true, colSpan: 4, align: 'right', bgColor: bandBg, textColor: bandFg },
+                { field: 'wpTotal', bold: true, align: 'center', colSpan: 2, bgColor: bandBg, textColor: bandFg },
+              ],
       },
       // Second row: this period's average/GPA | class average. Non-university only gets
       // a third row for position/best average — university has no ranking concept
@@ -1152,22 +1210,37 @@ export function getLedgerLayout(schoolType?: string): TemplateConfig & { section
               { text: 'CLASS AVERAGE:', bold: true, colSpan: 3, align: 'right', textColor: '#475569' },
               { field: 'classAverage', bold: true, align: 'center' },
             ]
-          : [
-              { text: 'TERM AVERAGE:', bold: true, colSpan: 2, align: 'right', textColor: '#475569' },
-              { field: 'average', bold: true, align: 'center' },
-              { text: 'CLASS AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: '#475569' },
-              { field: 'classAverage', bold: true, align: 'center', colSpan: 2 },
-            ],
+          : isPrimary
+            ? [
+                { text: 'CLASS AVERAGE /20:', bold: true, colSpan: 2, align: 'right', textColor: '#475569' },
+                { field: 'classAverage', bold: true, align: 'center' },
+                { text: 'POSITION IN CLASS:', bold: true, colSpan: 3, align: 'right', textColor: '#475569' },
+                { field: 'position', bold: true, align: 'center' },
+              ]
+            : [
+                { text: 'TERM AVERAGE:', bold: true, colSpan: 2, align: 'right', textColor: '#475569' },
+                { field: 'average', bold: true, align: 'center' },
+                { text: 'CLASS AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: '#475569' },
+                { field: 'classAverage', bold: true, align: 'center', colSpan: 2 },
+              ],
       },
-      ...(isUni ? [] : [{
-        id: `mfoot_${ts + 5}`,
-        cells: [
-          { text: 'POSITION IN CLASS:', bold: true, colSpan: 2, align: 'right' as const, textColor: '#475569' },
-          { field: 'position', bold: true, align: 'center' as const, colSpan: 2 },
-          { text: 'BEST AVERAGE:', bold: true, colSpan: 3, align: 'right' as const, textColor: '#475569' },
-          { field: 'bestAverage', bold: true, align: 'center' as const, colSpan: 2 },
-        ],
-      } as SheetRow]),
+      ...(isUni ? [] : [isPrimary
+        ? {
+            id: `mfoot_${ts + 5}`,
+            cells: [
+              { text: 'BEST AVERAGE:', bold: true, colSpan: 6, align: 'right' as const, textColor: '#475569' },
+              { field: 'bestAverage', bold: true, align: 'center' as const },
+            ],
+          } as SheetRow
+        : {
+            id: `mfoot_${ts + 5}`,
+            cells: [
+              { text: 'POSITION IN CLASS:', bold: true, colSpan: 2, align: 'right' as const, textColor: '#475569' },
+              { field: 'position', bold: true, align: 'center' as const, colSpan: 2 },
+              { text: 'BEST AVERAGE:', bold: true, colSpan: 3, align: 'right' as const, textColor: '#475569' },
+              { field: 'bestAverage', bold: true, align: 'center' as const, colSpan: 2 },
+            ],
+          } as SheetRow]),
       // Closing band — every period. University bands on Classification (which itself
       // bands on the cumulative GPA once one exists, otherwise this semester's own GPA —
       // see classificationForGpa), so it needs no final-period gate. Everyone else gets

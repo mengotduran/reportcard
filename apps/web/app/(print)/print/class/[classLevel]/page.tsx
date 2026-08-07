@@ -28,7 +28,15 @@ interface RawRC {
 export default function PrintClassPage() {
   const params = useParams()
   const searchParams = useSearchParams()
-  const { school } = useAuthStore()
+  // `_hasHydrated` matters here in a way it doesn't on a dashboard page: this route is in
+  // the (print) group, which has no layout and therefore no AuthGuard to hold rendering
+  // back until the persisted store has loaded. It is also only ever reached by its URL, so
+  // every visit is a COLD load. Without the gate below, the effect ran while `school` was
+  // still null, built the layout with an undefined school type — which falls through to the
+  // secondary branch — and never rebuilt it once the real type arrived. A primary school
+  // printed its cards with secondary's columns (Coef, Avg /20, Avg × Coef), while the
+  // letterhead above them correctly said PRIMARY.
+  const { school, _hasHydrated } = useAuthStore()
   const classLevel = decodeURIComponent(params.classLevel as string)
   const termId = searchParams.get('termId') ?? undefined
 
@@ -42,6 +50,8 @@ export default function PrintClassPage() {
   const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready' | 'blocked'>('loading')
 
   useEffect(() => {
+    // Wait for the persisted school to load — see _hasHydrated above.
+    if (!_hasHydrated) return
     const load = async () => {
       try {
         const [rcData, tplData, scaleData, promoScale, levels] = await Promise.all([
@@ -69,7 +79,7 @@ export default function PrintClassPage() {
       }
     }
     load()
-  }, [classLevel, termId])
+  }, [classLevel, termId, _hasHydrated, school?.type])
 
   // Auto-print once images have loaded
   useEffect(() => {

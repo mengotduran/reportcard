@@ -283,6 +283,67 @@ function ColorableCell({ sampleText, color, onColorChange, style }: {
   )
 }
 
+/**
+ * The "which printed copy does this belong to" chrome: the Both/Official/Student dropdown,
+ * and — when the section is scoped to the copy NOT currently being previewed — a dim plus a
+ * badge, so the canvas shows what the other copy leaves out instead of the section vanishing
+ * and looking deleted.
+ *
+ * Split out of SectionWrap so a `panel_row`'s CHILDREN (Class Master's Remark / Principal's
+ * Remark / School Stamp sit side by side in one by default) can get the exact same
+ * treatment. They used to get none at all: `renderSectionBody`'s `panel_row` case rendered
+ * each child's body directly with no wrapper, so a child scoped `showOn: 'official'` — the
+ * School Stamp, by default — stayed fully opaque and un-badged in the canvas no matter which
+ * copy was being previewed. The PRINTED card was never wrong (PrintableReportCard's own
+ * `panel_row` branch already filters children by `sectionShowsOn`), but the canvas looked
+ * like it was, telling an admin the seal would leak onto a student copy when it would not.
+ */
+function SectionVariantScope({ showOn, onShowOn, hiddenHere, compact, children }: {
+  showOn?: DocVariant; onShowOn?: (v: DocVariant | undefined) => void
+  hiddenHere?: boolean
+  /** Row children sit close together, so the dropdown can't hang off to the right without
+   *  overlapping a neighbour — it floats above the child's own top edge instead. */
+  compact?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ position: 'relative' }} className="group/variant">
+      {onShowOn && (
+        <div
+          // Compact (row-child) placement sits top-LEFT, deliberately opposite the
+          // panel_row's own "remove from row" × button (top-right) so the two never
+          // overlap on a narrow child like the Stamp's default 0.42-weight column.
+          className={`absolute flex items-center gap-1 opacity-0 group-hover/variant:opacity-100 transition-opacity z-10 ${
+            compact ? 'left-0 -top-6' : '-right-44 top-0'
+          }`}
+          style={compact ? undefined : { width: 168 }}
+        >
+          <select
+            value={showOn ?? 'both'}
+            onChange={e => onShowOn(e.target.value === 'both' ? undefined : e.target.value as DocVariant)}
+            className="text-[10px] border border-border rounded bg-card text-muted-foreground px-1 py-0.5 cursor-pointer"
+            title="Which printed copy this section appears on"
+          >
+            <option value="both">Both copies</option>
+            <option value="official">Official only</option>
+            <option value="student">Student copy only</option>
+          </select>
+        </div>
+      )}
+
+      {/* Badge on a section the previewed copy leaves out. */}
+      {hiddenHere && (
+        <div className="absolute right-1 top-1 z-10 text-[9px] font-semibold uppercase tracking-wide bg-muted text-muted-foreground border border-border rounded px-1.5 py-0.5 pointer-events-none">
+          {showOn === 'official' ? 'Official only' : 'Student copy only'}
+        </div>
+      )}
+      <div style={hiddenHere ? { opacity: 0.35 } : undefined}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 // ── Section wrapper (drag + up/down + delete) ─────────────────────────────────
 function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, onDrop, dragging, showOn, onShowOn, hiddenHere, children }: {
   index: number; total: number; onMove: (d: 'up'|'down') => void
@@ -290,9 +351,7 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
   onDrop: () => void; dragging: boolean
   /** Which printed copy this section is restricted to (undefined = both). */
   showOn?: DocVariant; onShowOn?: (v: DocVariant | undefined) => void
-  /** True when the section is scoped to the copy NOT currently being previewed: it stays
-   *  editable but is dimmed and badged, so the canvas shows what the other copy leaves out
-   *  instead of the section vanishing and looking deleted. */
+  /** True when the section is scoped to the copy NOT currently being previewed. */
   hiddenHere?: boolean
   children: React.ReactNode
 }) {
@@ -333,32 +392,9 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
         </button>
       </div>
 
-      {/* Which printed copy this section belongs to. Right-hand side so it never collides
-          with the reorder/delete toolbar on the left. */}
-      {onShowOn && (
-        <div className="absolute -right-44 top-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ width: 168 }}>
-          <select
-            value={showOn ?? 'both'}
-            onChange={e => onShowOn(e.target.value === 'both' ? undefined : e.target.value as DocVariant)}
-            className="text-[10px] border border-border rounded bg-card text-muted-foreground px-1 py-0.5 cursor-pointer"
-            title="Which printed copy this section appears on"
-          >
-            <option value="both">Both copies</option>
-            <option value="official">Official only</option>
-            <option value="student">Student copy only</option>
-          </select>
-        </div>
-      )}
-
-      {/* Badge on a section the previewed copy leaves out. */}
-      {hiddenHere && (
-        <div className="absolute right-1 top-1 z-10 text-[9px] font-semibold uppercase tracking-wide bg-muted text-muted-foreground border border-border rounded px-1.5 py-0.5 pointer-events-none">
-          {showOn === 'official' ? 'Official only' : 'Student copy only'}
-        </div>
-      )}
-      <div style={hiddenHere ? { opacity: 0.35 } : undefined}>
+      <SectionVariantScope showOn={showOn} onShowOn={onShowOn} hiddenHere={hiddenHere}>
         {children}
-      </div>
+      </SectionVariantScope>
     </div>
   )
 }
@@ -1028,8 +1064,18 @@ function RenderRemarks({ sec, color, accent, update }: { sec: RemarksSec; color:
   if (sec.panel) {
     return (
       <div style={{
-        border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', marginBottom: 12,
-        ...(sec.edgeColor ? { borderLeft: `3px solid ${sec.edgeColor}` } : {}),
+        // Longhand on every side, never the `border` shorthand: the left edge toggles
+        // between a themed 3px accent and the same hairline as the other three sides, and
+        // mixing shorthand with a conditionally-present `borderLeft` is what React's
+        // "Removing a style property during rerender" warning was flagging — the two
+        // fight over the same underlying value, and un-setting borderLeft on toggle-off
+        // didn't reliably fall back to the shorthand. Same width/style/color on all four
+        // sides now, differing only in which color the left one gets.
+        borderTop: `.8px solid rgba(${rgb},0.28)`,
+        borderRight: `.8px solid rgba(${rgb},0.28)`,
+        borderBottom: `.8px solid rgba(${rgb},0.28)`,
+        borderLeft: sec.edgeColor ? `3px solid ${sec.edgeColor}` : `.8px solid rgba(${rgb},0.28)`,
+        background: '#fff', marginBottom: 12,
       }}>
         <div style={{ background: `rgba(${rgb},0.07)`, borderBottom: `.6px solid rgba(${rgb},0.22)`, padding: '3.6px 7px', display: 'flex', alignItems: 'center', gap: 6 }}>
           <ET value={sec.label} onChange={v => update({ ...sec, label: v })}
@@ -1701,20 +1747,34 @@ export default function ReportCardDesignPage() {
         const row = sec as PanelRowSec
         return (
           <div style={{ display: 'flex', gap: 9, alignItems: 'stretch', marginBottom: 12 }}>
-            {row.children.map((child, ci) => (
-              <div key={child.id} style={{ flex: row.weights?.[ci] ?? 1, minWidth: 0, position: 'relative' }}>
-                {/* Lift a panel back out to full width, for an admin who wants it on its
-                    own row — the row itself disappears once it has no children left. */}
-                <button
-                  title={tr('Remove from row')}
-                  onClick={() => {
-                    const rest = row.children.filter((_, k) => k !== ci)
-                    update(rest.length ? { ...row, children: rest, weights: row.weights?.filter((_, k) => k !== ci) } : rest[0] ?? row)
-                  }}
-                  style={{ position: 'absolute', top: -8, right: 0, zIndex: 2, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 3, color: '#f87171', cursor: 'pointer', fontSize: 9, lineHeight: 1.4, padding: '0 4px' }}>×</button>
-                {renderSectionBody(child, s => update({ ...row, children: row.children.map((c, k) => k === ci ? s : c) }))}
-              </div>
-            ))}
+            {row.children.map((child, ci) => {
+              const setChild = (s: LayoutSection) => update({ ...row, children: row.children.map((c, k) => k === ci ? s : c) })
+              return (
+                <div key={child.id} style={{ flex: row.weights?.[ci] ?? 1, minWidth: 0, position: 'relative' }}>
+                  {/* Lift a panel back out to full width, for an admin who wants it on its
+                      own row — the row itself disappears once it has no children left. */}
+                  <button
+                    title={tr('Remove from row')}
+                    onClick={() => {
+                      const rest = row.children.filter((_, k) => k !== ci)
+                      update(rest.length ? { ...row, children: rest, weights: row.weights?.filter((_, k) => k !== ci) } : rest[0] ?? row)
+                    }}
+                    style={{ position: 'absolute', top: -8, right: 0, zIndex: 2, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 3, color: '#f87171', cursor: 'pointer', fontSize: 9, lineHeight: 1.4, padding: '0 4px' }}>×</button>
+                  {/* Same "which copy" dim/badge/dropdown a top-level section gets — a row
+                      child used to render with none of it, so a Stamp scoped official-only
+                      (the default here) stayed fully opaque while previewing the student
+                      copy, looking like it would print there when it never actually would. */}
+                  <SectionVariantScope
+                    showOn={child.showOn}
+                    onShowOn={supportsVariants ? (v => setChild({ ...child, showOn: v } as LayoutSection)) : undefined}
+                    hiddenHere={!sectionShowsOn(child, previewVariant)}
+                    compact
+                  >
+                    {renderSectionBody(child, setChild)}
+                  </SectionVariantScope>
+                </div>
+              )
+            })}
           </div>
         )
       }

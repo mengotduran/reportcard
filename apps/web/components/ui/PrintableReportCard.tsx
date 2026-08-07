@@ -1662,8 +1662,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       if (s.panel) {
         return (
           <div style={{
-            border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', marginBottom: 9,
-            ...(s.edgeColor ? { borderLeft: `3px solid ${s.edgeColor}` } : {}),
+            // Longhand on every side, not the `border` shorthand mixed with a conditional
+            // `borderLeft` — see the designer's RenderRemarks for the full reasoning (React's
+            // "Removing a style property during rerender" warning). Same visual result: a
+            // themed 3px left edge when set, the same hairline as the other sides otherwise.
+            borderTop: `.8px solid rgba(${rgb},0.28)`,
+            borderRight: `.8px solid rgba(${rgb},0.28)`,
+            borderBottom: `.8px solid rgba(${rgb},0.28)`,
+            borderLeft: s.edgeColor ? `3px solid ${s.edgeColor}` : `.8px solid rgba(${rgb},0.28)`,
+            background: '#fff', marginBottom: 9,
             display: 'flex', flexDirection: 'column', height: '100%',
           }}>
             <div style={{ background: `rgba(${rgb},0.07)`, color, fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', padding: '3.6px 7px', fontWeight: 'bold', borderBottom: `.6px solid rgba(${rgb},0.22)` }}
