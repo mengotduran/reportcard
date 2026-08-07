@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
-import { getTeacherAbsencesApi, getAbsenceCountsApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { getTeacherAbsencesApi, markAbsencesSeenApi, getAbsenceCountsApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { getTeachersApi } from '@/lib/api/teachers'
 import { getTeacherTimetableApi, TimetableSlot } from '@/lib/api/timetable'
 import { formatHours } from '@/lib/formatHours'
@@ -218,13 +218,16 @@ export default function TeachingHoursPage() {
   const { page, setPage, pageItems, totalPages } = usePagination(filtered, 15, `${search}|${statusFilter}`)
 
   // A course row has no single teacher, so drilling in is done per contributor — absences
-  // belong to a person, not to a course.
+  // belong to a person, not to a course. Opening this modal is a genuine, deliberate view —
+  // the real review action — so it's paired with markAbsencesSeenApi, unlike the plain read
+  // the 'absences:changed' listener above uses to keep the page's own data current.
   const openDrillDown = (row: CoverageRow, c: { teacherId: string; teacherName: string }) => {
     setDrillDown({ teacherId: c.teacherId, teacherName: c.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
     setAbsencesLoading(true)
     getTeacherAbsencesApi(c.teacherId)
       .then((d) => setAbsences(d.absences.filter((a) => a.subjectName === row.subjectName && a.classLevel === row.classLevel)))
       .finally(() => setAbsencesLoading(false))
+    markAbsencesSeenApi(c.teacherId).catch(() => {})
   }
 
   // "By Teacher" — every absence for this teacher, any course, targeted or not.
@@ -234,6 +237,7 @@ export default function TeachingHoursPage() {
     getTeacherAbsencesApi(teacherId)
       .then((d) => setAbsences(d.absences))
       .finally(() => setAbsencesLoading(false))
+    markAbsencesSeenApi(teacherId).catch(() => {})
   }
 
   // Default hides the teachers with nothing recorded. A school with 43 staff and two

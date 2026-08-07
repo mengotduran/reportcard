@@ -58,12 +58,21 @@ export const getMyAbsences = async (): Promise<AbsenceList> => {
   return res.data
 }
 
-// Admin-only (server-enforced) — a specific teacher's absences. Fetching this list marks
-// every not-yet-seen absence in it as seenByAdmin for NEXT time, so THIS response still
-// reflects the pre-view state (delete stays available on the current visit).
+// Admin-only (server-enforced) — a specific teacher's absences. Pure read, no side effect.
 export const getTeacherAbsences = async (teacherId: string, params?: { from?: string; to?: string }): Promise<AbsenceList> => {
   const res = await api.get('/teacher-absences', { params: { teacherId, ...params } })
   return res.data
+}
+
+// The actual "an admin reviewed this teacher's absences" action. Call ONLY on a genuine
+// focus event (useFocusEffect — the screen actually becoming visible), never from a
+// background realtime refresh: expo-router keeps a screen mounted after you navigate away
+// from it (pushed underneath whatever's on top now), so its socket listener stays live and
+// would otherwise keep "reviewing" a teacher's absences every time anyone in the school
+// reports one — before an admin has consciously looked at anything.
+export const markAbsencesSeen = async (teacherId: string) => {
+  const res = await api.post('/teacher-absences/mark-seen', null, { params: { teacherId } })
+  return res.data as { message: string; count: number }
 }
 
 // Admin-only — every teacher's absence total in one query, for the "By Teacher" browsing

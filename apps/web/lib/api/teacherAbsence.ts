@@ -54,6 +54,17 @@ export const getTeacherAbsencesApi = async (teacherId: string, params?: { from?:
   return res.data
 }
 
+// The actual "an admin reviewed this teacher's absences" action — separate from the plain
+// read above. Call this ONLY when the page genuinely becomes visible to the admin (e.g. on
+// mount / teacherId change), never from a background realtime refresh: a socket listener
+// left running on a page the admin has since navigated away from must keep the DATA fresh
+// without ever counting as a review, or absences get marked "seen" the instant they're
+// created, before anyone has looked. See the API's markAbsencesSeen for the full story.
+export const markAbsencesSeenApi = async (teacherId: string) => {
+  const res = await api.post('/teacher-absences/mark-seen', null, { params: { teacherId } })
+  return res.data as { message: string; count: number }
+}
+
 // Admin-only — every teacher's absence total in one query, for the "By Teacher" browsing
 // list. `periods` is the period-weighted total; `count` is raw events. Decoupled from
 // coverage/required-hours entirely.

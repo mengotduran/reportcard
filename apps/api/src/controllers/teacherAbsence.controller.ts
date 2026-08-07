@@ -675,6 +675,15 @@ export const getAbsenceCounts = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// Pure read — no side effect. Marking a teacher's absences reviewed used to happen here as
+// a side effect of fetching, which seemed reasonable (an admin opening this teacher's list
+// IS reading it) but broke down in practice: React Navigation / expo-router keep a screen
+// mounted after you navigate away from it (pushed underneath whatever's on top now), so its
+// `absences:changed` socket listener stays live and keeps calling this endpoint in the
+// BACKGROUND every time anyone in the school reports or retracts an absence — nothing to do
+// with this teacher, and nobody actually looking. That silently marked absences "reviewed"
+// the instant they were created, sometimes before an admin had so much as opened the app.
+// See markAbsencesSeen below for the real, deliberate review action.
 export const getTeacherAbsences = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -683,23 +692,56 @@ export const getTeacherAbsences = async (req: AuthRequest, res: Response) => {
     const from = req.query.from ? String(req.query.from) : undefined
     const to = req.query.to ? String(req.query.to) : undefined
 
-    const { absences: shaped, periodMinutes, periodsMissed, periodEnd } = await listAbsences(schoolId, teacherId, from, to)
+    const { absences, periodMinutes, periodsMissed, periodEnd } = await listAbsences(schoolId, teacherId, from, to)
+    res.json({ absences, periodMinutes, periodsMissed, periodEnd })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
 
-    // Mark seen for the NEXT time this list is fetched — deliberately not before building
-    // the response above, so the admin's CURRENT visit still shows these as deletable
-    // (their real chance to act, e.g. remove one to mark the teacher present after all).
-    // Only a later visit will show seenByAdmin: true and refuse the delete.
-    const unseenIds = shaped.filter((a) => !a.seenByAdmin).map((a) => a.id)
-    if (unseenIds.length > 0) {
-      await prisma.teacherAbsence.updateMany({ where: { id: { in: unseenIds } }, data: { seenByAdmin: true } })
-      // The teacher just lost the ability to retract these, and nothing else would tell them:
-      // this is a READ by the admin, so it writes no notification. Without the signal their
-      // screen keeps showing a delete button until they happen to reload, which is exactly
-      // the stale bin icon that reads as a bug.
-      emitToUser(teacherId, 'absences:changed')
-    }
+/**
+ * The real "an admin reviewed this teacher's absences" action, shared by two entry points:
+ *
+ *   - POST /api/teacher-absences/mark-seen, called from a genuine focus event (a screen
+ *     actually becoming visible to the admin — see teacher-timetable's useFocusEffect on
+ *     both platforms), never from a background realtime refresh.
+ *   - Reading the "Teacher absence reported" notification itself (markNotificationRead /
+ *     markAllNotificationsRead in notification.controller.ts) — an admin who reads the
+ *     notification and considers themselves informed, without necessarily drilling into
+ *     the teacher's timetable afterward, has still reviewed it. Locking only on the deeper
+ *     drill-down left the teacher able to delete a report the admin had already read and
+ *     acted on some other way (a phone call, telling them in person) — see the 2026-08
+ *     product decision.
+ *
+ * Marks every currently-unseen absence for this teacher, not just ones matching a
+ * particular date/slot — same reasoning either way: reviewing this teacher's record
+ * reviews all of it, not one row at a time.
+ */
+export async function markTeacherAbsencesSeen(schoolId: string, teacherId: string): Promise<number> {
+  const unseen = await prisma.teacherAbsence.findMany({
+    where: { schoolId, teacherId, seenByAdmin: false },
+    select: { id: true },
+  })
+  if (unseen.length > 0) {
+    await prisma.teacherAbsence.updateMany({ where: { id: { in: unseen.map((u) => u.id) } }, data: { seenByAdmin: true } })
+    // The teacher just lost the ability to retract these, and nothing else would tell them:
+    // this is a READ by the admin, so it writes no notification. Without the signal their
+    // screen keeps showing a delete button until they happen to reload, which is exactly
+    // the stale bin icon that reads as a bug.
+    emitToUser(teacherId, 'absences:changed')
+  }
+  return unseen.length
+}
 
-    res.json({ absences: shaped, periodMinutes, periodsMissed, periodEnd })
+// POST /api/teacher-absences/mark-seen
+export const markAbsencesSeen = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const teacherId = String(req.query.teacherId ?? req.body?.teacherId ?? '')
+    if (!teacherId) { res.status(400).json({ message: 'teacherId is required' }); return }
+    const count = await markTeacherAbsencesSeen(schoolId, teacherId)
+    res.json({ message: 'Marked as reviewed', count })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

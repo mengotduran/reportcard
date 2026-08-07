@@ -3,7 +3,7 @@ import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { getTeacherTimetableApi, getPeriodsApi, getTimetableHistoryApi, TimetableSlot, TimetablePeriod } from '@/lib/api/timetable'
-import { getTeacherAbsencesApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { getTeacherAbsencesApi, markAbsencesSeenApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import WeekGrid, { WeekGridSlot } from '@/components/ui/WeekGrid'
@@ -37,15 +37,22 @@ function TeacherTimetableView() {
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Landing on this page IS the genuine review — a real navigation, not a background
+  // refresh — so it's the one place here that calls markAbsencesSeenApi. The realtime
+  // listener below deliberately does NOT: it exists to keep the data current if this tab is
+  // left open in the background while something changes elsewhere, and a background sync
+  // must never count as an admin having looked at anything.
   useEffect(() => {
     if (!teacherId || !isAdmin) { setLoading(false); return }
     Promise.all([getTeacherTimetableApi(teacherId), getPeriodsApi(), getTeacherAbsencesApi(teacherId)])
       .then(([s, p, a]) => { setSlots(s.slots); setPeriods(p.periods); setAbsences(a.absences) })
       .catch(() => { /* keep last-known data on transient failure */ })
       .finally(() => setLoading(false))
+    markAbsencesSeenApi(teacherId).catch(() => {})
   }, [teacherId, isAdmin])
 
-  // Keeps this in step when the absence is deleted or locked from anywhere else.
+  // Keeps this in step when the absence is deleted or locked from anywhere else. Data-only —
+  // deliberately does NOT call markAbsencesSeenApi (see above).
   useEffect(() => onRealtime('absences:changed', () => {
     if (!teacherId || !isAdmin) return
     getTeacherAbsencesApi(teacherId).then((a) => setAbsences(a.absences)).catch(() => {})

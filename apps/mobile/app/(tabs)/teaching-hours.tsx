@@ -7,7 +7,7 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { getMyCoverage, getCoverage, getTeacherHoursTotals, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
 import { getMyTimetable, getTeacherTimetable, MyTimetableSlot } from '@/lib/api/timetable'
-import { getMyAbsences, getTeacherAbsences, getAbsenceCounts, reportAbsence, deleteAbsence, TeacherAbsence, AbsenceDay } from '@/lib/api/teacherAbsence'
+import { getMyAbsences, getTeacherAbsences, markAbsencesSeen, getAbsenceCounts, reportAbsence, deleteAbsence, TeacherAbsence, AbsenceDay } from '@/lib/api/teacherAbsence'
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import { formatHours } from '@/lib/formatHours'
 import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
@@ -648,6 +648,14 @@ function TeacherAttendanceScreen() {
     return <View style={styles.center}><ActivityIndicator color="#F03E2F" /></View>
   }
 
+  // One card, not one per subject — a teacher on eight courses used to get eight full
+  // cards stacked on this tab before anything else did, which was most of what the tab
+  // was. The rest live behind "See all" on a dedicated screen instead. The one shown here
+  // is whichever most needs a look: UNDER first, then OVER, EXACT, and finally NO_TARGET
+  // (nothing to act on) last.
+  const URGENCY: Record<CoverageStatus, number> = { UNDER: 0, OVER: 1, EXACT: 2, NO_TARGET: 3 }
+  const headline = rows.length > 0 ? [...rows].sort((a, b) => URGENCY[a.status] - URGENCY[b.status])[0] : undefined
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
@@ -660,33 +668,43 @@ function TeacherAttendanceScreen() {
                 : t('No required-hours target has been set for any of your subjects yet.')}
             </Text>
           </View>
-        ) : rows.map((r) => (
-          <View key={r.subjectId} style={styles.card}>
-            <Text style={styles.subject}>{r.subjectName}</Text>
-            <Text style={styles.meta}>{r.classLevel}{r.term ? ` · ${r.term}` : ''}</Text>
-            <View style={styles.statsRow}>
-              <View><Text style={styles.statLabel}>{t('Required')}</Text><Text style={styles.statValue}>{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</Text></View>
-              <View><Text style={styles.statLabel}>{t('Taught so far')}</Text><Text style={styles.statValue}>{formatHours(r.taughtHours)}</Text></View>
-              <View><Text style={styles.statLabel}>{r.isFinal ? t('Final') : t('Projected')}</Text><Text style={styles.statValue}>{formatHours(r.projectedFinalHours)}</Text></View>
-            </View>
-            <View style={[styles.badge, { backgroundColor: STATUS_COLOR[r.status] }]}>
-              <Text style={styles.badgeText}>{t(r.status)}</Text>
-            </View>
-            {/* The figures above are the COURSE's, which is what the target measures. When
-                somebody else also taught it, this teacher's own share is called out — without
-                it a teacher who joined in November would look as though they had missed the
-                hours taught before they arrived. */}
-            {(() => {
-              const mine = r.contributors.find((c) => c.teacherId === user?.id)
-              if (!mine || r.contributors.length < 2) return null
-              return (
-                <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 8 }}>
-                  {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {r.contributors.length} {t('teachers on this course')}
-                </Text>
-              )
-            })()}
-          </View>
-        ))}
+        ) : (
+          <>
+            {headline && (
+              <View key={headline.subjectId} style={styles.card}>
+                <Text style={styles.subject}>{headline.subjectName}</Text>
+                <Text style={styles.meta}>{headline.classLevel}{headline.term ? ` · ${headline.term}` : ''}</Text>
+                <View style={styles.statsRow}>
+                  <View><Text style={styles.statLabel}>{t('Required')}</Text><Text style={styles.statValue}>{headline.requiredHours != null ? formatHours(headline.requiredHours) : '—'}</Text></View>
+                  <View><Text style={styles.statLabel}>{t('Taught so far')}</Text><Text style={styles.statValue}>{formatHours(headline.taughtHours)}</Text></View>
+                  <View><Text style={styles.statLabel}>{headline.isFinal ? t('Final') : t('Projected')}</Text><Text style={styles.statValue}>{formatHours(headline.projectedFinalHours)}</Text></View>
+                </View>
+                <View style={[styles.badge, { backgroundColor: STATUS_COLOR[headline.status] }]}>
+                  <Text style={styles.badgeText}>{t(headline.status)}</Text>
+                </View>
+                {/* The figures above are the COURSE's, which is what the target measures. When
+                    somebody else also taught it, this teacher's own share is called out — without
+                    it a teacher who joined in November would look as though they had missed the
+                    hours taught before they arrived. */}
+                {(() => {
+                  const mine = headline.contributors.find((c) => c.teacherId === user?.id)
+                  if (!mine || headline.contributors.length < 2) return null
+                  return (
+                    <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 8 }}>
+                      {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {headline.contributors.length} {t('teachers on this course')}
+                    </Text>
+                  )
+                })()}
+              </View>
+            )}
+            {rows.length > 1 && (
+              <TouchableOpacity style={styles.seeAllRow} onPress={() => router.push('/coverage' as any)}>
+                <Text style={styles.seeAllText}>{t('See all courses')} ({rows.length})</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+          </>
+        )}
 
         {/* Scoped to the current period server-side (semester for university, academic
             year for primary/secondary) — once that period ends this resets to a fresh
@@ -953,7 +971,9 @@ function AdminAttendanceScreen() {
       || r.contributors.some((c) => c.teacherName.toLowerCase().includes(q))
   })
 
-  // Absences belong to a person, not a course, so drilling in is per contributor.
+  // Absences belong to a person, not a course, so drilling in is per contributor. Opening
+  // this modal is a genuine, deliberate view — the real review action — so it's the one
+  // place besides teacher-timetable's focus effect that calls markAbsencesSeen.
   const openDrillDown = (row: CoverageRow, c: { teacherId: string; teacherName: string }) => {
     setDrillDown({ teacherId: c.teacherId, teacherName: c.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
     setAbsencesLoading(true)
@@ -961,6 +981,7 @@ function AdminAttendanceScreen() {
       .then((d) => setAbsences(d.absences.filter((a) => a.subjectName === row.subjectName && a.classLevel === row.classLevel)))
       .catch(() => {})
       .finally(() => setAbsencesLoading(false))
+    markAbsencesSeen(c.teacherId).catch(() => {})
   }
 
   // "By Teacher" — every absence for this teacher, any course, targeted or not.
@@ -971,6 +992,7 @@ function AdminAttendanceScreen() {
       .then((d) => setAbsences(d.absences))
       .catch(() => {})
       .finally(() => setAbsencesLoading(false))
+    markAbsencesSeen(teacherId).catch(() => {})
   }
 
   const handleDeleteAbsence = (id: string, graceExpired = false) => {

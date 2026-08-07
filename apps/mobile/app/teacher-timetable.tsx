@@ -3,7 +3,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getTeacherTimetable, getPeriods, getTimetableHistory, MyTimetableSlot, TimetablePeriod } from '@/lib/api/timetable'
-import { getTeacherAbsences, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { getTeacherAbsences, markAbsencesSeen, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 import { buildGridSlots, groupAbsencesBySlot } from '@/lib/timetableGrid'
@@ -31,6 +31,9 @@ export default function TeacherTimetableScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
 
+  // Pure data refresh — no side effect. Used both by the focus effect below AND by the
+  // background realtime listeners, which must be able to keep this screen's data current
+  // without that ever counting as an admin "reviewing" anything (see markAbsencesSeen).
   const load = useCallback(async () => {
     if (!teacherId) { setLoading(false); return }
     try {
@@ -42,9 +45,19 @@ export default function TeacherTimetableScreen() {
     finally { setLoading(false); setRefreshing(false) }
   }, [teacherId])
 
-  useFocusEffect(useCallback(() => { load() }, [load]))
+  // The real review action, fired ONLY when this screen genuinely comes into view — never
+  // from the background realtime listeners below. expo-router keeps a screen mounted after
+  // you navigate away from it (pushed underneath whatever's on top now), so a plain
+  // useEffect tied to 'absences:changed' would otherwise fire in the background every time
+  // ANYONE in the school reports or retracts an absence, silently marking this teacher's
+  // absences "reviewed" the instant they're created — before an admin has looked at anything.
+  useFocusEffect(useCallback(() => {
+    load()
+    if (teacherId) markAbsencesSeen(teacherId).catch(() => {})
+  }, [load, teacherId]))
 
-  // Keeps this in step when the absence is deleted or locked from anywhere else.
+  // Keeps this in step when the absence is deleted or locked from anywhere else. Data-only —
+  // deliberately does NOT call markAbsencesSeen (see above).
   useEffect(() => onRealtime('absences:changed', load), [load])
   // The slots themselves moved, not just their absence markers. load() refetches both.
   useEffect(() => onRealtime('timetable:changed', load), [load])
