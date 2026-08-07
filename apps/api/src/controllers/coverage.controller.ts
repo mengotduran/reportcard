@@ -2,7 +2,7 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
-import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, periodMinutesFor, DayOfWeek, ScopeTerm, DateRange, mergeDateRanges } from '../utils/teachingHours'
+import { computeCoverage, resolveScopeTerms, dateStringWithinRange, slotPeriods, periodMinutesFor, DayOfWeek, ScopeTerm, DateRange, CoverageAbsence, mergeDateRanges } from '../utils/teachingHours'
 
 // Falls back to the most recently created session when no term is currently active —
 // same situation fees.controller's currentSession already leaves null; a school between
@@ -162,6 +162,11 @@ function clampTermsToWindow(terms: ScopeTerm[], window: { startDate: Date; endDa
 // ASSIGNMENT is one row, since the hours actually taught depend on THAT teacher's timetable
 // and on the window during which they held the course. A course handed over mid-term
 // therefore produces two rows, one per teacher, splitting the hours at the handover date.
+//
+// PRIMARY is the exception: a class's 1-3 teachers don't hand a course over, they hold it
+// TOGETHER (see [[primary_class_teaching_team]]), so two teachers currently on the same
+// class are credited an equal share of the SAME hours rather than each measured against
+// their own slice — see buildSharedTeamParts below.
 async function buildCoverageRows(schoolId: string, session: string, teacherId?: string): Promise<CoverageRow[]> {
   const [terms, allTerms, teacherSubjects, school] = await Promise.all([
     prisma.term.findMany({ where: { schoolId, session } }),
@@ -178,10 +183,11 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       where: { subject: { schoolId }, ...(teacherId ? { userId: teacherId } : {}) },
       include: { subject: true, user: { select: { id: true, name: true } } },
     }),
-    prisma.school.findUnique({ where: { id: schoolId }, select: { dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { type: true, dayPeriodMinutes: true, eveningPeriodMinutes: true } }),
   ])
   if (teacherSubjects.length === 0) return []
 
+  const isPrimary = school?.type === 'PRIMARY'
   const teacherIds = [...new Set(teacherSubjects.map((ts) => ts.userId))]
   const subjectIds = [...new Set(teacherSubjects.map((ts) => ts.subjectId))]
 
@@ -219,7 +225,171 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     getProgrammeByClassLevel(schoolId),
   ])
   const asOfDate = new Date()
-  const parts = teacherSubjects.flatMap((ts) => {
+
+  type Part = {
+    subject: (typeof teacherSubjects)[number]['subject']
+    scopeTerms: ScopeTerm[]
+    contributor: CoverageContributor
+    window: { startDate: Date; endDate: Date }
+    isFinal: boolean
+    // Set only by the shared-team path below. Overrides the summed contributor total in
+    // groupByCourse, which would otherwise double-count: two teachers who both hold the
+    // SAME class simultaneously report the SAME periods missed, one row each.
+    teamPeriodsMissed?: number
+  }
+
+  // A stable key for "the same period", so two teachers' own separate TimetableSlot rows
+  // for what is really one shared class period can be matched up. Not slot id — each
+  // teacher has their OWN row even when the class is identical.
+  const periodKey = (s: { dayOfWeek: string; startTime: string; endTime: string; specificDate?: string | null; startsOn?: string | null; endsOn?: string | null }) =>
+    `${s.dayOfWeek}${s.startTime}${s.endTime}${s.specificDate ?? ''}${s.startsOn ?? ''}${s.endsOn ?? ''}`
+
+  // PRIMARY only: subjects where 2+ teachers are CURRENTLY, CONCURRENTLY assigned (endedAt
+  // null) are a shared class team, not a handover — see [[primary_class_teaching_team]].
+  // A teacher who has since left one (endedAt set) is excluded and still measured
+  // individually below, same as any ordinary handover.
+  const liveTeamBySubject = new Map<string, string[]>()
+  if (isPrimary) {
+    for (const ts of teacherSubjects) {
+      if (ts.endedAt != null) continue
+      const arr = liveTeamBySubject.get(ts.subjectId) ?? []
+      arr.push(ts.userId)
+      liveTeamBySubject.set(ts.subjectId, arr)
+    }
+  }
+
+  const handledTeacherSubjectIds = new Set<string>()
+  const sharedParts: Part[] = []
+
+  for (const [subjectId, liveIds] of liveTeamBySubject) {
+    const uniqueLiveIds = [...new Set(liveIds)]
+    if (uniqueLiveIds.length < 2) continue // a solo primary teacher is not a "team"
+    const groupTs = teacherSubjects.filter((ts) => ts.subjectId === subjectId && ts.endedAt == null)
+    const subject = groupTs[0].subject
+
+    // Each team member's own qualifying slots — same rule as the individual path below.
+    const memberSlots = new Map<string, typeof slots>()
+    for (const ts of groupTs) {
+      memberSlots.set(ts.userId, slots.filter((s) =>
+        s.teacherId === ts.userId &&
+        (s.subjectId === subject.id || (s.subjectId == null && s.privateSubjectId === subject.id)) &&
+        s.archivedAt == null
+      ))
+    }
+
+    // The class's real weekly schedule: the union of every team member's periods, deduped
+    // by (day, time, one-off window) rather than by row id, since each teacher holds their
+    // own identical copy of the same period.
+    const representativeByKey = new Map<string, (typeof slots)[number]>()
+    for (const memberList of memberSlots.values()) {
+      for (const s of memberList) {
+        const key = periodKey(s)
+        if (!representativeByKey.has(key)) representativeByKey.set(key, s)
+      }
+    }
+    const dedupedSlots = [...representativeByKey.values()]
+    if (dedupedSlots.length === 0) continue // nobody on the live team has a timetable yet
+
+    // The window they've ALL held it together: from whichever of them joined last (that is
+    // when "2+ teachers" became true) onward, since every live member's endedAt is null.
+    const sharedStart = groupTs.reduce((max, ts) => (ts.startedAt > max ? ts.startedAt : max), groupTs[0].startedAt)
+    const held = { startDate: sharedStart, endDate: FAR_FUTURE }
+    const scopeTerms = clampTermsToWindow(resolveScopeTerms(subject, terms), held)
+    if (scopeTerms.length === 0) continue
+
+    const courseProgramme = programmeByClassLevel.get(subject.classLevel) ?? null
+    const coursePeriodMinutes = periodMinutesFor(school ?? { dayPeriodMinutes: null, eveningPeriodMinutes: null }, courseProgramme)
+
+    // Each member's own reported absences, as period-occurrences ("this exact class, on
+    // this date") rather than raw rows — what actually needs to line up across teachers.
+    const memberOccurrences = new Map<string, Map<string, { key: string; date: string; periodIndex: number | null }>>()
+    const memberOwnPeriodsMissed = new Map<string, number>()
+    for (const ts of groupTs) {
+      const mySlots = memberSlots.get(ts.userId) ?? []
+      const slotKeyById = new Map(mySlots.map((s) => [s.id, periodKey(s)]))
+      const myAbsences = absences.filter((a) => a.teacherId === ts.userId && slotKeyById.has(a.timetableSlotId))
+      const inScope = myAbsences.filter((a) => scopeTerms.some((term) => dateStringWithinRange(a.date, term.startDate, term.endDate)))
+      const occMap = new Map<string, { key: string; date: string; periodIndex: number | null }>()
+      for (const a of inScope) {
+        const key = slotKeyById.get(a.timetableSlotId)!
+        occMap.set(`${key}${a.date}${a.periodIndex ?? 'null'}`, { key, date: a.date, periodIndex: a.periodIndex })
+      }
+      memberOccurrences.set(ts.userId, occMap)
+
+      // Informational per-teacher figure: THEIR OWN reports, same open-ended cutoff as the
+      // individual path uses — stays on record even when a teammate covered the class, per
+      // the 2026-08 decision that an individual absence is never silently dropped, only
+      // kept from docking the shared hours.
+      memberOwnPeriodsMissed.set(ts.userId, myAbsences
+        .filter((a) => scopeTerms.some((term) => dateStringWithinRange(a.date, term.startDate, absenceCutoffForTerm(term, allTerms))))
+        .reduce((sum, a) => {
+          if (a.periodIndex != null) return sum + 1
+          const slot = mySlots.find((s) => s.id === a.timetableSlotId)
+          return sum + (slot ? (slotPeriods(slot.startTime, slot.endTime, coursePeriodMinutes) ?? 1) : 1)
+        }, 0))
+    }
+
+    // A period only really went untaught once EVERY live team member reported missing it —
+    // one teacher covering for another is not a missed class. Intersect, don't union.
+    let teamMissed = memberOccurrences.get(groupTs[0].userId) ?? new Map()
+    for (const ts of groupTs.slice(1)) {
+      const theirs = memberOccurrences.get(ts.userId) ?? new Map()
+      const next = new Map<string, { key: string; date: string; periodIndex: number | null }>()
+      for (const [occKey, occ] of teamMissed) if (theirs.has(occKey)) next.set(occKey, occ)
+      teamMissed = next
+    }
+    const syntheticAbsences: CoverageAbsence[] = [...teamMissed.values()].map((occ) => ({
+      timetableSlotId: representativeByKey.get(occ.key)!.id,
+      date: occ.date,
+      periodIndex: occ.periodIndex,
+    }))
+
+    const result = computeCoverage({
+      requiredHours: subject.requiredHours,
+      slots: dedupedSlots.map((s) => ({
+        id: s.id, dayOfWeek: s.dayOfWeek as DayOfWeek, startTime: s.startTime, endTime: s.endTime,
+        specificDate: s.specificDate, startsOn: s.startsOn, endsOn: s.endsOn,
+      })),
+      terms: scopeTerms,
+      absences: syntheticAbsences,
+      asOfDate,
+      periodMinutes: coursePeriodMinutes,
+      holidays: holidaysFor(holidays, courseProgramme),
+    })
+
+    // Equal share for every team member — N teachers holding one class together are
+    // credited the SAME hours between them, never the class's total each. Summed back up
+    // in groupByCourse below, N shares of total/N reconstruct the class's real total
+    // exactly, so no other aggregation logic needs to change.
+    const n = groupTs.length
+    for (const ts of groupTs) {
+      sharedParts.push({
+        subject,
+        scopeTerms: resolveScopeTerms(subject, terms),
+        contributor: {
+          teacherId: ts.userId,
+          teacherName: ts.user.name,
+          startedAt: iso(ts.startedAt),
+          endedAt: null,
+          subjectId: subject.id,
+          subjectName: subject.name,
+          classLevel: subject.classLevel,
+          term: subject.term,
+          scheduledHours: result.scheduledHours / n,
+          taughtHours: result.taughtHours / n,
+          projectedFinalHours: result.projectedFinalHours / n,
+          periodsMissed: memberOwnPeriodsMissed.get(ts.userId) ?? 0,
+        },
+        window: held,
+        isFinal: result.isFinal,
+        teamPeriodsMissed: teamMissed.size,
+      })
+      handledTeacherSubjectIds.add(ts.id)
+    }
+  }
+
+  const parts: Part[] = [...sharedParts, ...teacherSubjects.flatMap((ts) => {
+    if (handledTeacherSubjectIds.has(ts.id)) return []
     const subject = ts.subject
     // Which VERSION of the timetable counts for this assignment: the one that was live when
     // the window closed. For a teacher who still holds the course that is the current
@@ -308,7 +478,7 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
       window: { startDate: ts.startedAt, endDate: ts.endedAt ?? FAR_FUTURE },
       isFinal: result.isFinal,
     }]
-  })
+  })]
 
   // A course earns a row by having an hours target OR by having absences recorded against
   // it. Without the second condition an absence on an untargeted course is invisible here —
@@ -339,6 +509,7 @@ function groupByCourse(
     contributor: CoverageContributor
     window: { startDate: Date; endDate: Date }
     isFinal: boolean
+    teamPeriodsMissed?: number
   }[],
   holidays: DateRange[],
 ): CoverageRow[] {
@@ -373,7 +544,12 @@ function groupByCourse(
       term: subject.term,
       requiredHours: subject.requiredHours,
       scheduledHours, taughtHours, projectedFinalHours, status, isFinal,
-      periodsMissed: sum((c) => c.periodsMissed),
+      // A shared primary team's row uses the TEAM's missed periods (all of them absent at
+      // once), not the sum of each member's own reports — two teachers on the same class
+      // who each individually missed the same period would otherwise double it. Anyone on
+      // the group who came through the ordinary (non-shared) path leaves this undefined, so
+      // the plain sum still applies to a normal handover course.
+      periodsMissed: group.find((g) => g.teamPeriodsMissed != null)?.teamPeriodsMissed ?? sum((c) => c.periodsMissed),
       // Earliest window first, so the handover chain reads in order.
       contributors: [...group].sort((a, b) => a.contributor.startedAt.localeCompare(b.contributor.startedAt)).map((g) => g.contributor),
       gaps: findGaps(scopeTerms, group.map((g) => g.window), now),
