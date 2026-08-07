@@ -23,7 +23,8 @@ export default function HndRegistrationPage() {
   const { isAuthenticated, school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
-  const groupWordCap = 'Department'
+  const isPrimary = school?.type === 'PRIMARY'
+  const groupWordCap = isPrimary ? 'Class' : 'Department'
   const stripSection = (n: string) => n.replace(/\s*\([^)]*\)\s*$/, '').trim()
   const { toast, showToast, hideToast } = useToast()
 
@@ -109,9 +110,9 @@ export default function HndRegistrationPage() {
           <BookMarked size={20} className="text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-foreground">{isUniversity ? 'HND Registration' : 'GCE Registration'}</h1>
+          <h1 className="text-xl font-bold text-foreground">{isUniversity ? 'HND Registration' : isPrimary ? 'FSLC Registration' : 'GCE Registration'}</h1>
           <p className="text-sm text-muted-foreground">
-            {isUniversity ? 'Level 2 students · HND exam registration' : 'Form 5 & Upper Sixth · GCE exam registration'}
+            {isUniversity ? 'Level 2 students · HND exam registration' : isPrimary ? 'Class Six · First School Leaving Certificate exam registration' : 'Form 5 & Upper Sixth · GCE exam registration'}
             {data?.session ? ` · ${data.session}` : ''}
           </p>
         </div>
@@ -173,7 +174,7 @@ export default function HndRegistrationPage() {
                     </span>
                     <button
                       onClick={() => handleEditFee(dept)}
-                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition">
+                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition">
                       <Pencil size={13} />
                     </button>
                   </div>
@@ -195,7 +196,7 @@ export default function HndRegistrationPage() {
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 activeDept === dept
                   ? 'bg-primary text-white'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  : 'bg-muted text-muted-foreground hover:bg-hover/80'
               }`}>
               {dept === 'ALL' ? 'All departments' : dept}
             </button>
@@ -227,7 +228,9 @@ export default function HndRegistrationPage() {
         <div className="text-center py-16 text-muted-foreground text-sm">
           {isUniversity
             ? 'No Level 2 students found. Make sure Level 2 department classes exist.'
-            : 'No Form 5 or Upper Sixth students found. Make sure those classes exist.'}
+            : isPrimary
+              ? 'No Class Six pupils found. Make sure a Class Six class exists.'
+              : 'No Form 5 or Upper Sixth students found. Make sure those classes exist.'}
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground text-sm">No students match your search.</div>
@@ -249,7 +252,7 @@ export default function HndRegistrationPage() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {pageItems.map((s, i) => (
-                    <tr key={s.studentId} className="hover:bg-muted/40 transition-colors">
+                    <tr key={s.studentId} className="hover:bg-hover/40 transition-colors">
                       <td className="px-4 py-3 text-muted-foreground text-xs">{(page - 1) * pageSize + i + 1}</td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-foreground">{s.name}</p>

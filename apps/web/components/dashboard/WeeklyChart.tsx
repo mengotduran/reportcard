@@ -40,13 +40,25 @@ function TrendIndicator({ data }: { data: number[] }) {
   return <span className="flex items-center gap-1 text-muted-foreground text-xs font-semibold"><Minus size={13} />{t('No change')}</span>
 }
 
+type HoverPoint = { index: number; x: number; y: number }
+
 // Recharts' composition (ResponsiveContainer AND its own Line/Bar/Area/Grid children)
 // silently renders nothing under React 19 — recharts/recharts#4590, #6857, open upstream
 // with no fix even at 3.10.0, and no console error to point at. Rather than depend on a
 // broken third-party render path for an 8-point sparkline, this draws it by hand: a plain
 // SVG polyline/area/bars sized from a measured container width. Small enough that hand-
 // rolling it is less risk than chasing a library bug with no confirmed resolution.
-function Sparkline({ data, width, color, type }: { data: number[]; width: number; color: string; type: ChartCfg['type'] }) {
+//
+// Hover is tracked here (not via native <title>, which only shows after the OS hover delay
+// and needs the pointer exactly on an 8px hit target) so the parent can render a real,
+// instant tooltip. `onHover` reports the nearest data index plus its plotted pixel position;
+// the parent owns the tooltip element since it needs to render outside the SVG's clipping.
+function Sparkline({
+  data, width, color, type, onHover, hoverIndex,
+}: {
+  data: number[]; width: number; color: string; type: ChartCfg['type']
+  onHover: (point: HoverPoint | null) => void; hoverIndex: number | null
+}) {
   const n = data.length
   if (n === 0 || width === 0) return null
   const max = Math.max(...data, 1)
@@ -54,11 +66,27 @@ function Sparkline({ data, width, color, type }: { data: number[]; width: number
   const x = (i: number) => (n === 1 ? width / 2 : (i / (n - 1)) * width)
   const y = (v: number) => CHART_HEIGHT - STROKE_INSET - (v / max) * usableHeight
 
+  // Nearest point by X, not exact hit-testing — a sparkline is thin enough that "closest
+  // column" is what a user expects the whole chart to respond to, same as Recharts' own
+  // hover behaviour.
+  const nearestIndex = (clientX: number, currentTarget: SVGSVGElement) => {
+    const rect = currentTarget.getBoundingClientRect()
+    const relX = clientX - rect.left
+    return Math.min(n - 1, Math.max(0, n === 1 ? 0 : Math.round((relX / width) * (n - 1))))
+  }
+
   if (type === 'bar') {
     const slot = width / n
     const barWidth = Math.min(24, slot * 0.6)
     return (
-      <svg width={width} height={CHART_HEIGHT} className="overflow-visible">
+      <svg
+        width={width} height={CHART_HEIGHT} className="overflow-visible"
+        onMouseMove={(e) => {
+          const i = nearestIndex(e.clientX, e.currentTarget)
+          onHover({ index: i, x: x(i), y: y(data[i]) })
+        }}
+        onMouseLeave={() => onHover(null)}
+      >
         {data.map((v, i) => {
           const barHeight = Math.max(2, (v / max) * usableHeight)
           return (
@@ -70,9 +98,8 @@ function Sparkline({ data, width, color, type }: { data: number[]; width: number
               height={barHeight}
               rx={3}
               fill={color}
-            >
-              <title>{v.toLocaleString()}</title>
-            </rect>
+              opacity={hoverIndex === null || hoverIndex === i ? 1 : 0.4}
+            />
           )
         })}
       </svg>
@@ -83,14 +110,22 @@ function Sparkline({ data, width, color, type }: { data: number[]; width: number
   const areaPath = `${linePath} L${x(n - 1)},${CHART_HEIGHT} L${x(0)},${CHART_HEIGHT} Z`
 
   return (
-    <svg width={width} height={CHART_HEIGHT} className="overflow-visible">
+    <svg
+      width={width} height={CHART_HEIGHT} className="overflow-visible"
+      onMouseMove={(e) => {
+        const i = nearestIndex(e.clientX, e.currentTarget)
+        onHover({ index: i, x: x(i), y: y(data[i]) })
+      }}
+      onMouseLeave={() => onHover(null)}
+    >
       {type === 'area' && <path d={areaPath} fill={color} fillOpacity={0.1} stroke="none" />}
       <path d={linePath} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-      {data.map((v, i) => (
-        <circle key={i} cx={x(i)} cy={y(v)} r={8} fill="transparent">
-          <title>{v.toLocaleString()}</title>
-        </circle>
-      ))}
+      {hoverIndex != null && (
+        <line x1={x(hoverIndex)} y1={STROKE_INSET} x2={x(hoverIndex)} y2={CHART_HEIGHT - STROKE_INSET} stroke={color} strokeOpacity={0.2} strokeWidth={1} />
+      )}
+      {hoverIndex != null && (
+        <circle cx={x(hoverIndex)} cy={y(data[hoverIndex])} r={4} fill={color} stroke="var(--card)" strokeWidth={2} />
+      )}
     </svg>
   )
 }
@@ -100,6 +135,7 @@ export default function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; w
   const values = weekData[cfg.key] ?? []
   const Icon = cfg.icon
   const [containerRef, width] = useMeasuredWidth<HTMLDivElement>()
+  const [hover, setHover] = useState<HoverPoint | null>(null)
 
   const labels = weekData.labels ?? []
   const tickIdxs = labels.length > 1 ? [0, Math.floor((labels.length - 1) / 2), labels.length - 1] : [0]
@@ -119,8 +155,23 @@ export default function WeeklyChart({ cfg, weekData, total }: { cfg: ChartCfg; w
         </div>
       </div>
 
-      <div ref={containerRef} style={{ width: '100%', height: CHART_HEIGHT }}>
-        <Sparkline data={values} width={width} color={cfg.color} type={cfg.type} />
+      <div ref={containerRef} className="relative" style={{ width: '100%', height: CHART_HEIGHT }}>
+        <Sparkline data={values} width={width} color={cfg.color} type={cfg.type} onHover={setHover} hoverIndex={hover?.index ?? null} />
+        {/* Own tooltip, not the SVG's native <title> — that only appears after the OS hover
+            delay and needs the pointer exactly on a tiny hit target. Clamped so it never
+            spills past the chart's own width near either edge. */}
+        {hover != null && width > 0 && (
+          <div
+            className="absolute pointer-events-none z-10 -translate-x-1/2 bg-card text-foreground border border-border rounded-lg shadow-md px-2 py-1 text-xs whitespace-nowrap"
+            style={{
+              left: Math.min(Math.max(hover.x, 28), width - 28),
+              top: Math.max(hover.y - 32, 0),
+            }}
+          >
+            <span className="font-semibold">{values[hover.index]?.toLocaleString()}</span>
+            {labels[hover.index] && <span className="text-muted-foreground ml-1">{labels[hover.index]}</span>}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between -mt-1">

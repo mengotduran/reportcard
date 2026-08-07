@@ -5,6 +5,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Modal, FlatList, RefreshControl, TextInput,
 } from 'react-native'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
@@ -24,6 +25,7 @@ import {
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import api from '@/lib/api/client'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { isCompetencyRating, RATING_COLORS } from '@/lib/competency'
 import { getGradingScale, gradeFromScore, isFailingScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
@@ -425,14 +427,26 @@ export default function AdminReportCardDetail() {
   // job and naming a teacher beside it points at the wrong person.
   const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY'
   const average = reportCard.average ?? 0
-  const avgMaxScore = subjects[0]?.maxScore ?? 20
+  // The scale the AVERAGE is on, which is not always the scale its SUBJECTS are on. Only a
+  // university states a raw average (out of the course's own maxScore); primary and
+  // secondary both state it out of 20 — primary does so even though its subjects are marked
+  // raw out of 100 (see saveEntries). Reading this off `subjects[0].maxScore` therefore fed
+  // gradeFromScore 100 for a /20 primary average and graded 13.9 as if it were 13.9/100.
+  const avgMaxScore = school?.type === 'UNIVERSITY' ? (subjects[0]?.maxScore ?? 100) : 20
   const gradeResult = gradeFromScore(average, avgMaxScore, gradingRanges)
 
   // Publish readiness (same rules as web + bulk-publish) — prefer the backend's
   // readiness detail once loaded, since it also catches subjects with zero
   // entries at all, not just entries with a missing sequence score.
-  const localSeqsFilled = reportCard.entries.length > 0 &&
-    reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null)
+  // Nursery: a rating per subject and nothing else. Read from the CLASS, not the school —
+  // one primary school runs both modes at once, its nursery rated and Class 1-6 marked.
+  const isCompetency = reportCard.gradingMode === 'COMPETENCY'
+  const ratedCount = reportCard.entries.filter(e => isCompetencyRating(e.grade)).length
+  // A competency card has no sequences at all, so "complete" there means every subject
+  // carries a rating — the same rule the API's own publish gate applies.
+  const localSeqsFilled = reportCard.entries.length > 0 && (isCompetency
+    ? reportCard.entries.every(e => isCompetencyRating(e.grade))
+    : reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
   // Positions are class-relative — every other active student in this class + term
@@ -446,7 +460,7 @@ export default function AdminReportCardDetail() {
 
   // University only. Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors web +
   // PrintableReportCard logic. "Terms Average"/"Overall Grade"/"Position"/"Class Average"
-  // are primary/secondary concepts (a raw 0-100 score average and a class rank) and don't
+  // are primary/secondary concepts (a /20 score average and a class rank) and don't
   // apply to a university report card, which is graded and classified by GPA instead.
   const semGpaInfo = (() => {
     let pts = 0, cr = 0
@@ -460,8 +474,12 @@ export default function AdminReportCardDetail() {
     }
     return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
   })()
-  const cgpa = reportCard.cgpa ?? semGpaInfo.gpa
-  const classification = classificationForGpa(cgpa, classificationBands)
+  // Null on any semester that does not close the academic year (the API only sends it
+  // on the last one). Not defaulted to the semester GPA, which is a different figure.
+  const cgpa: number | null = reportCard.cgpa ?? null
+  // Classification bands the cumulative once the year has one, otherwise this
+  // semester's own GPA, so it always describes a figure shown on this card.
+  const classification = classificationForGpa(cgpa ?? semGpaInfo.gpa, classificationBands)
 
   const handleSaveRemarks = async () => {
     setSavingRemarks(true)
@@ -497,7 +515,8 @@ export default function AdminReportCardDetail() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.studentName}>{reportCard.student.name}</Text>
-            <Text style={styles.meta}>{reportCard.student.classLevel} · {reportCard.term.name} · {reportCard.term.session}</Text>
+            {/* Stripped: the section is an internal grouping and must never appear on a card. */}
+            <Text style={styles.meta}>{stripProgrammeSuffix(reportCard.student.classLevel)} · {reportCard.term.name} · {reportCard.term.session}</Text>
           </View>
         </View>
         <View style={[styles.statusBadge, isDraft ? styles.draftBadge : styles.publishedBadge]}>
@@ -508,12 +527,21 @@ export default function AdminReportCardDetail() {
         </View>
       </View>
 
+      {/* A rated card gets progress instead of figures: it has no average, no grade and
+          no position, and dashes where they would be read as data that failed to load. */}
       <View style={styles.statsGrid}>
-        {(isUniversity
+        {(isCompetency
+          ? [
+              { label: tr('Subjects'), value: String(subjects.length || reportCard.entries.length) },
+              { label: tr('rated'), value: `${ratedCount}/${subjects.length || reportCard.entries.length}` },
+            ]
+          : isUniversity
           ? [
               { label: tr('Courses'), value: String(subjects.length || reportCard.entries.length) },
               { label: tr('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
-              { label: tr('Cumulative GPA'), value: cgpa.toFixed(2) },
+              // CGPA is the year-end figure, so only the closing semester carries it.
+              // Never fall back to the semester GPA under a cumulative label.
+              ...(cgpa != null ? [{ label: tr('Cumulative GPA'), value: cgpa.toFixed(2) }] : []),
               { label: tr('Classification'), value: classification, color: classification === 'Fail' ? '#dc2626' : undefined },
             ]
           : [
@@ -543,7 +571,7 @@ export default function AdminReportCardDetail() {
           <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
             <View style={[styles.readinessBadge, allSeqsFilled ? styles.readinessOk : styles.readinessFail]}>
               <Text style={{ fontSize: 10, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>
-                {allSeqsFilled ? '✓' : '✗'} {tr('Sequences')}
+                {allSeqsFilled ? '✓' : '✗'} {isCompetency ? tr('Ratings') : tr('Sequences')}
               </Text>
             </View>
             <View style={[styles.readinessBadge, hasRemarks ? styles.readinessOk : styles.readinessFail]}>
@@ -711,7 +739,7 @@ export default function AdminReportCardDetail() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionAccent} />
-          <Text style={styles.sectionTitle}>{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</Text>
+          <Text style={styles.sectionTitle}>{isCompetency ? tr('Subject Ratings') : isUniversity ? tr('Course Scores') : tr('Subject Scores')}</Text>
           {/* This list is read-only; marks live on the class sheet. Without a way through,
               a complete card offers no route to correct a mark. Draft only: published is
               frozen for everyone, and the button would just open a locked sheet. */}
@@ -719,7 +747,7 @@ export default function AdminReportCardDetail() {
             <TouchableOpacity
               onPress={() => router.push(`/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}` as any)}
               style={{ marginLeft: 'auto', borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: '#F03E2F' }}>{tr('Edit marks')}</Text>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: '#F03E2F' }}>{isCompetency ? tr('Edit ratings') : tr('Edit marks')}</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -732,6 +760,30 @@ export default function AdminReportCardDetail() {
               const unfilled = !entry || (entry.seq1Score == null || entry.seq2Score == null)
               const maxScore = subject.maxScore ?? 20
               const gr = unfilled ? null : gradeFromScore(entry!.score ?? 0, maxScore, gradingRanges)
+              // A rated subject has no mark, no maximum and no coefficient to report —
+              // just the rating, which is the whole card.
+              if (isCompetency) {
+                const rating = entry?.grade
+                const rc = isCompetencyRating(rating) ? RATING_COLORS[rating] : null
+                return (
+                  <View key={subject.id} style={[styles.scoreCard, rc ? { borderLeftWidth: 3, borderLeftColor: rc } : null]}>
+                    <View style={styles.scoreCardInner}>
+                      <View style={styles.scoreLeft}>
+                        <Text style={styles.scoreSubjectName}>{subject.name}</Text>
+                      </View>
+                      <View style={styles.scoreRight}>
+                        {rc ? (
+                          <View style={[styles.gradeBadge, { backgroundColor: '#f3f4f6' }]}>
+                            <Text style={[styles.gradeText, { color: rc }]}>{tr(rating as string)}</Text>
+                          </View>
+                        ) : (
+                          <Text style={{ fontSize: 11, color: colors.textMuted }}>{tr('Not recorded')}</Text>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                )
+              }
               return (
                 <View key={subject.id} style={[styles.scoreCard, gr && { borderLeftWidth: 3, borderLeftColor: gr.color }]}>
                   <View style={styles.scoreCardInner}>
@@ -807,7 +859,7 @@ export default function AdminReportCardDetail() {
         ) : isDraft && !allSeqsFilled ? (
           <View style={{ backgroundColor: '#FEF3C7', borderColor: '#FDE68A', borderWidth: 1, borderRadius: 10, padding: 12 }}>
             <Text style={{ fontSize: 13, fontWeight: '700', color: '#92400E' }}>{tr('Cannot add remarks yet')}</Text>
-            <Text style={{ fontSize: 12, color: '#B45309', marginTop: 2 }}>{tr('All subject sequences must be filled before you can add general remarks.')}</Text>
+            <Text style={{ fontSize: 12, color: '#B45309', marginTop: 2 }}>{isCompetency ? tr('Every subject must be rated before you can add general remarks.') : tr('All subject sequences must be filled before you can add general remarks.')}</Text>
           </View>
         ) : (
           <Text style={styles.remarksText}>

@@ -47,6 +47,20 @@ enum MarksEntryMode {
   ADMIN_ONLY
 }
 
+/// Day or Evening sitting of the school. See the Postgres schema for the full rationale:
+/// a university runs the same programme twice with the same lecturers and different
+/// students, each sitting being its own ClassLevel.
+enum Programme {
+  DAY
+  EVENING
+}
+
+/// How a class is assessed — see ClassLevel.gradingMode.
+enum GradingMode {
+  NUMERIC
+  COMPETENCY
+}
+
 model ParentSchool {
   id        String   @id @default(uuid())
   name      String
@@ -84,7 +98,18 @@ model School {
   updatedAt      DateTime   @updatedAt
   acronym        String?
   batch          Int?
-  repeatThreshold Float?
+  // Length of one school period in minutes. Teaching hours are counted in real clock
+  // hours, but a teacher's ATTENDANCE is counted in these periods, so a 100-minute class
+  // on a 50-minute grid is 2 periods missed. Mirrors the Postgres schema.
+  // Day and Evening are separate sittings with their own bell schedule (see
+  // TimetablePeriod.programme), so each gets its own period length. Mirrors the Postgres
+  // schema — see the fuller comment there.
+  dayPeriodMinutes     Int?
+  eveningPeriodMinutes Int?
+  // Minutes after a period STARTS before the teacher counts as having missed it; once up,
+  // that period's absence is final for everyone. null keeps the older end-of-period rule.
+  // Mirrors the Postgres schema — see the fuller comment there.
+  absenceGraceMinutes Int?
   authorizationNumber String?
   // Official-header letterhead text (left/right blocks in the "Official"
   // report-card header style). One EN and one FR variant per side; the
@@ -99,6 +124,7 @@ model School {
   users                    User[]
   students                 Student[]
   subjects                 Subject[]
+  subjectExclusions                 SubjectExclusion[]
   terms                    Term[]
   reportCards              ReportCard[]
   classLevels              ClassLevel[]
@@ -106,6 +132,7 @@ model School {
   reportCardTemplate       ReportCardTemplate?
   classListTemplate        ClassListTemplate?
   gradingScale             GradingScale?
+  promotionScale           PromotionScale?
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
   excelTemplates           ExcelTemplate[]
@@ -114,6 +141,7 @@ model School {
   teacherAbsences          TeacherAbsence[]
   notifications            Notification[]
   pastTermMarksGrants      PastTermMarksGrant[]
+  holidays                 SchoolHoliday[]
 }
 
 model GradingScale {
@@ -121,6 +149,19 @@ model GradingScale {
   schoolId  String   @unique
   ranges    Json     @default("[]")
   updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
+// Mirrors the Postgres schema — see the fuller comment there.
+model PromotionScale {
+  id           String   @id @default(uuid())
+  schoolId     String   @unique
+  trialMinimum Float?
+  passLabel    String   @default("Pass")
+  trialLabel   String   @default("This student was promoted on trial")
+  repeatLabel  String   @default("Repeat")
+  updatedAt    DateTime @updatedAt
 
   school School @relation(fields: [schoolId], references: [id])
 }
@@ -165,9 +206,20 @@ model ClassLevel {
   hasStream          Boolean  @default(false)
   order              Int      @default(0)
   maxScore           Int      @default(20)
+  testMaxScore       Int      @default(30) // primary only — Test ceiling out of maxScore, Exam = maxScore - testMaxScore
   feeAmount          Int      @default(0) // total fee for this class per academic session, in XAF
   hndRegistrationFee Int?
   departmentId       String?
+  // Day or Evening sitting; existing classes are all DAY.
+  programme          Programme @default(DAY)
+  // How this class is assessed: NUMERIC (score + average + position) or COMPETENCY
+  // (nursery — a developmental rating per subject, no average, total or position).
+  // Mirrors the Postgres schema; see the full note there.
+  gradingMode        GradingMode @default(NUMERIC)
+  // Superadmin-granted, one-shot permission to change this class's mark ceilings after a
+  // term of the current year has closed. Null = locked. Mirrors the Postgres schema; the
+  // full reasoning lives there.
+  scaleUnlockedAt    DateTime?
   createdAt          DateTime @default(now())
 
   school     School      @relation(fields: [schoolId], references: [id])
@@ -180,7 +232,11 @@ model User {
   id                String   @id @default(uuid())
   schoolId          String?
   name              String
-  email             String   @unique
+  // Nullable: a no-email account logs in with `username` instead — see below.
+  email             String?  @unique
+  // Alternative login identifier for someone with no email. See schema.prisma's User model
+  // for the full rationale (identical here).
+  username          String?  @unique
   password          String
   role              UserRole
   masterClassLevel  String?
@@ -197,6 +253,10 @@ model User {
   // university term-scoping and passwordSetAt always non-null (set at creation).
   createdForTerm    String?
   passwordSetAt     DateTime?
+  // Forgot-password flow: a single-use token hash and its expiry. Mirrors the Postgres
+  // schema — without these the reset endpoints fail on an offline install.
+  resetTokenHash      String?   @unique
+  resetTokenExpiresAt DateTime?
 
   school          School?          @relation(fields: [schoolId], references: [id])
   reportCards     ReportCard[]
@@ -230,6 +290,9 @@ model Student {
   // round-tripping it through a timestamp shifts it by a day for anyone west of UTC.
   dateOfBirth       String?
   placeOfBirth      String?
+  // Uploaded file URL, same "/uploads/<file>" shape as School.logo/stamp. Absent = the
+  // report card's identity box prints an empty labelled photo frame instead of an image.
+  photo             String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -239,6 +302,7 @@ model Student {
   hndRegistrationPayments  HndRegistrationPayment[]
 
   @@unique([schoolId, studentId])
+  subjectExclusions   SubjectExclusion[]
 }
 
 model FeePayment {
@@ -266,6 +330,7 @@ model HndRegistrationPayment {
   amount     Int
   paidOn     DateTime
   note       String?
+  examNumber String? // government exam registration number (FSLC/GCE/HND), optional
   recordedBy String?
   createdAt  DateTime @default(now())
 
@@ -294,6 +359,7 @@ model Subject {
   code        String?
   classLevel  String
   maxScore    Int      @default(20)
+  testMaxScore Int     @default(30) // primary only — see ClassLevel.testMaxScore
   coefficient Int      @default(1)
   credit      Int?     // credit hours (university GPA courses)
   compulsory  Boolean  @default(true) // optional subjects: a student may not take them
@@ -313,6 +379,8 @@ model Subject {
   teacherSubjects TeacherSubject[]
   timetableSlots  TimetableSlot[]
   pastTermGrants  PastTermMarksGrant[]
+  exclusions      SubjectExclusion[]
+  privateSlots    TimetableSlot[]    @relation("PrivateSlotCourse")
 }
 
 // Mirrors schema.prisma — see the comment there.
@@ -328,6 +396,25 @@ model TimetableSlot {
   label        String?
   room         String?
   specificDate String?
+  // ── How long this slot runs (private/extra classes) ──────────────────────────
+  // Three shapes, and only one of them can apply at a time:
+  //   specificDate set          a single day, happens exactly once
+  //   startsOn/endsOn set       recurs weekly on dayOfWeek, but only between those dates
+  //   all three null            recurs weekly for the whole term/session (the original
+  //                             behaviour, and what every school-period slot uses)
+  // Dates are "YYYY-MM-DD" text for the same reason Student.dateOfBirth is: a DateTime
+  // shifts a day across timezones, and these are calendar days, not instants.
+  startsOn     String?
+  endsOn       String?
+  // A private class may be tied to a course, so the hours it delivers land on that
+  // course's coverage instead of floating free. Deliberately NOT `subjectId`: that field
+  // is what distinguishes a school period from a private slot everywhere in the codebase
+  // (absence reporting, the builder's grid, coverage's own query), so reusing it would
+  // silently turn every linked private class into a timetabled school period.
+  privateSubjectId String?
+  // SetNull, not Cascade: deleting a course must unlink the private class, never
+  // delete it. The class still happened; it just stops counting toward that course.
+  privateSubject   Subject? @relation("PrivateSlotCourse", fields: [privateSubjectId], references: [id], onDelete: SetNull)
   archivedAt   DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -346,14 +433,21 @@ model TeacherAbsence {
   teacherId       String
   timetableSlotId String
   date            String
+  // Which period WITHIN the slot this row is, 0-based, so a double period books two rows
+  // and a late arrival loses only the period actually missed. null = a legacy whole-slot
+  // row. Mirrors the Postgres schema.
+  periodIndex     Int?
   recordedById    String
+  // Once an admin has viewed this in the per-teacher list on a PRIOR visit it becomes a
+  // locked historical record. Mirrors the Postgres schema.
+  seenByAdmin     Boolean  @default(false)
   createdAt       DateTime @default(now())
   school          School         @relation(fields: [schoolId], references: [id])
   teacher         User           @relation("TeacherAbsences", fields: [teacherId], references: [id], onDelete: Cascade)
   slot            TimetableSlot  @relation(fields: [timetableSlotId], references: [id], onDelete: Cascade)
   recordedBy      User           @relation("AbsencesRecorded", fields: [recordedById], references: [id])
 
-  @@unique([teacherId, timetableSlotId, date])
+  @@unique([teacherId, timetableSlotId, date, periodIndex])
   @@index([schoolId, teacherId])
 }
 
@@ -365,6 +459,7 @@ model Notification {
   type        String
   title       String
   body        String
+  data        Json?
   readAt      DateTime?
   createdAt   DateTime  @default(now())
   school      School    @relation(fields: [schoolId], references: [id])
@@ -380,6 +475,10 @@ model TimetablePeriod {
   startTime String
   endTime   String
   isBreak   Boolean @default(false)
+  // Which sitting this period belongs to. Day and Evening are two fully independent bell
+  // schedules, so every row picks one explicitly — no more "whole school" null. Defaults
+  // to DAY, a no-op for every school type except university.
+  programme Programme @default(DAY)
   school    School  @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])
@@ -390,11 +489,50 @@ model TeacherSubject {
   userId    String
   subjectId String
   createdAt DateTime @default(now())
+  // When this teacher actually took the course, and when they gave it up. Hours are only
+  // counted inside this window, so a mid-term handover splits the course's hours between
+  // the two teachers at the exact date the admin recorded.
+  //
+  // endedAt null = they still hold it. An ENDED row is deliberately kept rather than deleted:
+  // it is the only record that the previous teacher ever taught it, and deleting it would
+  // erase the hours they are owed.
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  // NOT unique on (userId, subjectId) any more: a teacher can hold a course, hand it over,
+  // and take it back later, which is two legitimate rows. "Only one ACTIVE assignment per
+  // teacher+course" is enforced in code instead (see assignSubjects), because a partial
+  // unique index on endedAt IS NULL cannot be expressed in the Prisma schema and would show
+  // as permanent drift.
+  @@index([userId, subjectId])
+  @@index([subjectId, endedAt])
+}
 
-  @@unique([userId, subjectId])
+// A school closure — public holiday, mid-term break, anything that cancels teaching. Stored
+// as a NAMED RANGE rather than one row per day, because schools close for stretches and a
+// row per day would be tedious to enter and easy to get half-wrong.
+//
+// Ranges are INCLUSIVE of both ends and may overlap each other; the hours maths merges them
+// before subtracting, so an overlap can never remove the same day twice. Any scheduled period
+// falling inside one is not counted as taught, and an absence reported for such a period stops
+// subtracting too — nobody missed a class that never happened.
+model SchoolHoliday {
+  id        String   @id @default(uuid())
+  schoolId  String
+  name      String
+  // Which sitting is closed. NULL = the whole school, which is what every existing holiday
+  // means and stays the default. Set it only when one sitting runs through a closure the
+  // other observes. Evening currently exists for universities only, so this is a no-op
+  // everywhere else.
+  programme Programme?
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime @default(now())
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId, startDate])
 }
 
 model Term {
@@ -492,4 +630,29 @@ model MarksEntryModeChange {
 
   @@index([schoolId, changedAt])
   @@index([schoolId, termId])
+}
+
+/// A student who does NOT take an optional course, even though the course belongs to their
+/// class. University departments are otherwise a fixed course list — everyone sits
+/// everything — so this is the ONLY way a course can be absent from one student's report
+/// card without being absent from their classmates'.
+///
+/// Deliberately an EXCLUSION list rather than an enrolment list: the default has to stay
+/// "everyone in the department takes this", so a course that is merely marked optional
+/// behaves exactly as before until somebody is actually ticked off it. An enrolment list
+/// would have silently emptied every optional course the day it shipped.
+///
+/// Only meaningful where `Subject.compulsory` is false; a compulsory course ignores these.
+model SubjectExclusion {
+  id        String   @id @default(uuid())
+  schoolId  String
+  subjectId String
+  studentId String
+  createdAt DateTime @default(now())
+  school    School   @relation(fields: [schoolId], references: [id])
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, studentId])
+  @@index([schoolId, subjectId])
 }

@@ -5,20 +5,49 @@ import { AuthRequest } from '../middleware/auth'
 import { logMarksEntryModeChange, currentTermIdFor } from '../utils/marksEntryMode'
 import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
 import { sendPasswordSetupEmail } from '../utils/email'
+import { validateNewPassword, validateUsername } from '../utils/passwordValidation'
 
 const schoolInclude = {
   _count: { select: { students: true, users: true, reportCards: true } },
 }
 
+// An admin with no email logs in with a username instead — same idea as a teacher created
+// the same way (see createTeacher in teacher.controller.ts). Exactly one of the two is
+// required; mirrors the request body's `adminEmail`/`adminUsername` fields at each call site.
+type AdminIdentifier = { email: string | null; username: string | null }
+
+function resolveAdminIdentifier(email: unknown, username: unknown): AdminIdentifier | { error: string } {
+  const hasEmail = typeof email === 'string' && email.trim().length > 0
+  const hasUsername = typeof username === 'string' && username.trim().length > 0
+  if (hasEmail === hasUsername) {
+    return { error: hasEmail ? 'Provide either an admin email or a username, not both' : 'An admin email or a username is required' }
+  }
+  if (hasUsername) {
+    const usernameError = validateUsername((username as string).trim())
+    if (usernameError) return { error: usernameError }
+  }
+  return { email: hasEmail ? (email as string) : null, username: hasUsername ? (username as string).trim() : null }
+}
+
+function isIdentifierError(x: AdminIdentifier | { error: string }): x is { error: string } {
+  return 'error' in x
+}
+
+async function findExistingAdminUser(identifier: AdminIdentifier) {
+  return identifier.email
+    ? prisma.user.findUnique({ where: { email: identifier.email } })
+    : prisma.user.findUnique({ where: { username: identifier.username! } })
+}
+
 // A newly created SCHOOL_ADMIN goes through the exact same invite pattern as a
-// brand-new teacher (see createTeacher in teacher.controller.ts): offline
-// installs get a real, working password immediately; online schools instead
-// get an emailed setup link and stay "pending" (passwordSetAt null) until they
-// use it. resetPassword (passwordReset.controller.ts) stamps passwordSetAt
-// whichever flow — initial setup or a later forgot-password reset — redeems
-// the token, so "pending" always clears itself once a real password is set.
-async function buildAdminAccount(adminPassword: string | undefined) {
-  if (IS_OFFLINE_BUILD) {
+// brand-new teacher (see createTeacher in teacher.controller.ts): offline installs (or
+// anyone with no email, online or off) get a real, working password immediately; an online
+// admin with an email instead gets an emailed setup link and stays "pending" (passwordSetAt
+// null) until they use it. resetPassword (passwordReset.controller.ts) stamps passwordSetAt
+// whichever flow — initial setup or a later forgot-password reset — redeems the token, so
+// "pending" always clears itself once a real password is set.
+async function buildAdminAccount(identifier: AdminIdentifier, adminPassword: string | undefined) {
+  if (IS_OFFLINE_BUILD || !identifier.email) {
     return {
       password: await bcrypt.hash(adminPassword!, 12),
       passwordSetAt: new Date() as Date | null,
@@ -43,10 +72,9 @@ async function sendAdminSetupEmail(email: string, inviteToken: string, language?
   await sendPasswordSetupEmail({ to: email, resetUrl: setupUrl, lang: language === 'FR' ? 'FR' : 'EN' })
 }
 
-function offlinePasswordError(adminPassword: string | undefined): string | null {
-  if (!IS_OFFLINE_BUILD) return null
-  if (!adminPassword || adminPassword.length < 6) return 'Password must be at least 6 characters'
-  return null
+function directPasswordError(identifier: AdminIdentifier, adminPassword: string | undefined): string | null {
+  if (!IS_OFFLINE_BUILD && identifier.email) return null // emailed setup link instead — no password taken here
+  return validateNewPassword(String(adminPassword ?? ''))
 }
 
 // ─── Overview ────────────────────────────────────────────────────────────────
@@ -78,19 +106,22 @@ export const getOverview = async (_req: Request, res: Response) => {
 
 export const createStandaloneSchool = async (req: Request, res: Response) => {
   try {
-    const { schoolName, schoolType, schoolEmail, subdomain, adminName, adminEmail, adminPassword, phone, city, language } = req.body
+    const { schoolName, schoolType, schoolEmail, subdomain, adminName, adminEmail, adminUsername, adminPassword, phone, city, language } = req.body
 
     const existing = await prisma.school.findFirst({ where: { OR: [{ email: schoolEmail }, { subdomain }] } })
     if (existing) { res.status(400).json({ message: 'Email or subdomain already taken' }); return }
 
-    const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } })
-    if (existingUser) { res.status(400).json({ message: 'Admin email already exists' }); return }
+    const identifier = resolveAdminIdentifier(adminEmail, adminUsername)
+    if (isIdentifierError(identifier)) { res.status(400).json({ message: identifier.error }); return }
 
-    const pwError = offlinePasswordError(adminPassword)
+    const existingUser = await findExistingAdminUser(identifier)
+    if (existingUser) { res.status(400).json({ message: identifier.email ? 'Admin email already exists' : 'Admin username already exists' }); return }
+
+    const pwError = directPasswordError(identifier, adminPassword)
     if (pwError) { res.status(400).json({ message: pwError }); return }
 
     const lang = language === 'FR' ? 'FR' : 'EN'
-    const account = await buildAdminAccount(adminPassword)
+    const account = await buildAdminAccount(identifier, adminPassword)
     const school = await prisma.school.create({
       data: {
         name: schoolName,
@@ -103,7 +134,7 @@ export const createStandaloneSchool = async (req: Request, res: Response) => {
         coverImages: [],
         users: {
           create: {
-            name: adminName, email: adminEmail, role: 'SCHOOL_ADMIN',
+            name: adminName, email: identifier.email, username: identifier.username, role: 'SCHOOL_ADMIN',
             password: account.password, passwordSetAt: account.passwordSetAt,
             resetTokenHash: account.resetTokenHash, resetTokenExpiresAt: account.resetTokenExpiresAt,
           },
@@ -112,7 +143,7 @@ export const createStandaloneSchool = async (req: Request, res: Response) => {
       include: { ...schoolInclude, users: true },
     })
 
-    if (account.inviteToken) await sendAdminSetupEmail(adminEmail, account.inviteToken, lang)
+    if (account.inviteToken && identifier.email) await sendAdminSetupEmail(identifier.email, account.inviteToken, lang)
 
     res.status(201).json({ message: 'School created', school })
   } catch (error) {
@@ -135,7 +166,8 @@ export const createParentSchool = async (req: Request, res: Response) => {
         subdomain: string
         schoolEmail: string
         adminName: string
-        adminEmail: string
+        adminEmail?: string
+        adminUsername?: string
         adminPassword: string
         phone?: string
       }[]
@@ -149,20 +181,24 @@ export const createParentSchool = async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Each section must be a unique type + language combination' }); return
     }
 
-    // Check for duplicate subdomains / emails
+    // Check for duplicate subdomains / emails, and resolve each section's admin identifier.
+    const identifiers: AdminIdentifier[] = []
     for (const s of sections) {
       const dup = await prisma.school.findFirst({ where: { OR: [{ email: s.schoolEmail }, { subdomain: s.subdomain }] } })
       if (dup) { res.status(400).json({ message: `Subdomain or email already taken for ${s.type} section` }); return }
-      const dupUser = await prisma.user.findUnique({ where: { email: s.adminEmail } })
-      if (dupUser) { res.status(400).json({ message: `Admin email ${s.adminEmail} already exists` }); return }
+      const identifier = resolveAdminIdentifier(s.adminEmail, s.adminUsername)
+      if (isIdentifierError(identifier)) { res.status(400).json({ message: `${identifier.error} (${s.type} section)` }); return }
+      const dupUser = await findExistingAdminUser(identifier)
+      if (dupUser) { res.status(400).json({ message: `Admin ${identifier.email ? 'email' : 'username'} already exists (${s.type} section)` }); return }
+      identifiers.push(identifier)
     }
 
-    for (const s of sections) {
-      const pwError = offlinePasswordError(s.adminPassword)
+    for (const [i, s] of sections.entries()) {
+      const pwError = directPasswordError(identifiers[i], s.adminPassword)
       if (pwError) { res.status(400).json({ message: `${pwError} (${s.type} section)` }); return }
     }
 
-    const accounts = await Promise.all(sections.map((s) => buildAdminAccount(s.adminPassword)))
+    const accounts = await Promise.all(sections.map((s, i) => buildAdminAccount(identifiers[i], s.adminPassword)))
 
     const { parent, created } = await prisma.$transaction(async (tx) => {
       const parent = await tx.parentSchool.create({ data: { name, city, country } })
@@ -180,7 +216,7 @@ export const createParentSchool = async (req: Request, res: Response) => {
               coverImages: [],
               users: {
                 create: {
-                  name: s.adminName, email: s.adminEmail, role: 'SCHOOL_ADMIN',
+                  name: s.adminName, email: identifiers[i].email, username: identifiers[i].username, role: 'SCHOOL_ADMIN',
                   password: accounts[i].password, passwordSetAt: accounts[i].passwordSetAt,
                   resetTokenHash: accounts[i].resetTokenHash, resetTokenExpiresAt: accounts[i].resetTokenExpiresAt,
                 },
@@ -194,7 +230,7 @@ export const createParentSchool = async (req: Request, res: Response) => {
     })
 
     await Promise.all(sections.map((s, i) =>
-      accounts[i].inviteToken ? sendAdminSetupEmail(s.adminEmail, accounts[i].inviteToken!, s.language) : Promise.resolve()
+      accounts[i].inviteToken && identifiers[i].email ? sendAdminSetupEmail(identifiers[i].email!, accounts[i].inviteToken!, s.language) : Promise.resolve()
     ))
 
     res.status(201).json({ message: 'Parent school and sections created', parent, sections: created })
@@ -207,7 +243,7 @@ export const createParentSchool = async (req: Request, res: Response) => {
 export const addSectionToParent = async (req: Request, res: Response) => {
   try {
     const parentId = String(req.params.id)
-    const { type, subdomain, schoolEmail, adminName, adminEmail, adminPassword, phone, language } = req.body
+    const { type, subdomain, schoolEmail, adminName, adminEmail, adminUsername, adminPassword, phone, language } = req.body
     const lang = language === 'FR' ? 'FR' : 'EN'
 
     const parent = await prisma.parentSchool.findUnique({ where: { id: parentId } })
@@ -218,13 +254,16 @@ export const addSectionToParent = async (req: Request, res: Response) => {
 
     const dup = await prisma.school.findFirst({ where: { OR: [{ email: schoolEmail }, { subdomain }] } })
     if (dup) { res.status(400).json({ message: 'Email or subdomain already taken' }); return }
-    const dupUser = await prisma.user.findUnique({ where: { email: adminEmail } })
-    if (dupUser) { res.status(400).json({ message: 'Admin email already exists' }); return }
 
-    const pwError = offlinePasswordError(adminPassword)
+    const identifier = resolveAdminIdentifier(adminEmail, adminUsername)
+    if (isIdentifierError(identifier)) { res.status(400).json({ message: identifier.error }); return }
+    const dupUser = await findExistingAdminUser(identifier)
+    if (dupUser) { res.status(400).json({ message: identifier.email ? 'Admin email already exists' : 'Admin username already exists' }); return }
+
+    const pwError = directPasswordError(identifier, adminPassword)
     if (pwError) { res.status(400).json({ message: pwError }); return }
 
-    const account = await buildAdminAccount(adminPassword)
+    const account = await buildAdminAccount(identifier, adminPassword)
     const section = await prisma.school.create({
       data: {
         parentSchoolId: parentId,
@@ -237,7 +276,7 @@ export const addSectionToParent = async (req: Request, res: Response) => {
         coverImages: [],
         users: {
           create: {
-            name: adminName, email: adminEmail, role: 'SCHOOL_ADMIN',
+            name: adminName, email: identifier.email, username: identifier.username, role: 'SCHOOL_ADMIN',
             password: account.password, passwordSetAt: account.passwordSetAt,
             resetTokenHash: account.resetTokenHash, resetTokenExpiresAt: account.resetTokenExpiresAt,
           },
@@ -246,7 +285,7 @@ export const addSectionToParent = async (req: Request, res: Response) => {
       include: schoolInclude,
     })
 
-    if (account.inviteToken) await sendAdminSetupEmail(adminEmail, account.inviteToken, lang)
+    if (account.inviteToken && identifier.email) await sendAdminSetupEmail(identifier.email, account.inviteToken, lang)
 
     res.status(201).json({ message: 'Section added', section })
   } catch (error) {
@@ -287,7 +326,7 @@ export const toggleParentSchoolActive = async (req: Request, res: Response) => {
 export const addSectionToSchool = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id) // existing school id
-    const { type, subdomain, schoolEmail, adminName, adminEmail, adminPassword, language } = req.body
+    const { type, subdomain, schoolEmail, adminName, adminEmail, adminUsername, adminPassword, language } = req.body
     const lang = language === 'FR' ? 'FR' : 'EN'
 
     const existing = await prisma.school.findUnique({ where: { id } })
@@ -303,10 +342,13 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
 
     const dup = await prisma.school.findFirst({ where: { OR: [{ email: schoolEmail }, { subdomain }] } })
     if (dup) { res.status(400).json({ message: 'Email or subdomain already taken' }); return }
-    const dupUser = await prisma.user.findUnique({ where: { email: adminEmail } })
-    if (dupUser) { res.status(400).json({ message: 'Admin email already exists' }); return }
 
-    const pwError = offlinePasswordError(adminPassword)
+    const identifier = resolveAdminIdentifier(adminEmail, adminUsername)
+    if (isIdentifierError(identifier)) { res.status(400).json({ message: identifier.error }); return }
+    const dupUser = await findExistingAdminUser(identifier)
+    if (dupUser) { res.status(400).json({ message: identifier.email ? 'Admin email already exists' : 'Admin username already exists' }); return }
+
+    const pwError = directPasswordError(identifier, adminPassword)
     if (pwError) { res.status(400).json({ message: pwError }); return }
 
     // If standalone, promote to multi-section by creating a parent
@@ -319,7 +361,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
       parentId = parent.id
     }
 
-    const account = await buildAdminAccount(adminPassword)
+    const account = await buildAdminAccount(identifier, adminPassword)
     const parent = await prisma.parentSchool.findUnique({ where: { id: parentId! } })
     const section = await prisma.school.create({
       data: {
@@ -331,7 +373,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
         subdomain: subdomain.toLowerCase(),
         users: {
           create: {
-            name: adminName, email: adminEmail, role: 'SCHOOL_ADMIN',
+            name: adminName, email: identifier.email, username: identifier.username, role: 'SCHOOL_ADMIN',
             password: account.password, passwordSetAt: account.passwordSetAt,
             resetTokenHash: account.resetTokenHash, resetTokenExpiresAt: account.resetTokenExpiresAt,
           },
@@ -340,7 +382,7 @@ export const addSectionToSchool = async (req: Request, res: Response) => {
       include: schoolInclude,
     })
 
-    if (account.inviteToken) await sendAdminSetupEmail(adminEmail, account.inviteToken, lang)
+    if (account.inviteToken && identifier.email) await sendAdminSetupEmail(identifier.email, account.inviteToken, lang)
 
     res.status(201).json({ message: 'Section added', section })
   } catch (error) {
@@ -498,7 +540,7 @@ export const getSchoolAdmins = async (req: Request, res: Response) => {
     const schoolId = String(req.params.schoolId)
     const admins = await prisma.user.findMany({
       where: { schoolId, role: { in: ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'] } },
-      select: { id: true, name: true, email: true, role: true, isActive: true, passwordSetAt: true },
+      select: { id: true, name: true, email: true, username: true, role: true, isActive: true, passwordSetAt: true },
       orderBy: { name: 'asc' },
     })
     res.json({
@@ -556,7 +598,7 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
 
     if (!school) { res.status(404).json({ message: 'School not found' }); return }
 
-    const [classCounts, usersByRole, subjectCount, rcByStatus, terms] = await Promise.all([
+    const [classCounts, usersByRole, subjectCount, rcByStatus, terms, classLevels] = await Promise.all([
       prisma.student.groupBy({
         by: ['classLevel'],
         where: { schoolId, isActive: true },
@@ -578,6 +620,14 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
         where: { schoolId },
         select: { id: true, name: true, session: true, isCurrent: true, printingEnabled: true },
         orderBy: [{ session: 'desc' }, { startDate: 'asc' }],
+      }),
+      // The real class rows (not the student groupBy above, which only has names): the
+      // superadmin needs their ids to unlock a frozen mark ceiling, and their ceilings to
+      // see what is actually being unlocked.
+      prisma.classLevel.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, maxScore: true, testMaxScore: true, scaleUnlockedAt: true },
+        orderBy: [{ order: 'asc' }, { name: 'asc' }],
       }),
     ])
 
@@ -606,6 +656,7 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
       subjects: subjectCount,
       reportCards: rcByStatus.map(r => ({ status: r.status, count: r._count })),
       terms,
+      classLevels,
     })
   } catch (error) {
     console.error(error)
@@ -614,6 +665,45 @@ export const getSchoolDetail = async (req: Request, res: Response) => {
 }
 
 /** PATCH /api/superadmin/terms/:termId/printing — enable or disable report card printing for a term. */
+/**
+ * The only way past a class's frozen assessment settings.
+ *
+ * A class's mark totals (`maxScore`, and primary's `testMaxScore`) AND its marks-vs-ratings
+ * `gradingMode` are settled for the academic year once that class has published cards in a
+ * term of the year that has closed — see frozenScaleClasses in classlevel.controller. A
+ * school that has to correct one genuinely wrong setting asks the superadmin, who unlocks
+ * the class here; the school then makes the change itself, and doing so SPENDS the grant.
+ * Deliberately not a "superadmin edits the value" endpoint: the school knows what the
+ * setting should be, the superadmin is only deciding that changing it is warranted.
+ *
+ * Turning it off again is the same call with `unlocked: false`, for a grant given by mistake.
+ */
+export const toggleClassScaleUnlock = async (req: Request, res: Response) => {
+  const id = String(req.params.classLevelId)
+  const { unlocked } = req.body
+  if (typeof unlocked !== 'boolean') {
+    res.status(400).json({ message: 'unlocked must be a boolean' })
+    return
+  }
+  try {
+    const level = await prisma.classLevel.findUnique({ where: { id } })
+    if (!level) { res.status(404).json({ message: 'Class not found' }); return }
+    const updated = await prisma.classLevel.update({
+      where: { id },
+      data: { scaleUnlockedAt: unlocked ? new Date() : null },
+    })
+    res.json({
+      message: unlocked
+        ? 'Assessment settings unlocked for this class. The school can now change them once.'
+        : 'Assessment settings locked again.',
+      classLevel: { id: updated.id, name: updated.name, scaleUnlockedAt: updated.scaleUnlockedAt },
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 export const toggleTermPrinting = async (req: Request, res: Response) => {
   const termId = String(req.params.termId)
   const { printingEnabled } = req.body

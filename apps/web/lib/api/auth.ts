@@ -40,15 +40,17 @@ export const changeMyPasswordApi = async (currentPassword: string, newPassword: 
   return res.data as { message: string }
 }
 
-// Offline installs pass newPassword directly. Online schools omit it entirely —
-// the API emails the target user a setup link instead of taking one here.
-export const resetUserPasswordApi = async (userId: string, newPassword?: string) => {
-  const res = await api.put(`/auth/users/${userId}/reset-password`, newPassword ? { newPassword } : {})
+// Offline installs, or a target with no email on file, always pass newPassword directly.
+// Online with an email: omitting newPassword emails a setup link (the default); passing
+// { newPassword, mode: 'direct' } instead overrides that — for someone who still has an
+// email on file but has lost access to that inbox, where re-sending a link is a dead end.
+export const resetUserPasswordApi = async (userId: string, newPassword?: string, mode?: 'direct') => {
+  const res = await api.put(`/auth/users/${userId}/reset-password`, newPassword ? { newPassword, ...(mode ? { mode } : {}) } : {})
   return res.data
 }
 
 export const getMeApi = async (): Promise<{
-  id: string; name: string; email: string; role: string
+  id: string; name: string; email: string | null; username?: string | null; role: string
   masterClassLevel: string | null; preferredLanguage: string; school: any
 }> => {
   const res = await api.get('/auth/me')
@@ -60,6 +62,9 @@ export const updateLanguagePreferenceApi = async (language: 'EN' | 'FR') => {
   return res.data as { preferredLanguage: string }
 }
 
+// Self-service — this is how a username-only account (no email on file) adds a real one
+// afterward, unlocking email-based password recovery going forward. Their username keeps
+// working as a login identifier too; it's never cleared.
 export const updateMyEmailApi = async (email: string) => {
   const res = await api.patch('/auth/me/email', { email })
   return res.data as { id: string; name: string; email: string; role: string }

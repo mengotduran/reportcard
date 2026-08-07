@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
@@ -11,6 +11,7 @@ import {
   ClassStudentOverview,
 } from '@/lib/api/reportcards'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { onRealtimeDebounced } from '@/lib/socket'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -171,6 +172,29 @@ export default function ClassMasterScreen() {
   useFocusEffect(useCallback(() => {
     fetchData().finally(() => setLoading(false))
   }, [fetchData]))
+
+  // Someone saved marks. This list shows per-student averages and whether each student's
+  // sequences are filled, both of which change the moment a subject teacher saves.
+  //
+  // Held back while the remark modal is open: the modal edits `remarksText` against the
+  // student it was opened for, and pulling the list out from under it mid-sentence is the
+  // same class of mistake as refetching over a half-typed marks column. The refresh is not
+  // lost, only deferred to whenever the modal closes (the effect below).
+  const editTargetRef = useRef<StudentRow | null>(null)
+  editTargetRef.current = editTarget
+  const [missedMarksUpdate, setMissedMarksUpdate] = useState(false)
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (editTargetRef.current) { setMissedMarksUpdate(true); return }
+    fetchData().catch(() => {})
+  }), [fetchData])
+
+  // Deliver a refresh that arrived while the modal was open. Keyed on the modal closing
+  // rather than added to each of the four places that close it, so no exit path can forget.
+  useEffect(() => {
+    if (editTarget || !missedMarksUpdate) return
+    setMissedMarksUpdate(false)
+    fetchData().catch(() => {})
+  }, [editTarget, missedMarksUpdate, fetchData])
 
   const onRefresh = async () => {
     setRefreshing(true)

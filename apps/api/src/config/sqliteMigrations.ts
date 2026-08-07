@@ -17,6 +17,13 @@ import addTimetablePeriod from '../../prisma/sqlite/migrations/20260720183000_ad
 import addTeachingHoursCoverage from '../../prisma/sqlite/migrations/20260721183500_add_teaching_hours_coverage/migration.sql'
 import addTimetableSlotVersioning from '../../prisma/sqlite/migrations/20260725163400_add_timetable_slot_versioning/migration.sql'
 import addPastTermMarksGrant from '../../prisma/sqlite/migrations/20260725185800_add_past_term_marks_grant/migration.sql'
+import addClassLevelProgramme from '../../prisma/sqlite/migrations/20260726191800_add_class_level_programme/migration.sql'
+import addAbsenceGraceAndPeriodIndex from '../../prisma/sqlite/migrations/20260728103000_add_absence_grace_and_period_index/migration.sql'
+import syncPeriodMinutesResetTokenSeenByAdmin from '../../prisma/sqlite/migrations/20260728120000_sync_period_minutes_reset_token_seen_by_admin/migration.sql'
+import addPromotionScale from '../../prisma/sqlite/migrations/20260802135550_add_promotion_scale/migration.sql'
+import dropRepeatThreshold from '../../prisma/sqlite/migrations/20260802140509_drop_repeat_threshold/migration.sql'
+import addStudentPhoto from '../../prisma/sqlite/migrations/20260803165754_add_student_photo/migration.sql'
+import addClassGradingModeAndScaleUnlock from '../../prisma/sqlite/migrations/20260807120000_add_class_grading_mode_and_scale_unlock/migration.sql'
 
 export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260624111054_init', sql: init },
@@ -30,4 +37,17 @@ export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260721183500_add_teaching_hours_coverage', sql: addTeachingHoursCoverage },
   { name: '20260725163400_add_timetable_slot_versioning', sql: addTimetableSlotVersioning },
   { name: '20260725185800_add_past_term_marks_grant', sql: addPastTermMarksGrant },
+  { name: '20260726191800_add_class_level_programme', sql: addClassLevelProgramme },
+  { name: '20260728103000_add_absence_grace_and_period_index', sql: addAbsenceGraceAndPeriodIndex },
+  { name: '20260728120000_sync_period_minutes_reset_token_seen_by_admin', sql: syncPeriodMinutesResetTokenSeenByAdmin },
+  // NOTE: this list was already missing 10 migrations (20260723-20260801) before this
+  // entry was added — a pre-existing gap, not introduced here. Flagged to the project
+  // owner; not fixed as part of this change since it's unrelated in scope.
+  { name: '20260802135550_add_promotion_scale', sql: addPromotionScale },
+  { name: '20260802140509_drop_repeat_threshold', sql: dropRepeatThreshold },
+  { name: '20260803165754_add_student_photo', sql: addStudentPhoto },
+  // ClassLevel.gradingMode (nursery ratings) + ClassLevel.scaleUnlockedAt (the superadmin's
+  // one-shot key to a frozen mark ceiling). One migration because both columns reached the
+  // SQLite schema together; SQLite adds columns by rebuilding the table, so they share one.
+  { name: '20260807120000_add_class_grading_mode_and_scale_unlock', sql: addClassGradingModeAndScaleUnlock },
 ]

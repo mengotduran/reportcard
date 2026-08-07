@@ -4,7 +4,10 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 interface User {
   id: string
   name: string
-  email: string
+  // Nullable: a username-only account (no email on file) has this null instead — see
+  // the User model's own comment for the full rationale.
+  email: string | null
+  username?: string | null
   role: string
   masterClassLevel?: string | null
   preferredLanguage?: string | null
@@ -26,7 +29,9 @@ interface School {
   marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
   coverImage: string | null
   coverImages: string[]
-  repeatThreshold?: number | null
+  /** Minutes after a period starts before it counts as missed and the record becomes
+   *  final. null keeps the older rule: changeable until the period ends. */
+  absenceGraceMinutes?: number | null
   email?: string
   phone?: string | null
   address?: string | null

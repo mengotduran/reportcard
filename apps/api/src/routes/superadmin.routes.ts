@@ -3,7 +3,7 @@ import {
   getOverview, getAllSchools, getSchoolAdmins, updateAdminEmail, getSchoolDetail,
   createStandaloneSchool, createParentSchool, addSectionToParent, addSectionToSchool,
   toggleSchoolActive, toggleParentSchoolActive, deleteSchool, deleteParentSchool, updateSchool,
-  toggleTermPrinting,
+  toggleTermPrinting, toggleClassScaleUnlock,
 } from '../controllers/superadmin.controller'
 import { protect, restrictTo } from '../middleware/auth'
 
@@ -29,5 +29,7 @@ router.post('/parent-schools/:id/sections', addSectionToParent)
 router.patch('/parent-schools/:id/toggle', toggleParentSchoolActive)
 
 router.patch('/terms/:termId/printing', toggleTermPrinting)
+// The escape hatch for a mark ceiling frozen by a closed, published term.
+router.patch('/class-levels/:classLevelId/scale-unlock', toggleClassScaleUnlock)
 
 export default router

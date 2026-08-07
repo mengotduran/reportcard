@@ -45,7 +45,7 @@ export default function SetupChecklist() {
       <div className="space-y-2">
         {items.map((item) => (
           <button key={item.path} onClick={() => router.push(item.path)}
-            className="w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 rounded-lg hover:bg-muted transition group">
+            className="w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 rounded-lg hover:bg-hover transition group">
             <span className="flex items-center gap-2.5 min-w-0">
               {item.done
                 ? <CheckCircle2 size={17} className="text-emerald-500 flex-shrink-0" />

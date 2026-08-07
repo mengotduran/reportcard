@@ -11,6 +11,11 @@
   --card-foreground:      #262016;
   --muted:                #cec5b2;
   --muted-foreground:     #6e6452;
+  /* Row/button hover tint. Separate from --muted on purpose: --muted is also a RESTING
+     background (skeletons, badges, panels — 200+ uses), so it can't be tuned for hover
+     without moving all of those too. Identical to --muted here, so light mode is unchanged;
+     dark mode overrides it to something actually visible. */
+  --hover:                #cec5b2;
   --border:               #b9ad94;
   --input:                #ddd5c6;
   --primary:              #F03E2F;
@@ -28,6 +33,10 @@
   --card-foreground:      #ffffff;
   --muted:                #1c1c1f;
   --muted-foreground:     #a1a1aa;
+  /* The whole reason this token exists: --muted (#1c1c1f) sits a hair off --card (#161618),
+     so a muted hover on a card was invisible in dark mode. This sits between card and
+     border, so a hovered row lifts without shouting. */
+  --hover:                #26262b;
   --border:               #27272a;
   --input:                #1c1c1f;
   --primary:              #F03E2F;
@@ -48,6 +57,7 @@
   --color-card-foreground:      var(--card-foreground);
   --color-muted:                var(--muted);
   --color-muted-foreground:     var(--muted-foreground);
+  --color-hover:                var(--hover);
   --color-border:               var(--border);
   --color-input:                var(--input);
   --color-primary:              var(--primary);

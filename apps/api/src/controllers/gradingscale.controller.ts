@@ -45,29 +45,32 @@ export const getGradingScale = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
     const isUniversity = school?.type === 'UNIVERSITY'
+    // Primary also grades on a raw 0-100 scale (Test+Exam, see reportcard.controller.ts
+    // saveEntries), same shape as university — only secondary stays on 0-20.
+    const isRawHundredScale = isUniversity || school?.type === 'PRIMARY'
 
     let scale = await prisma.gradingScale.findUnique({ where: { schoolId } })
     if (!scale) {
       const schoolExists = await prisma.school.findUnique({ where: { id: schoolId }, select: { id: true } })
       if (!schoolExists) {
-        const defRanges = isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES
+        const defRanges = isRawHundredScale ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES
         res.json({ ranges: defRanges, classificationBands: isUniversity ? DEFAULT_CLASSIFICATION_BANDS : [] })
         return
       }
-      const defRanges = isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES
+      const defRanges = isRawHundredScale ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES
       scale = await prisma.gradingScale.create({ data: { schoolId, ranges: defRanges as any } })
     }
 
     const { ranges, classificationBands, legendRows } = parseStoredData(scale.ranges)
 
-    // Auto-migrate stale percent scale for non-university schools only
-    if (!isUniversity && ranges.length > 0 && isOldPercentScale(ranges)) {
+    // Auto-migrate stale percent scale for schools that are meant to be on 0-20 only.
+    if (!isRawHundredScale && ranges.length > 0 && isOldPercentScale(ranges)) {
       await prisma.gradingScale.update({ where: { schoolId }, data: { ranges: DEFAULT_RANGES as any } })
       res.json({ ranges: DEFAULT_RANGES, classificationBands: [], legendRows: [] })
       return
     }
 
-    const defRanges = isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES
+    const defRanges = isRawHundredScale ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES
     const defBands = isUniversity ? DEFAULT_CLASSIFICATION_BANDS : []
     res.json({
       ranges: ranges.length > 0 ? ranges : defRanges,

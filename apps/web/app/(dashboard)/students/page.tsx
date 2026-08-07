@@ -1,17 +1,19 @@
 'use client'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
   getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, StudentStatus,
-  bulkPromoteStudentsApi,
+  bulkPromoteStudentsApi, uploadStudentPhotoApi, removeStudentPhotoApi,
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
 import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
+import { stripProgrammeSuffix, withProgrammeSuffix, PROGRAMME_LABELS } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info } from 'lucide-react'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
@@ -19,7 +21,7 @@ import CustomSelect from '@/components/ui/CustomSelect'
 import { usePagination } from '@/lib/usePagination'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
-import { getFeesOverviewApi, formatXAF, FeeOverviewRow } from '@/lib/api/fees'
+import { getFeesOverviewApi, FeeOverviewRow } from '@/lib/api/fees'
 import { buildCsv, saveCsv, saveBlob, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
 
@@ -29,6 +31,7 @@ interface Student {
   guardianPhone?: string; guardianEmail?: string
   status?: StudentStatus
   directLevel2Entry?: boolean
+  photo?: string | null
 }
 
 const STATUS_TABS: { value: StudentStatus; label: string }[] = [
@@ -41,6 +44,23 @@ const STATUS_BADGE: Record<StudentStatus, string> = {
   DISABLED: 'bg-amber-100 text-amber-700',
   DISMISSED: 'bg-red-100 text-red-700',
 }
+// Same three meanings as STATUS_BADGE, reduced to a dot for the table: the label beside it
+// already says the word, so the colour only has to separate the three at a glance.
+const STATUS_DOT: Record<StudentStatus, string> = {
+  ACTIVE: 'bg-emerald-500',
+  DISABLED: 'bg-amber-500',
+  DISMISSED: 'bg-red-500',
+}
+
+/** Two-letter monogram for the row avatar: first and last name, so pupils sharing a first
+ *  name are still told apart. Falls back to one letter for a single-word name. */
+function studentInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '?'
+  const first = words[0][0] ?? ''
+  const last = words.length > 1 ? words[words.length - 1][0] ?? '' : ''
+  return (first + last).toUpperCase()
+}
 
 const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender: '', dateOfBirth: '', placeOfBirth: '', guardianName: '', guardianPhone: '', guardianEmail: '', uniDept: '', uniLevel: '', secDept: '', directLevel2Entry: false }
 
@@ -49,12 +69,20 @@ const emptyForm = { name: '', studentId: '', classLevel: '', stream: '', gender:
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 
 // Helpers for parsing university class level names
-function univDept(classLevel: string): string {
+function univDept(rawName: string): string {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const classLevel = stripProgrammeSuffix(rawName)
   if (classLevel.startsWith('HND ')) return classLevel.replace(/^HND /, '').replace(/ - Level \d+$/i, '')
   if (classLevel.startsWith('Degree ')) return classLevel.replace(/^Degree /, '')
   return classLevel
 }
-function univLevel(classLevel: string): string {
+function univLevel(rawName: string): string {
+  // Normalised first: these patterns anchor at the end of the name, where the
+  // Day/Evening marker sits. The sitting is `ClassLevel.programme`, never part of a
+  // department or level.
+  const classLevel = stripProgrammeSuffix(rawName)
   if (/ - Level 2$/i.test(classLevel)) return 'Level 2'
   if (/ - Level 1$/i.test(classLevel)) return 'Level 1'
   if (classLevel.startsWith('Degree ')) return 'Level 3'
@@ -73,19 +101,35 @@ export default function StudentsPage() {
   const { isAuthenticated, activeSession, setActiveSession, school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  // Primary is the only type with no department layer at all — see the table header.
+  const isPrimary = !isUniversity && !isSecondary
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  // A university's year is split into semesters, not terms. Same Term rows either way, only
+  // the word changes, exactly as the sidebar relabels the nav.
+  const ts = (termStr: string, semesterStr: string) => t(isUniversity ? semesterStr : termStr)
   const [students, setStudents] = useState<Student[]>([])
   const [filterClasses, setFilterClasses] = useState<string[]>([])
   const [definedClasses, setDefinedClasses] = useState<ClassLevel[]>([])
+  // Day/Evening. Morning and evening cohorts are entirely different people, so this filters
+  // the roster itself, not just the class dropdown.
+  const programmeFilter = useProgrammeFilter(definedClasses)
   const [departments, setDepartments] = useState<Department[]>([])
   const [deptFilter, setDeptFilter] = useState('all')
   const [activeClass, setActiveClass] = useState('all')
   const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
+  const [sortAsc, setSortAsc] = useState(true)
+  // Per-term/semester export lives behind the Export CSV caret rather than as its own row of
+  // chips — it is an export option, not a filter on the table, and sitting among the filters
+  // it read as one.
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingPhoto, setEditingPhoto] = useState<string | null>(null)
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const photoInputRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -243,20 +287,34 @@ export default function StudentsPage() {
   // student's department is never stored directly — it's always derived from which
   // class they're in — so picking department-first is what guarantees the class they
   // end up with actually belongs to it.
+  // Classes the form may offer: narrowed to the section being browsed, so the modal can
+  // never enrol into the other one behind the filter's back. With no filter ('ALL') the
+  // whole school is offered and the level list labels each section.
+  const formClasses = useMemo(
+    () => definedClasses.filter((c) => programmeFilter.matches(c.name)),
+    [definedClasses, programmeFilter.programme],
+  )
+
   const secDeptClasses = useMemo(() =>
-    isSecondary && form.secDept ? definedClasses.filter((c) => c.departmentId === form.secDept) : [],
-  [isSecondary, form.secDept, definedClasses])
+    isSecondary && form.secDept ? formClasses.filter((c) => c.departmentId === form.secDept) : [],
+  [isSecondary, form.secDept, formClasses])
 
   // University two-step picker: unique departments, then available levels per dept
   const uniDepts = useMemo(() =>
-    isUniversity ? Array.from(new Set(definedClasses.map((c) => univDept(c.name)))).sort() : [],
-  [isUniversity, definedClasses])
+    isUniversity ? Array.from(new Set(formClasses.map((c) => univDept(c.name)))).sort() : [],
+  [isUniversity, formClasses])
 
   const uniLevelsForDept = useMemo(() => {
     if (!isUniversity || !form.uniDept) return []
-    return definedClasses
+    return formClasses
       .filter((c) => univDept(c.name) === form.uniDept)
-      .map((c) => ({ label: univLevel(c.name), classLevel: c.name }))
+      .map((c) => ({
+        label: univLevel(c.name),
+        classLevel: c.name,
+        // Both sittings of a programme have the same levels, so "Level 1" would otherwise
+        // appear twice with nothing to tell them apart.
+        sitting: programmeFilter.programmeOf(c.name),
+      }))
       .filter((x) => x.label)
       .sort((a, b) => {
         const order: Record<string, number> = { 'Level 1': 0, 'Level 2': 1, 'Level 3': 2 }
@@ -264,9 +322,41 @@ export default function StudentsPage() {
       })
   }, [isUniversity, form.uniDept, definedClasses])
 
+  // Split into the two sittings. A flat row reading "Level 1, Level 1, Level 2, Level 3"
+  // makes the reader work out which is which from a tag on one of them; a heading per
+  // sitting says it outright. Levels need not exist in both: Level 3 (Degree) continues
+  // from Level 2 and runs only in the evening, so it appears under one heading and not
+  // the other, with nothing missing-looking about it.
+  // Does the class being enrolled into have a Level 1 to carry over from, in its own
+  // section? A brand-new programme has none: every student in it is necessarily a direct
+  // entrant, so asking the question would be a choice with one right answer.
+  const level1ForSelectedClass = useMemo(() => {
+    if (!isUniversity || !form.classLevel) return null
+    const bare = stripProgrammeSuffix(form.classLevel)
+    if (!/ - Level 2$/i.test(bare)) return null
+    const wanted = withProgrammeSuffix(bare.replace(/ - Level 2$/i, ' - Level 1'), programmeFilter.programmeOf(form.classLevel))
+    return definedClasses.find((c) => c.name === wanted) ?? null
+  }, [isUniversity, form.classLevel, definedClasses])
+
+  // With no Level 1 in this section there is nothing to carry over from, so the student IS
+  // a direct entrant. Set it rather than leaving the default: the carry-over path resolves
+  // the fee from a Level 1 class that does not exist, which silently comes out as zero.
+  useEffect(() => {
+    if (!isUniversity) return
+    if (/ - Level 2$/i.test(stripProgrammeSuffix(form.classLevel)) && !level1ForSelectedClass && !form.directLevel2Entry) {
+      setForm((f) => ({ ...f, directLevel2Entry: true }))
+    }
+  }, [isUniversity, form.classLevel, level1ForSelectedClass])
+
+  const uniLevelsBySitting = useMemo(() => ({
+    DAY: uniLevelsForDept.filter((x) => x.sitting === 'DAY'),
+    EVENING: uniLevelsForDept.filter((x) => x.sitting === 'EVENING'),
+  }), [uniLevelsForDept])
+
   const openAdd = () => {
     setEditingId(null)
     setForm(emptyForm)
+    setEditingPhoto(null)
     setError('')
     setShowModal(true)
   }
@@ -293,6 +383,7 @@ export default function StudentsPage() {
       secDept: isSecondary ? (deptIdOfClass(baseClass) ?? '') : '',
       directLevel2Entry: (s as { directLevel2Entry?: boolean }).directLevel2Entry ?? false,
     })
+    setEditingPhoto(s.photo ?? null)
     setError('')
     setShowModal(true)
   }
@@ -300,8 +391,32 @@ export default function StudentsPage() {
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
+    setEditingPhoto(null)
     setError('')
     setForm(emptyForm)
+  }
+
+  const handlePhotoUpload = async (file: File) => {
+    if (!editingId) return
+    setUploadingPhoto(true)
+    try {
+      const res = await uploadStudentPhotoApi(editingId, file)
+      setEditingPhoto(res.student.photo)
+      setStudents(prev => prev.map(x => x.id === editingId ? { ...x, photo: res.student.photo } : x))
+      showToast(t('Photo updated successfully'))
+    } catch {
+      showToast(t('Upload failed. Make sure the file is an image under 5MB.'), 'error')
+    } finally { setUploadingPhoto(false) }
+  }
+
+  const handlePhotoRemove = async () => {
+    if (!editingId) return
+    try {
+      await removeStudentPhotoApi(editingId)
+      setEditingPhoto(null)
+      setStudents(prev => prev.map(x => x.id === editingId ? { ...x, photo: null } : x))
+      showToast(t('Photo removed'))
+    } catch { showToast(t('Failed to remove photo'), 'error') }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -406,7 +521,7 @@ export default function StudentsPage() {
     if (!file) return
     setImportPreviewing(true)
     try {
-      const result = await previewStudentImportApi(file)
+      const result = await previewStudentImportApi(file, programmeFilter.programme)
       setImportPreview(result)
     } catch (err: unknown) {
       const e2 = err as { response?: { data?: { message?: string } } }
@@ -460,7 +575,7 @@ export default function StudentsPage() {
   // roster + class chips are active-only.
   const handleExport = async () => {
     const targetTerms = activeTermId ? visibleTerms.filter((tm) => tm.id === activeTermId) : visibleTerms
-    if (targetTerms.length === 0) { showToast(t('No term selected'), 'error'); return }
+    if (targetTerms.length === 0) { showToast(ts('No term selected', 'No semester selected'), 'error'); return }
     const targetClasses = activeClass !== 'all'
       ? [activeClass]
       : (isSecondary && deptFilter !== 'all' ? filterClasses.filter((c) => deptIdOfClass(c) === deptFilter) : filterClasses)
@@ -469,7 +584,7 @@ export default function StudentsPage() {
       { label: t('Name'), value: (s: Student) => s.name },
       { label: t('Student ID'), value: (s: Student) => s.studentId },
       ...(isSecondary ? [{ label: t('Department'), value: (s: Student) => deptNameOf(s.classLevel) }] : []),
-      { label: t('Class'), value: (s: Student) => isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel },
+      { label: t('Class'), value: (s: Student) => stripProgrammeSuffix(isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel) },
       { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
       { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
       { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
@@ -527,31 +642,53 @@ export default function StudentsPage() {
   const classFilterOptions = (isSecondary && deptFilter !== 'all'
     ? filterClasses.filter((cls) => deptIdOfClass(cls) === deptFilter)
     : filterClasses
-  ).map((cls) => ({ value: cls, label: isSecondary ? stripDeptSuffix(cls) : cls }))
+  ).filter((cls) => programmeFilter.matches(cls))
+    .map((cls) => ({ value: cls, label: stripProgrammeSuffix(isSecondary ? stripDeptSuffix(cls) : cls) }))
 
   // The roster to display: when a department is selected (and no single class),
   // narrow the server roster to that department's classes client-side.
-  const visibleStudents = (isSecondary && deptFilter !== 'all' && activeClass === 'all')
+  const visibleStudents = ((isSecondary && deptFilter !== 'all' && activeClass === 'all')
     ? students.filter((s) => deptIdOfClass(s.classLevel) === deptFilter)
     : students
+  ).filter((s) => programmeFilter.matches(s.classLevel))
 
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(visibleStudents, 15, `${deptFilter}|${activeClass}|${search}|${statusFilter}`)
+  // Sorted by name, the only column worth ordering on a roster — and the reason the STUDENT
+  // header carries an arrow. localeCompare so accented names file where a reader expects.
+  const sortedStudents = useMemo(
+    () => [...visibleStudents].sort((a, b) => (sortAsc ? 1 : -1) * a.name.localeCompare(b.name)),
+    [visibleStudents, sortAsc],
+  )
+
+  // How many departments the subtitle reports. Secondary keeps them as real records;
+  // a university encodes them in the class name, so they're counted from the classes.
+  const departmentCount = isSecondary
+    ? departments.length
+    : isUniversity
+      ? new Set(definedClasses.map((c) => univDept(c.name))).size
+      : 0
+
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(sortedStudents, 15, `${deptFilter}|${activeClass}|${search}|${statusFilter}|${sortAsc}`)
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between gap-4 mb-5">
         <div>
           <h2 className="text-2xl font-bold text-foreground">{t('Students')}</h2>
+          {/* Roster size first, because it is what the page is for, then the scope it is
+              currently showing so a filtered count is never mistaken for the whole school. */}
           <p className="text-muted-foreground text-sm mt-1">
-            {visibleStudents.length} {activeClass !== 'all'
-              ? `${t('in')} ${isSecondary ? stripDeptSuffix(activeClass) : activeClass}`
+            {visibleStudents.length} {t('enrolled')}
+            {activeClass !== 'all'
+              ? ` · ${stripProgrammeSuffix(isSecondary ? stripDeptSuffix(activeClass) : activeClass)}`
               : (isSecondary && deptFilter !== 'all')
-                ? `${t('in')} ${departments.find(d => d.id === deptFilter)?.name ?? ''}`
-                : t('total students')}
+                ? ` · ${departments.find(d => d.id === deptFilter)?.name ?? ''}`
+                : departmentCount > 0
+                  ? ` · ${departmentCount} ${departmentCount === 1 ? t('department') : t('departments')}`
+                  : ''}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {isUniversity && / - Level 1$/i.test(activeClass) && statusFilter === 'ACTIVE' && (
+          {isUniversity && / - Level 1$/i.test(stripProgrammeSuffix(activeClass)) && statusFilter === 'ACTIVE' && (
             <button onClick={() => {
               setPromoteSelected(new Set(students.map((s) => s.id)))
               setPromoteModalOpen(true)
@@ -560,17 +697,67 @@ export default function StudentsPage() {
               <ArrowUpCircle size={16} /> Promote to Level 2
             </button>
           )}
-          <button onClick={handleExport} disabled={exporting}
-            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition">
-            <Download size={16} /> {exporting ? t('Exporting...') : t('Export CSV')}
-          </button>
+          {/* Split button: the main half exports what is on screen, the caret narrows it to a
+              single term/semester. Only grown a caret when there is more than one to pick. */}
+          <div className="relative">
+            <div className="flex items-stretch rounded-lg border border-border overflow-hidden">
+              {/* The chosen term rides on the button label. It used to be a highlighted chip
+                  in plain sight, and moving it into a menu would otherwise mean exporting a
+                  single term while the page gives no sign that is what will happen. */}
+              <button onClick={handleExport} disabled={exporting}
+                className="flex items-center gap-2 text-foreground px-3 py-2 text-sm font-medium hover:bg-hover disabled:opacity-50 transition">
+                <Download size={16} />
+                {exporting ? t('Exporting...') : t('Export CSV')}
+                {!exporting && activeTermId && (
+                  <span className="text-xs font-semibold text-primary">
+                    · {visibleTerms.find((tm) => tm.id === activeTermId)?.name}
+                  </span>
+                )}
+              </button>
+              {visibleTerms.length > 0 && (
+                <button
+                  onClick={() => setExportMenuOpen((o) => !o)}
+                  aria-label={ts('Export by term', 'Export by semester')}
+                  className="px-2 border-l border-border text-muted-foreground hover:bg-hover transition"
+                >
+                  <ChevronDown size={15} />
+                </button>
+              )}
+            </div>
+            {exportMenuOpen && visibleTerms.length > 0 && (
+              <>
+                {/* Click-away layer: a menu that only closed on re-clicking the caret is the
+                    kind that gets left open behind a modal. */}
+                <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
+                <div className="absolute right-0 mt-1 z-50 w-56 rounded-xl border border-border bg-card shadow-xl overflow-hidden py-1">
+                  <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    {ts('Export by term', 'Export by semester')}
+                  </p>
+                  <button
+                    onClick={() => { handleTermFilter(''); setExportMenuOpen(false) }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-hover transition ${!activeTermId ? 'text-primary font-semibold' : 'text-foreground'}`}
+                  >
+                    {ts('All Terms', 'All Semesters')}
+                  </button>
+                  {visibleTerms.map((tm) => (
+                    <button key={tm.id}
+                      onClick={() => { handleTermFilter(tm.id); setExportMenuOpen(false) }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-hover transition ${activeTermId === tm.id ? 'text-primary font-semibold' : 'text-foreground'}`}
+                    >
+                      {tm.name}{tm.isCurrent ? ` (${t('Current')})` : ''}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <button onClick={openImportModal} disabled={!hasCurrentTerm}
-            title={hasCurrentTerm ? undefined : t('Set a current academic year/term before adding students.')}
-            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition">
-            <Upload size={16} /> {t('Import Students')}
+            title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
+            <Upload size={16} /> {t('Import')}
           </button>
           <button onClick={openAdd} disabled={!hasCurrentTerm}
-            title={hasCurrentTerm ? undefined : t('Set a current academic year/term before adding students.')}
+            title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
             className="flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 disabled:cursor-not-allowed transition">
             <Plus size={16} /> {t('Add Student')}
           </button>
@@ -580,74 +767,74 @@ export default function StudentsPage() {
       {!hasCurrentTerm && (
         <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2">
           <Info size={15} className="flex-shrink-0" />
-          {t('No current academic year/term is set — set one before you can add students.')}{' '}
-          <button onClick={() => router.push('/terms')} className="font-semibold underline hover:no-underline">{t('Go to Terms')}</button>
+          {ts('No current academic year/term is set. Set one before you can add students.', 'No current academic year/semester is set. Set one before you can add students.')}{' '}
+          <button onClick={() => router.push('/terms')} className="font-semibold underline hover:no-underline">{ts('Go to Terms', 'Go to Semesters')}</button>
         </div>
       )}
 
-      {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          {isSecondary && departments.length > 0 && (
-            <>
-              <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}:</span>
-              <CustomSelect
-                className="w-52"
-                compact
-                value={deptFilter}
-                onChange={handleDeptFilter}
-                placeholder={t('All Departments')}
-                options={[
-                  { value: 'all', label: t('All Departments') },
-                  ...departments.map((d) => ({ value: d.id, label: d.name })),
-                ]}
-              />
-            </>
-          )}
-          <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? t('Department') : t('Class')}:</span>
+      {/* One filter bar rather than four stacked rows. Search takes the space it needs and
+          the narrowing controls sit beside it, in the order they narrow: sitting, then
+          department, then class, then status. */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input type="text" placeholder={t('Search by name, ID or guardian...')} value={search} onChange={handleSearch}
+            className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+
+        {/* Day/Evening sitting, only once the school runs one. Placed before the class
+            picker because it narrows what that picker offers. */}
+        {programmeFilter.hasEvening && (
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={(p) => { programmeFilter.setProgramme(p); handleClassFilter('all') }}
+          />
+        )}
+
+        {isSecondary && departments.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground flex-shrink-0">{t('Department')}</span>
+            <CustomSelect
+              className="w-44"
+              compact
+              value={deptFilter}
+              onChange={handleDeptFilter}
+              placeholder={t('All Departments')}
+              options={[
+                { value: 'all', label: t('All Departments') },
+                ...departments.map((d) => ({ value: d.id, label: d.name })),
+              ]}
+            />
+          </div>
+        )}
+
+        {(filterClasses.length > 0 || (isSecondary && departments.length > 0)) && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? t('Department') : t('Class')}</span>
+            <CustomSelect
+              className="w-48"
+              compact
+              value={activeClass}
+              onChange={handleClassFilter}
+              placeholder={isUniversity ? t('All Departments') : t('All Classes')}
+              options={[
+                { value: 'all', label: isUniversity ? t('All Departments') : t('All Classes') },
+                ...classFilterOptions,
+              ]}
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground flex-shrink-0">{t('Status')}</span>
           <CustomSelect
-            className="w-64"
+            className="w-36"
             compact
-            value={activeClass}
-            onChange={handleClassFilter}
-            placeholder={isUniversity ? t('All Departments') : t('All Classes')}
-            options={[
-              { value: 'all', label: isUniversity ? t('All Departments') : t('All Classes') },
-              ...classFilterOptions,
-            ]}
+            value={statusFilter}
+            onChange={(v) => handleStatusFilter(v as StudentStatus)}
+            options={STATUS_TABS.map((tab) => ({ value: tab.value, label: t(tab.label) }))}
           />
         </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className="text-xs text-muted-foreground mr-1">{t('Status')}:</span>
-        {STATUS_TABS.map((tab) => (
-          <button key={tab.value} onClick={() => handleStatusFilter(tab.value)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${statusFilter === tab.value ? 'bg-primary text-white' : 'bg-muted text-muted-foreground hover:bg-muted'}`}>
-            {t(tab.label)}
-          </button>
-        ))}
-      </div>
-
-      {visibleTerms.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          <span className="text-xs text-muted-foreground mr-1">{t('Export by term')}:</span>
-          <button onClick={() => handleTermFilter('')}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!activeTermId ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
-            {t('All Terms')}
-          </button>
-          {visibleTerms.map((tm) => (
-            <button key={tm.id} onClick={() => handleTermFilter(tm.id)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${activeTermId === tm.id ? 'bg-primary text-white' : 'bg-card border border-border text-muted-foreground hover:bg-muted'}`}>
-              {tm.name}{tm.isCurrent ? ` (${t('Current')})` : ''}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="relative mb-4">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input type="text" placeholder={t('Search students...')} value={search} onChange={handleSearch}
-          className="w-full pl-9 pr-4 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
       </div>
 
       <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -662,79 +849,120 @@ export default function StudentsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px]">
-            <thead className="bg-muted border-b border-border">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Name')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Student ID')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{isUniversity ? 'Department' : t('Class')}</th>
-                {isUniversity && <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">Level</th>}
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Gender')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Guardian')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Fees')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Status')}</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase">{t('Actions')}</th>
+          <table className="w-full min-w-[860px]">
+            <thead className="border-b border-border">
+              <tr className="[&>th]:text-left [&>th]:px-4 [&>th]:py-3 [&>th]:text-[11px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-wider [&>th]:text-muted-foreground/70">
+                {/* Name and ID share one column: the ID identifies the person in the row above
+                    it, so a column of its own only pushed everything else right. */}
+                <th>
+                  <button onClick={() => setSortAsc((a) => !a)} className="flex items-center gap-1.5 hover:text-foreground transition uppercase tracking-wider">
+                    {t('Student')}
+                    <ArrowUp size={12} className={`transition-transform ${sortAsc ? '' : 'rotate-180'}`} />
+                  </button>
+                </th>
+                {/* Secondary and university both group classes under a department, so both
+                    get the column. Primary has none, and an empty column would only ask the
+                    reader what belongs in it. */}
+                {!isPrimary && <th>{t('Department')}</th>}
+                <th>{isUniversity ? t('Level') : t('Class')}</th>
+                <th>{t('Gender')}</th>
+                <th>{t('Guardian')}</th>
+                <th>{t('Fees due')}</th>
+                <th>{t('Status')}</th>
+                <th><span className="sr-only">{t('Actions')}</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {pageItems.map((s) => (
-                <tr key={s.id} className="hover:bg-muted dark:hover:bg-muted transition">
+              {pageItems.map((s) => {
+                const status = s.status ?? 'ACTIVE'
+                return (
+                <tr key={s.id} className="group hover:bg-hover transition">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 flex-shrink-0 bg-primary/10 text-primary rounded-full flex items-center justify-center text-xs font-bold">
-                        {s.name.charAt(0)}
+                      <div className="w-9 h-9 flex-shrink-0 bg-primary/10 text-primary rounded-lg flex items-center justify-center text-xs font-bold">
+                        {studentInitials(s.name)}
                       </div>
-                      <span className="text-sm font-medium text-foreground">{s.name}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground truncate">{s.name}</p>
+                        {/* Tabular figures so the codes line up down the column — they are
+                            read by comparing them, which ragged digits make harder. */}
+                        <p className="text-xs text-muted-foreground/80 tabular-nums truncate">{s.studentId}</p>
+                      </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{s.studentId}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {isUniversity ? univDept(s.classLevel) : isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel}
-                  </td>
-                  {isUniversity && (
-                    <td className="px-4 py-3">
-                      {(() => {
-                        const b = univLevelBadge(s.classLevel)
-                        return b
-                          ? <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${b.cls}`}>{b.label}</span>
-                          : <span className="text-muted-foreground text-sm">—</span>
-                      })()}
+                  {!isPrimary && (
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {isUniversity
+                        ? stripProgrammeSuffix(univDept(s.classLevel))
+                        : (deptNameOf(s.classLevel) || <span className="text-muted-foreground">—</span>)}
                     </td>
                   )}
+                  {/* The class name is stripped for display, so without the badge an evening
+                      student's row is character for character identical to a day student's in
+                      the same programme. The badge rides on whichever column names the cohort:
+                      the class, or the level where a university has no class column. */}
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2 flex-wrap">
+                      {isUniversity
+                        ? (() => {
+                            const b = univLevelBadge(s.classLevel)
+                            return b
+                              ? <span className={`inline-flex px-2 py-0.5 rounded-md text-xs font-semibold ${b.cls}`}>{b.label}</span>
+                              : <span className="text-muted-foreground text-sm">—</span>
+                          })()
+                        : stripProgrammeSuffix(isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel)}
+                      {programmeFilter.programmeOf(s.classLevel) === 'EVENING' && <EveningBadge />}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.gender ? t(s.gender) : '—'}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{s.guardianName || '—'}</td>
-                  <td className="px-4 py-3">
+                  {/* What is OWED, as a number rather than a badge: this column is scanned to
+                      find who still has to pay, and a row of coloured pills reads as decoration
+                      where a column of figures reads as money. Only an unpaid balance is
+                      coloured, because only that one needs chasing. */}
+                  <td className="px-4 py-3 whitespace-nowrap">
                     {(() => {
                       const f = feesByStudent[s.id]
                       if (!f || f.status === 'NONE') return <span className="text-muted-foreground text-sm">—</span>
-                      if (f.status === 'COMPLETE') return <span className="inline-flex px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded text-xs font-medium">{t('Complete')}</span>
-                      const cls = f.status === 'UNPAID' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                      return <span className={`inline-flex px-3 py-1.5 rounded text-xs font-medium ${cls}`}>{formatXAF(f.balance)} {t('left')}</span>
+                      if (f.status === 'COMPLETE') return <span className="text-sm text-muted-foreground">{t('settled')}</span>
+                      const overdue = f.status === 'UNPAID'
+                      return (
+                        <span className={`inline-flex items-center gap-1.5 text-sm ${overdue ? 'text-destructive' : 'text-foreground'}`}>
+                          {overdue && <AlertCircle size={14} className="flex-shrink-0" />}
+                          <span className="font-semibold tabular-nums">{Math.round(f.balance).toLocaleString('en-US')}</span>
+                          <span className="text-xs text-muted-foreground">XAF</span>
+                        </span>
+                      )
                     })()}
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[s.status ?? 'ACTIVE']}`}>
-                      {t(STATUS_TABS.find((tab) => tab.value === (s.status ?? 'ACTIVE'))?.label ?? 'Active')}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATUS_DOT[status]}`} />
+                      {t(STATUS_TABS.find((tab) => tab.value === status)?.label ?? 'Active')}
                     </span>
                   </td>
+                  {/* Actions stay faint until the row is hovered, so 15 rows do not present 45
+                      buttons competing with the data. Still rendered (not hidden) so they work
+                      on touch, where there is no hover at all. */}
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-end gap-1 opacity-60 group-hover:opacity-100 transition">
                       <button onClick={() => setFeesTarget({ id: s.id, name: s.name })} title={t('School Fees')}
-                        className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 rounded transition">
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition">
                         <Wallet size={14} />
                       </button>
-                      <button onClick={() => openEdit(s)}
-                        className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
+                      <button onClick={() => openEdit(s)} title={t('Edit')}
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition">
                         <Pencil size={14} />
                       </button>
                       <button onClick={() => openStatusModal(s)} title={t('Change Status')}
-                        className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition">
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
                         <UserX size={14} />
                       </button>
                     </div>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
           </div>
@@ -752,6 +980,34 @@ export default function StudentsPage() {
               </button>
             </div>
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
+            {/* Photo prints in the identity box at the top of the report card, in the frame
+                that otherwise sits empty. Only available once the student exists (upload
+                needs an id) — a brand new "Add Student" form has nothing to attach it to yet. */}
+            {editingId ? (
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-16 h-20 rounded-lg border border-border bg-muted flex items-center justify-center overflow-hidden shrink-0">
+                  {editingPhoto
+                    ? <img src={editingPhoto} alt="" className="w-full h-full object-cover" />
+                    : <span className="text-[9px] uppercase tracking-wide text-muted-foreground text-center px-1">{t('No Photo')}</span>}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <button type="button" onClick={() => photoInputRef.current?.click()} disabled={uploadingPhoto}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-50">
+                    {uploadingPhoto ? t('Uploading...') : editingPhoto ? t('Change Photo') : t('Upload Photo')}
+                  </button>
+                  {editingPhoto && (
+                    <button type="button" onClick={handlePhotoRemove}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-destructive hover:bg-destructive/10">
+                      {t('Remove Photo')}
+                    </button>
+                  )}
+                  <input ref={photoInputRef} type="file" accept="image/*" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhotoUpload(f); e.target.value = '' }} />
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground mb-4">{t('You can add a photo once the student is saved.')}</p>
+            )}
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">{t('Full Name')} <span className="text-destructive">*</span></label>
@@ -794,36 +1050,93 @@ export default function StudentsPage() {
                     <div className="space-y-3">
                       <div>
                         <label className="block text-xs font-medium text-foreground mb-2">Level <span className="text-destructive">*</span></label>
-                        <div className="flex flex-wrap gap-3">
-                          {uniLevelsForDept.map(({ label, classLevel }) => (
-                            <label key={label} className="flex items-center gap-2 cursor-pointer">
-                              <input type="radio" name="uniLevel" value={label} required
-                                checked={form.uniLevel === label}
-                                onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
-                                className="accent-primary" />
-                              <span className="text-sm text-foreground">{label}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      {form.uniLevel === 'Level 2' && !editingId && (
-                        <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
-                          <strong>Old Level 1 students?</strong> Use the <strong>"Promote to Level 2"</strong> button on the students list instead — it moves existing students in bulk without creating duplicates.
-                        </div>
-                      )}
-                      {form.uniLevel === 'Level 2' && (
-                        <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
-                          <input type="checkbox"
-                            checked={form.directLevel2Entry}
-                            onChange={(e) => setForm({ ...form, directLevel2Entry: e.target.checked })}
-                            className="mt-0.5 accent-amber-600 w-4 h-4 flex-shrink-0" />
-                          <div>
-                            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Direct Level 2 entrant (new student)</p>
-                            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
-                              Check this only if the student is enrolling fresh at Level 2 and was NOT here in Level 1. They will be charged the Level 2 entry fee instead of the full 2-year program fee.
-                            </p>
+                        {/* One block per sitting, each labelled. A department that only runs
+                            in the daytime shows a single unlabelled row exactly as before,
+                            so nothing changes for a school with no evening programme. */}
+                        {uniLevelsBySitting.EVENING.length === 0 ? (
+                          <div className="flex flex-wrap gap-3">
+                            {uniLevelsForDept.map(({ label, classLevel }) => (
+                              <label key={classLevel} className="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="uniLevel" value={classLevel} required
+                                  checked={form.classLevel === classLevel}
+                                  onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
+                                  className="accent-primary" />
+                                <span className="text-sm text-foreground">{label}</span>
+                              </label>
+                            ))}
                           </div>
-                        </label>
+                        ) : (
+                          <div className="space-y-2">
+                            {(['DAY', 'EVENING'] as const).map((sitting) => {
+                              const options = uniLevelsBySitting[sitting]
+                              if (options.length === 0) return null
+                              return (
+                                <div key={sitting} className="rounded-lg border border-border p-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                                    {t(PROGRAMME_LABELS[sitting])} {t('section')}
+                                  </p>
+                                  <div className="flex flex-wrap gap-4">
+                                    {options.map(({ label, classLevel }) => (
+                                      <label key={classLevel} className="flex items-center gap-2 cursor-pointer">
+                                        <input type="radio" name="uniLevel" value={classLevel} required
+                                          checked={form.classLevel === classLevel}
+                                          onChange={() => setForm({ ...form, uniLevel: label, classLevel, directLevel2Entry: false })}
+                                          className="accent-primary" />
+                                        <span className="text-sm text-foreground">{label}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      {/* Level 2 has two kinds of student, and which one this is decides what
+                          they are charged. The question is only worth asking when there is a
+                          Level 1 to have come from — IN THE SAME SECTION, since an evening
+                          Level 2 continues from evening Level 1, never from the day one. A
+                          programme running Level 2 for the first time has no such cohort, so
+                          every student in it is a direct entrant and the choice is made for
+                          them rather than asked. */}
+                      {form.uniLevel === 'Level 2' && (
+                        level1ForSelectedClass ? (
+                          <div className="space-y-2">
+                            {!editingId && (
+                              <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+                                <strong>{t('Moving up a whole class?')}</strong> {t('Use the "Promote to Level 2" button on the students list instead, it moves the existing cohort in bulk without creating duplicates.')}
+                              </div>
+                            )}
+                            <div className="rounded-lg border border-border p-3">
+                              <p className="text-xs font-medium text-foreground mb-2">
+                                {t('How is this student joining Level 2?')} <span className="text-destructive">*</span>
+                              </p>
+                              <div className="space-y-2">
+                                {([false, true] as const).map((direct) => (
+                                  <label key={String(direct)} className="flex items-start gap-2.5 cursor-pointer">
+                                    <input type="radio" name="level2Entry" className="mt-0.5 accent-primary"
+                                      checked={form.directLevel2Entry === direct}
+                                      onChange={() => setForm({ ...form, directLevel2Entry: direct })} />
+                                    <span>
+                                      <span className="text-sm text-foreground block">
+                                        {direct ? t('Direct entry') : t('Continuing from Level 1')}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {direct
+                                          ? t('New here, did not do Level 1 at this school. Charged the Level 2 entry fee.')
+                                          : `${t('Was in')} ${stripProgrammeSuffix(level1ForSelectedClass.name)}${programmeFilter.programmeOf(level1ForSelectedClass.name) === 'EVENING' ? ` (${t('Evening')})` : ''}. ${t('Already covered by the 2-year programme fee.')}`}
+                                      </span>
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-3 rounded-lg border border-border bg-muted/40 text-xs text-muted-foreground">
+                            {t('This programme has no Level 1 to continue from, so this student is a direct entrant and is charged the Level 2 entry fee.')}
+                          </div>
+                        )
                       )}
                     </div>
                   )}
@@ -857,7 +1170,11 @@ export default function StudentsPage() {
                           required
                           className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                           <option value="">{t('Select class')}</option>
-                          {secDeptClasses.map((c) => <option key={c.id} value={c.name}>{stripDeptSuffix(c.name)}</option>)}
+                          {secDeptClasses.map((c) => (
+                            <option key={c.id} value={c.name}>
+                              {stripDeptSuffix(stripProgrammeSuffix(c.name))}{(c.programme ?? 'DAY') === 'EVENING' ? ` (${t('Evening')})` : ''}
+                            </option>
+                          ))}
                         </select>
                       ) : (
                         <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
@@ -870,14 +1187,14 @@ export default function StudentsPage() {
               ) : (
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">{t('Class')} <span className="text-destructive">*</span></label>
-                  {definedClasses.length > 0 ? (
+                  {formClasses.length > 0 ? (
                     <select
                       value={form.classLevel}
                       onChange={(e) => setForm({ ...form, classLevel: e.target.value, stream: '' })}
                       required
                       className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                       <option value="">{t('Select class')}</option>
-                      {definedClasses.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                      {formClasses.map((c) => <option key={c.id} value={c.name}>{stripProgrammeSuffix(c.name)}</option>)}
                     </select>
                   ) : (
                     <div className="w-full border border-border rounded-lg px-3 py-2 text-sm text-muted-foreground bg-muted dark:bg-card">
@@ -946,7 +1263,7 @@ export default function StudentsPage() {
               ))}
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">{t('Cancel')}</button>
+                  className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">{t('Cancel')}</button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
                   {saving ? t('Saving...') : editingId ? t('Save Changes') : t('Add Student')}
@@ -1014,7 +1331,7 @@ export default function StudentsPage() {
                         <div className="bg-muted rounded-lg border border-border max-h-36 overflow-y-auto">
                           {importPreview.carryOvers.map((c: CarryOverRow) => (
                             <div key={c.row} className="px-3 py-2 text-xs text-muted-foreground border-b border-border last:border-0 flex items-center justify-between gap-2">
-                              <span>{c.name} <span className="text-foreground/50">— {c.classLevel}</span></span>
+                              <span>{c.name} <span className="text-foreground/50">— {stripProgrammeSuffix(c.classLevel)}</span></span>
                               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${c.matchType === 'matricule' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'}`}>
                                 {c.matchType === 'matricule' ? t('Matricule match') : t('Name match')}
                               </span>
@@ -1045,7 +1362,7 @@ export default function StudentsPage() {
 
             <div className="flex gap-3 pt-5">
               <button type="button" onClick={closeImportModal}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleImportCommit}
@@ -1079,7 +1396,7 @@ export default function StudentsPage() {
             <p className="text-sm text-muted-foreground mb-4">{statusTarget.name}</p>
             <div className="space-y-2 mb-5">
               {STATUS_TABS.map((tab) => (
-                <label key={tab.value} className="flex items-center gap-3 cursor-pointer border border-border rounded-lg px-3 py-2.5 hover:bg-muted transition">
+                <label key={tab.value} className="flex items-center gap-3 cursor-pointer border border-border rounded-lg px-3 py-2.5 hover:bg-hover transition">
                   <input type="radio" name="status" value={tab.value}
                     checked={newStatus === tab.value}
                     onChange={() => setNewStatus(tab.value)}
@@ -1095,7 +1412,7 @@ export default function StudentsPage() {
             )}
             <div className="flex gap-3">
               <button type="button" onClick={closeStatusModal}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleStatusSave} disabled={statusSaving}
@@ -1160,7 +1477,7 @@ export default function StudentsPage() {
                   feeStatus === 'UNPAID' ? 'Unpaid' : ''
                 return (
                   <label key={s.id}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-muted transition border ${promoteSelected.has(s.id) ? 'border-indigo-200 bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-800' : 'border-transparent'}`}>
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-hover transition border ${promoteSelected.has(s.id) ? 'border-indigo-200 bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-800' : 'border-transparent'}`}>
                     <input
                       type="checkbox"
                       checked={promoteSelected.has(s.id)}
@@ -1198,7 +1515,7 @@ export default function StudentsPage() {
               </p>
               <div className="flex gap-3">
                 <button type="button" onClick={() => setPromoteModalOpen(false)}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   Cancel
                 </button>
                 <button

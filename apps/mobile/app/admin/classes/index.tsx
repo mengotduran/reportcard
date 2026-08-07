@@ -7,7 +7,9 @@ import {
   TextInput, Switch,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { getClasses, createClass, deleteClass, ClassLevel } from '@/lib/api/classes'
+import { getClasses, createClass, deleteClass, getClassDeleteImpact, ClassLevel, ClassDeleteImpact, GradingMode } from '@/lib/api/classes'
+import { stripProgrammeSuffix } from '@/lib/programme'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getDepartments, createDepartment, deleteDepartment, Department } from '@/lib/api/departments'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
@@ -57,6 +59,23 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   feeBadge: { backgroundColor: '#dcfce7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 20 },
   feeBadgeText: { fontSize: 11, fontWeight: '600', color: '#16a34a' },
   deleteBtn: { padding: 8, backgroundColor: '#fee2e2', borderRadius: 10 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  delName: { fontSize: 13, color: colors.textSecondary, marginBottom: 12 },
+  delMuted: { fontSize: 12, color: colors.textMuted, marginBottom: 12 },
+  delError: { fontSize: 13, color: '#ef4444', marginBottom: 12 },
+  delWarn: { backgroundColor: '#fee2e2', borderRadius: 10, padding: 12, marginBottom: 12 },
+  delWarnTitle: { fontSize: 13, fontWeight: '700', color: '#b91c1c' },
+  delWarnBody: { fontSize: 11, color: '#b91c1c', marginTop: 4 },
+  delBullet: { fontSize: 13, color: colors.text, marginBottom: 4 },
+  delBulletNum: { fontWeight: '700' },
+  delTypeName: { fontWeight: '700', color: colors.text },
+  delActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  delCancel: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
+  delCancelText: { fontSize: 14, color: colors.textSecondary, fontWeight: '600' },
+  delConfirm: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#ef4444', alignItems: 'center' },
+  delConfirmOff: { opacity: 0.4 },
+  delConfirmText: { fontSize: 14, color: '#fff', fontWeight: '700' },
+  programmeBar: { paddingHorizontal: 16, paddingBottom: 10 },
   empty: { flex: 1, alignItems: 'center', paddingTop: 80, gap: 8 },
   emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary },
   emptySubText: { fontSize: 13, color: colors.textMuted },
@@ -154,20 +173,39 @@ export default function ClassesScreen() {
   const { school } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  const isPrimary = school?.type === 'PRIMARY'
   // Universities call classes "departments" — same data/route, just different wording.
   const tt = (classStr: string, deptStr: string) => t(isUniversity ? deptStr : classStr)
   const [classes, setClasses] = useState<ClassLevel[]>([])
+  // Deleting a class takes its courses, their marks, the lecturers' assignments to them and
+  // every timetable slot they sit in. Far more than this screen can see, so the warning is
+  // built from a server count taken before anything is touched, and the name must be typed.
+  // Alert.prompt would have been the short route, but it is iOS only.
+  const [deleteDeptTarget, setDeleteDeptTarget] = useState<Department | null>(null)
+  const [typedDeptName, setTypedDeptName] = useState('')
+  const [deptDeleteError, setDeptDeleteError] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<ClassLevel | null>(null)
+  const [deleteImpact, setDeleteImpact] = useState<ClassDeleteImpact | null>(null)
+  const [impactError, setImpactError] = useState('')
+  const [typedName, setTypedName] = useState('')
+  const [deleting, setDeleting] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [newName, setNewName] = useState('')
   const [hasStream, setHasStream] = useState(false)
-  const [maxScore, setMaxScore] = useState('20')
+  // Primary marks a subject out of 100 by default (Test 30 + Exam 70), not secondary's 20 —
+  // the web form has always seeded it that way and the phone had not, so a primary class
+  // created here came out marked /20 with a Test ceiling that made no sense against it.
+  const [maxScore, setMaxScore] = useState(isPrimary ? '100' : '20')
   // Starts empty, not a real number: it used to default to a stock 150000 that looked
   // like a deliberately entered value, so a distracted admin could save every class with
   // a fee that has nothing to do with their school's actual tuition. The input's
   // placeholder shows the same number as a hint instead.
   const [feeAmount, setFeeAmount] = useState('')
+  // Primary only. A nursery class is assessed by rating, not by marks — see
+  // ClassLevel.gradingMode. Everything else stays NUMERIC, which is the API's default.
+  const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
   const [creating, setCreating] = useState(false)
 
   // Secondary departments (streams)
@@ -222,9 +260,14 @@ export default function ClassesScreen() {
     setRefreshing(false)
   }
 
-  const visibleClasses = isSecondary && activeDeptId
+  // Day/Evening. Mobile has shown both cohorts mixed with nothing to tell them apart since
+  // the sections were added; this is the same filter the web classes page uses.
+  const programmeFilter = useProgrammeFilter(classes)
+
+  const visibleClasses = (isSecondary && activeDeptId
     ? classes.filter((c) => c.departmentId === activeDeptId)
     : classes
+  ).filter((c) => programmeFilter.matches(c.name))
 
   const handleCreateDept = async () => {
     if (!deptName.trim()) return
@@ -240,19 +283,18 @@ export default function ClassesScreen() {
     } finally { setSavingDept(false) }
   }
 
-  const handleDeleteDept = (dep: Department) => {
-    Alert.alert(t('Delete Department'), `${t('Delete')} "${dep.name}"?`, [
-      { text: t('Cancel'), style: 'cancel' },
-      { text: t('Delete'), style: 'destructive', onPress: async () => {
-        try {
-          await deleteDepartment(dep.id)
-          if (activeDeptId === dep.id) setActiveDeptId('')
-          await fetchDepartments()
-        } catch (err: any) {
-          Alert.alert(t('Error'), err?.response?.data?.message ?? t('Failed to delete department'))
-        }
-      } },
-    ])
+  const confirmDeleteDept = async () => {
+    if (!deleteDeptTarget) return
+    try {
+      await deleteDepartment(deleteDeptTarget.id)
+      if (activeDeptId === deleteDeptTarget.id) setActiveDeptId('')
+      setDeleteDeptTarget(null)
+      setTypedDeptName('')
+      await fetchDepartments()
+    } catch (err: any) {
+      // The API refuses a department that still holds classes, and says so.
+      setDeptDeleteError(err?.response?.data?.message ?? t('Failed to delete department'))
+    }
   }
 
   const handleCreate = async () => {
@@ -280,13 +322,15 @@ export default function ClassesScreen() {
         await createClass({
           name, hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0,
           ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
+          ...(isPrimary ? { gradingMode } : {}),
         })
       }
       setModalVisible(false)
       setNewName('')
       setHasStream(false)
-      setMaxScore('20')
+      setMaxScore(isPrimary ? '100' : '20')
       setFeeAmount('')
+      setGradingMode('NUMERIC')
       setSections([])
       await fetchClasses()
     } catch (err: any) {
@@ -296,26 +340,34 @@ export default function ClassesScreen() {
     }
   }
 
-  const handleDelete = (cls: ClassLevel) => {
-    Alert.alert(
-      tt('Delete Class', 'Delete Department'),
-      `${t('Delete')} "${cls.name}"? ${t('This may affect students and report cards.')}`,
-      [
-        { text: t('Cancel'), style: 'cancel' },
-        {
-          text: t('Delete'),
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteClass(cls.id)
-              setClasses((prev) => prev.filter((c) => c.id !== cls.id))
-            } catch {
-              Alert.alert(t('Error'), tt('Failed to delete class.', 'Failed to delete department.'))
-            }
-          },
-        },
-      ]
-    )
+  const openDelete = async (cls: ClassLevel) => {
+    setDeleteTarget(cls)
+    setDeleteImpact(null)
+    setImpactError('')
+    setTypedName('')
+    try {
+      setDeleteImpact(await getClassDeleteImpact(cls.id))
+    } catch {
+      // Without real counts there is nothing honest to warn about, so the delete is refused
+      // rather than shown with a blank or guessed list.
+      setImpactError(t('Could not check what deleting this would remove. Try again.'))
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteClass(deleteTarget.id, deleteTarget.name)
+      setClasses((prev) => prev.filter((c) => c.id !== deleteTarget.id))
+      setDeleteTarget(null)
+      setDeleteImpact(null)
+      setTypedName('')
+    } catch (err: any) {
+      // The refusal explains itself ("still has 22 students"). A fixed string here left the
+      // admin guessing at a rule they cannot see, same defect the web classes page had.
+      setImpactError(err?.response?.data?.message ?? tt('Failed to delete class.', 'Failed to delete department.'))
+    } finally { setDeleting(false) }
   }
 
   return (
@@ -325,6 +377,20 @@ export default function ClassesScreen() {
           <ActivityIndicator size="large" color="#F03E2F" />
         </View>
       ) : (
+      <>
+      {programmeFilter.hasEvening && (
+        <View style={styles.programmeBar}>
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={programmeFilter.setProgramme}
+            counts={{
+              ALL: classes.length,
+              DAY: classes.filter((c) => programmeFilter.programmeOf(c.name) === 'DAY').length,
+              EVENING: classes.filter((c) => programmeFilter.programmeOf(c.name) === 'EVENING').length,
+            }}
+          />
+        </View>
+      )}
       <FlatList
         data={visibleClasses}
         keyExtractor={(item) => item.id}
@@ -338,7 +404,7 @@ export default function ClassesScreen() {
               return (
                 <TouchableOpacity key={d.id} style={[styles.chip, active && styles.chipActive]}
                   onPress={() => setActiveDeptId(d.id)}
-                  onLongPress={() => !d.isDefault && handleDeleteDept(d)}>
+                  onLongPress={() => { if (!d.isDefault) { setDeleteDeptTarget(d); setTypedDeptName(''); setDeptDeleteError('') } }}>
                   <Text style={[styles.chipText, active && styles.chipTextActive]}>{d.name}</Text>
                   <Text style={[styles.chipCount, active && styles.chipCountActive]}>{count}</Text>
                 </TouchableOpacity>
@@ -363,7 +429,14 @@ export default function ClassesScreen() {
               <Text style={styles.iconText}>{stripDeptSuffix(item.name).charAt(0).toUpperCase()}</Text>
             </View>
             <View style={styles.info}>
-              <Text style={styles.className}>{isSecondary ? stripDeptSuffix(item.name) : item.name}</Text>
+              <View style={styles.nameRow}>
+                {/* The marker is stripped for display, so the badge is the only thing telling
+                    an evening department apart from its identically named day twin. */}
+                <Text style={styles.className}>
+                  {stripProgrammeSuffix(isSecondary ? stripDeptSuffix(item.name) : item.name)}
+                </Text>
+                {programmeFilter.programmeOf(item.name) === 'EVENING' && <EveningBadge />}
+              </View>
               <View style={styles.badgeRow}>
                 {item.hasStream && (
                   <View style={styles.streamBadge}>
@@ -378,14 +451,23 @@ export default function ClassesScreen() {
                     <Text style={styles.feeBadgeText}>{formatXAF(item.feeAmount)}</Text>
                   </View>
                 )}
+                {/* Which classes are rated rather than marked. Worth saying on the list
+                    itself: the mode cannot be changed from the phone, so an admin
+                    otherwise has no way to see it here at all. */}
+                {item.gradingMode === 'COMPETENCY' && (
+                  <View style={styles.streamBadge}>
+                    <Text style={styles.streamBadgeText}>{t('Ratings')}</Text>
+                  </View>
+                )}
               </View>
             </View>
-            <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
+            <TouchableOpacity style={styles.deleteBtn} onPress={() => openDelete(item)}>
               <Ionicons name="trash-outline" size={18} color="#ef4444" />
             </TouchableOpacity>
           </View>
         )}
       />
+      </>
       )}
 
       <TouchableOpacity
@@ -395,6 +477,145 @@ export default function ClassesScreen() {
       >
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
+
+      {/* Secondary department grouping. The API refuses one that still holds classes, so
+          nothing can be destroyed here, but deleting a department asks for the name like
+          every other delete does. */}
+      <Modal visible={!!deleteDeptTarget} transparent animationType="fade" onRequestClose={() => setDeleteDeptTarget(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t('Delete Department')}</Text>
+              <TouchableOpacity onPress={() => { setDeleteDeptTarget(null); setTypedDeptName('') }}>
+                <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.delName}>{deleteDeptTarget?.name}</Text>
+            <Text style={styles.delMuted}>
+              {classes.filter((c) => c.departmentId === deleteDeptTarget?.id).length > 0
+                ? t('This department still holds classes. Move or delete them first, then it can be removed.')
+                : t('This department holds no classes, so nothing else is removed with it.')}
+            </Text>
+            {!!deptDeleteError && <Text style={styles.delError}>{deptDeleteError}</Text>}
+            <Text style={styles.label}>{t('Type the exact name to confirm')}</Text>
+            <Text style={styles.delTypeName}>{deleteDeptTarget?.name}</Text>
+            <TextInput
+              style={styles.input}
+              value={typedDeptName}
+              onChangeText={setTypedDeptName}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholderTextColor={colors.textMuted}
+            />
+            <View style={styles.delActions}>
+              <TouchableOpacity style={styles.delCancel}
+                onPress={() => { setDeleteDeptTarget(null); setTypedDeptName(''); setDeptDeleteError('') }}>
+                <Text style={styles.delCancelText}>{t('Cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.delConfirm, typedDeptName.trim() !== (deleteDeptTarget?.name ?? '').trim() && styles.delConfirmOff]}
+                onPress={confirmDeleteDept}
+                disabled={typedDeptName.trim() !== (deleteDeptTarget?.name ?? '').trim()}>
+                <Text style={styles.delConfirmText}>{t('Delete')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete confirmation. Not an Alert: it has to state what it is about to destroy and
+          take a typed name, and Alert.prompt is iOS only. */}
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{tt('Delete Class', 'Delete Department')}</Text>
+              <TouchableOpacity onPress={() => { setDeleteTarget(null); setTypedName('') }}>
+                <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.delName}>
+              {stripProgrammeSuffix(deleteTarget?.name ?? '')}
+              {deleteTarget && programmeFilter.programmeOf(deleteTarget.name) === 'EVENING' ? `  (${t('Evening')})` : ''}
+            </Text>
+
+            {impactError ? (
+              <Text style={styles.delError}>{impactError}</Text>
+            ) : !deleteImpact ? (
+              <Text style={styles.delMuted}>{t('Checking what this would remove…')}</Text>
+            ) : deleteImpact.blocked ? (
+              <>
+                <View style={styles.delWarn}>
+                  <Text style={styles.delWarnTitle}>
+                    {deleteImpact.students} {t(deleteImpact.students === 1 ? 'student is still in this department' : 'students are still in this department')}
+                  </Text>
+                </View>
+                <Text style={styles.delMuted}>
+                  {t('A department holding students cannot be deleted. Move them to another department first, or set them as dismissed, then delete it.')}
+                </Text>
+              </>
+            ) : (
+              <>
+                {deleteImpact.subjects > 0 && (
+                  <View style={styles.delWarn}>
+                    <Text style={styles.delWarnTitle}>
+                      {t('All')} {deleteImpact.subjects} {tt(deleteImpact.subjects === 1 ? 'subject' : 'subjects', deleteImpact.subjects === 1 ? 'course' : 'courses')} {t('in it will be deleted')}
+                    </Text>
+                    <Text style={styles.delWarnBody}>
+                      {deleteImpact.marks > 0
+                        ? `${t('Every mark entered on them goes too')} (${deleteImpact.marks}). ${t('The day department, if there is one, keeps its own.')}`
+                        : t('The day department, if there is one, keeps its own.')}
+                    </Text>
+                  </View>
+                )}
+
+                {[
+                  [deleteImpact.marks, t('marks')],
+                  [deleteImpact.subjects, tt('subjects', 'courses')],
+                  [deleteImpact.assignments, t('lecturer assignments')],
+                  [deleteImpact.slots, t('timetable slots')],
+                  [deleteImpact.classMasters, t('class master assignments')],
+                ].filter(([n]) => (n as number) > 0).map(([n, label]) => (
+                  <Text key={String(label)} style={styles.delBullet}>•  <Text style={styles.delBulletNum}>{n as number}</Text> {label as string}</Text>
+                ))}
+
+                <Text style={styles.delMuted}>{t('This cannot be undone.')}</Text>
+
+                {/* One key. 'Type' already exists meaning a category (school type), so
+                    reusing it here would translate to the wrong word entirely. */}
+                <Text style={styles.label}>{t('Type the exact name to confirm')}</Text>
+                <Text style={styles.delTypeName}>{deleteTarget?.name}</Text>
+                <TextInput
+                  style={styles.input}
+                  value={typedName}
+                  onChangeText={setTypedName}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholderTextColor={colors.textMuted}
+                />
+              </>
+            )}
+
+            <View style={styles.delActions}>
+              <TouchableOpacity
+                style={styles.delCancel}
+                onPress={() => { setDeleteTarget(null); setDeleteImpact(null); setImpactError(''); setTypedName('') }}
+                disabled={deleting}>
+                <Text style={styles.delCancelText}>{impactError || deleteImpact?.blocked ? t('Close') : t('Cancel')}</Text>
+              </TouchableOpacity>
+              {!impactError && !deleteImpact?.blocked && (
+                <TouchableOpacity
+                  style={[styles.delConfirm, (!deleteImpact || deleting || typedName.trim() !== (deleteTarget?.name ?? '')) && styles.delConfirmOff]}
+                  onPress={confirmDelete}
+                  disabled={!deleteImpact || deleting || typedName.trim() !== (deleteTarget?.name ?? '')}>
+                  <Text style={styles.delConfirmText}>{deleting ? t('Deleting…') : t('Delete')}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
@@ -441,6 +662,33 @@ export default function ClassesScreen() {
               </View>
             )}
 
+            {/* How this class is assessed. Primary only: nursery classes are rated, and a
+                rating has no maximum, so the Max Score field goes with it. */}
+            {isPrimary && (
+              <>
+                <Text style={styles.label}>{t('Assessment')}</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
+                  {(['NUMERIC', 'COMPETENCY'] as GradingMode[]).map((m) => {
+                    const on = gradingMode === m
+                    return (
+                      <TouchableOpacity key={m} onPress={() => setGradingMode(m)}
+                        style={[styles.sectionBtn, { flex: 1 }, on && styles.sectionBtnActive]}>
+                        <Text style={[styles.sectionBtnText, on && styles.sectionBtnTextActive]}>
+                          {m === 'NUMERIC' ? t('Marks') : t('Ratings')}
+                        </Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+                <Text style={styles.switchHint}>
+                  {gradingMode === 'COMPETENCY'
+                    ? t('For nursery and pre-primary. Each subject is rated Attained, Developing or Not Yet Attained. The report card carries no marks, no average and no position in class.')
+                    : t('Each subject is marked out of a maximum, and the report card carries an average and a position in class.')}
+                </Text>
+              </>
+            )}
+
+            {gradingMode === 'NUMERIC' && (<>
             <Text style={styles.label}>{isUniversity ? t('Max Score per Course') : t('Max Score per Subject')} <Text style={styles.required}>*</Text></Text>
             <TextInput
               style={styles.input}
@@ -450,6 +698,7 @@ export default function ClassesScreen() {
               placeholderTextColor="#9ca3af"
               keyboardType="numeric"
             />
+            </>)}
 
             <Text style={styles.label}>{t('School Fee (XAF)')} <Text style={styles.required}>*</Text></Text>
             <TextInput

@@ -13,6 +13,16 @@ export interface TimetableSlot {
   // "YYYY-MM-DD" — set only for a one-off private/extra slot that doesn't repeat every
   // week. null means it recurs weekly on dayOfWeek, same as before.
   specificDate?: string | null
+  /** Window for a private class that runs weekly but only part of the term. Both null =
+   *  the whole term. Ignored when specificDate is set. */
+  startsOn?: string | null
+  endsOn?: string | null
+  /** Course a private class delivers hours toward, if any. */
+  privateSubjectId?: string | null
+  /** Name of that course, resolved by the API so no client refetches the subject list. */
+  privateSubjectName?: string | null
+  /** And its class, so a linked private class can show the same two rows a course does. */
+  privateSubjectClass?: string | null
 }
 
 export const getTeacherTimetableApi = async (teacherId: string): Promise<{ slots: TimetableSlot[] }> => {
@@ -23,6 +33,7 @@ export const getTeacherTimetableApi = async (teacherId: string): Promise<{ slots
 export const saveTimetableApi = async (teacherId: string, slots: {
   dayOfWeek: string; startTime: string; endTime: string
   subjectId?: string | null; label?: string | null; room?: string | null; specificDate?: string | null
+  startsOn?: string | null; endsOn?: string | null; privateSubjectId?: string | null
 }[]) => {
   const res = await api.put('/timetable', { slots }, { params: { teacherId } })
   // `reassigned` appears when scheduling a course took it off another lecturer
@@ -71,14 +82,25 @@ export interface TimetablePeriod {
   startTime: string
   endTime: string
   isBreak: boolean
+  /** Which sitting this period belongs to. Day and Evening are independent bell
+   *  schedules, own periods, own breaks, own minutes-per-period — every row picks one. */
+  programme: 'DAY' | 'EVENING'
 }
 
-export const getPeriodsApi = async (): Promise<{ periods: TimetablePeriod[]; periodMinutes: number | null }> => {
+export const getPeriodsApi = async (): Promise<{
+  periods: TimetablePeriod[]
+  dayPeriodMinutes: number | null
+  eveningPeriodMinutes: number | null
+}> => {
   const res = await api.get('/timetable/periods')
   return res.data
 }
 
-export const savePeriodsApi = async (periods: { startTime: string; endTime: string; isBreak: boolean }[], periodMinutes: number | null) => {
-  const res = await api.put('/timetable/periods', { periods, periodMinutes })
+export const savePeriodsApi = async (
+  periods: { startTime: string; endTime: string; isBreak: boolean; programme: 'DAY' | 'EVENING' }[],
+  dayPeriodMinutes: number | null,
+  eveningPeriodMinutes: number | null,
+) => {
+  const res = await api.put('/timetable/periods', { periods, dayPeriodMinutes, eveningPeriodMinutes })
   return res.data as { message: string }
 }

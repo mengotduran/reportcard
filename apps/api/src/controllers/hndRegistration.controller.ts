@@ -2,13 +2,17 @@ import { Response } from 'express'
 import prisma from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { currentSession } from './fees.controller'
+import { stripProgramme } from '../utils/programme'
 
 export const HND_REGISTRATION_FEE = 65_000
 // Default GCE exam-registration fee for secondary schools (Form 5 → O Level, Upper Sixth → A Level).
 export const GCE_REGISTRATION_FEE = 20_000
+// Default FSLC (First School Leaving Certificate) exam-registration fee for primary schools'
+// Class Six pupils — the government exit exam, primary's equivalent of GCE/HND registration.
+export const FSLC_REGISTRATION_FEE = 15_000
 
 type RegStatus = 'COMPLETE' | 'PARTIAL' | 'UNPAID'
-type EligibleSchoolType = 'UNIVERSITY' | 'SECONDARY'
+type EligibleSchoolType = 'UNIVERSITY' | 'SECONDARY' | 'PRIMARY'
 
 function regStatus(paid: number, fee: number): RegStatus {
   if (paid >= fee) return 'COMPLETE'
@@ -17,33 +21,38 @@ function regStatus(paid: number, fee: number): RegStatus {
 }
 
 function deptFromLevel2Class(classLevel: string): string {
-  return classLevel.replace(/^HND /, '').replace(/ - Level 2$/, '')
+  return stripProgramme(classLevel).replace(/^HND /, '').replace(/ - Level 2$/, '')
 }
 
 // A class requires exam registration when: it's a university's final (Level 2) HND
-// class, or a secondary school's Form 5 (O Level) / Upper Sixth (A Level) class —
-// including any stream suffix, e.g. "Form 5 Science", "Upper Sixth Arts".
+// class, a secondary school's Form 5 (O Level) / Upper Sixth (A Level) class — including
+// any stream suffix, e.g. "Form 5 Science", "Upper Sixth Arts" — or a primary school's
+// Class Six (FSLC), including any section suffix, e.g. "Class Six A".
 export function isRegistrationClass(schoolType: string | undefined, classLevel: string): boolean {
-  if (schoolType === 'UNIVERSITY') return /- Level 2$/i.test(classLevel)
+  // Normalised first: an evening Level 2 is still a registration class.
+  if (schoolType === 'UNIVERSITY') return /- Level 2$/i.test(stripProgramme(classLevel))
   if (schoolType === 'SECONDARY') return /^Form\s?5\b/i.test(classLevel) || /^Upper\s?Sixth\b/i.test(classLevel)
+  if (schoolType === 'PRIMARY') return /^Class\s?(Six|6)\b/i.test(classLevel) || /^CM2\b/i.test(classLevel)
   return false
 }
 
 function defaultFeeFor(schoolType: EligibleSchoolType): number {
-  return schoolType === 'SECONDARY' ? GCE_REGISTRATION_FEE : HND_REGISTRATION_FEE
+  if (schoolType === 'SECONDARY') return GCE_REGISTRATION_FEE
+  if (schoolType === 'PRIMARY') return FSLC_REGISTRATION_FEE
+  return HND_REGISTRATION_FEE
 }
 
 // Group label shown per class in the list/fee-editor: university strips the "HND …
-// - Level 2" wrapper down to the bare department name; secondary class names are
-// already a readable label ("Form 5 Science") so they're used as-is.
+// - Level 2" wrapper down to the bare department name; secondary and primary class names
+// are already a readable label ("Form 5 Science", "Class Six") so they're used as-is.
 function groupLabelFor(schoolType: EligibleSchoolType, classLevel: string): string {
   return schoolType === 'UNIVERSITY' ? deptFromLevel2Class(classLevel) : classLevel
 }
 
 async function assertEligibleSchool(schoolId: string, res: Response): Promise<EligibleSchoolType | null> {
   const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } })
-  if (school?.type !== 'UNIVERSITY' && school?.type !== 'SECONDARY') {
-    res.status(403).json({ message: 'Exam registration is only available for secondary and university schools.' })
+  if (school?.type !== 'UNIVERSITY' && school?.type !== 'SECONDARY' && school?.type !== 'PRIMARY') {
+    res.status(403).json({ message: 'Exam registration is only available for primary, secondary and university schools.' })
     return null
   }
   return school.type
@@ -187,7 +196,7 @@ export const addHndRegistrationPayment = async (req: AuthRequest, res: Response)
     if (!(await assertEligibleSchool(schoolId, res))) return
 
     const studentId = String(req.params.studentId)
-    const { amount, paidOn, note } = req.body
+    const { amount, paidOn, note, examNumber } = req.body
 
     const student = await prisma.student.findFirst({ where: { id: studentId, schoolId } })
     if (!student) { res.status(404).json({ message: 'Student not found' }); return }
@@ -208,7 +217,12 @@ export const addHndRegistrationPayment = async (req: AuthRequest, res: Response)
     if (isNaN(when.getTime())) { res.status(400).json({ message: 'Invalid payment date' }); return }
 
     await prisma.hndRegistrationPayment.create({
-      data: { schoolId, studentId, session, amount: amt, paidOn: when, note: note?.trim() || null, recordedBy: req.user!.id },
+      data: {
+        schoolId, studentId, session, amount: amt, paidOn: when,
+        note: note?.trim() || null,
+        examNumber: typeof examNumber === 'string' && examNumber.trim() ? examNumber.trim() : null,
+        recordedBy: req.user!.id,
+      },
     })
 
     req.params.studentId = studentId

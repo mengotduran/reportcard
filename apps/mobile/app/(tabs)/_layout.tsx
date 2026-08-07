@@ -1,6 +1,6 @@
 import { Tabs, Redirect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { TouchableOpacity, View, Text } from 'react-native'
+import { TouchableOpacity, View, Text, AppState } from 'react-native'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '@/lib/store/auth.store'
@@ -9,18 +9,28 @@ import { getMyNotifications } from '@/lib/api/notifications'
 import { useTheme, font, hairlineWidth } from '@/lib/useTheme'
 import ThemeToggle from '@/components/ThemeToggle'
 import { useT } from '@/lib/i18n'
+import { connectSocket, disconnectSocket, onRealtime, reconnectIfNeeded } from '@/lib/socket'
 
 const TEACHER_ROLES = ['CLASS_TEACHER', 'SUBJECT_TEACHER']
 const ADMIN_ROLES = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL']
-const NOTIFICATION_POLL_MS = 30000
+// Fallback interval only — the socket is the primary path now, so this is deliberately
+// slow. It exists so a dead socket degrades to stale rather than frozen.
+const NOTIFICATION_POLL_MS = 150000
 
 export default function TabsLayout() {
-  const { isAuthenticated, _hasHydrated, user, school, logout, activeSession, setActiveSession } = useAuthStore()
+  const { isAuthenticated, _hasHydrated, user, school, token, logout, activeSession, setActiveSession } = useAuthStore()
   const { colors, isDark } = useTheme()
   const router = useRouter()
   const t = useT()
   const [unreadCount, setUnreadCount] = useState(0)
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
+  const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
+  const isClassMaster = user?.role === 'CLASS_MASTER'
+  // Who gets notifications: admins (a teacher self-reported or retracted) AND teachers /
+  // class masters (an admin logged or removed an absence FOR them, or took a course off
+  // them). The API is role-agnostic and returns each user's own rows, so this is purely
+  // which roles we connect and surface a badge to. Mirrors web's `receivesNotifications`.
+  const receivesNotifications = isAdmin || isTeacher || isClassMaster
 
   // Keep the app-wide active academic year valid (defaults to the live year).
   useEffect(() => {
@@ -31,26 +41,38 @@ export default function TabsLayout() {
     }).catch(() => {})
   }, [isAuthenticated, user?.role])
 
-  // Only admins receive notifications (teacher-absence reports) for now — poll rather
-  // than true push, see [[in_app_notifications]] for why.
+  // Real-time via socket, with the poll kept as a slower SAFETY NET. Still not true push:
+  // nothing arrives while the app is closed, only while it is open. See the socket module
+  // for why signals carry no data.
   useEffect(() => {
-    if (!isAuthenticated || !isAdmin) return
+    if (!isAuthenticated || !receivesNotifications || !token) return
     let cancelled = false
-    const poll = () => getMyNotifications().then((r) => { if (!cancelled) setUnreadCount(r.unreadCount) }).catch(() => {})
-    poll()
-    const interval = setInterval(poll, NOTIFICATION_POLL_MS)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [isAuthenticated, isAdmin])
+    const refresh = () => getMyNotifications().then((r) => { if (!cancelled) setUnreadCount(r.unreadCount) }).catch(() => {})
+
+    refresh()
+    connectSocket(token)
+    const off = onRealtime('notifications:changed', refresh)
+    const interval = setInterval(refresh, NOTIFICATION_POLL_MS)
+
+    // iOS suspends the process in the background and can drop the connection without the JS
+    // runtime hearing about it, so socket.io's own backoff never fires. Reconnect and refetch
+    // on foreground, or the app comes back from a pocket showing a stale badge forever.
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') { reconnectIfNeeded(); refresh() }
+    })
+
+    return () => { cancelled = true; off(); clearInterval(interval); sub.remove() }
+  }, [isAuthenticated, receivesNotifications, token])
 
   if (!_hasHydrated) return null
   if (!isAuthenticated) return <Redirect href="/login" />
 
-  const isTeacher = TEACHER_ROLES.includes(user?.role ?? '')
-  const isClassMaster = user?.role === 'CLASS_MASTER'
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isUniversity = school?.type === 'UNIVERSITY'
 
-  const handleLogout = () => { logout(); router.replace('/login') }
+  // Drop the socket before clearing the session: it is still joined to this user's rooms,
+  // and reusing it after a different login would deliver their signals to the wrong person.
+  const handleLogout = () => { disconnectSocket(); logout(); router.replace('/login') }
 
   const notificationBell = (
     <TouchableOpacity onPress={() => router.push('/notifications' as any)} style={{ padding: 8 }} hitSlop={8}>
@@ -76,19 +98,6 @@ export default function TabsLayout() {
     </View>
   )
 
-  // Teachers/class masters have no "More" tab (admin-only menu), so this is
-  // their only way to reach Account — change password, mainly.
-  const teacherHeaderButtons = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
-      <ThemeToggle size="sm" />
-      <TouchableOpacity onPress={() => router.push('/account')} style={{ padding: 8 }} hitSlop={8}>
-        <Ionicons name="person-circle-outline" size={22} color={colors.textSecondary} />
-      </TouchableOpacity>
-      <TouchableOpacity onPress={handleLogout} style={{ padding: 8 }} hitSlop={8}>
-        <Ionicons name="log-out-outline" size={22} color="#ef4444" />
-      </TouchableOpacity>
-    </View>
-  )
 
   const logoutButtonWhite = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>

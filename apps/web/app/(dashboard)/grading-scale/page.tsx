@@ -19,7 +19,10 @@ export default function GradingScalePage() {
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
   const isUniversity = school?.type === 'UNIVERSITY'
-  const maxMark = isUniversity ? 100 : 20
+  // Primary now grades on the raw Test+Exam total (like university's CA+Exam), not a /20
+  // normalised sequence average — see reportcard.controller.ts saveEntries.
+  const isPrimary = school?.type === 'PRIMARY'
+  const maxMark = (isUniversity || isPrimary) ? 100 : 20
 
   const emptyRange = (): GradeRange => ({
     id: `r_${Date.now()}`,
@@ -53,7 +56,7 @@ export default function GradingScalePage() {
   useEffect(() => {
     if (!isAuthenticated) { router.push('/login'); return }
     getGradingScaleApi().then(({ ranges: r, classificationBands: cb, legendRows: lr }) => {
-      setRanges(r.length > 0 ? r : (isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES))
+      setRanges(r.length > 0 ? r : ((isUniversity || isPrimary) ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES))
       setClassificationBands(
         isUniversity
           ? (cb.length > 0 ? cb : DEFAULT_CLASSIFICATION_BANDS)
@@ -146,7 +149,7 @@ export default function GradingScalePage() {
 
   const resetToDefault = () => {
     if (confirm(t('Reset to default grading scale? This will overwrite your current scale.'))) {
-      setRanges((isUniversity ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES).map(r => ({ ...r, id: `r_${Date.now()}_${r.grade}` })))
+      setRanges(((isUniversity || isPrimary) ? DEFAULT_UNIVERSITY_RANGES : DEFAULT_RANGES).map(r => ({ ...r, id: `r_${Date.now()}_${r.grade}` })))
       if (isUniversity) setClassificationBands(DEFAULT_CLASSIFICATION_BANDS)
     }
   }
@@ -154,7 +157,7 @@ export default function GradingScalePage() {
   const testResult = testScore !== '' ? gradeForScore20(Number(testScore), ranges) : null
 
   // Coverage warning
-  const step = isUniversity ? 1 : 0.5
+  const step = (isUniversity || isPrimary) ? 1 : 0.5
   const warnings: string[] = []
   let uncovered = 0
   for (let s = 0; s <= maxMark; s += step) {
@@ -166,7 +169,7 @@ export default function GradingScalePage() {
   if (loading) return <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-5xl mx-auto">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-foreground tracking-tight">{t('Grading Scale')}</h2>
@@ -177,7 +180,7 @@ export default function GradingScalePage() {
           </p>
         </div>
         <div className="flex gap-2 flex-shrink-0">
-          <button onClick={resetToDefault} className="text-xs text-muted-foreground border border-border px-3 py-1.5 rounded-lg hover:bg-muted transition-colors">
+          <button onClick={resetToDefault} className="text-xs text-muted-foreground border border-border px-3 py-1.5 rounded-lg hover:bg-hover transition-colors">
             {t('Reset to default')}
           </button>
           <button onClick={handleSave} disabled={saving}
@@ -215,46 +218,52 @@ export default function GradingScalePage() {
             <Plus size={14} /> {t('Add Range')}
           </button>
         </div>
-        <div className="overflow-x-auto"><table className="w-full min-w-[700px]">
+        {/* No min-w here. The old min-w-[700px] sat BELOW the table's own 728px min-content
+            floor, so it never once took effect: it read as a deliberate width and did nothing.
+            Every column but Remark is nowrap and sized to its content; Remark takes w-full so
+            all the slack lands in the one column that can use it, instead of being spread
+            across the icon columns while the headers wrap into two lines. */}
+        <div className="overflow-x-auto"><table className="w-full">
           <thead>
             <tr className="border-b border-gray-100 dark:border-border">
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Grade')}</th>
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">
-                {isUniversity ? t('Mark Range (/100)') : t('Mark Range (/20)')}
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">{t('Grade')}</th>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">
+                {/* The bound is stated once here rather than repeated in every row. */}
+                {t('Mark Range')} <span className="font-bold text-primary normal-case">/ {maxMark}</span>
               </th>
               {isUniversity && (
-                <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Grade Point (GP)')}</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">{t('Grade Point')}</th>
               )}
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Remark')}</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase w-full">{t('Remark')}</th>
               {isUniversity && (
-                <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Jury Decision')}</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">{t('Jury Decision')}</th>
               )}
-              <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Color')}</th>
-              <th className="px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Order')}</th>
-              <th className="px-4 py-2 text-xs font-medium text-muted-foreground uppercase">{t('Actions')}</th>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">{t('Color')}</th>
+              <th className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">{t('Order')}</th>
+              <th className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase whitespace-nowrap">{t('Actions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {sorted.map((r, i) => (
-              <tr key={r.id} className="hover:bg-muted dark:hover:bg-muted transition">
-                <td className="px-4 py-3">
+              <tr key={r.id} className="hover:bg-hover transition">
+                <td className="px-3 py-3">
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold"
                     style={{ backgroundColor: `${r.color}20`, color: r.color }}>
                     {r.grade}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-sm text-foreground font-mono">
-                  {r.minScore} – {r.maxScore} / {maxMark}
+                <td className="px-3 py-3 text-sm text-foreground font-mono whitespace-nowrap">
+                  {r.minScore} – {r.maxScore}
                 </td>
                 {isUniversity && (
-                  <td className="px-4 py-3 text-sm font-semibold text-foreground">
+                  <td className="px-3 py-3 text-sm font-semibold text-foreground whitespace-nowrap">
                     {r.gradePoint?.toFixed(2) ?? '—'}
                   </td>
                 )}
                 <td className="px-4 py-3 text-sm text-muted-foreground">{r.remark || '—'}</td>
                 {isUniversity && (
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1">
+                  <td className="px-3 py-3">
+                    <div className="flex gap-1 whitespace-nowrap">
                       {(['VALIDATED', 'FAIL'] as const).map(opt => (
                         <button key={opt} type="button"
                           onClick={() => setRanges(prev => prev.map(x => x.id === r.id ? { ...x, juryDecision: opt } : x))}
@@ -263,7 +272,7 @@ export default function GradingScalePage() {
                               ? opt === 'FAIL'
                                 ? 'bg-red-600 text-white border-red-600'
                                 : 'bg-green-600 text-white border-green-600'
-                              : 'border-border text-muted-foreground hover:bg-muted'
+                              : 'border-border text-muted-foreground hover:bg-hover'
                           }`}>
                           {opt}
                         </button>
@@ -271,10 +280,10 @@ export default function GradingScalePage() {
                     </div>
                   </td>
                 )}
-                <td className="px-4 py-3">
+                <td className="px-3 py-3">
                   <div className="w-5 h-5 rounded-full border border-border" style={{ backgroundColor: r.color }} />
                 </td>
-                <td className="px-4 py-2">
+                <td className="px-3 py-2">
                   <div className="flex items-center gap-0.5">
                     <button onClick={() => moveRange(r.id, 'up')} disabled={i === 0}
                       className="p-1 text-muted-foreground hover:text-muted-foreground disabled:opacity-20">
@@ -286,7 +295,7 @@ export default function GradingScalePage() {
                     </button>
                   </div>
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-3 py-3">
                   <div className="flex items-center gap-1">
                     <button onClick={() => openEdit(r)}
                       className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition">
@@ -326,7 +335,7 @@ export default function GradingScalePage() {
             </thead>
             <tbody className="divide-y divide-border">
               {sortedBands.map((b, i) => (
-                <tr key={i} className="hover:bg-muted transition">
+                <tr key={i} className="hover:bg-hover transition">
                   <td className="px-4 py-2 text-sm font-mono text-foreground">{b.min.toFixed(2)} – {b.max.toFixed(2)}</td>
                   <td className="px-4 py-2 text-sm font-semibold text-foreground">{b.label}</td>
                   <td className="px-4 py-2">
@@ -372,7 +381,7 @@ export default function GradingScalePage() {
           </thead>
           <tbody className="divide-y divide-border">
             {legendRows.map((row, i) => (
-              <tr key={i} className="hover:bg-muted transition">
+              <tr key={i} className="hover:bg-hover transition">
                 <td className="px-4 py-2 text-sm font-mono font-bold text-foreground">{row.abbr}</td>
                 <td className="px-4 py-2 text-sm text-muted-foreground">{row.meaning}</td>
                 <td className="px-4 py-2">
@@ -397,7 +406,7 @@ export default function GradingScalePage() {
       </div>}
 
       {/* Live tester */}
-      {!isUniversity && (
+      {!isUniversity && !isPrimary && (
         <div className="bg-card rounded-xl border border-border p-4">
           <h3 className="text-sm font-semibold text-foreground mb-3">{t('Test the Scale')}</h3>
           <div className="flex items-center gap-3">
@@ -424,8 +433,8 @@ export default function GradingScalePage() {
         </div>
       )}
 
-      {/* University: live tester for /100 */}
-      {isUniversity && (
+      {/* University/primary: live tester for /100 */}
+      {(isUniversity || isPrimary) && (
         <div className="bg-card rounded-xl border border-border p-4">
           <h3 className="text-sm font-semibold text-foreground mb-3">{t('Test the Scale')}</h3>
           <div className="flex items-center gap-3">
@@ -449,7 +458,9 @@ export default function GradingScalePage() {
                   </span>
                   <div>
                     <p className="text-sm font-medium text-foreground">{match.remark}</p>
-                    <p className="text-xs text-muted-foreground">GP: {match.gradePoint?.toFixed(2) ?? '—'} · {testScore} / 100</p>
+                    <p className="text-xs text-muted-foreground">
+                      {isUniversity && <>GP: {match.gradePoint?.toFixed(2) ?? '—'} · </>}{testScore} / 100
+                    </p>
                   </div>
                 </div>
               )
@@ -474,17 +485,17 @@ export default function GradingScalePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
-                    {isUniversity ? t('Min Mark (/100)') : t('Min Mark (/20)')}
+                    {(isUniversity || isPrimary) ? t('Min Mark (/100)') : t('Min Mark (/20)')}
                   </label>
-                  <input type="number" min="0" max={maxMark} step={isUniversity ? 1 : 0.5} value={editForm.minScore}
+                  <input type="number" min="0" max={maxMark} step={(isUniversity || isPrimary) ? 1 : 0.5} value={editForm.minScore}
                     onChange={e => setEditForm(f => ({ ...f, minScore: Number(e.target.value) }))}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
-                    {isUniversity ? t('Max Mark (/100)') : t('Max Mark (/20)')}
+                    {(isUniversity || isPrimary) ? t('Max Mark (/100)') : t('Max Mark (/20)')}
                   </label>
-                  <input type="number" min="0" max={maxMark} step={isUniversity ? 1 : 0.5} value={editForm.maxScore}
+                  <input type="number" min="0" max={maxMark} step={(isUniversity || isPrimary) ? 1 : 0.5} value={editForm.maxScore}
                     onChange={e => setEditForm(f => ({ ...f, maxScore: Number(e.target.value) }))}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
@@ -523,7 +534,7 @@ export default function GradingScalePage() {
                               : opt === ''
                                 ? 'bg-muted border-border text-foreground'
                                 : 'bg-green-600 text-white border-green-600'
-                            : 'border-border text-muted-foreground hover:bg-muted'
+                            : 'border-border text-muted-foreground hover:bg-hover'
                         }`}>
                         {opt || t('None')}
                       </button>
@@ -546,7 +557,7 @@ export default function GradingScalePage() {
             </div>
             <div className="flex gap-3 pt-4">
               <button onClick={closeEdit}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button onClick={saveEdit} disabled={!editForm.grade.trim()}
@@ -592,7 +603,7 @@ export default function GradingScalePage() {
             </div>
             <div className="flex gap-3 pt-4">
               <button onClick={closeBandEdit}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button onClick={saveBandEdit} disabled={!bandForm.label.trim()}
@@ -630,7 +641,7 @@ export default function GradingScalePage() {
             </div>
             <div className="flex gap-3 pt-4">
               <button onClick={closeLegendEdit}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button onClick={saveLegendEdit} disabled={!legendForm.abbr.trim()}

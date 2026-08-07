@@ -5,17 +5,22 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi } from '@/lib/api/reportcards'
 import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
+import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
-  grade: string; remarks: string; subject: { id: string; name: string }
+  grade: string; remarks: string; subject: { id: string; name: string; maxScore?: number }
 }
 interface RawRC {
   id: string; status: string; remarks?: string; average?: number | null
   position?: number | null; cgpa?: number | null
-  classSize?: number | null; classAverage?: number | null
-  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string }
+  classSize?: number | null; classAverage?: number | null; bestAverage?: number | null
+  // Only non-null on the session's final (third) term's card — see annualAverage in
+  // reportcard.controller.ts. Gates Decision's live computation in PrintableReportCard.
+  annualAverage?: number | null
+  student: { id: string; name: string; studentId: string; classLevel: string; guardianName?: string; photo?: string | null }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
   entries: RawEntry[]
 }
@@ -23,7 +28,15 @@ interface RawRC {
 export default function PrintClassPage() {
   const params = useParams()
   const searchParams = useSearchParams()
-  const { school } = useAuthStore()
+  // `_hasHydrated` matters here in a way it doesn't on a dashboard page: this route is in
+  // the (print) group, which has no layout and therefore no AuthGuard to hold rendering
+  // back until the persisted store has loaded. It is also only ever reached by its URL, so
+  // every visit is a COLD load. Without the gate below, the effect ran while `school` was
+  // still null, built the layout with an undefined school type — which falls through to the
+  // secondary branch — and never rebuilt it once the real type arrived. A primary school
+  // printed its cards with secondary's columns (Coef, Avg /20, Avg × Coef), while the
+  // letterhead above them correctly said PRIMARY.
+  const { school, _hasHydrated } = useAuthStore()
   const classLevel = decodeURIComponent(params.classLevel as string)
   const termId = searchParams.get('termId') ?? undefined
 
@@ -31,16 +44,25 @@ export default function PrintClassPage() {
   const [config, setConfig] = useState<TemplateConfig | null>(null)
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [classBands, setClassBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
+  // The whole run is one class, so one mode covers every card in it.
+  const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
   const [status, setStatus] = useState<'loading' | 'empty' | 'error' | 'ready' | 'blocked'>('loading')
 
   useEffect(() => {
+    // Wait for the persisted school to load — see _hasHydrated above.
+    if (!_hasHydrated) return
     const load = async () => {
       try {
-        const [rcData, tplData, scaleData] = await Promise.all([
+        const [rcData, tplData, scaleData, promoScale, levels] = await Promise.all([
           getReportCardsApi({ termId, classLevel }),
           getTemplateApi().catch(() => ({ config: {} })),
           getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: [], legendRows: [] })),
+          getPromotionScaleApi().catch(() => null),
+          getClassLevelsApi().catch(() => ({ classLevels: [] })),
         ])
+        setPromotionScale(promoScale)
+        setGradingMode(levels.classLevels.find((c) => c.name === classLevel)?.gradingMode ?? 'NUMERIC')
         const published: RawRC[] = rcData.reportCards.filter((rc: RawRC) => rc.status === 'PUBLISHED')
         if (published.length === 0) { setStatus('empty'); return }
         if (published[0]?.term?.printingEnabled === false) { setStatus('blocked'); return }
@@ -57,7 +79,7 @@ export default function PrintClassPage() {
       }
     }
     load()
-  }, [classLevel, termId])
+  }, [classLevel, termId, _hasHydrated, school?.type])
 
   // Auto-print once images have loaded
   useEffect(() => {
@@ -115,7 +137,9 @@ export default function PrintClassPage() {
       `}</style>
 
       {cards.map((rc, i) => {
-        const subjects = rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name }))
+        // maxScore travels with the subject: a PRIMARY mark is normalised onto the grading
+        // scale's units before it is graded (see entryGrade in PrintableReportCard).
+        const subjects = rc.entries.map(e => ({ id: e.subject.id, name: e.subject.name, maxScore: e.subject.maxScore }))
         const entries: PrintEntry[] = rc.entries.map(e => ({
           subjectId: e.subject.id,
           score: e.score,
@@ -138,6 +162,9 @@ export default function PrintClassPage() {
               position={rc.position ?? null}
               classSize={rc.classSize ?? null}
               classAverage={rc.classAverage ?? null}
+              bestAverage={rc.bestAverage ?? undefined}
+              studentPhoto={rc.student.photo ?? undefined}
+              annualAverage={rc.annualAverage ?? undefined}
               config={config}
               // A whole-class print run is the end-of-term hand-out, so these are STUDENT
               // copies. Official copies are printed per student, sealed and sent by the school.
@@ -146,6 +173,8 @@ export default function PrintClassPage() {
               classificationBands={classBands}
               cgpa={rc.cgpa ?? undefined}
               subjectStats={classSubjectStats}
+              promotionScale={promotionScale}
+              gradingMode={gradingMode}
             />
           </div>
         )

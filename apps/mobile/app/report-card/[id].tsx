@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView,
   Platform, Keyboard, TouchableWithoutFeedback,
 } from 'react-native'
+import { stripProgrammeSuffix } from '@/lib/programme'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
@@ -13,6 +14,8 @@ import {
 } from '@/lib/api/reportcards'
 import { getGradingScale, gradeFromScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
+import { onRealtimeDebounced } from '@/lib/socket'
+import { isCompetencyRating, RATING_COLORS, CompetencyRating } from '@/lib/competency'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 
@@ -22,6 +25,13 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   container: { flex: 1, backgroundColor: colors.bgSecondary },
   content: { padding: 16, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  // Amber: this reports a conflict, so it must read as "something happened" at a glance.
+  staleBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fef3c7', borderColor: '#fde68a', borderWidth: 1,
+    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12,
+  },
+  staleBarText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400e' },
   infoCard: {
     backgroundColor: colors.card,
     borderRadius: 14,
@@ -156,6 +166,11 @@ export default function ReportCardDetailScreen() {
   const [reportCard, setReportCard] = useState<ReportCardDetail | null>(null)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [entries, setEntries] = useState<Entry[]>([])
+  // Scores exactly as last loaded, keyed by subject. `entries` is the EDIT BUFFER, so this
+  // is the only way to tell a typed-but-unsaved card from a clean one.
+  const loadedScoresRef = useRef<Record<string, string>>({})
+  // Someone else saved marks for this student while this card held unsaved edits.
+  const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [remarks, setRemarks] = useState('')
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
@@ -182,18 +197,35 @@ export default function ReportCardDetailScreen() {
       && (s.term == null || s.term === rc.term.name)
       && (s.compulsory !== false || rc.entries.some((e) => e.subject.id === s.id)))
     setSubjects(classSubjects)
-    setEntries(
-      classSubjects.map((s) => {
-        const e = rc.entries.find((e) => e.subject.id === s.id)
-        // Use '' for null/unfilled scores so we can distinguish from explicitly-entered 0
-        return { subjectId: s.id, score: e?.score != null ? String(e.score) : '', grade: e?.grade ?? '', remarks: e?.remarks ?? '' }
-      })
-    )
+    const loadedEntries = classSubjects.map((s) => {
+      const e = rc.entries.find((e) => e.subject.id === s.id)
+      // Use '' for null/unfilled scores so we can distinguish from explicitly-entered 0
+      return { subjectId: s.id, score: e?.score != null ? String(e.score) : '', grade: e?.grade ?? '', remarks: e?.remarks ?? '' }
+    })
+    setEntries(loadedEntries)
+    // Baseline for "does this card hold unsaved edits" — see isDirty below. `entries` is the
+    // edit buffer, so this is the only way to tell typed-but-unsaved from clean.
+    loadedScoresRef.current = Object.fromEntries(loadedEntries.map((e) => [e.subjectId, e.score]))
+    setStaleFromElsewhere(false)
   }, [id])
 
   useFocusEffect(useCallback(() => {
     fetchData().finally(() => setLoading(false))
   }, [fetchData]))
+
+  // Unsaved edits present? Compared against the last load rather than tracked by a flag, so
+  // typing a mark and then undoing it correctly reads as clean again.
+  const isDirty = entries.some((e) => (loadedScoresRef.current[e.subjectId] ?? '') !== e.score)
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
+
+  // Someone else saved marks for this student. Same rule as the marks grid: this screen has
+  // an edit buffer, so it is offered a reload rather than having one forced on it. A silent
+  // refetch here would wipe scores typed into the very card being edited.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (isDirtyRef.current) setStaleFromElsewhere(true)
+    else fetchData().catch(() => {})
+  }), [fetchData])
 
   const updateScore = (subjectId: string, raw: string) => {
     const subject = subjects.find((s) => s.id === subjectId)
@@ -269,11 +301,20 @@ export default function ReportCardDetailScreen() {
   const isDraft = reportCard.status === 'DRAFT'
   const isClassMaster = user?.role === 'CLASS_MASTER'
   const isUniversity = reportCard.school?.type === 'UNIVERSITY'
+  // Nursery: a rating per subject and nothing else. Read from the CLASS, not the school —
+  // one primary school runs both modes at once. Ratings are recorded on the class sheet,
+  // never typed here, so this card stays read-only for them.
+  const isCompetency = reportCard.gradingMode === 'COMPETENCY'
+  const ratedCount = entries.filter((e) => isCompetencyRating(e.grade)).length
 
   // Publish readiness — same rules as admin and web. Prefer the backend's
   // readiness detail once loaded, since it also catches subjects with zero
   // entries at all, not just entries with a missing sequence score.
-  const localSeqsFilled = entries.length > 0 && entries.every(e => e.score !== '' && e.score != null)
+  // A competency card has no sequences at all, so "complete" there means every subject
+  // carries a rating — the same rule the API's own publish gate applies.
+  const localSeqsFilled = entries.length > 0 && (reportCard.gradingMode === 'COMPETENCY'
+    ? entries.every(e => isCompetencyRating(e.grade))
+    : entries.every(e => e.score !== '' && e.score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
   // Positions are class-relative — every other active student in this class + term
@@ -284,7 +325,14 @@ export default function ReportCardDetailScreen() {
   // Class master can only add remarks once ALL sequences are filled
   const canEditRemarks = !isClassMaster || (isDraft && allSeqsFilled)
 
-  const avgMaxScore = subjects[0]?.maxScore ?? 20
+  // The scale the AVERAGE is on, which is not always the scale its SUBJECTS are on — only
+  // a university states a raw average; primary and secondary both state it out of 20.
+  const avgMaxScore = isUniversity ? (subjects[0]?.maxScore ?? 100) : 20
+  // Recomputed live as marks are typed, so it must match the API's saveEntries exactly or
+  // the figure jumps the moment it's saved: coefficient-weighted, and normalised per
+  // subject onto /20 for primary/secondary. Primary marks its subjects raw out of 100 but
+  // states the average out of 20, so skipping the normalisation showed 69.4 where the
+  // saved card says 13.9.
   const average = (() => {
     if (!subjects.length) return 0
     let totalWeighted = 0, totalCoeff = 0
@@ -293,7 +341,9 @@ export default function ReportCardDetailScreen() {
       // Skip unfilled subjects — matches API: `if (e.score == null) continue`
       if (!entry || entry.score === '') continue
       const coeff = s.coefficient ?? 1
-      totalWeighted += Number(entry.score) * coeff
+      const raw = Number(entry.score)
+      const max = s.maxScore ?? 0
+      totalWeighted += (isUniversity ? raw : (max > 0 ? (raw / max) * 20 : 0)) * coeff
       totalCoeff += coeff
     }
     return totalCoeff > 0 ? totalWeighted / totalCoeff : 0
@@ -301,7 +351,7 @@ export default function ReportCardDetailScreen() {
 
   // University only. Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors web +
   // PrintableReportCard logic. "Terms Average"/"Overall Grade"/"Position"/"Class Average"
-  // are primary/secondary concepts (a raw 0-100 score average and a class rank) and don't
+  // are primary/secondary concepts (a /20 score average and a class rank) and don't
   // apply to a university report card, which is graded and classified by GPA instead.
   const semGpaInfo = (() => {
     let pts = 0, cr = 0
@@ -315,8 +365,12 @@ export default function ReportCardDetailScreen() {
     }
     return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
   })()
-  const cgpa = reportCard.cgpa ?? semGpaInfo.gpa
-  const classification = classificationForGpa(cgpa, classificationBands)
+  // Null on any semester that does not close the academic year (the API only sends it
+  // on the last one). Not defaulted to the semester GPA, which is a different figure.
+  const cgpa: number | null = reportCard.cgpa ?? null
+  // Classification bands the cumulative once the year has one, otherwise this
+  // semester's own GPA, so it always describes a figure shown on this card.
+  const classification = classificationForGpa(cgpa ?? semGpaInfo.gpa, classificationBands)
 
   return (
     <KeyboardAvoidingView
@@ -326,11 +380,27 @@ export default function ReportCardDetailScreen() {
     >
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      {/* Someone else saved marks for this student while this card holds unsaved edits.
+          Offered, never applied automatically: reloading replaces the edit buffer, so
+          discarding typed marks has to be the user's decision. */}
+      {staleFromElsewhere && (
+        <TouchableOpacity
+          style={styles.staleBar}
+          activeOpacity={0.7}
+          onPress={() => { setLoading(true); fetchData().catch(() => {}).finally(() => setLoading(false)) }}
+        >
+          <Ionicons name="refresh-outline" size={15} color="#92400e" />
+          <Text style={styles.staleBarText}>
+            {t('Someone else saved marks for this student. Tap to reload, or finish and save yours first.')}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {/* Student info */}
       <View style={styles.infoCard}>
         <Text style={styles.studentName}>{reportCard.student.name}</Text>
         <Text style={styles.meta}>
-          {reportCard.term.name} · {reportCard.term.session} · {reportCard.student.classLevel}
+          {reportCard.term.name} · {reportCard.term.session} · {stripProgrammeSuffix(reportCard.student.classLevel)}
         </Text>
         <View style={[styles.statusBadge, isDraft ? styles.draftBadge : styles.publishedBadge]}>
           <Ionicons
@@ -344,12 +414,21 @@ export default function ReportCardDetailScreen() {
         </View>
       </View>
 
-      {/* Summary */}
+      {/* Summary. A rated card gets progress instead of figures: it has no average, no
+          grade and no position, and printing dashes where they would be reads as data
+          that failed to load rather than a deliberate absence. */}
       <View style={styles.summaryRow}>
-        {(isUniversity
+        {(isCompetency
+          ? [
+              { label: t('Subjects'), value: String(subjects.length) },
+              { label: t('rated'), value: `${ratedCount}/${subjects.length}` },
+            ]
+          : isUniversity
           ? [
               { label: t('Semester GPA'), value: semGpaInfo.gpa.toFixed(2) },
-              { label: t('Cumulative GPA'), value: cgpa.toFixed(2) },
+              // CGPA is the year-end figure, so only the closing semester carries it.
+              // Never fall back to the semester GPA under a cumulative label.
+              ...(cgpa != null ? [{ label: t('Cumulative GPA'), value: cgpa.toFixed(2) }] : []),
               { label: t('Classification'), value: classification, color: classification === 'Fail' ? '#dc2626' : undefined },
             ]
           : [
@@ -370,12 +449,30 @@ export default function ReportCardDetailScreen() {
 
       {/* Subjects */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{isUniversity ? t('Course Scores') : t('Subject Scores')}</Text>
+        <Text style={styles.sectionTitle}>{isCompetency ? t('Subject Ratings') : isUniversity ? t('Course Scores') : t('Subject Scores')}</Text>
         {subjects.map((subject) => {
           const entry = entries.find((e) => e.subjectId === subject.id)
           const isFilled = entry?.score !== '' && entry?.score != null
           const score = isFilled ? Number(entry!.score) : 0
           const g = isFilled ? gradeFromScore(score, subject.maxScore, gradingRanges) : null
+          // A rating is recorded on the class sheet, never typed here — there is no
+          // number to type, and a picker per subject on a read-only card would be a
+          // second, competing place to change one.
+          if (isCompetency) {
+            const rating = entry?.grade
+            return (
+              <View key={subject.id} style={styles.subjectRow}>
+                <Text style={styles.subjectName}>{subject.name}</Text>
+                {isCompetencyRating(rating) ? (
+                  <View style={[styles.gradePill, { backgroundColor: `${RATING_COLORS[rating]}18` }]}>
+                    <Text style={[styles.gradeText, { color: RATING_COLORS[rating] }]}>{t(rating)}</Text>
+                  </View>
+                ) : (
+                  <Text style={{ fontSize: 12, color: colors.textMuted }}>{t('Not recorded')}</Text>
+                )}
+              </View>
+            )
+          }
           return (
             <View key={subject.id} style={styles.subjectRow}>
               <Text style={styles.subjectName}>{subject.name}</Text>
@@ -423,7 +520,7 @@ export default function ReportCardDetailScreen() {
         ) : isClassMaster && !allSeqsFilled ? (
           <View style={{ backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 8, padding: 10 }}>
             <Text style={{ fontSize: 12, color: '#d97706', fontWeight: '600' }}>{t('Cannot add remarks yet')}</Text>
-            <Text style={{ fontSize: 11, color: '#92400e', marginTop: 2 }}>{t('All subject sequences must be filled first.')}</Text>
+            <Text style={{ fontSize: 11, color: '#92400e', marginTop: 2 }}>{isCompetency ? t('Every subject must be rated first.') : t('All subject sequences must be filled first.')}</Text>
           </View>
         ) : (
           <Text style={styles.remarksReadOnly}>{reportCard.remarks || '—'}</Text>
@@ -433,22 +530,26 @@ export default function ReportCardDetailScreen() {
       {/* Actions — class master can save marks but not publish */}
       {isDraft && (
         <View style={styles.actions}>
-          <TouchableOpacity
-            style={[styles.saveBtn, saving && styles.disabled]}
-            onPress={handleSave}
-            disabled={saving}
-            activeOpacity={0.8}
-          >
-            {saving
-              ? <ActivityIndicator color="#374151" size="small" />
-              : <><Ionicons name="save-outline" size={16} color="#374151" /><Text style={styles.saveBtnText}>{t('Save Draft')}</Text></>}
-          </TouchableOpacity>
+          {/* Marks are typed here; ratings never are (they are recorded on the class
+              sheet), so a rated card has nothing for this button to save. */}
+          {!isCompetency && (
+            <TouchableOpacity
+              style={[styles.saveBtn, saving && styles.disabled]}
+              onPress={handleSave}
+              disabled={saving}
+              activeOpacity={0.8}
+            >
+              {saving
+                ? <ActivityIndicator color="#374151" size="small" />
+                : <><Ionicons name="save-outline" size={16} color="#374151" /><Text style={styles.saveBtnText}>{t('Save Draft')}</Text></>}
+            </TouchableOpacity>
+          )}
           {user?.role !== 'CLASS_MASTER' && (
             <>
               {!canPublish && (
                 <View style={{ flexDirection: 'row', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: allSeqsFilled ? '#dcfce7' : '#fee2e2' }}>
-                    <Text style={{ fontSize: 9, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>{allSeqsFilled ? '✓' : '✗'} {t('Sequences')}</Text>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: allSeqsFilled ? '#16a34a' : '#ef4444' }}>{allSeqsFilled ? '✓' : '✗'} {isCompetency ? t('Ratings') : t('Sequences')}</Text>
                   </View>
                   <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, backgroundColor: hasRemarks ? '#dcfce7' : '#fee2e2' }}>
                     <Text style={{ fontSize: 9, fontWeight: '700', color: hasRemarks ? '#16a34a' : '#ef4444' }}>{hasRemarks ? '✓' : '✗'} {t('Remarks')}</Text>

@@ -8,6 +8,7 @@ import { MessageSquare, CheckCircle, Clock, X, Save, Sparkles } from 'lucide-rea
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import { stripProgrammeSuffix } from '@/lib/programme'
 
 interface Student {
   id: string
@@ -19,9 +20,10 @@ interface Student {
 
 export default function ClassMasterPage() {
   const router = useRouter()
-  const { isAuthenticated, user, updateUser } = useAuthStore()
+  const { isAuthenticated, user, updateUser, school } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  const isPrimary = school?.type === 'PRIMARY'
 
   const masterClass = user?.masterClassLevel ?? ''
   const [term, setTerm] = useState<{ id: string; name: string; session: string } | null>(null)
@@ -167,7 +169,7 @@ export default function ClassMasterPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {students.map((s, i) => (
-                <tr key={s.id} className="hover:bg-muted dark:hover:bg-muted transition">
+                <tr key={s.id} className="hover:bg-hover transition">
                   <td className="px-4 py-3 text-xs text-muted-foreground">{i + 1}</td>
                   <td className="px-4 py-3">
                     <p className="text-sm font-medium text-foreground">{s.name}</p>
@@ -211,7 +213,7 @@ export default function ClassMasterPage() {
                         </span>
                       ) : (
                         <button onClick={() => openEdit(s)}
-                          className={`flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition ${isGranted ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                          className={`flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition ${isGranted ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-muted-foreground hover:bg-hover'}`}>
                           <MessageSquare size={12} />
                           {isGranted ? `✏️ ${t('Edit (permitted)')}` : activeRemark(s.reportCard).trim() ? t('Edit') : t('Add Remarks')}
                         </button>
@@ -232,7 +234,7 @@ export default function ClassMasterPage() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-semibold text-foreground">{editTarget.name}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">{editTarget.classLevel} · {t('General Remarks')}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{stripProgrammeSuffix(editTarget.classLevel)} · {t('General Remarks')}</p>
               </div>
               <button onClick={() => setEditTarget(null)} className="text-muted-foreground dark:text-muted-foreground hover:text-foreground dark:hover:text-foreground">
                 <X size={20} />
@@ -240,7 +242,7 @@ export default function ClassMasterPage() {
             </div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-muted-foreground">
-                {t('Average:')} {editTarget.reportCard?.average != null ? editTarget.reportCard.average.toFixed(1) : '—'}/20 · {schoolLang === 'FR' ? t('French') : t('English')}
+                {t('Average:')} {editTarget.reportCard?.average != null ? editTarget.reportCard.average.toFixed(1) : '—'}/{isPrimary ? 100 : 20} · {schoolLang === 'FR' ? t('French') : t('English')}
               </span>
               <button
                 onClick={handleGenerate}
@@ -260,7 +262,7 @@ export default function ClassMasterPage() {
             <p className="text-[11px] text-muted-foreground mt-2">{t('AI drafts are a starting point — review and edit before saving.')}</p>
             <div className="flex gap-3 mt-4">
               <button onClick={() => setEditTarget(null)}
-                className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-muted dark:hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground dark:text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button onClick={handleSaveRemarks} disabled={saving}

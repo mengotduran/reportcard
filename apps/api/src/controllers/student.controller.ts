@@ -1,7 +1,18 @@
 import { Response } from 'express'
+import path from 'path'
+import fs from 'fs'
 import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
+import { stripProgramme, withProgrammeOf } from '../utils/programme'
 import { demoLimitBlock } from '../config/demo'
+import { UPLOAD_DIR } from '../config/uploads'
+
+function deleteFile(urlPath: string) {
+  try {
+    const filePath = path.join(UPLOAD_DIR, path.basename(urlPath))
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+  } catch { /* ignore */ }
+}
 
 /** '' / whitespace from an untouched optional form field means "not provided", i.e. NULL,
  *  never an empty string: one representation of missing keeps the print side simple. */
@@ -70,6 +81,13 @@ export const getStudents = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
     const { classLevel, search } = req.query
+    // Day/Evening. Resolved server-side and NOT on the client, because the roster is
+    // paginated: filtering a page would report "no evening students" whenever none happen
+    // to fall on the page being looked at, which is exactly what it did.
+    const programme = req.query.programme ? String(req.query.programme).toUpperCase() : null
+    const programmeNames = programme === 'DAY' || programme === 'EVENING'
+      ? (await prisma.classLevel.findMany({ where: { schoolId, programme }, select: { name: true } })).map((c) => c.name)
+      : null
     const session = req.query.session ? String(req.query.session) : null
 
     // Explicit status filter (e.g. "show me who's Disabled/Dismissed") bypasses
@@ -95,7 +113,12 @@ export const getStudents = async (req: AuthRequest, res: Response) => {
     const where = {
       schoolId,
       ...yearOrStatusScope,
-      ...(classLevel ? { classLevel: String(classLevel) } : {}),
+      // An explicit class already implies its section, so it wins over the programme filter.
+      ...(classLevel
+        ? { classLevel: String(classLevel) }
+        : programmeNames
+          ? { classLevel: { in: programmeNames } }
+          : {}),
       // Matches name, matricule OR class — the same three fields the clients were
       // filtering on locally, so moving search server-side (needed once the list is
       // paginated) doesn't quietly narrow what's searchable.
@@ -174,6 +197,9 @@ function deptAbbr(dept: string): string {
   return words.map(w => (w.length > 5 ? w.slice(0, 2) : w[0]).toUpperCase()).join('')
 }
 function parseProgramAndDept(classLevel: string): { prog: string; dept: string; levelSuffix: string } {
+  // Normalised first, so an evening student's matricule is built exactly like a day
+  // student's — otherwise the level digit is dropped from their abbreviation.
+  classLevel = stripProgramme(classLevel)
   if (classLevel.startsWith('HND ')) {
     const m = classLevel.match(/ - Level (\d+)$/)
     return { prog: 'HND', dept: classLevel.replace(/^HND /, '').replace(/ - Level \d+$/, ''), levelSuffix: m ? m[1] : '' }
@@ -334,6 +360,42 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// Same flow as School.logo/stamp (see school.controller.ts uploadLogo/uploadStamp):
+// disk upload via multer, the old file removed once the new one is on record.
+export const uploadStudentPhoto = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+    if (!req.file) { res.status(400).json({ message: 'No file uploaded' }); return }
+
+    const student = await prisma.student.findFirst({ where: { id, schoolId } })
+    if (!student) { res.status(404).json({ message: 'Student not found' }); return }
+    if (student.photo) deleteFile(student.photo)
+
+    const url = `/uploads/${req.file.filename}`
+    const updated = await prisma.student.update({ where: { id }, data: { photo: url } })
+    res.json({ message: 'Photo uploaded', student: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const removeStudentPhoto = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+    const student = await prisma.student.findFirst({ where: { id, schoolId } })
+    if (!student) { res.status(404).json({ message: 'Student not found' }); return }
+    if (student.photo) deleteFile(student.photo)
+    const updated = await prisma.student.update({ where: { id }, data: { photo: null } })
+    res.json({ message: 'Photo removed', student: updated })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
 // Replaces the old silent "delete" (which never deleted anything, just set
 // isActive: false with no visible status or way back). status is the
 // explicit, reversible reason; isActive is kept in sync since every existing
@@ -396,8 +458,13 @@ export const bulkPromoteStudents = async (req: AuthRequest, res: Response) => {
 
     const toUpdate: { id: string; newLevel: string }[] = []
     for (const s of students) {
-      if (!/ - Level 1$/i.test(s.classLevel)) continue
-      const newLevel = s.classLevel.replace(/ - Level 1$/i, ' - Level 2')
+      // Evening Level 1 students were skipped entirely here: the test anchors at the end
+      // of the name, where their section marker sits, so a promotion either dropped them
+      // silently or reported "none are in a Level 1 class". They promote into the EVENING
+      // Level 2, never the day one.
+      const bare = stripProgramme(s.classLevel)
+      if (!/ - Level 1$/i.test(bare)) continue
+      const newLevel = withProgrammeOf(s.classLevel, bare.replace(/ - Level 1$/i, ' - Level 2'))
       toUpdate.push({ id: s.id, newLevel })
     }
 
@@ -454,9 +521,15 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
 
     const [school, classes] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { type: true } }),
-      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, departmentId: true } }),
+      prisma.classLevel.findMany({ where: { schoolId }, select: { name: true, departmentId: true, programme: true } }),
     ])
     const departments = await ensureDepartments(schoolId, school?.type)
+
+    // Day/Evening comes from the filter the admin is on, sent alongside the file. The sheet
+    // has no column for it, and a department running both sittings cannot be resolved without
+    // it. Anything unrecognised means "not chosen", which only blocks the ambiguous rows.
+    const rawProgramme = String((req.body?.programme ?? 'ALL')).toUpperCase()
+    const programme = rawProgramme === 'DAY' || rawProgramme === 'EVENING' ? rawProgramme : 'ALL'
 
     let existingStudents: { name: string; studentId: string }[] | undefined
     if (school?.type === 'UNIVERSITY') {
@@ -466,7 +539,7 @@ export const previewStudentImport = async (req: AuthRequest, res: Response) => {
       })
     }
 
-    const result = await previewStudentRows(file.buffer, file.originalname, school?.type ?? 'PRIMARY', classes, departments, existingStudents)
+    const result = await previewStudentRows(file.buffer, file.originalname, school?.type ?? 'PRIMARY', classes, departments, existingStudents, programme)
     res.json(result)
   } catch (error) {
     console.error(error)

@@ -11,6 +11,7 @@ import { getDashboardStats, getWeeklyStats, getTeacherClasses, WeeklyStats, Teac
 import { getCurrentTerm, CurrentTerm } from '@/lib/api/terms'
 import { getMyTimetable, MyTimetableSlot } from '@/lib/api/timetable'
 import { getMyNotifications } from '@/lib/api/notifications'
+import { onRealtime } from '@/lib/socket'
 import { useTheme, Colors, type, space, radius, font, hairlineWidth } from '@/lib/useTheme'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import { API_BASE } from '@/lib/config'
@@ -97,6 +98,7 @@ function TeacherHome() {
   const pagerRef = useRef<ScrollView>(null)
   const [classes, setClasses] = useState<TeacherClassRow[]>([])
   const [classesLoading, setClassesLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [panel, setPanel] = useState(0)
   const [term, setTerm] = useState<CurrentTerm | null>(null)
   const [todaySlots, setTodaySlots] = useState<MyTimetableSlot[]>([])
@@ -109,8 +111,19 @@ function TeacherHome() {
   const isUniversity = school?.type === 'UNIVERSITY'
   const levelWord = isUniversity ? 'university school' : `${(school?.type ?? '').toLowerCase()} school`
 
+  const refreshUnread = useCallback(() => {
+    getMyNotifications().then((r) => setUnreadCount(r.unreadCount)).catch(() => {})
+  }, [])
+
   const fetchAll = useCallback(() => {
-    getTeacherClasses().then((r) => setClasses(r.classes)).catch(() => {}).finally(() => setClassesLoading(false))
+    // A failed request must NOT fall through to "you haven't been assigned any classes yet".
+    // That sentence is a claim about the data, and it reads as "my courses vanished" when the
+    // real problem is that the API is unreachable — which is exactly what a dead dev tunnel
+    // or a lost Wi-Fi connection looks like, since the persisted login still shows the name.
+    getTeacherClasses()
+      .then((r) => { setClasses(r.classes); setLoadFailed(false) })
+      .catch(() => setLoadFailed(true))
+      .finally(() => setClassesLoading(false))
     getCurrentTerm().then(setTerm).catch(() => {})
     getMyTimetable().then((r) => {
       const todayName = DAY_ORDER[new Date().getDay()]
@@ -119,11 +132,17 @@ function TeacherHome() {
     // Unread notifications (e.g. an admin logged/removed an absence for this teacher) —
     // the whole point is the teacher sees it on landing here, not only if they dig into
     // Attendance. Refreshed on every focus, same as the rest.
-    getMyNotifications().then((r) => setUnreadCount(r.unreadCount)).catch(() => {})
-  }, [])
+    refreshUnread()
+  }, [refreshUnread])
 
   useEffect(() => { fetchAll() }, [fetchAll])
   useFocusEffect(useCallback(() => { fetchAll() }, [fetchAll]))
+
+  // This badge is the teacher's only notification indicator on mobile — the tab layout's bell
+  // is admin-only, and their Home tab renders its own header. So it has to react to the
+  // realtime signal itself; the socket is connected by the tab layout. Only the count is
+  // refetched, not the whole dashboard, since that is all the signal says changed.
+  useEffect(() => onRealtime('notifications:changed', refreshUnread), [refreshUnread])
 
   // Ends-in copy fix (spec §3.3): "ends today" at 0, "ends in N days" ahead, "ended" past.
   const daysLeft = term ? Math.ceil((new Date(term.endDate).getTime() - now.getTime()) / 86400000) : null
@@ -156,6 +175,7 @@ function TeacherHome() {
   const todayKey = now.toDateString()
 
   const goToClass = (c: TeacherClassRow) => {
+    if (c.subjectId && c.studentCount === 0) return
     if (c.subjectId && term) {
       router.push(`/marks/${encodeURIComponent(c.subjectId)}?classLevel=${encodeURIComponent(c.classLevelName)}&termId=${term.id}&termName=${encodeURIComponent(term.name)}&subjectName=${encodeURIComponent(c.subjectName ?? '')}&sequence=0` as any)
     } else if (isClassMaster) {
@@ -166,7 +186,9 @@ function TeacherHome() {
   }
 
   const initials = (school?.name ?? 'S').split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
-  const shown = classes.slice(0, 4)
+  // Nicely, not exhaustively — a teacher on many classes gets a taste here and the rest
+  // on My Classes, which already lists every one of them ("view all N" below).
+  const shown = classes.slice(0, 3)
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ paddingBottom: space.xl }} showsVerticalScrollIndicator={false}>
@@ -252,26 +274,36 @@ function TeacherHome() {
         <View style={{ width: CARD_W, minHeight: PANEL_MIN_H, backgroundColor: colors.surface, borderRadius: radius.card, paddingVertical: space.xs, paddingHorizontal: space.lg }}>
           {classesLoading ? (
             <View style={{ height: 40, marginVertical: space.md, backgroundColor: colors.line, borderRadius: radius.chip }} />
+          ) : loadFailed ? (
+            <Text style={[type.bodySmall, { color: '#F03E2F', textAlign: 'center', paddingVertical: space.xl }]}>
+              {t("Could not reach the server. Check your connection and pull to refresh.")}
+            </Text>
           ) : shown.length === 0 ? (
             <Text style={[type.bodySmall, { color: colors.textDim, textAlign: 'center', paddingVertical: space.xl }]}>
               {t("You haven't been assigned any classes yet.")}
             </Text>
           ) : (
-            shown.map((c, i) => (
-              <TouchableOpacity
-                key={c.id}
-                onPress={() => goToClass(c)}
-                activeOpacity={0.7}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, borderTopWidth: i === 0 ? 0 : hairlineWidth, borderColor: colors.hairline }}
-              >
-                <Text style={[type.microLabel, { color: colors.textFaint, width: 16 }]}>{String(i + 1).padStart(2, '0')}</Text>
-                <View style={{ flex: 1, marginLeft: space.md }}>
-                  <Text style={[type.itemTitle, { color: colors.text }]} numberOfLines={1}>{c.subjectName ?? t('Class oversight')}</Text>
-                  {!!c.departmentName && <Text style={[type.microLabel, { color: colors.textFaint, marginTop: 2 }]} numberOfLines={1}>{c.departmentName.toLowerCase()}</Text>}
-                </View>
-                <Text style={[type.microLabel, { color: colors.brassInk, marginLeft: space.sm }]}>{shortCode(c.classLevelName)}</Text>
-              </TouchableOpacity>
-            ))
+            shown.map((c, i) => {
+              const noStudents = !!c.subjectId && c.studentCount === 0
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  onPress={() => goToClass(c)}
+                  activeOpacity={noStudents ? 1 : 0.7}
+                  disabled={noStudents}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: space.md, borderTopWidth: i === 0 ? 0 : hairlineWidth, borderColor: colors.hairline, opacity: noStudents ? 0.5 : 1 }}
+                >
+                  <Text style={[type.microLabel, { color: colors.textFaint, width: 16 }]}>{String(i + 1).padStart(2, '0')}</Text>
+                  <View style={{ flex: 1, marginLeft: space.md }}>
+                    <Text style={[type.itemTitle, { color: colors.text }]} numberOfLines={1}>{c.subjectName ?? t('Class oversight')}</Text>
+                    <Text style={[type.microLabel, { color: colors.textFaint, marginTop: 2 }]} numberOfLines={1}>
+                      {noStudents ? t('No students yet') : (c.departmentName ? c.departmentName.toLowerCase() : '')}
+                    </Text>
+                  </View>
+                  <Text style={[type.microLabel, { color: colors.brassInk, marginLeft: space.sm }]}>{shortCode(c.classLevelName)}</Text>
+                </TouchableOpacity>
+              )
+            })
           )}
           {classes.length > 0 && (
             <TouchableOpacity onPress={() => router.push('/my-courses' as any)} style={{ paddingTop: space.md, paddingBottom: space.sm }}>

@@ -1,10 +1,11 @@
-import { useState, useCallback, useMemo } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getMyAbsences, deleteAbsence, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
+import { onRealtime } from '@/lib/socket'
 
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
 
@@ -31,6 +32,7 @@ export default function AbsencesScreen() {
   const { colors } = useTheme()
   const styles = useMemo(() => makeStyles(colors), [colors])
   const t = useT()
+  const router = useRouter()
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -45,6 +47,12 @@ export default function AbsencesScreen() {
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
+  // An admin opening this teacher's list LOCKS these rows (seenByAdmin), which no longer
+  // permits a retraction. That is a read on the admin's side, so no notification fires and
+  // nothing else would tell this screen — without it the delete button lingers until the
+  // teacher happens to reload, and then fails.
+  useEffect(() => onRealtime('absences:changed', load), [load])
+
   const onRefresh = () => { setRefreshing(true); load() }
 
   const handleDelete = (id: string) => {
@@ -52,7 +60,14 @@ export default function AbsencesScreen() {
       { text: t('Cancel'), style: 'cancel' },
       {
         text: t('Remove'), style: 'destructive', onPress: async () => {
-          try { await deleteAbsence(id); load() } catch { Alert.alert(t('Error'), t('Failed to remove absence')) }
+          try { await deleteAbsence(id); load() } catch (err: any) {
+            // The list may simply be stale: an admin can review (locking it) or the grace
+            // period can expire while this screen sits open, and the bin stays on screen
+            // until something refetches. Show the API's actual reason and reload, so the
+            // row corrects itself instead of failing again on the next tap.
+            Alert.alert(t('Cannot remove'), err?.response?.data?.message || t('Failed to remove absence'))
+            load()
+          }
         },
       },
     ])
@@ -76,15 +91,28 @@ export default function AbsencesScreen() {
           </View>
         }
         renderItem={({ item: a }) => {
-          // Same rule as the Attendance tab: locked once the period's actually over, or
-          // once an admin has reviewed it in a prior visit to their list.
-          const locked = a.hourHasPassed || a.seenByAdmin
+          // Same rule as the Attendance tab: locked once the period's actually over, once
+          // an admin has reviewed it in a prior visit to their list, or whenever an admin
+          // was the one who recorded it (locked for its whole life, however far off).
+          const locked = a.isFinal || a.graceExpired || a.seenByAdmin || a.recordedByAdmin
           return (
-            <View style={styles.row}>
+            <TouchableOpacity
+              style={styles.row}
+              activeOpacity={0.7}
+              // Same drill-down as the Attendance tab: open the timetable at this period.
+              onPress={() => router.push({
+                pathname: '/(tabs)/timetable',
+                params: { missedSlotId: a.timetableSlotId, missedDate: a.date, missedFrom: a.startTime, missedTo: a.endTime },
+              } as any)}
+            >
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowText}>{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</Text>
-                <Text style={styles.rowSub}>{a.subjectName} · {a.classLevel}</Text>
-                {a.seenByAdmin && <Text style={styles.rowHint}>{t('reviewed')}</Text>}
+                <Text style={styles.rowSub}>{a.subjectName}{a.classLevel ? ` · ${a.classLevel}` : ''}</Text>
+                {/* Why the padlock: admin-recorded outranks reviewed, being the reason
+                    that never lifts. */}
+                {a.recordedByAdmin
+                  ? <Text style={styles.rowHint}>{t('recorded by admin')}</Text>
+                  : a.seenByAdmin ? <Text style={styles.rowHint}>{t('reviewed')}</Text> : null}
               </View>
               {locked ? (
                 <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
@@ -93,7 +121,7 @@ export default function AbsencesScreen() {
                   <Ionicons name="trash-outline" size={18} color="#ef4444" />
                 </TouchableOpacity>
               )}
-            </View>
+            </TouchableOpacity>
           )
         }}
       />

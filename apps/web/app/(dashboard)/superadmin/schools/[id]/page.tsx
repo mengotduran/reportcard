@@ -1,10 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { getSchoolDetailApi, toggleTermPrintingApi, updateSchoolApi, SchoolDetail, TermRow } from '@/lib/api/superadmin'
+import { getSchoolDetailApi, toggleTermPrintingApi, toggleClassScaleUnlockApi, updateSchoolApi, SchoolDetail, TermRow, ClassLevelRow } from '@/lib/api/superadmin'
 import {
   ArrowLeft, Users, BookOpen, FileText, CheckCircle, Clock,
-  School, Building2, Layers, MapPin, Mail, Phone, Globe, Printer
+  School, Building2, Layers, MapPin, Mail, Phone, Globe, Printer, Lock
 } from 'lucide-react'
 
 const TYPE_COLORS: Record<string, string> = {
@@ -28,6 +28,7 @@ export default function SchoolDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [togglingTerm, setTogglingTerm] = useState<string | null>(null)
+  const [togglingClass, setTogglingClass] = useState<string | null>(null)
   const [savingMode, setSavingMode] = useState(false)
 
   useEffect(() => {
@@ -57,6 +58,24 @@ export default function SchoolDetailPage() {
       setError('Failed to update who enters marks.')
     } finally {
       setSavingMode(false)
+    }
+  }
+
+  // A school that has published a term cannot change that class's mark totals for the rest
+  // of the year. This hands back the key for ONE change; the school makes it themselves,
+  // because they are the ones who know what the total should be.
+  const handleToggleScaleUnlock = async (cls: ClassLevelRow) => {
+    setTogglingClass(cls.id)
+    try {
+      const updated = await toggleClassScaleUnlockApi(cls.id, cls.scaleUnlockedAt == null)
+      setDetail(prev => prev ? {
+        ...prev,
+        classLevels: prev.classLevels.map(c => c.id === updated.id ? { ...c, scaleUnlockedAt: updated.scaleUnlockedAt } : c),
+      } : prev)
+    } catch {
+      setError('Failed to update the assessment lock.')
+    } finally {
+      setTogglingClass(null)
     }
   }
 
@@ -274,6 +293,56 @@ export default function SchoolDetailPage() {
               ))}
               <p className="text-xs text-muted-foreground px-5 py-3 border-t border-border">
                 When disabled, the Print button is hidden from report cards for that {school.type === 'UNIVERSITY' ? 'semester' : 'term'}.
+              </p>
+            </div>
+          )}
+
+          {/* Assessment settings — the school's escape hatch lives here, not on their side.
+              A class's mark total (and, for primary, its Test/Exam split and whether it is
+              marked or rated) freezes for the rest of the academic year once that class has
+              published cards in a term that has closed: those cards were scored against
+              those settings, each Subject keeps its own copy of the ceilings, and a card
+              already handed out states an average and a position — or deliberately states
+              neither. Unlocking hands back the key for ONE change, made by the school. */}
+          {detail.classLevels.length > 0 && (
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+                <Lock size={15} className="text-muted-foreground" />
+                <h3 className="font-semibold text-foreground text-sm">Assessment — Unlock a Class</h3>
+              </div>
+              {detail.classLevels.map((cls) => {
+                const unlocked = cls.scaleUnlockedAt != null
+                return (
+                  <div key={cls.id} className="flex items-center justify-between px-5 py-3 border-b border-border last:border-0">
+                    <div className="min-w-0">
+                      <span className="text-sm text-foreground font-medium">{cls.name}</span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        out of {cls.maxScore}
+                        {school.type === 'PRIMARY' ? ` · Test ${cls.testMaxScore} / Exam ${Math.max(0, cls.maxScore - cls.testMaxScore)}` : ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {unlocked && <span className="text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Unlocked</span>}
+                      <button
+                        onClick={() => handleToggleScaleUnlock(cls)}
+                        disabled={togglingClass === cls.id}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 focus:outline-none ${
+                          unlocked ? 'bg-amber-500' : 'bg-muted-foreground/30'
+                        }`}
+                        title={unlocked ? 'Unlocked — the school can change this class once' : 'Locked — click to let the school change this class once'}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                          unlocked ? 'translate-x-4' : 'translate-x-1'
+                        }`} />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+              <p className="text-xs text-muted-foreground px-5 py-3 border-t border-border">
+                A class locks itself once its report cards have been published for a term that has ended:
+                its mark total, and for primary whether it is marked or rated, are settled for that year.
+                Unlocking lets the school change that class once; making the change closes it again.
               </p>
             </div>
           )}

@@ -1,4 +1,6 @@
 import prisma from '../config/prisma'
+import { NotificationLink } from './notificationLink'
+import { emitToUser } from '../config/socket'
 
 /**
  * Moving a course from one teacher to another.
@@ -23,12 +25,18 @@ export async function takeCoursesFromOtherTeachers(params: {
   schoolId: string
   subjectIds: string[]
   newTeacherId: string
+  /** The date the handover takes effect. The previous teacher's hours are counted up to it
+   *  and the new teacher's from it, so an admin recording a departure five days late still
+   *  credits those five days to the right person. Defaults to now. */
+  effectiveAt?: Date
 }): Promise<string[]> {
   const { schoolId, subjectIds, newTeacherId } = params
+  const effectiveAt = params.effectiveAt ?? new Date()
   if (subjectIds.length === 0) return []
 
   const existing = await prisma.teacherSubject.findMany({
-    where: { subjectId: { in: subjectIds }, userId: { not: newTeacherId } },
+    // Only ACTIVE assignments: an already-ended row is history and must not be touched again.
+    where: { subjectId: { in: subjectIds }, userId: { not: newTeacherId }, endedAt: null },
     include: { user: { select: { id: true, name: true } }, subject: { select: { id: true, name: true, classLevel: true } } },
   })
   if (existing.length === 0) return []
@@ -46,14 +54,30 @@ export async function takeCoursesFromOtherTeachers(params: {
     byTeacher.set(row.userId, cur)
   }
 
-  const archivedAt = new Date()
+  // Archived AS OF THE HANDOVER, not "now". The archive date is what bounds the slot's
+  // lifetime in the hours maths, so stamping it with the current time would end the outgoing
+  // teacher's timetable today regardless of when they actually left — their hours for the
+  // period they did teach would vanish.
+  const archivedAt = effectiveAt
   const summaries: string[] = []
 
   for (const [previousTeacherId, info] of byTeacher) {
     const courseList = info.courses.join(', ')
+    // Opens the teacher's own timetable, which is where the consequence is visible. The
+    // slots are archived in this same transaction, so the grid shows the AFTER state with
+    // nothing where those periods used to be — the banner is what accounts for the gap.
+    const link: NotificationLink = {
+      teacherId: previousTeacherId,
+      teacherName: info.name,
+      reassignedCourses: courseList,
+      reassignedTo: newTeacherName,
+    }
     await prisma.$transaction([
-      prisma.teacherSubject.deleteMany({
-        where: { userId: previousTeacherId, subjectId: { in: info.subjectIds } },
+      // ENDED, not deleted. Deleting was the old behaviour and it erased the only record
+      // that this teacher ever held the course — along with every hour they are owed for it.
+      prisma.teacherSubject.updateMany({
+        where: { userId: previousTeacherId, subjectId: { in: info.subjectIds }, endedAt: null },
+        data: { endedAt: effectiveAt },
       }),
       prisma.timetableSlot.updateMany({
         where: { schoolId, teacherId: previousTeacherId, subjectId: { in: info.subjectIds }, archivedAt: null },
@@ -66,9 +90,14 @@ export async function takeCoursesFromOtherTeachers(params: {
           type: 'COURSE_REASSIGNED',
           title: 'A course was reassigned',
           body: `${courseList} ${info.courses.length === 1 ? 'has' : 'have'} been reassigned to ${newTeacherName}. ${info.courses.length === 1 ? 'It is' : 'They are'} no longer on your courses, and any timetable periods you had for ${info.courses.length === 1 ? 'it' : 'them'} have been removed.`,
+          data: link as any,
         },
       }),
     ])
+    // Outside the $transaction on purpose. Emitting inside the array is not even possible
+    // here (it takes queries, not callbacks), and emitting before the commit would tell the
+    // client to refetch a notification that isn't visible yet.
+    emitToUser(previousTeacherId, 'notifications:changed')
     summaries.push(`"${courseList}" was reassigned from ${info.name} to ${newTeacherName}`)
   }
 

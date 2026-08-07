@@ -15,10 +15,50 @@ import { getGradingScale, gradeFromScore, isFailingMark, GradeRange, DEFAULT_RAN
 import { useAuthStore } from '@/lib/store/auth.store'
 import { seqFull, seqShort } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
+import { onRealtimeDebounced } from '@/lib/socket'
+import { getClasses, GradingMode } from '@/lib/api/classes'
+import CompetencyMarksEntry from '@/components/CompetencyMarksEntry'
 
 // University marking split: CA out of 30, exam out of 70, course out of 100.
 const EXAM_MAX = 70
 const COURSE_MAX = 100
+
+/**
+ * Which sheet this class gets: the numeric grid below, or the rating picker in
+ * CompetencyMarksEntry. The two share almost nothing — a rated class has no score, no
+ * sequence, no maximum and no grade — so they are separate screens rather than one
+ * screen full of branches.
+ *
+ * Resolved from the class list, never guessed from the class NAME: names are free text
+ * (a French section calls these Maternelle), which is why gradingMode is a stored field.
+ * An unknown class falls back to NUMERIC, matching the API's own default.
+ */
+export default function MarksEntryRoute() {
+  const { classLevel } = useLocalSearchParams<{ classLevel: string }>()
+  const decodedClass = decodeURIComponent(classLevel)
+  const { colors } = useTheme()
+  const [mode, setMode] = useState<GradingMode | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getClasses()
+      .then(({ classLevels }) => {
+        if (!cancelled) setMode(classLevels.find((c) => c.name === decodedClass)?.gradingMode ?? 'NUMERIC')
+      })
+      .catch(() => { if (!cancelled) setMode('NUMERIC') })
+    return () => { cancelled = true }
+  }, [decodedClass])
+
+  // Neither sheet, briefly: showing the numeric one first and swapping would flash a
+  // marks grid at a nursery teacher on every open.
+  if (mode === null) return (
+    <View style={{ flex: 1, backgroundColor: colors.card, justifyContent: 'center', alignItems: 'center' }}>
+      <ActivityIndicator color="#F03E2F" />
+    </View>
+  )
+
+  return mode === 'COMPETENCY' ? <CompetencyMarksEntry /> : <NumericMarksEntry />
+}
 
 interface Row {
   studentId: string
@@ -84,7 +124,7 @@ function MarksSkeleton({ colors, s }: { colors: Colors; s: any }) {
   )
 }
 
-export default function MarksEntryScreen() {
+function NumericMarksEntry() {
   const { subjectId, classLevel, termId, termName, subjectName, sequence } = useLocalSearchParams<{
     subjectId: string; classLevel: string; termId: string
     termName: string; subjectName: string; sequence: string
@@ -98,6 +138,7 @@ export default function MarksEntryScreen() {
   const s = makeSStyles(colors)
   const seqIndex = Number(sequence)
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isPrimary = school?.type === 'PRIMARY'
   // The school records marks centrally AND I am a teacher. Admins are never locked out.
   // Same rule as the web grid; the API is the real gate either way.
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
@@ -106,14 +147,31 @@ export default function MarksEntryScreen() {
   // Exam and Resit stay the administration's. Same rule as the web grid.
   const caExemptForTeacher = adminOnlyMarks && isUniversity && seqIndex === 0
   const isResit = isUniversity && seqIndex === 2
-  const seqLabel = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
+  const seqLabel = isUniversity
+    ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam')
+    : isPrimary ? (seqIndex === 0 ? t('Test') : t('Exam')) : seqFull(termName, seqIndex, lang)
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
   const decodedSubjectName = decodeURIComponent(subjectName)
 
   const [rows, setRows] = useState<Row[]>([])
+  // Scores exactly as last loaded from the server, keyed by student. `rows` is the EDIT
+  // BUFFER, so this is the only way to tell a typed-but-unsaved grid from a clean one.
+  // Derived by comparison rather than a flag set in each edit handler, so any future edit
+  // path is covered without remembering to mark it dirty.
+  const loadedScoresRef = useRef<Record<string, string>>({})
+  // Someone else saved marks for this class while this grid held unsaved edits.
+  const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [maxScore, setMaxScore] = useState(20)
-  const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
+  // PRIMARY only — the Test's ceiling; the Exam gets what is left of maxScore. The phone
+  // used to ignore this split entirely and cap BOTH components at the subject total, so a
+  // Test out of 30 accepted 100 and the header promised marks the sheet could not hold.
+  const [testMaxScore, setTestMaxScore] = useState(30)
+  const effectiveMax = isUniversity
+    ? (seqIndex === 0 ? 30 : 70)
+    : isPrimary
+      ? (seqIndex === 0 ? testMaxScore : Math.max(0, maxScore - testMaxScore))
+      : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -142,6 +200,7 @@ export default function MarksEntryScreen() {
     ])
     const subject = subjectData.subjects.find((s) => s.id === decodedSubjectId)
     if (subject?.maxScore) setMaxScore(subject.maxScore)
+    if (subject?.testMaxScore) setTestMaxScore(subject.testMaxScore)
     if (scaleData.ranges?.length > 0) setGradingRanges(scaleData.ranges)
 
     const overview = await getClassOverview(termId, decodedClass, decodedSubjectId)
@@ -199,6 +258,10 @@ export default function MarksEntryScreen() {
         }
       })
     setRows(loaded)
+    // Baseline for "does this grid hold unsaved edits" — see isDirty below. Captured from
+    // the same rows just rendered, so a fresh load always starts clean.
+    loadedScoresRef.current = Object.fromEntries(loaded.map((r) => [r.studentId, r.score]))
+    setStaleFromElsewhere(false)
   }, [termId, decodedClass, decodedSubjectId, seqIndex, isAdminRole])
 
   useFocusEffect(useCallback(() => {
@@ -213,6 +276,25 @@ export default function MarksEntryScreen() {
       .catch(() => setLoadError(t('Could not load the marks. Check your connection and try again.')))
       .finally(() => setLoading(false))
   }, [fetchData]))
+
+  // Unsaved edits present? Compared against the last load rather than tracked by a flag,
+  // so typing a mark and then undoing it correctly reads as clean again.
+  const isDirty = rows.some((r) => (loadedScoresRef.current[r.studentId] ?? '') !== r.score)
+  // Mirrored into a ref so the subscription below reads the CURRENT value without
+  // re-subscribing on every keystroke.
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
+
+  // Someone else saved marks for this class/subject.
+  //
+  // This screen is the one that must NOT blindly refetch: `rows` is the edit buffer, so
+  // refetching over a half-typed column would destroy work with no undo. Clean grid, silent
+  // refresh; dirty grid, the user is told and decides. Debounced because the signal arrives
+  // once per student in a class save.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (isDirtyRef.current) setStaleFromElsewhere(true)
+    else fetchData().catch(() => {})
+  }), [fetchData])
 
   const updateScore = (studentId: string, value: string) => {
     // Allow digits + a single decimal point (e.g. 15.5); clamp to maxScore only
@@ -378,7 +460,9 @@ export default function MarksEntryScreen() {
                   backgroundColor: seqIndex === i ? '#FEF2F1' : 'transparent',
                 }}>
                 <Text style={{ fontSize: 11, fontWeight: seqIndex === i ? '700' : '500', color: seqIndex === i ? '#F03E2F' : colors.textSecondary }}>
-                  {isUniversity ? (i === 0 ? t('CA') : i === 1 ? t('Exam') : t('Resit')) : seqShort(termName, i, lang)}
+                  {isUniversity
+                    ? (i === 0 ? t('CA') : i === 1 ? t('Exam') : t('Resit'))
+                    : isPrimary ? (i === 0 ? t('Test') : t('Exam')) : seqShort(termName, i, lang)}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -419,6 +503,22 @@ export default function MarksEntryScreen() {
           )
         )}
 
+        {/* Someone else saved marks for this class while this grid holds unsaved edits.
+            Offered, never applied automatically: reloading replaces the edit buffer, so
+            discarding typed marks has to be the user's decision, not a background event's. */}
+        {staleFromElsewhere && (
+          <TouchableOpacity
+            style={s.staleBar}
+            activeOpacity={0.7}
+            onPress={() => { setLoading(true); fetchData().catch(() => {}).finally(() => setLoading(false)) }}
+          >
+            <Ionicons name="refresh-outline" size={15} color="#92400e" />
+            <Text style={s.staleBarText}>
+              {t('Someone else saved marks for this class. Tap to reload, or finish and save yours first.')}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Copy bar — resit has nothing to copy from */}
         {/* Why the sheet is read-only, or a teacher meets a dead grid and assumes the
             app is broken rather than seeing a school policy. */}
@@ -437,9 +537,15 @@ export default function MarksEntryScreen() {
               {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
             </Text>
           </View>
-        ) : editableRows.length > 0 && (
+        ) : editableRows.length > 0 && !isUniversity && !isPrimary && (
           // Pointless (and would look like a back door around ADMIN_ONLY) to show a
           // "fill this in" shortcut on a tab this user has no editable rows on at all.
+          //
+          // Never shown for universities: CA is out of 30 and Exam out of 70, so neither is
+          // a sensible starting point for the other. Copying CA into Exam silently halves
+          // every student, and copying Exam into CA writes scores above the CA maximum.
+          // Primary/secondary sequences share one maxScore, which is the only case where
+          // "same marks again" actually means anything.
           <TouchableOpacity style={s.copyBar} onPress={handleCopyFromOther} activeOpacity={0.7}>
             <Ionicons name="copy-outline" size={15} color="#7c3aed" />
             <Text style={s.copyBarText}>{t('Copy marks from')} {otherSeqShort} → {t('fill here')}</Text>
@@ -453,9 +559,25 @@ export default function MarksEntryScreen() {
           <View style={s.headerRow}>
             <View style={s.colNum}><Text style={s.headerText}>#</Text></View>
             <View style={s.colName}><Text style={s.headerText}>{t('STUDENT NAME')}</Text></View>
-            <View style={s.colScore}><Text style={s.headerText}>{isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
+            <View style={s.colScore}><Text style={s.headerText}>{isUniversity
+                ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70')
+                : isPrimary
+                  ? `${seqIndex === 0 ? t('TEST') : t('EXAM')} / ${effectiveMax}`
+                  : `${t('MARKS /')} ${effectiveMax}`}</Text></View>
             <View style={s.colRemark}><Text style={s.headerText}>{t('PERFORMANCE')}</Text></View>
           </View>
+
+          {rows.length === 0 && (
+            <View style={[s.center, { paddingTop: 60 }]}>
+              <Ionicons name="people-outline" size={40} color={colors.textMuted} />
+              <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 10 }}>
+                {t('No students in this class yet.')}
+              </Text>
+              <Text style={{ fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: 4 }}>
+                {t('Add students to')} {decodedClass} {t('before entering marks.')}
+              </Text>
+            </View>
+          )}
 
           {rows.map((row, index) => {
             const num = Number(row.score)
@@ -535,14 +657,20 @@ export default function MarksEntryScreen() {
           })}
         </ScrollView>
 
-        {/* Footer */}
-        <View style={s.footer}>
-          <TouchableOpacity style={[s.saveBtn, (saving || editableRows.length === 0) && s.disabled]} onPress={handleSaveAll} disabled={saving || editableRows.length === 0} activeOpacity={0.8}>
-            {saving
-              ? <ActivityIndicator color="#fff" />
-              : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? t('All Cards Published') : t('Save All Marks')}</Text></>}
-          </TouchableOpacity>
-        </View>
+        {/* Footer — nothing to save or publish when there's no one on the roster yet,
+            so the button (which used to read "All Cards Published", a straight lie in
+            that case: 0 editable rows means either "everyone's published" OR "no
+            students exist", and those are very different things to tell a teacher) is
+            dropped entirely rather than shown disabled. */}
+        {rows.length > 0 && (
+          <View style={s.footer}>
+            <TouchableOpacity style={[s.saveBtn, (saving || editableRows.length === 0) && s.disabled]} onPress={handleSaveAll} disabled={saving || editableRows.length === 0} activeOpacity={0.8}>
+              {saving
+                ? <ActivityIndicator color="#fff" />
+                : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={s.saveBtnText}>{editableRows.length === 0 ? t('All Cards Published') : t('Save All Marks')}</Text></>}
+            </TouchableOpacity>
+          </View>
+        )}
         </>
         )}
       </View>
@@ -568,6 +696,14 @@ const makeSStyles = (colors: Colors) => StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   copyBarText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#7c3aed' },
+  // Amber, not the copy bar's violet: this one reports a conflict rather than offering a
+  // shortcut, and it must read as "something happened" at a glance.
+  staleBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fef3c7', paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#fde68a',
+  },
+  staleBarText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400e' },
   resitBar: {
     backgroundColor: '#eff6ff', paddingHorizontal: 14, paddingVertical: 10,
     borderBottomWidth: 1, borderBottomColor: '#bfdbfe',

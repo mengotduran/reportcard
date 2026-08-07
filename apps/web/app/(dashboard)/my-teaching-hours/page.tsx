@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { getMyTimetableApi, TimetableSlot } from '@/lib/api/timetable'
@@ -9,7 +10,10 @@ import { formatHours } from '@/lib/formatHours'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
-import { CalendarOff, Trash2, X } from 'lucide-react'
+import { CalendarOff, Trash2, X, ChevronRight } from 'lucide-react'
+import { stripProgrammeSuffix } from '@/lib/programme'
+import { onRealtime } from '@/lib/socket'
+import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
 
 const DAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']
 const dayLabel = (d: string) => d.charAt(0) + d.slice(1).toLowerCase()
@@ -25,6 +29,11 @@ function dayOfWeekFor(dateStr: string): string {
 
 // Mirrors the API's slotHasPassed (Cameroon is UTC+1/WAT, no DST) — lets the UI grey
 // these out up front instead of only finding out after a rejected request.
+//
+// This is the TEACHER's page, so every caller passes the period's START, not its end: once
+// their class has begun it is no longer theirs to file, and only an admin can record it
+// (see the cutoff comment in createAbsence). Passing endTime here would offer periods the
+// API now refuses.
 function slotHasPassed(dateStr: string, endTime: string): boolean {
   const [y, m, d] = dateStr.split('-').map(Number)
   const [hh, mm] = endTime.split(':').map(Number)
@@ -40,7 +49,8 @@ const STATUS_STYLE: Record<CoverageStatus, string> = {
 
 export default function MyTeachingHoursPage() {
   const t = useT()
-  const { school } = useAuthStore()
+  const router = useRouter()
+  const { school, user } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
 
@@ -69,6 +79,11 @@ export default function MyTeachingHoursPage() {
       .finally(() => setLoading(false))
   }
 
+  // An admin opening this teacher's list LOCKS these rows (seenByAdmin), which no longer
+  // permits a retraction. That is a read on the admin's side, so no notification fires and
+  // nothing else would tell this page — without it the delete button lingers, then fails.
+  useEffect(() => onRealtime('absences:changed', load), [])
+
   useEffect(load, [])
 
   const openReportModal = () => {
@@ -78,8 +93,11 @@ export default function MyTeachingHoursPage() {
     setShowReportModal(true)
   }
 
-  const daySlots = date ? slots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
-  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
+  // slotRunsOn, not weekday + subjectId. Dropping `s.subjectId` is what lets a private
+  // class be reported at all; slotRunsOn is what keeps a one-off or time-boxed one from
+  // being offered on a date it does not actually run.
+  const daySlots = date ? slots.filter((s) => slotRunsOn(s, date)) : []
+  const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.startTime))
 
   const handleReport = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -96,6 +114,13 @@ export default function MyTeachingHoursPage() {
       setSaving(false)
     }
   }
+
+  // One row, not one per subject — a teacher on several courses used to get the whole
+  // list rendered here before anything else on the page did. The rest live behind
+  // "See all" on /my-coverage instead. The one shown is whichever most needs a look:
+  // UNDER first, then OVER, EXACT, and finally NO_TARGET (nothing to act on) last.
+  const URGENCY: Record<CoverageStatus, number> = { UNDER: 0, OVER: 1, EXACT: 2, NO_TARGET: 3 }
+  const headline = rows.length > 0 ? [...rows].sort((a, b) => URGENCY[a.status] - URGENCY[b.status])[0] : undefined
 
   const handleDeleteAbsence = async (id: string) => {
     try {
@@ -135,37 +160,87 @@ export default function MyTeachingHoursPage() {
               <p className="text-muted-foreground text-sm">{t('No required-hours target has been set for any of your subjects yet.')}</p>
             </div>
           ) : (
-            <div className="bg-card rounded-xl border border-border overflow-hidden mb-8">
-              <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
-                <thead className="bg-muted border-b border-border">
-                  <tr>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{isUniversity ? t('Course') : t('Subject')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Required')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Taught so far')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Projected / Final')}</th>
-                    <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Status')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {rows.map((r) => (
-                    <tr key={r.subjectId} className="hover:bg-muted/40 transition">
-                      <td className="px-5 py-3">
-                        <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
-                        <span className="text-xs text-muted-foreground ml-2">{r.classLevel}{r.term ? ` · ${r.term}` : ''}</span>
-                      </td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
-                      <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.projectedFinalHours)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>
-                          {t(r.status)}
-                        </span>
-                      </td>
+            <>
+              {/* Full table — desktop only. A row per course is compact enough there that
+                  the whole list never "floods" the page the way it does at phone width. */}
+              <div className="hidden md:block bg-card rounded-xl border border-border overflow-hidden mb-8">
+                <div className="overflow-x-auto"><table className="w-full min-w-[640px]">
+                  <thead className="bg-muted border-b border-border">
+                    <tr>
+                      <th className="text-left px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{isUniversity ? t('Course') : t('Subject')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Required')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Taught so far')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Projected / Final')}</th>
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('Status')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table></div>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {rows.map((r) => (
+                      <tr key={r.subjectId} className="hover:bg-hover/40 transition">
+                        <td className="px-5 py-3">
+                          <span className="text-sm font-medium text-foreground">{r.subjectName}</span>
+                          <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(r.classLevel)}{r.term ? ` · ${r.term}` : ''}</span>
+                          {/* The figures across this row are the COURSE's, which is what the
+                              target measures. When someone else also taught it, the teacher's
+                              own share is spelled out — otherwise a teacher who joined in
+                              November looks as though they missed everything before that. */}
+                          {r.contributors.length > 1 && (() => {
+                            const mine = r.contributors.find((c) => c.teacherId === user?.id)
+                            return mine ? (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {r.contributors.length} {t('teachers on this course')}
+                              </p>
+                            ) : null
+                          })()}
+                        </td>
+                        <td className="px-4 py-3 text-center text-sm text-foreground">{r.requiredHours != null ? formatHours(r.requiredHours) : '—'}</td>
+                        <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.taughtHours)}</td>
+                        <td className="px-4 py-3 text-center text-sm text-foreground">{formatHours(r.projectedFinalHours)}{!r.isFinal && <span className="text-xs text-muted-foreground"> ({t('projected')})</span>}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>
+                            {t(r.status)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table></div>
+              </div>
+
+              {/* Phone-width only — one course, not the whole list, plus a link to the
+                  full set on its own page. Same headline pick (most urgent status first)
+                  the mobile app uses on its Attendance tab. */}
+              <div className="md:hidden bg-card rounded-xl border border-border overflow-hidden mb-8">
+                {headline && (
+                  <div className="px-5 py-4">
+                    <span className="text-sm font-medium text-foreground">{headline.subjectName}</span>
+                    <span className="text-xs text-muted-foreground ml-2">{stripProgrammeSuffix(headline.classLevel)}{headline.term ? ` · ${headline.term}` : ''}</span>
+                    <div className="flex items-center gap-5 mt-3">
+                      <div><p className="text-xs text-muted-foreground">{t('Required')}</p><p className="text-sm font-semibold text-foreground">{headline.requiredHours != null ? formatHours(headline.requiredHours) : '—'}</p></div>
+                      <div><p className="text-xs text-muted-foreground">{t('Taught so far')}</p><p className="text-sm font-semibold text-foreground">{formatHours(headline.taughtHours)}</p></div>
+                      <div><p className="text-xs text-muted-foreground">{headline.isFinal ? t('Final') : t('Projected')}</p><p className="text-sm font-semibold text-foreground">{formatHours(headline.projectedFinalHours)}</p></div>
+                    </div>
+                    <span className={`inline-block mt-3 px-2 py-1 rounded-full text-xs font-semibold ${STATUS_STYLE[headline.status]}`}>
+                      {t(headline.status)}
+                    </span>
+                    {headline.contributors.length > 1 && (() => {
+                      const mine = headline.contributors.find((c) => c.teacherId === user?.id)
+                      return mine ? (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          {t('You taught')} {formatHours(mine.taughtHours)} {t('of this')} · {headline.contributors.length} {t('teachers on this course')}
+                        </p>
+                      ) : null
+                    })()}
+                  </div>
+                )}
+                {rows.length > 1 && (
+                  <button onClick={() => router.push('/my-coverage')}
+                    className="w-full flex items-center justify-center gap-1.5 py-3 text-sm font-medium text-primary hover:bg-hover/40 transition border-t border-border">
+                    {t('See all courses')} ({rows.length}) <ChevronRight size={16} />
+                  </button>
+                )}
+              </div>
+            </>
           )}
 
           {/* Scoped to the current period server-side (semester for university, academic
@@ -203,18 +278,28 @@ export default function MyTeachingHoursPage() {
                     // Once the period's happened, only an admin can remove it (they may
                     // want to mark the teacher present after all); once an admin has
                     // reviewed it in a PRIOR visit to their list, it's locked for everyone.
-                    const locked = a.hourHasPassed || a.seenByAdmin
-                    const lockedReason = a.seenByAdmin
-                      ? t('Already reviewed by an admin — ask them to remove it if needed')
-                      : t('This period has already passed — ask an admin to remove it if needed')
+                    // An admin-recorded absence is never removable here at all, whatever the
+                    // timing — it was never this teacher's report to retract.
+                    const locked = a.isFinal || a.graceExpired || a.seenByAdmin || a.recordedByAdmin
+                    // Most specific reason first: "an admin filed this" outlives both other
+                    // locks and is the only one that was true from the moment it appeared.
+                    const lockedReason = a.recordedByAdmin
+                      ? t('An admin recorded this absence, so only an admin can remove it')
+                      : a.seenByAdmin
+                        ? t('Already reviewed by an admin — ask them to remove it if needed')
+                        : t('This period has already passed — ask an admin to remove it if needed')
                     return (
-                      <tr key={a.id} className="hover:bg-muted/40 transition">
+                      // Clicking an absence opens the timetable AT that period, ringed. Same
+                      // params the notification links already use, so both routes land alike.
+                      <tr key={a.id}
+                        onClick={() => router.push(`/my-timetable?missedSlotId=${encodeURIComponent(a.timetableSlotId)}&missedDate=${encodeURIComponent(a.date)}&missedFrom=${encodeURIComponent(a.startTime)}&missedTo=${encodeURIComponent(a.endTime)}`)}
+                        className="hover:bg-hover/40 transition cursor-pointer">
                         <td className="px-5 py-3 text-sm text-foreground">{a.date}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} <span className="text-xs text-muted-foreground">{a.classLevel}</span></td>
+                        <td className="px-4 py-3 text-sm text-foreground">{a.subjectName ?? '—'} {a.classLevel && <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(a.classLevel)}</span>}</td>
                         <td className="px-4 py-3 text-sm text-muted-foreground">{t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</td>
                         <td className="px-4 py-3 text-center">
                           <button
-                            onClick={() => handleDeleteAbsence(a.id)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteAbsence(a.id) }}
                             disabled={locked}
                             className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
                             title={locked ? lockedReason : t('Remove')}
@@ -254,7 +339,7 @@ export default function MyTeachingHoursPage() {
                 daySlots.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{t('No periods on your timetable for this day.')}</p>
                 ) : reportableSlots.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{t('All periods for this day have already passed — ask an admin if this needs correcting.')}</p>
+                  <p className="text-xs text-muted-foreground">{t('Every period for this day has already started. Ask an admin to record it.')}</p>
                 ) : (
                   <div>
                     <label className="flex items-center gap-2 text-sm text-foreground mb-3">
@@ -268,7 +353,7 @@ export default function MyTeachingHoursPage() {
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-foreground mb-1">{t('Which periods?')}</p>
                       {daySlots.map((s) => {
-                        const passed = slotHasPassed(date, s.endTime)
+                        const passed = slotHasPassed(date, s.startTime)
                         const locked = wholeDay || passed
                         return (
                           <label key={s.id} className={`flex items-center gap-2 text-sm text-foreground ${locked ? 'opacity-50' : ''}`}>
@@ -278,8 +363,8 @@ export default function MyTeachingHoursPage() {
                               disabled={locked}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
-                            {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{s.classLevel}</span>
-                            {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
+                            {s.startTime}–{s.endTime} · {slotTitle(s)} {s.classLevel && <span className="text-xs text-muted-foreground">{stripProgrammeSuffix(s.classLevel)}</span>}
+                            {passed && <span className="text-xs text-muted-foreground italic">({t('already started')})</span>}
                           </label>
                         )
                       })}
@@ -290,7 +375,7 @@ export default function MyTeachingHoursPage() {
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowReportModal(false)}
-                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button

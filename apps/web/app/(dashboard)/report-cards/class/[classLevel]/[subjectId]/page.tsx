@@ -12,14 +12,55 @@ import { seqShort, seqFull } from '@/lib/sequences'
 import { ArrowLeft, Save, Copy, AlertTriangle } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
+import { onRealtimeDebounced } from '@/lib/socket'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getMeApi } from '@/lib/api/auth'
 import { useT, useLang } from '@/lib/i18n'
+import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
+import CompetencyEntryPage from './CompetencyEntry'
 
 // University marking split: CA is out of 30, the exam out of 70, the course out of 100.
 // The same numbers the column headers below print.
 const EXAM_MAX = 70
 const COURSE_MAX = 100
+
+/**
+ * Which sheet this class gets: the numeric spreadsheet below, or the rating picker in
+ * CompetencyEntry. Decided here rather than inside the grid because the two share almost
+ * nothing — a competency class has no score, no sequence, no maximum and no grade, so the
+ * numeric grid's entire row model and save payload are wrong for it.
+ *
+ * Resolved from the class list rather than guessed from the class NAME: names are free
+ * text (a French section calls these Maternelle), which is the whole reason gradingMode
+ * is a stored field. An unknown class falls back to NUMERIC, matching the API's default.
+ */
+export default function MarksEntryPage() {
+  const params = useParams()
+  const classLevel = decodeURIComponent(String(params.classLevel))
+  const [mode, setMode] = useState<GradingMode | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getClassLevelsApi()
+      .then(({ classLevels }) => {
+        if (!cancelled) setMode(classLevels.find((c) => c.name === classLevel)?.gradingMode ?? 'NUMERIC')
+      })
+      .catch(() => { if (!cancelled) setMode('NUMERIC') })
+    return () => { cancelled = true }
+  }, [classLevel])
+
+  // Neither sheet, briefly: rendering the numeric one first and swapping would flash a
+  // marks grid at a nursery teacher every single time.
+  if (mode === null) return (
+    <div className="space-y-3" style={{ minHeight: 'calc(100vh - 120px)' }}>
+      <div className="h-8 w-56 rounded bg-muted animate-pulse" />
+      <div className="h-11 w-full rounded bg-muted animate-pulse" />
+      <div className="h-64 w-full rounded-xl bg-muted animate-pulse" />
+    </div>
+  )
+
+  return mode === 'COMPETENCY' ? <CompetencyEntryPage /> : <NumericMarksEntry />
+}
 
 interface Row {
   studentId: string
@@ -37,7 +78,7 @@ interface Row {
   resitEligible?: boolean
 }
 
-export default function MarksEntryPage() {
+function NumericMarksEntry() {
   const router = useRouter()
   const params = useParams()
   const { user, school, updateSchool } = useAuthStore()
@@ -50,6 +91,7 @@ export default function MarksEntryPage() {
   const termName = searchParams.get('termName') ?? ''
   const lang = useLang()
   const isUniversity = school?.type === 'UNIVERSITY'
+  const isPrimary = school?.type === 'PRIMARY'
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   // True when the signed-in user isn't who this school's policy lets record marks: a
   // teacher when the school routes entry through the administration, or an admin
@@ -67,13 +109,27 @@ export default function MarksEntryPage() {
   // branch: adminOnlyMarks already means something different for them (see above).
   const caExemptForTeacher = !isAdminRole && isUniversity && seqIndex === 0 && adminOnlyMarks
   const isResit = isUniversity && seqIndex === 2
-  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : seqFull(termName, seqIndex, lang)
-  const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
-  const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
+  const seqLabel    = isUniversity ? (seqIndex === 0 ? 'CA' : seqIndex === 1 ? 'Exam' : 'Resit Exam') : isPrimary ? (seqIndex === 0 ? 'Test' : 'Exam') : seqFull(termName, seqIndex, lang)
+  const otherSeqLabel = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : isPrimary ? (seqIndex === 0 ? 'Exam' : 'Test') : seqShort(termName, seqIndex === 0 ? 1 : 0, lang)
+  const otherSeqFull  = isUniversity ? (seqIndex === 0 ? 'Exam' : 'CA') : isPrimary ? (seqIndex === 0 ? 'Exam' : 'Test') : seqFull(termName, seqIndex === 0 ? 1 : 0, lang)
 
   const [rows, setRows] = useState<Row[]>([])
+  // Scores exactly as last loaded from the server, keyed by student. `rows` is the EDIT
+  // BUFFER, so this is the only way to tell a typed-but-unsaved grid from a clean one.
+  // Derived by comparison rather than a flag set in each edit handler, so any future edit
+  // path (bulk clear, copy, paste) is covered without remembering to mark it dirty.
+  const loadedScoresRef = useRef<Record<string, string>>({})
+  // Someone else saved marks for this class while this grid held unsaved edits. We refuse
+  // to refetch over the top of typing, so the user is offered the reload instead.
+  const [staleFromElsewhere, setStaleFromElsewhere] = useState(false)
   const [maxScore, setMaxScore] = useState(20)
-  const effectiveMax = isUniversity ? (seqIndex === 0 ? 30 : 70) : maxScore
+  // Primary only — the Test component's ceiling; Exam ceiling is maxScore - testMaxScore.
+  const [testMaxScore, setTestMaxScore] = useState(30)
+  const effectiveMax = isUniversity
+    ? (seqIndex === 0 ? 30 : 70)
+    : isPrimary
+      ? (seqIndex === 0 ? testMaxScore : maxScore - testMaxScore)
+      : maxScore
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -132,6 +188,7 @@ export default function MarksEntryPage() {
     ])
     const subject = subjectData.subjects.find((s: any) => s.id === subjectId)
     if (subject?.maxScore) setMaxScore(subject.maxScore)
+    if (subject?.testMaxScore) setTestMaxScore(subject.testMaxScore)
     if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
 
     // One request for the whole class — entries come straight off the overview response
@@ -200,6 +257,10 @@ export default function MarksEntryPage() {
 
     if (fetchGenerationRef.current !== myGeneration) return // a newer fetch has since started
     setRows(loaded)
+    // Baseline for "does this grid hold unsaved edits" — see isDirty below. Captured from
+    // the same rows that were just rendered, so a fresh load always starts clean.
+    loadedScoresRef.current = Object.fromEntries(loaded.map((r) => [r.studentId, r.score]))
+    setStaleFromElsewhere(false)
     setInvalidRows({})
     setSelectedIndices(new Set())
     setEditingIndex(null)
@@ -211,6 +272,29 @@ export default function MarksEntryPage() {
   // /re-graded against the NEW sequence's max score (e.g. a CA mark out of 30 briefly
   // graded as an Exam mark out of 70 — a false "FAIL") until the refetch quietly resolved.
   useEffect(() => { setLoading(true); fetchData().finally(() => setLoading(false)) }, [fetchData])
+
+  // Unsaved edits present? Compared against the last load rather than tracked by a flag,
+  // so typing a mark and then undoing it correctly reads as clean again.
+  const isDirty = rows.some((r) => (loadedScoresRef.current[r.studentId] ?? '') !== r.score)
+  // Mirrored into a ref so the realtime subscription below can read the CURRENT value
+  // without re-subscribing on every keystroke.
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
+
+  // Someone else saved marks for this class/subject.
+  //
+  // This grid is the one screen that must NOT blindly refetch: `rows` is the edit buffer,
+  // so refetching over a half-typed column would destroy work with no undo. When the grid
+  // is clean there is nothing to lose and it silently refreshes; when it is dirty the user
+  // is told and decides. Debounced because the signal arrives once per student.
+  //
+  // Also fires for the user's OWN save (they are in the school room too). Harmless: by then
+  // handleSaveAll has already refetched and the grid is clean, so this is one redundant
+  // fetch rather than a surprise.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => {
+    if (isDirtyRef.current) setStaleFromElsewhere(true)
+    else fetchData()
+  }), [fetchData])
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   const rangeSet = (a: number, b: number): Set<number> => {
@@ -558,7 +642,7 @@ export default function MarksEntryPage() {
       {/* Header */}
       <div className="mb-0 pb-4">
         <button onClick={() => router.back()}
-          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition inline-flex">
+          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition inline-flex">
           <ArrowLeft size={20} />
         </button>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -577,7 +661,11 @@ export default function MarksEntryPage() {
                 className={`text-xs px-2.5 py-1.5 rounded-lg border transition ${seqIndex === i
                   ? 'border-primary bg-primary/10 text-primary font-semibold'
                   : 'border-border text-muted-foreground hover:text-foreground'}`}>
-                {isUniversity ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit')) : seqShort(termName, i, lang)}
+                {isUniversity
+                  ? (i === 0 ? t('CA (30)') : i === 1 ? t('Exam (70)') : t('Resit'))
+                  : isPrimary
+                    ? (i === 0 ? `${t('Test')} (${testMaxScore})` : `${t('Exam')} (${maxScore - testMaxScore})`)
+                    : seqShort(termName, i, lang)}
               </button>
             ))}
           </div>
@@ -620,16 +708,39 @@ export default function MarksEntryPage() {
         )
       )}
 
+      {/* Someone else saved marks for this class while this grid holds unsaved edits.
+          Offered, never applied automatically: reloading replaces the edit buffer, so
+          discarding typed marks has to be the user's decision, not a background event's. */}
+      {staleFromElsewhere && (
+        <div className="flex items-center gap-3 bg-amber-50 border-b border-amber-200 px-4 py-2.5 text-sm text-amber-800">
+          <span className="flex-1">
+            {t('Someone else saved marks for this class. Reload to see them, or finish and save yours first.')}
+          </span>
+          <button
+            onClick={() => { setLoading(true); fetchData().finally(() => setLoading(false)) }}
+            className="flex-shrink-0 font-semibold text-amber-900 underline hover:no-underline"
+          >
+            {t('Reload')}
+          </button>
+        </div>
+      )}
+
       {/* Copy-from-other-seq bar — resit has nothing to copy from, and it's pointless
           (and would look like a back door around ADMIN_ONLY) to show a "fill this in"
-          shortcut on a tab this user has no editable rows on at all. */}
+          shortcut on a tab this user has no editable rows on at all.
+
+          NOT shown for universities OR primary schools. CA/Test and Exam are marked out of
+          different totals there (e.g. 30 and 70), so one is never a sensible starting point
+          for the other: copying Test into Exam silently halves every student, and copying
+          Exam into Test writes scores above the Test maximum. Secondary sequences share one
+          maxScore, which is the only case where "same marks again" is a meaningful shortcut. */}
       {isResit ? (
         <div className="w-full flex items-center gap-3 bg-sky-50 border-b border-sky-200 px-4 py-3 text-left">
           <span className="flex-1 text-sm text-sky-700">
             {t('Only students who failed the course can resit, and only the exam is re-sat. Enter their new exam mark out of 70 here; their CA stays as it is, so a better exam mark can lift the total.')}
           </span>
         </div>
-      ) : editableRows.length > 0 && (
+      ) : editableRows.length > 0 && !isUniversity && !isPrimary && (
         <button
           onClick={handleCopyFromOther}
           className="w-full flex items-center gap-3 bg-violet-50 hover:bg-violet-100 border-b border-violet-200 px-4 py-3 transition text-left"
@@ -693,12 +804,24 @@ export default function MarksEntryPage() {
                 <th className="text-left px-4 py-3 text-xs font-bold text-white w-10 border-r border-white/10">#</th>
                 <th className="text-left px-4 py-3 text-xs font-bold text-white border-r border-white/10">{t('STUDENT NAME')}</th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white w-44 border-r border-white/10">
-                  {isUniversity ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70') : `${t('MARKS /')} ${effectiveMax}`}
+                  {isUniversity
+                    ? (seqIndex === 0 ? 'CA / 30' : seqIndex === 1 ? 'MARKS / 70' : 'RESIT / 70')
+                    : isPrimary
+                      ? `${seqIndex === 0 ? t('TEST') : t('EXAM')} / ${effectiveMax}`
+                      : `${t('MARKS /')} ${effectiveMax}`}
                 </th>
                 <th className="text-center px-4 py-3 text-xs font-bold text-white">{t('PERFORMANCE')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-4 py-16 text-center">
+                    <p className="text-sm text-muted-foreground">{t('No students in this class yet.')}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{t('Add students to')} {classLevel} {t('before entering marks.')}</p>
+                  </td>
+                </tr>
+              )}
               {rows.map((row, index) => {
                 const isSelected = selectedIndices.has(index)
                 const isEditing  = editingIndex === index
@@ -787,23 +910,27 @@ export default function MarksEntryPage() {
         </div>
       </div>
 
-      {/* Save button */}
-      <div className="border border-border rounded-b-xl overflow-hidden">
-        <button
-          onClick={handleSaveAll}
-          disabled={saving || editableRows.length === 0}
-          className="w-full flex items-center justify-center gap-3 bg-primary hover:bg-[#d63429] disabled:opacity-50 text-white py-4 text-base font-bold transition"
-        >
-          <Save size={18} />
-          {saving
-            ? t('Saving...')
-            : editableRows.length === 0
-              // Nothing editable has two causes now, and blaming publishing when the real
-              // reason is school policy sends the teacher to argue with the wrong person.
-              ? (adminOnlyMarks ? (isAdminRole ? t('Teachers enter marks here') : t('Administration enters marks here')) : t('All Cards Published'))
-              : t('Save All Marks')}
-        </button>
-      </div>
+      {/* Save button — nothing to save or publish with no one on the roster yet, so the
+          button (which used to read "All Cards Published", a straight lie in that case:
+          0 editable rows means either "everyone's published" OR "no students exist", and
+          those are very different things to tell a teacher) is dropped entirely rather
+          than shown disabled. */}
+      {rows.length > 0 && (
+        <div className="border border-border rounded-b-xl overflow-hidden">
+          <button
+            onClick={handleSaveAll}
+            disabled={saving || editableRows.length === 0}
+            className="w-full flex items-center justify-center gap-3 bg-primary hover:bg-[#d63429] disabled:opacity-50 text-white py-4 text-base font-bold transition"
+          >
+            <Save size={18} />
+            {saving
+              ? t('Saving...')
+              : editableRows.length === 0
+                ? (adminOnlyMarks ? (isAdminRole ? t('Teachers enter marks here') : t('Administration enters marks here')) : t('All Cards Published'))
+                : t('Save All Marks')}
+          </button>
+        </div>
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

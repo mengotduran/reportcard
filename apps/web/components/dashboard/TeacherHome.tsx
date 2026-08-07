@@ -36,6 +36,7 @@ export default function TeacherHome() {
   const [chartStats, setChartStats] = useState<TeacherChartStats | null>(null)
   const [classes, setClasses] = useState<TeacherClassRow[]>([])
   const [classesLoading, setClassesLoading] = useState(true)
+  const [classesFailed, setClassesFailed] = useState(false)
   const [term, setTerm] = useState<CurrentTerm | null>(null)
   const [todaySlots, setTodaySlots] = useState<TimetableSlot[]>([])
   const [timetableLoading, setTimetableLoading] = useState(true)
@@ -51,7 +52,13 @@ export default function TeacherHome() {
 
   useEffect(() => {
     getTeacherChartStatsApi().then(setChartStats).catch(() => {})
-    getTeacherClassesApi().then((r) => setClasses(r.classes)).catch(() => {}).finally(() => setClassesLoading(false))
+    // A failed load must NOT fall through to "you haven't been assigned any classes yet".
+    // That sentence is a claim about the data, and stating it after a 401 or a network drop
+    // sends a teacher to their admin over a problem that isn't theirs.
+    getTeacherClassesApi()
+      .then((r) => { setClasses(r.classes); setClassesFailed(false) })
+      .catch(() => setClassesFailed(true))
+      .finally(() => setClassesLoading(false))
     getCurrentTermApi().then(setTerm).catch(() => {})
     getMyTimetableApi().then((r) => {
       const todayName = DAY_ORDER[new Date().getDay()]
@@ -153,6 +160,8 @@ export default function TeacherHome() {
             <div className="space-y-2">
               {[0, 1, 2].map((i) => <div key={i} className="h-12 bg-muted rounded-lg animate-pulse" />)}
             </div>
+          ) : classesFailed ? (
+            <p className="text-sm text-destructive py-4 text-center">{t('Could not load your courses. Check your connection and reload.')}</p>
           ) : classes.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">{t("You haven't been assigned any classes yet.")}</p>
           ) : (
@@ -177,7 +186,7 @@ export default function TeacherHome() {
                   <button
                     key={c.id}
                     onClick={goTo}
-                    className="w-full flex items-center gap-3 rounded-lg pl-3 pr-2 py-2.5 border-l-4 bg-muted/40 hover:bg-muted transition text-left"
+                    className="w-full flex items-center gap-3 rounded-lg pl-3 pr-2 py-2.5 border-l-4 bg-muted/40 hover:bg-hover transition text-left"
                     style={{ borderColor: color }}
                   >
                     <div className="min-w-0 flex-1">

@@ -29,6 +29,9 @@ export interface ReportCardDetail {
   remarks: string | null
   remarksFr: string | null
   remarksSource: string | null
+  /** How the CLASS is assessed. On a COMPETENCY (nursery) card each entry's `grade`
+   *  holds a rating, every score is null, and there is no average or position at all. */
+  gradingMode?: 'NUMERIC' | 'COMPETENCY'
   student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string }
   term: { id: string; name: string; session: string }
   school: { name: string; type: string; language?: string }
@@ -40,6 +43,9 @@ export interface Subject {
   name: string
   classLevel: string
   maxScore: number
+  /** PRIMARY only: the Test component's ceiling. The Exam is `maxScore - testMaxScore`,
+   *  derived rather than stored, so the two can never drift apart. */
+  testMaxScore?: number
   coefficient: number
   credit?: number | null
   compulsory?: boolean
@@ -63,7 +69,7 @@ export interface ClassStudentOverview {
     marksEditGrantedTo: string | null; remarksEditGrantedTo: string | null; marksFilled?: boolean
     /** Per-subject marks, returned so the marks sheet needs ONE request instead of one
      *  per student — a phone on shaky wifi cannot afford an N+1. */
-    entries?: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null }[]
+    entries?: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null; grade?: string | null }[]
   } | null
 }
 
@@ -87,6 +93,8 @@ export const getClassOverview = async (
   // active one, and (if not) whether an admin has unlocked this subject+term for
   // teachers to edit anyway. See PastTermMarksGrant.
   isCurrentTerm: boolean; pastTermEditGranted: boolean
+  /** How this class is assessed — marks, or a rating per subject (nursery). */
+  gradingMode?: 'NUMERIC' | 'COMPETENCY'
 }> => {
   const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel, subjectId } })
   return res.data
@@ -125,9 +133,12 @@ export const getSubjects = async (): Promise<{ subjects: Subject[] }> => {
   return res.data
 }
 
+// `rating` is the competency (nursery) path: the API takes it INSTEAD of any score and
+// stores it as the entry's grade. Leave the key off an entry entirely to keep whatever
+// rating it already has — sending `rating: null` is what clears one.
 export const saveEntries = async (
   id: string,
-  data: { entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]; remarks?: string }
+  data: { entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; rating?: string | null; remarks?: string }[]; remarks?: string }
 ) => {
   const res = await api.put(`/report-cards/${id}/entries`, data)
   return res.data

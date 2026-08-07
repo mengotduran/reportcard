@@ -47,7 +47,7 @@ export default function Pagination({
           onClick={() => onPage(page - 1)}
           disabled={page <= 1}
           aria-label={t('Previous')}
-          className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition">
+          className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed transition">
           <ChevronLeft size={16} />
         </button>
         {pageWindow(page, totalPages).map((p, i) =>
@@ -62,7 +62,7 @@ export default function Pagination({
               className={`min-w-[26px] px-1.5 py-1 rounded-lg text-xs tabular-nums transition ${
                 p === page
                   ? 'bg-primary text-primary-foreground font-medium'
-                  : 'border border-border text-muted-foreground hover:bg-muted'
+                  : 'border border-border text-muted-foreground hover:bg-hover'
               }`}>
               {p}
             </button>
@@ -72,7 +72,7 @@ export default function Pagination({
           onClick={() => onPage(page + 1)}
           disabled={page >= totalPages}
           aria-label={t('Next')}
-          className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition">
+          className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed transition">
           <ChevronRight size={16} />
         </button>
       </div>

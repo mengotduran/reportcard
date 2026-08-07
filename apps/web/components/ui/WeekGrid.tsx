@@ -1,4 +1,5 @@
 'use client'
+import { useEffect, useRef } from 'react'
 import { useT } from '@/lib/i18n'
 
 // A read-only day-columns x hour-rows calendar grid — visually similar to a
@@ -16,9 +17,21 @@ export interface WeekGridSlot {
   title: string
   subtitle?: string | null
   isPrivate?: boolean
+  /** Arrived here from an absence or a notification naming THIS slot. Ringed rather
+   *  than restyled: it is a "you are looking at this one" marker, and must not be
+   *  confused with the absent/missed styling, which is data about the class itself. */
+  focused?: boolean
   // A one-off slot (a specific calendar date, not a weekly recurrence) — shown with a
   // dashed border so it reads as "just this once" rather than part of the standing schedule.
   isOneOff?: boolean
+  /** Reported absent and ALREADY past: greyed and struck through, it was not taught. */
+  missed?: boolean
+  /** Reported absent but STILL TO COME. Marked distinctly from a lost period, because
+   *  nothing has been lost yet and the report can still be retracted. */
+  reportedAbsent?: boolean
+  /** Short note under the subtitle, e.g. the dates reported. The grid is a recurring week
+   *  with no dates of its own, so without this "absent" would not say WHICH week. */
+  note?: string | null
 }
 
 export interface WeekGridBreak {
@@ -58,6 +71,17 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
   for (let h = startHour; h <= endHour; h++) hourMarks.push(h)
 
   const formatHour = (h: number) => `${String(h % 24).padStart(2, '0')}:00`
+
+  // Scrolls the focused slot into view exactly once, when it first shows up — not a plain
+  // inline ref callback, which React treats as a NEW function every render and re-invokes
+  // on each one, so a smooth scrollIntoView kept firing on every realtime update and made
+  // manual scrolling feel like it was being yanked back.
+  const focusedRef = useRef<HTMLButtonElement | null>(null)
+  const focusedId = slots.find((s) => s.focused)?.id
+  useEffect(() => {
+    if (!focusedId) return
+    focusedRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [focusedId])
 
   return (
     // Wrapped in its own horizontal scroller — 7 day columns plus the hour
@@ -102,17 +126,23 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
                     <button
                       key={s.id}
                       type="button"
+                      ref={s.focused ? focusedRef : undefined}
                       onClick={() => onSlotClick?.(s)}
                       disabled={!onSlotClick}
                       className={`absolute left-1 right-1 rounded-md px-1.5 py-1 text-left overflow-hidden border transition ${
-                        s.isPrivate
-                          ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-400'
-                          : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/15'
-                      } ${s.isOneOff ? 'border-dashed' : ''} ${onSlotClick ? 'cursor-pointer' : 'cursor-default'}`}
+                        s.missed
+                          ? 'bg-muted border-border text-muted-foreground opacity-75'
+                          : s.reportedAbsent
+                            ? 'bg-slate-100 border-slate-300 text-slate-600 dark:bg-slate-500/15 dark:border-slate-500/40 dark:text-slate-300'
+                            : s.isPrivate
+                              ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-400'
+                              : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/15'
+                      } ${s.isOneOff || s.reportedAbsent ? 'border-dashed' : ''} ${s.focused ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''} ${onSlotClick ? 'cursor-pointer' : 'cursor-default'}`}
                       style={{ top, height, zIndex: 1 }}
                     >
-                      <div className="text-[11px] font-semibold leading-tight truncate">{s.title}</div>
+                      <div className={`text-[11px] font-semibold leading-tight truncate ${s.missed ? 'line-through' : ''}`}>{s.title}</div>
                       {s.subtitle && <div className="text-[10px] leading-tight opacity-80 truncate">{s.subtitle}</div>}
+                      {s.note && <div className="text-[9px] font-bold leading-tight truncate mt-0.5">{s.note}</div>}
                     </button>
                   )
                 })}

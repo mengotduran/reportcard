@@ -183,11 +183,20 @@ export function applyInsertCol(
   const n = normRange(sel)
   const at = after ? n.c2 + 1 : n.c1   // logical column the new column is inserted before
   const ws = table.colWidths
+  // Only rows after the per-subject data row (the footer/hero band — TOTAL, TERM
+  // AVERAGE, DECISION...) get the "grow the last cell" treatment below. A header or
+  // data row must always get a genuinely NEW cell instead, never grow an existing
+  // one — growing, say, the Remarks column silently doubled its width with no new
+  // content and desynced the table's real column count from the header/data rows'
+  // own cell arrays (colCount said 9, but there were still only 8 actual columns of
+  // content), which is what put a visible gap through the footer under it.
+  const dataRowIdx = table.rows.findIndex(r => r._isDataRow)
   return {
     table: {
       ...table,
       colCount: table.colCount + 1,
-      rows: table.rows.map(row => {
+      rows: table.rows.map((row, ri) => {
+        const isFooterRow = dataRowIdx >= 0 && ri > dataRowIdx
         const cells: SheetCell[] = []
         let col = 0
         let done = false
@@ -209,21 +218,19 @@ export function applyInsertCol(
           col += span
         }
         if (!done) {
-          // Inserting at the very end: a single cell spanning the whole row
-          // (a full-width title banner) grows with the table. A hero row shaped
-          // [wide label…, value] (e.g. the transcript's "SEMESTER GPA: | 2.90"
-          // or the ledger's TERM AVERAGE) grows its label instead, so the value
-          // stays pinned to the table's outer edge rather than leaving a bare
-          // gap after it. Anything else gets a fresh cell that carries over the
-          // row's trailing style (so a banded TOTAL row's band keeps reaching
-          // the edge) but none of its content.
+          // Inserting at the very end: a single cell spanning the whole row (a
+          // full-width title banner) grows with the table — nothing else makes
+          // sense there. On a footer row, the LAST cell grows instead (the pinned
+          // value, e.g. the ledger's wpTotal or the transcript's GPA figure), never
+          // the label before it — its content is centered, so the extra width
+          // just becomes a little even padding on both sides, and it still ends
+          // the row exactly at the outer edge. A header or data row always gets a
+          // fresh blank cell instead, full stop — see the comment above.
           const last = cells[cells.length - 1]
-          const secondLast = cells.length >= 2 ? cells[cells.length - 2] : null
           if (cells.length === 1 && (cells[0].colSpan ?? 1) === table.colCount)
             cells[0] = { ...cells[0], colSpan: table.colCount + 1 }
-          else if (secondLast && (secondLast.colSpan ?? 1) > 1)
-            cells[cells.length - 2] = { ...secondLast, colSpan: (secondLast.colSpan ?? 1) + 1 }
-          else cells.push({ bgColor: last?.bgColor, textColor: last?.textColor, bold: last?.bold, align: last?.align })
+          else if (isFooterRow && last) cells[cells.length - 1] = { ...last, colSpan: (last.colSpan ?? 1) + 1 }
+          else cells.push({})
         }
         return { ...row, cells }
       }),
@@ -237,6 +244,7 @@ export function applyDeleteCols(table: SpreadsheetTable, sel: SheetRange): Sprea
   const n = normRange(sel)
   const newCount = table.colCount - (n.c2 - n.c1 + 1)
   if (newCount <= 0) return table
+  const singleCol = n.c1 === n.c2
   return {
     ...table,
     colCount: newCount,
@@ -247,7 +255,25 @@ export function applyDeleteCols(table: SpreadsheetTable, sel: SheetRange): Sprea
         const span = cell.colSpan ?? 1
         const start = col, end = col + span - 1
         col += span
-        if (start >= n.c1 && end <= n.c2) continue // fully inside the deleted range — drop
+        if (start >= n.c1 && end <= n.c2) {
+          // Fully inside the deleted range, normally just dropped — but a footer
+          // band's own value cell (Total Points Obtained, Class Average, Best
+          // Average, Term Appreciation...) can end up exactly here purely by
+          // coincidence of column position (it's often the table's very last
+          // column), and dropping it silently erases that figure from the row
+          // rather than just narrowing the table by one column. If this single
+          // deleted column IS that one cell (span 1, matching the deleted width)
+          // and it's carrying real content (a bound field or its own text), shrink
+          // the cell immediately before it instead — almost always a label with
+          // spare width to give up — and leave this one untouched.
+          const worthSaving = singleCol && span === 1 && !!(cell.field || cell.text)
+          const prev = cells[cells.length - 1]
+          if (worthSaving && prev && (prev.colSpan ?? 1) > 1) {
+            cells[cells.length - 1] = { ...prev, colSpan: (prev.colSpan ?? 1) - 1 }
+            cells.push(cell)
+          }
+          continue
+        }
         if (end < n.c1 || start > n.c2) { cells.push(cell); continue } // no overlap — keep as-is
         // Partial overlap — shrink the span by however many of its columns are being deleted
         const overlap = Math.min(end, n.c2) - Math.max(start, n.c1) + 1
@@ -257,6 +283,31 @@ export function applyDeleteCols(table: SpreadsheetTable, sel: SheetRange): Sprea
       return { ...row, cells }
     }),
     colWidths: table.colWidths?.filter((_, ci) => ci < n.c1 || ci > n.c2),
+  }
+}
+
+// Relocate one column (e.g. dragging "Seq 1" to sit after "Grade") by a plain
+// array splice on flat rows — every cell colSpan 1, i.e. the header row and the
+// per-subject data row, the only rows with real per-column identity. A merged
+// footer row (label/value pairs laid out for their own balance, not aligned to
+// any one subject column) is left exactly as it is — nothing in it "belongs" to
+// the column being moved.
+export function applyMoveCol(table: SpreadsheetTable, fromCol: number, insertBeforeCol: number): SpreadsheetTable {
+  if (fromCol < 0 || fromCol >= table.colCount) return table
+  if (insertBeforeCol === fromCol || insertBeforeCol === fromCol + 1) return table // dropped on itself
+
+  const isFlatRow = (row: SheetRow) => row.cells.length === table.colCount && row.cells.every(c => (c.colSpan ?? 1) === 1)
+  const targetIdx = insertBeforeCol > fromCol ? insertBeforeCol - 1 : insertBeforeCol
+
+  return {
+    ...table,
+    rows: table.rows.map(row => {
+      if (!isFlatRow(row)) return row
+      const cells = [...row.cells]
+      const [moved] = cells.splice(fromCol, 1)
+      cells.splice(targetIdx, 0, moved)
+      return { ...row, cells }
+    }),
   }
 }
 
@@ -507,6 +558,9 @@ export function SpreadsheetGrid({
   const [pickerAnchorRect, setPickerAnchorRect] = useState<DOMRect | null>(null)
   const [pickerError, setPickerError] = useState<string | null>(null)
   const drag = useRef<Pos | null>(null)
+  // Column-header drag-to-reorder (marksKeyMode only — see applyMoveCol).
+  const [colDragFrom, setColDragFrom] = useState<number | null>(null)
+  const [colDropAt, setColDropAt] = useState<{ col: number; side: 'left' | 'right' } | null>(null)
 
   // Context for page-level global toolbar
   const ctx = useContext(SheetCtx)
@@ -629,6 +683,14 @@ export function SpreadsheetGrid({
     }
   }
 
+  // The row immediately above the per-subject data row is the real column-header
+  // row (even when a full-width title banner sits above THAT) — same convention
+  // applyMarksKey already uses to find where a column's label text lives. Column
+  // drag-to-reorder is anchored there: only single-span cells in that one row are
+  // valid drag handles, since a merged banner cell has no single column to grab.
+  const dataRowIdx   = rows.findIndex(r => r._isDataRow)
+  const headerRowIdx = dataRowIdx > 0 ? dataRowIdx - 1 : -1
+
   return (
     <div tabIndex={0} onKeyDown={onKeyDown} style={{ outline: 'none' }}>
       <div style={{ overflowX: 'auto' }} onMouseLeave={() => { drag.current = null }}>
@@ -650,20 +712,50 @@ export function SpreadsheetGrid({
                   const displayVal = cell.field
                     ? (resolveField ? resolveField(cell.field) : `[${cell.field}]`)
                     : (cell.text ?? '')
+                  const isDragHandle = !!marksKeyMode && ri === headerRowIdx && (cell.colSpan ?? 1) === 1
+                  const dropSide = colDropAt?.col === ci ? colDropAt.side : null
 
                   return (
                     <td key={ci} colSpan={cell.colSpan ?? 1} rowSpan={cell.rowSpan ?? 1}
+                      draggable={isDragHandle}
                       style={{
                         border: `1px solid ${selected || isPickerOpen ? color : '#d1d5db'}`,
                         outline: (selected || isPickerOpen) ? `2px solid ${color}` : 'none',
                         outlineOffset: -2, padding: 0,
                         backgroundColor: cell.bgColor ?? 'transparent',
-                        cursor: marksKeyMode ? 'pointer' : 'cell',
+                        cursor: isDragHandle ? 'grab' : marksKeyMode ? 'pointer' : 'cell',
                         verticalAlign: 'middle', position: 'relative',
+                        opacity: colDragFrom === ci && ri === headerRowIdx ? 0.4 : 1,
+                        boxShadow: dropSide === 'left' ? `inset 3px 0 0 0 ${color}`
+                          : dropSide === 'right' ? `inset -3px 0 0 0 ${color}` : undefined,
                       }}
-                      onMouseDown={e => onCellDown(ri, ci, e)}
+                      // onCellDown calls preventDefault() to drive its own range-selection
+                      // drag — on the same element that also has draggable=true, that
+                      // preempts the browser's native drag gesture before it can start, so
+                      // a drag handle skips it entirely (it has no text-selection use of its
+                      // own to protect against here).
+                      onMouseDown={isDragHandle ? undefined : e => onCellDown(ri, ci, e)}
                       onMouseEnter={e => onCellEnter(ri, ci, e)}
-                      onDoubleClick={e => startEdit(ri, ci, e.currentTarget)}>
+                      onDoubleClick={e => startEdit(ri, ci, e.currentTarget)}
+                      onDragStart={isDragHandle ? e => {
+                        e.dataTransfer.effectAllowed = 'move'
+                        setColDragFrom(ci)
+                      } : undefined}
+                      onDragOver={isDragHandle && colDragFrom != null ? e => {
+                        e.preventDefault()
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const side = e.clientX - rect.left < rect.width / 2 ? 'left' : 'right'
+                        setColDropAt(prev => prev?.col === ci && prev.side === side ? prev : { col: ci, side })
+                      } : undefined}
+                      onDrop={isDragHandle ? e => {
+                        e.preventDefault()
+                        if (colDragFrom != null && colDropAt) {
+                          const insertBefore = colDropAt.side === 'right' ? colDropAt.col + 1 : colDropAt.col
+                          onChange(applyMoveCol(table, colDragFrom, insertBefore))
+                        }
+                        setColDragFrom(null); setColDropAt(null)
+                      } : undefined}
+                      onDragEnd={isDragHandle ? () => { setColDragFrom(null); setColDropAt(null) } : undefined}>
                       {isEditing ? (
                         <input autoFocus value={editVal}
                           onChange={e => setEditVal(e.target.value)}
@@ -709,7 +801,7 @@ export function SpreadsheetGrid({
       <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 2, lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span>
           {marksKeyMode
-            ? 'Dbl-click a cell to set its key or delete the column'
+            ? 'Dbl-click a cell to set its key or delete the column · drag a header to reorder it'
             : 'Click to select · Drag / Shift+click for range · Dbl-click to edit · Del to clear · Arrows to navigate'}
         </span>
         {marksKeyMode && (

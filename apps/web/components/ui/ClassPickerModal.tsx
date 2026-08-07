@@ -67,7 +67,7 @@ export default function ClassPickerModal({
             const checked = selected.includes(o.classLevel)
             return (
               <button key={o.classLevel} onClick={() => ready && toggle(o.classLevel)} disabled={!ready}
-                className={`w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-3 transition disabled:cursor-not-allowed ${ready ? 'hover:bg-muted' : 'opacity-60'}`}>
+                className={`w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-3 transition disabled:cursor-not-allowed ${ready ? 'hover:bg-hover' : 'opacity-60'}`}>
                 <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked ? 'bg-primary border-primary' : 'border-border'} ${!ready ? 'opacity-50' : ''}`}>
                   {checked && <Check size={12} className="text-white" />}
                 </span>
@@ -91,7 +91,7 @@ export default function ClassPickerModal({
         </div>
 
         <div className="p-4 border-t border-border flex gap-2">
-          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg text-sm font-medium border border-border text-foreground hover:bg-muted transition">{t('Cancel')}</button>
+          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg text-sm font-medium border border-border text-foreground hover:bg-hover transition">{t('Cancel')}</button>
           <button onClick={() => onConfirm(selected)} disabled={selected.length === 0 || busy}
             className="flex-1 px-4 py-2 rounded-lg text-sm font-medium bg-primary text-white hover:bg-[#d63429] disabled:opacity-50 transition">
             {busy ? t('Working…') : `${confirmLabel} (${selected.length})`}

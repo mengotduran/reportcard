@@ -13,12 +13,16 @@ import { useToast } from '@/lib/useToast'
 import PrintableReportCard from '@/components/ui/PrintableReportCard'
 import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfig, DocVariant } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { gradeFromScore } from '@/lib/grading'
+import { isCompetencyRating, RATING_COLORS, CompetencyRating } from '@/lib/competency'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
 
 interface Subject { id: string; name: string; classLevel: string; maxScore: number; coefficient: number; credit?: number; compulsory?: boolean; term?: string | null }
-interface Entry { subjectId: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string }
+/** `score` is null when the course has NO entry on this card, which is not a mark of 0.
+ *  Conflating the two put unmarked courses into the GPA denominator with zero points. */
+interface Entry { subjectId: string; score: number | null; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string }
 interface ReportCard {
   id: string
   status: string
@@ -27,15 +31,20 @@ interface ReportCard {
   position: number | null
   classSize?: number | null
   classAverage?: number | null
+  bestAverage?: number | null
   annualAverage?: number | null
   annualPosition?: number | null
   annualClassSize?: number | null
+  excludedSubjectIds?: string[]
+  /** How the CLASS is assessed. A COMPETENCY (nursery) card carries a rating per subject
+   *  in each entry's `grade`, and deliberately has no average, no total and no position. */
+  gradingMode?: 'NUMERIC' | 'COMPETENCY'
   remarks: string | null
   remarksFr: string | null
   remarksSource: string | null
   marksEditGrantedTo: string | null
   remarksEditGrantedTo: string | null
-  student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string }
+  student: { id: string; name: string; classLevel: string; studentId: string; guardianName?: string; gender?: string; photo?: string | null }
   term: { id: string; name: string; session: string; printingEnabled?: boolean }
   school: { name: string; type: string; language?: string; logo?: string | null; stamp?: string | null; email?: string; phone?: string | null; address?: string | null; website?: string | null; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null }
   entries: { id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; grade: string; remarks: string; subject: { id: string; name: string } }[]
@@ -78,6 +87,7 @@ export default function ReportCardDetailPage() {
   const [classificationBands, setClassificationBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
   const [studentCgpa, setStudentCgpa] = useState<number | null>(null)
   const [subjectStats, setSubjectStats] = useState<Record<string, { min: number; avg: number; max: number }>>({})
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
 
   const [teachers, setTeachers] = useState<{ id: string; name: string; role: string }[]>([])
   const [grantMarksUserId, setGrantMarksUserId] = useState('')
@@ -115,13 +125,15 @@ export default function ReportCardDetailPage() {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
-      const [rc, subjectData, tplData, scaleData, teacherData] = await Promise.all([
+      const [rc, subjectData, tplData, scaleData, teacherData, promoScale] = await Promise.all([
         getReportCardApi(String(params.id)),
         getSubjectsApi(),
         getTemplateApi().catch(() => ({ config: {} })),
         getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: DEFAULT_CLASSIFICATION_BANDS, legendRows: [] })),
         getTeachersApi().catch(() => ({ teachers: [] })),
+        getPromotionScaleApi().catch(() => null),
       ])
+      setPromotionScale(promoScale)
       setTeachers((teacherData.teachers ?? []).filter((t: any) => ['CLASS_TEACHER', 'CLASS_MASTER'].includes(t.role)))
       if (scaleData.ranges.length > 0) setGradingRanges(scaleData.ranges)
       if (scaleData.classificationBands?.length > 0) setClassificationBands(scaleData.classificationBands)
@@ -138,19 +150,38 @@ export default function ReportCardDetailPage() {
       // (i.e. a report-card entry exists). Optional-not-taken are omitted.
       // A course scoped to one semester (university) only counts for that
       // semester; a subject with no term (primary/secondary) always counts.
+      // Courses this student was ticked off (optional ones they do not take) never appear.
+      const excluded = new Set<string>(rc.excludedSubjectIds ?? [])
       const classSubjects = subjectData.subjects.filter(
         (s: Subject) => s.classLevel === rc.student.classLevel
           && (s.term == null || s.term === rc.term.name)
-          && (s.compulsory !== false || rc.entries.some((e: any) => e.subject.id === s.id))
+          && !excluded.has(s.id)
+          // A university department is a fixed course list, so every course that is not
+          // excluded is sat, marks or no marks. Primary/secondary keep the older rule where
+          // an optional subject only shows once the student has an entry for it.
+          && (rc.school?.type === 'UNIVERSITY'
+            ? true
+            : (s.compulsory !== false || rc.entries.some((e: any) => e.subject.id === s.id)))
       )
       setSubjects(classSubjects)
+      // A university department is a fixed course list: every student in it sits every
+      // course, no exceptions. So a course with no marks means the student did not sit it,
+      // which is a zero — it prints 00, grades F, takes a FAIL jury decision and carries its
+      // credits into the GPA like any other failure.
+      //
+      // Primary/secondary do NOT work that way (optional subjects, streams), so there an
+      // unmarked subject stays null and drops out of the average entirely, which is what
+      // the API's own average has always done ("skip unfilled subjects").
+      const isUni = rc.school?.type === 'UNIVERSITY'
       const existingEntries = classSubjects.map((s: Subject) => {
         const existing = rc.entries.find((e: any) => e.subject.id === s.id)
         return {
           subjectId: s.id,
-          score: existing?.score || 0,
-          seq1Score: existing?.seq1Score ?? null,
-          seq2Score: existing?.seq2Score ?? null,
+          score: existing?.score ?? (isUni ? 0 : null),
+          // Missing components read as 0 for the same reason: a course sat with no exam
+          // mark scores nothing for the exam. Only meaningful at a university.
+          seq1Score: existing?.seq1Score ?? (isUni ? 0 : null),
+          seq2Score: existing?.seq2Score ?? (isUni ? 0 : null),
           resitScore: existing?.resitScore ?? null,
           grade: existing?.grade || '',
           remarks: existing?.remarks || ''
@@ -190,7 +221,11 @@ export default function ReportCardDetailPage() {
         if (reportCard?.school.language === 'FR') await updateRemarksApi(String(params.id), undefined, generalRemarksFr)
         else await updateRemarksApi(String(params.id), generalRemarks)
       } else {
-        await saveEntriesApi(String(params.id), { entries })
+        // Unmarked courses go over the wire as 0, exactly as before this fix. The null is
+        // a DISPLAY/GPA distinction only; changing what gets written is a separate question
+        // (saving a card currently materialises a real 0 entry for a course nobody has
+        // marked yet, which is worth revisiting on its own rather than inside a GPA fix).
+        await saveEntriesApi(String(params.id), { entries: entries.map(e => ({ ...e, score: e.score ?? 0 })) })
       }
       showToast(tr('Saved successfully'))
       fetchData()
@@ -268,7 +303,16 @@ export default function ReportCardDetailPage() {
     }
   }
 
-  const avgMaxScore = subjects[0]?.maxScore ?? 20
+  // The scale the AVERAGE is on, which is not always the scale its SUBJECTS are on — only
+  // a university states a raw average; primary and secondary both state it out of 20.
+  // (`isUniversity` proper is declared below, past the null guard; this runs before it.)
+  const avgIsUniversity = reportCard?.school?.type === 'UNIVERSITY'
+  const avgMaxScore = avgIsUniversity ? (subjects[0]?.maxScore ?? 100) : 20
+  // Recomputed live as marks are typed, so it must match the API's saveEntries exactly or
+  // the figure jumps the moment it's saved: coefficient-weighted, and normalised per
+  // subject onto /20 for primary/secondary. Primary marks its subjects raw out of 100 but
+  // states the average out of 20, so skipping the normalisation showed 69.4 where the
+  // saved card says 13.9.
   const average = (() => {
     if (!subjects.length) return 0
     let totalWeighted = 0, totalCoeff = 0
@@ -277,7 +321,9 @@ export default function ReportCardDetailPage() {
       // Skip unless BOTH sequences are filled — API only sets score when seq1 AND seq2 are non-null
       if (!entry || entry.seq1Score == null || entry.seq2Score == null) continue
       const coeff = s.coefficient ?? 1
-      totalWeighted += (entry.score ?? 0) * coeff
+      const raw = entry.score ?? 0
+      const max = s.maxScore ?? 0
+      totalWeighted += (avgIsUniversity ? raw : (max > 0 ? (raw / max) * 20 : 0)) * coeff
       totalCoeff += coeff
     }
     return totalCoeff > 0 ? totalWeighted / totalCoeff : 0
@@ -287,6 +333,13 @@ export default function ReportCardDetailPage() {
   if (!reportCard) return <div className="text-center py-12 text-muted-foreground text-sm">Report card not found.</div>
 
   const isUniversity = reportCard.school.type === 'UNIVERSITY'
+  const isPrimary = reportCard.school.type === 'PRIMARY'
+  // Nursery: a rating per subject and nothing else. Read from the CLASS, not the school —
+  // one primary school runs both modes at once. Every figure this card would otherwise
+  // show (average, grade, position, class average) is meaningless here and is dropped
+  // rather than printed as a dash: ranking three-year-olds is what this mode avoids.
+  const isCompetency = reportCard.gradingMode === 'COMPETENCY'
+  const ratedCount = entries.filter((e) => isCompetencyRating(e.grade)).length
 
   // Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors PrintableReportCard logic
   const semGpaInfo = (() => {
@@ -301,14 +354,25 @@ export default function ReportCardDetailPage() {
     }
     return { gpa: cr > 0 ? pts / cr : 0, credits: cr }
   })()
-  const cgpa = studentCgpa ?? semGpaInfo.gpa
+  // Null on any semester that does not close the year (the API only sends it on the last
+  // one). NOT defaulted to the semester GPA: that is a different figure, and printing it
+  // under a "Cumulative" label is exactly the confusion this rule removes.
+  const cgpa = studentCgpa
+  // What Classification bands. The cumulative once the year has one, otherwise this
+  // semester's own GPA — so the classification always describes a figure actually shown
+  // on this card, and never a cumulative the student does not have yet.
+  const classifiedGpa = studentCgpa ?? semGpaInfo.gpa
 
   // Publish readiness checks — prefer the backend's readiness detail (admin-only)
   // once it loads, since it also catches subjects with zero entries at all, not
   // just entries with a missing sequence score. Falls back to the local, weaker
   // check for non-admins (who never fetch readiness) so their remarks-edit gate
   // still works.
-  const localSeqsFilled = entries.length > 0 && entries.every(e => e.seq1Score != null && e.seq2Score != null)
+  // A competency card has no sequences at all, so "complete" there means every subject
+  // carries a rating — the same rule the API's own publish gate applies.
+  const localSeqsFilled = entries.length > 0 && (isCompetency
+    ? entries.every(e => isCompetencyRating(e.grade))
+    : entries.every(e => e.seq1Score != null && e.seq2Score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!(reportCard.remarks?.trim() || reportCard.remarksFr?.trim())
   // Positions are class-relative — every other active student in this class + term
@@ -341,7 +405,7 @@ export default function ReportCardDetailPage() {
 <div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => router.push('/report-cards')}
-          className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition"
+          className="p-2 text-muted-foreground hover:text-muted-foreground hover:bg-hover rounded-lg transition"
         >
           <ArrowLeft size={20} />
         </button>
@@ -362,7 +426,7 @@ export default function ReportCardDetailPage() {
                   <button
                     onClick={() => setShowUnpublishModal(true)}
                     disabled={unpublishing}
-                    className="text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-md hover:bg-muted hover:text-foreground disabled:opacity-50 transition-colors"
+                    className="text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-md hover:bg-hover hover:text-foreground disabled:opacity-50 transition-colors"
                   >
                     {unpublishing ? tr('Unpublishing…') : tr('Unpublish')}
                   </button>
@@ -436,14 +500,14 @@ export default function ReportCardDetailPage() {
                       the official is sealed and sent by the school itself. */}
                   <button
                     onClick={() => handlePrint('student')}
-                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover transition"
                     title={tr('The copy handed to students at the end of the term')}
                   >
                     <Printer size={14} /> {tr('Print Student Copy')}
                   </button>
                   <button
                     onClick={() => handlePrint('official')}
-                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted transition"
+                    className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover transition"
                     title={tr('The sealed copy the school sends out itself')}
                   >
                     <Printer size={14} /> {tr('Print Official')}
@@ -457,7 +521,7 @@ export default function ReportCardDetailPage() {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-muted disabled:opacity-50 transition"
+                  className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm hover:bg-hover disabled:opacity-50 transition"
                 >
                   <Save size={14} />
                   {saving ? tr('Saving...') : tr('Save Remarks')}
@@ -479,7 +543,7 @@ export default function ReportCardDetailPage() {
                       <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
                         allSeqsFilled ? 'bg-green-100 text-green-700' : 'bg-destructive/10 text-destructive'
                       }`}>
-                        {allSeqsFilled ? '✓' : '✗'} {tr('Sequences')}
+                        {allSeqsFilled ? '✓' : '✗'} {isCompetency ? tr('Ratings') : tr('Sequences')}
                       </span>
                       <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
                         hasRemarks ? 'bg-green-100 text-green-700' : 'bg-destructive/10 text-destructive'
@@ -506,7 +570,26 @@ export default function ReportCardDetailPage() {
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-6">
-        {isUniversity ? (
+        {isCompetency ? (
+          <>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('Subjects')}</p>
+            </div>
+            <div className="bg-card rounded-xl border border-border p-4 text-center">
+              <p className="text-2xl font-bold text-foreground">{ratedCount}/{subjects.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">{tr('rated')}</p>
+            </div>
+            {/* Deliberately where the average and the position would be: says outright that
+                this card has none, instead of leaving a gap that reads as missing data. */}
+            <div className="col-span-2 bg-card rounded-xl border border-border p-4 flex flex-col justify-center">
+              <p className="text-sm font-bold text-foreground">{tr('Assessed by rating')}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {tr('This class is assessed by rating, so its report cards carry no marks, no average and no position.')}
+              </p>
+            </div>
+          </>
+        ) : isUniversity ? (
           <>
             <div className="bg-card rounded-xl border border-border p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{subjects.length}</p>
@@ -516,12 +599,19 @@ export default function ReportCardDetailPage() {
               <p className="text-2xl font-bold text-foreground">{semGpaInfo.gpa.toFixed(2)}</p>
               <p className="text-xs text-muted-foreground mt-1">{tr('Semester GPA')}</p>
             </div>
+            {/* CGPA is the year-end figure, so only the closing semester carries it. */}
+            {cgpa != null && (
+              <div className="bg-card rounded-xl border border-border p-4 text-center">
+                <p className="text-2xl font-bold text-foreground">{cgpa.toFixed(2)}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tr('Cumulative GPA')}</p>
+              </div>
+            )}
+            {/* Classification shows on every semester: it answers "where does this student
+                stand", which is worth knowing in December as much as in June. It bands the
+                CGPA once there is one, and this semester's own GPA before that, so the
+                figure it describes is always the one on the card beside it. */}
             <div className="bg-card rounded-xl border border-border p-4 text-center">
-              <p className="text-2xl font-bold text-foreground">{cgpa.toFixed(2)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{tr('Cumulative GPA')}</p>
-            </div>
-            <div className="bg-card rounded-xl border border-border p-4 text-center">
-              <p className="text-lg font-bold text-foreground leading-tight">{classificationForGpa(cgpa, classificationBands)}</p>
+              <p className="text-lg font-bold text-foreground leading-tight">{classificationForGpa(classifiedGpa, classificationBands)}</p>
               <p className="text-xs text-muted-foreground mt-1">{tr('Classification')}</p>
             </div>
           </>
@@ -579,7 +669,7 @@ export default function ReportCardDetailPage() {
         <>
           <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
             <div className="px-4 py-3 bg-muted border-b border-border flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-foreground">{isUniversity ? tr('Course Scores') : tr('Subject Scores')}</h3>
+              <h3 className="text-sm font-semibold text-foreground">{isCompetency ? tr('Subject Ratings') : isUniversity ? tr('Course Scores') : tr('Subject Scores')}</h3>
               {/* This table is read-only; marks are entered on the class sheet. Without a
                   way through, a card whose marks are already complete offered no route to
                   correct one at all: the only other path is Report Cards > class > subject
@@ -588,10 +678,10 @@ export default function ReportCardDetailPage() {
               {canEditMarks && (
                 <button
                   onClick={() => router.push(`/report-cards/class/${encodeURIComponent(reportCard.student.classLevel)}?termId=${reportCard.term.id}&termName=${encodeURIComponent(reportCard.term.name)}`)}
-                  className="text-xs font-medium border border-border bg-card text-foreground px-3 py-1.5 rounded-md hover:bg-muted transition-colors whitespace-nowrap"
+                  className="text-xs font-medium border border-border bg-card text-foreground px-3 py-1.5 rounded-md hover:bg-hover transition-colors whitespace-nowrap"
                   title={tr('Marks are entered on the class sheet')}
                 >
-                  {tr('Edit marks')}
+                  {isCompetency ? tr('Edit ratings') : tr('Edit marks')}
                 </button>
               )}
             </div>
@@ -599,26 +689,57 @@ export default function ReportCardDetailPage() {
               <thead className="border-b border-gray-100 dark:border-border">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{isUniversity ? tr('Course') : tr('Subject')}</th>
-                  {isUniversity ? (
-                    <>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">CA / 30</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Exam / 70</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Total / 100</th>
-                    </>
-                  ) : (
-                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Score')}</th>
-                  )}
-                  <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{isUniversity ? tr('Credit') : tr('Coeff')}</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Grade')}</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Remarks')}</th>
+                  {/* One column, and no coefficient: a rating is not weighted into anything. */}
+                  {isCompetency ? (
+                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Rating')}</th>
+                  ) : (<>
+                    {isUniversity ? (
+                      <>
+                        <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">CA / 30</th>
+                        <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Exam / 70</th>
+                        <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Total / 100</th>
+                      </>
+                    ) : (
+                      <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Score')}</th>
+                    )}
+                    <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{isUniversity ? tr('Credit') : tr('Coeff')}</th>
+                    {/* What this course actually contributes to the GPA, which credit alone
+                        does not show: a 2-credit course carries 8.0 at an A and 0 at an F. */}
+                    {isUniversity && <th className="text-center px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Weight')}</th>}
+                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Grade')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">{tr('Remarks')}</th>
+                  </>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {subjects.map((subject) => {
-                  const entry = entries.find(e => e.subjectId === subject.id)
-                  const bothFilled = entry?.seq1Score != null && entry?.seq2Score != null
+                {isCompetency && subjects.map((subject) => {
+                  const rating = entries.find(e => e.subjectId === subject.id)?.grade
                   return (
-                    <tr key={subject.id} className="hover:bg-muted dark:hover:bg-muted">
+                    <tr key={subject.id} className="hover:bg-hover">
+                      <td className="px-4 py-3 text-sm font-medium text-foreground">{subject.name}</td>
+                      <td className="px-4 py-3">
+                        {isCompetencyRating(rating) ? (
+                          <span className="text-xs font-bold px-2.5 py-1 rounded"
+                            style={{
+                              backgroundColor: RATING_COLORS[rating as CompetencyRating].bg,
+                              color: RATING_COLORS[rating as CompetencyRating].text,
+                            }}>
+                            {tr(rating)}
+                          </span>
+                        ) : <span className="text-sm text-muted-foreground">{tr('Not recorded')}</span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+                {!isCompetency && subjects.map((subject) => {
+                  const entry = entries.find(e => e.subjectId === subject.id)
+                  // Marked at all, not marked completely. A course with a CA and no Exam
+                  // yet still has a total (the missing part counts as 0), and it counts
+                  // toward the GPA — so the card has to show the same figure the GPA used
+                  // rather than a dash. Only a course with NEITHER component stays blank.
+                  const hasMark = entry?.score != null
+                  return (
+                    <tr key={subject.id} className="hover:bg-hover">
                       <td className="px-4 py-3 text-sm font-medium text-foreground">{subject.name}</td>
                       {isUniversity ? (
                         <>
@@ -633,14 +754,14 @@ export default function ReportCardDetailPage() {
                               : <span className="text-sm text-muted-foreground">—</span>}
                           </td>
                           <td className="px-4 py-3">
-                            {bothFilled
+                            {hasMark
                               ? <span className="text-sm font-semibold text-foreground">{entry!.score ?? 0}<span className="text-muted-foreground text-xs ml-1 font-normal">/100</span></span>
                               : <span className="text-sm text-muted-foreground">—</span>}
                           </td>
                         </>
                       ) : (
                         <td className="px-4 py-3">
-                          {!bothFilled
+                          {!hasMark
                             ? <span className="text-sm text-muted-foreground">—</span>
                             : <span className="text-sm text-foreground">{entry?.score ?? 0}<span className="text-muted-foreground text-xs ml-1">/{subject.maxScore}</span></span>
                           }
@@ -651,8 +772,22 @@ export default function ReportCardDetailPage() {
                           {isUniversity ? (subject.credit ?? 0) : `×${subject.coefficient ?? 1}`}
                         </span>
                       </td>
+                      {/* grade point × credit, exactly as PrintableReportCard's `weighted`
+                          column computes it, so the screen and the printed card can never
+                          disagree. Summing this column and dividing by the credits is the
+                          semester GPA shown above. */}
+                      {isUniversity && (
+                        <td className="px-4 py-3 text-center">
+                          {(() => {
+                            const gp = entry?.score == null ? null : gradePointForScore20(entry.score, gradingRanges)
+                            return gp == null
+                              ? <span className="text-sm text-muted-foreground">—</span>
+                              : <span className="text-sm font-semibold text-foreground tabular-nums">{(gp * (subject.credit ?? 0)).toFixed(1)}</span>
+                          })()}
+                        </td>
+                      )}
                       <td className="px-4 py-3">
-                        {!bothFilled
+                        {!hasMark
                           ? <span className="text-sm text-muted-foreground">—</span>
                           : (() => {
                               const gr = gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges)
@@ -667,7 +802,7 @@ export default function ReportCardDetailPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-sm text-muted-foreground dark:text-muted-foreground">
-                          {!bothFilled ? '—' : gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges).remark || '—'}
+                          {!hasMark ? '—' : gradeFromScore(entry?.score || 0, subject.maxScore, gradingRanges).remark || '—'}
                         </span>
                       </td>
                     </tr>
@@ -732,15 +867,24 @@ export default function ReportCardDetailPage() {
             </div>
             {(() => { const isFr = reportCard.school.language === 'FR'; return (canEditRemarks || canAdminEditRemarks) ? (
               <>
+                {/* The AI draft is written FROM the average, so a rated card has nothing to
+                    generate one out of. The button is dropped rather than shown permanently
+                    disabled, which would read as something broken. */}
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs text-muted-foreground">{tr('Average:')} {reportCard.average != null ? reportCard.average.toFixed(1) : '—'}/20 · {tr('Language:')} {isFr ? tr('French') : tr('English')}</span>
-                  <button
-                    onClick={handleGenerateRemarks}
-                    disabled={generatingRemarks || reportCard.average == null}
-                    title={reportCard.average == null ? tr('Average not computed yet — fill all sequences first') : tr('Generate a draft from the average')}
-                    className="flex items-center gap-1.5 text-xs border border-primary/30 text-primary px-3 py-1.5 rounded-lg hover:bg-primary/10 disabled:opacity-50 transition">
-                    <Sparkles size={12} /> {generatingRemarks ? tr('Generating…') : tr('Generate with AI')}
-                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    {isCompetency
+                      ? `${tr('Rated:')} ${ratedCount}/${subjects.length} · ${tr('Language:')} ${isFr ? tr('French') : tr('English')}`
+                      : `${tr('Average:')} ${reportCard.average != null ? reportCard.average.toFixed(1) : '—'}/${isPrimary ? 100 : 20} · ${tr('Language:')} ${isFr ? tr('French') : tr('English')}`}
+                  </span>
+                  {!isCompetency && (
+                    <button
+                      onClick={handleGenerateRemarks}
+                      disabled={generatingRemarks || reportCard.average == null}
+                      title={reportCard.average == null ? tr('Average not computed yet — fill all sequences first') : tr('Generate a draft from the average')}
+                      className="flex items-center gap-1.5 text-xs border border-primary/30 text-primary px-3 py-1.5 rounded-lg hover:bg-primary/10 disabled:opacity-50 transition">
+                      <Sparkles size={12} /> {generatingRemarks ? tr('Generating…') : tr('Generate with AI')}
+                    </button>
+                  )}
                 </div>
                 <textarea
                   rows={3}
@@ -754,7 +898,9 @@ export default function ReportCardDetailPage() {
             ) : (isClassMaster || isAdmin) && !allSeqsFilled && reportCard.status === 'DRAFT' ? (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm text-amber-700 font-medium">{tr('Cannot add remarks yet')}</p>
-                <p className="text-xs text-amber-600 mt-0.5">{tr('All subject sequences must be filled before you can add general remarks.')}</p>
+                <p className="text-xs text-amber-600 mt-0.5">{isCompetency
+                  ? tr('Every subject must be rated before you can add general remarks.')
+                  : tr('All subject sequences must be filled before you can add general remarks.')}</p>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">{(isFr ? reportCard.remarksFr : reportCard.remarks) || <span className="italic">{tr('No remarks yet')}</span>}</p>
@@ -799,15 +945,19 @@ export default function ReportCardDetailPage() {
             position={reportCard.position}
             classSize={reportCard.classSize ?? undefined}
             classAverage={reportCard.classAverage ?? undefined}
+            bestAverage={reportCard.bestAverage ?? undefined}
+            studentPhoto={reportCard.student.photo ?? undefined}
             annualAverage={reportCard.annualAverage ?? undefined}
             annualPosition={reportCard.annualPosition ?? undefined}
             annualClassSize={reportCard.annualClassSize ?? undefined}
+            promotionScale={promotionScale}
             config={templateConfig}
             gradeBands={gradingRanges}
             classificationBands={classificationBands}
             variant={variant}
             cgpa={studentCgpa ?? undefined}
             subjectStats={subjectStats}
+            gradingMode={reportCard.gradingMode}
           />
         </div>,
         document.body

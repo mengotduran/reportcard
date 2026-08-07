@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, type LucideIcon } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, CalendarCheck, type LucideIcon } from 'lucide-react'
 import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
@@ -215,8 +215,10 @@ export default function SettingsPage() {
   })
   const [loadingInfo, setLoadingInfo] = useState(true)
   const [savingInfo, setSavingInfo] = useState(false)
-  const [thresholdValue, setThresholdValue] = useState<string>(school?.repeatThreshold != null ? String(school.repeatThreshold) : '')
-  const [savingThreshold, setSavingThreshold] = useState(false)
+  // Minutes after a period starts before it counts as missed. Blank = the older rule
+  // (changeable until the period ends), which is what every school starts on.
+  const [graceValue, setGraceValue] = useState<string>(school?.absenceGraceMinutes != null ? String(school.absenceGraceMinutes) : '')
+  const [savingGrace, setSavingGrace] = useState(false)
   // Who records marks. University only: some keep marks out of teachers' hands so the
   // person who teaches a course never enters its marks.
   const [marksMode, setMarksMode] = useState<'TEACHERS' | 'ADMIN_ONLY'>((school as any)?.marksEntryMode ?? 'TEACHERS')
@@ -254,7 +256,7 @@ export default function SettingsPage() {
         phone: s.phone ?? '', address: s.address ?? '', website: s.website ?? '',
         authorizationNumber: s.authorizationNumber ?? '',
       })
-      setThresholdValue(s.repeatThreshold != null ? String(s.repeatThreshold) : '')
+      setGraceValue(s.absenceGraceMinutes != null ? String(s.absenceGraceMinutes) : '')
       setMarksMode((s as any).marksEntryMode ?? 'TEACHERS')
       setMarksSwitches(res.data.marksEntrySwitches ?? null)
       setMarksHistory(res.data.marksEntryModeHistory ?? [])
@@ -314,14 +316,25 @@ export default function SettingsPage() {
     handleSaveMarksMode(mode)
   }
 
-  const handleSaveThreshold = async () => {
-    setSavingThreshold(true)
+  // Worked example against a concrete start time, because "15 minutes" alone doesn't tell
+  // an admin what it does to their actual timetable.
+  const graceExample = (() => {
+    const mins = Number(graceValue)
+    if (!Number.isFinite(mins) || mins < 0) return '--:--'
+    const total = 7 * 60 + 30 + mins
+    return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+  })()
+
+  const handleSaveGrace = async () => {
+    setSavingGrace(true)
     try {
-      const res = await api.put('/school/settings', { repeatThreshold: thresholdValue === '' ? null : Number(thresholdValue) })
+      const res = await api.put('/school/settings', { absenceGraceMinutes: graceValue === '' ? null : Number(graceValue) })
       updateSchool(res.data.school)
-      showToast(t('Decision threshold saved'))
-    } catch { showToast(t('Failed to save'), 'error') }
-    finally { setSavingThreshold(false) }
+      showToast(t('Attendance setting saved'))
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to save'), 'error')
+    } finally { setSavingGrace(false) }
   }
 
   const handleSaveOfficialText = async () => {
@@ -374,26 +387,45 @@ export default function SettingsPage() {
     { id: 'profile', label: t('School Profile') },
     { id: 'branding', label: t('Branding') },
     { id: 'reportcards', label: t('Report Cards') },
+    { id: 'attendance', label: t('Attendance') },
     ...(isOfflineInstall ? [{ id: 'data', label: t('Data & Backup') }] : []),
   ]
   const scrollRef = useRef<HTMLDivElement>(null)
   const [activeSection, setActiveSection] = useState('account')
   useEffect(() => {
-    const els = sections
-      .map(s => document.getElementById(s.id))
+    const root = scrollRef.current
+    if (!root) return
+    const ids = sections.map(s => s.id)
+    const els = ids
+      .map(id => document.getElementById(id))
       .filter((el): el is HTMLElement => el != null)
+
+    // The detection band is only the top 10–30% of the column, and the LAST section is
+    // shorter than the distance left to scroll, so it can never climb into that band —
+    // scrolled fully to the bottom, the (very tall) section above it was still spanning
+    // the band and stayed highlighted. Hitting the bottom means you are looking at the
+    // last section, whatever the geometry says, so treat that as authoritative.
+    const atBottom = () => root.scrollTop + root.clientHeight >= root.scrollHeight - 4
+
     const observer = new IntersectionObserver(
       entries => {
+        if (atBottom()) { setActiveSection(ids[ids.length - 1]); return }
         const visible = entries
           .filter(e => e.isIntersecting)
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
         if (visible[0]) setActiveSection(visible[0].target.id)
       },
       // Root is the inner scroll column (below), not the window — only it scrolls.
-      { root: scrollRef.current, rootMargin: '-10% 0px -70% 0px' },
+      { root, rootMargin: '-10% 0px -70% 0px' },
     )
     els.forEach(el => observer.observe(el))
-    return () => observer.disconnect()
+
+    // The observer only fires when an intersection actually changes, which it doesn't
+    // once you're parked at the bottom, so the bottom is also checked on plain scroll.
+    const onScroll = () => { if (atBottom()) setActiveSection(ids[ids.length - 1]) }
+    root.addEventListener('scroll', onScroll, { passive: true })
+
+    return () => { observer.disconnect(); root.removeEventListener('scroll', onScroll) }
   }, [isOfflineInstall])
 
   return (
@@ -435,7 +467,10 @@ export default function SettingsPage() {
 
             {/* My Account */}
             <div className={CARD}>
-              <CardHead icon={UserCircle} title={t('My Account')} desc={t('Used to sign in — not the same as the school email below')} />
+              <CardHead icon={UserCircle} title={t('My Account')}
+                desc={user?.email
+                  ? t('Used to sign in — not the same as the school email below')
+                  : `${t('You currently sign in with the username')} "${(user as any)?.username}". ${t('Add an email below to also enable email-based password recovery.')}`} />
               <div className="mt-5">
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Your Login Email')} <span className="text-destructive">*</span></label>
                 <input
@@ -478,7 +513,7 @@ export default function SettingsPage() {
                       className={`px-5 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                         active
                           ? 'bg-primary text-white border-primary'
-                          : 'border-border text-muted-foreground hover:bg-muted'
+                          : 'border-border text-muted-foreground hover:bg-hover'
                       }`}
                     >
                       {lang === 'EN' ? 'English' : 'Français'}
@@ -743,44 +778,25 @@ export default function SettingsPage() {
           <section id="reportcards" className="scroll-mt-8 space-y-4">
             <h4 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">{t('Report Cards')}</h4>
 
-            {/* Academic Decisions */}
+            {/* Academic Decisions — now a CTA to its own page, same pattern as Grading
+                Scale below: Pass / Promoted on Trial / Repeat wording is per-school and
+                needs more room (3 labels + a trial minimum) than fits inline here. */}
             <div className={CARD}>
               <CardHead
                 icon={GraduationCap}
-                title={t('Academic Decisions (PASS / REPEAT)')}
+                title={t('Academic Decisions (Pass / Trial / Repeat)')}
                 desc={isUniversity
-                  ? t('Set the minimum CGPA a student needs to continue. When you end the academic year, PASS or REPEAT is written automatically on every report card based on each student\'s cumulative GPA.')
-                  : t('Set the minimum annual average a student needs to pass. When you end the academic year, PASS or REPEAT is written automatically on every report card.')}
+                  ? t('Set the minimum CGPA for a trial promotion, and the wording shown for Pass, Promoted on Trial, and Repeat. When you end the academic year, the decision is written automatically on every report card based on each student\'s cumulative GPA.')
+                  : t('Set the minimum annual average for a trial promotion, and the wording shown for Pass, Promoted on Trial, and Repeat. When you end the academic year, the decision is written automatically on every report card.')}
+                action={
+                  <button
+                    onClick={() => router.push('/promotion-scale')}
+                    className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {t('Configure')} <ArrowRight size={14} />
+                  </button>
+                }
               />
-              <div className="mt-5 flex items-end gap-3">
-                <div className="flex-1 max-w-xs">
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    {isUniversity ? t('Min CGPA to continue') : t('Min average to pass (0 – 20)')}
-                  </label>
-                  <input
-                    type="number"
-                    min={0} max={isUniversity ? 4 : 20} step={isUniversity ? 0.1 : 0.5}
-                    placeholder={isUniversity ? 'e.g. 2.0' : 'e.g. 10'}
-                    value={thresholdValue}
-                    onChange={(e) => setThresholdValue(e.target.value)}
-                    className={FIELD}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {thresholdValue !== ''
-                      ? isUniversity
-                        ? `Students with CGPA below ${thresholdValue} will be marked REPEAT.`
-                        : `Students averaging below ${thresholdValue} will be marked REPEAT.`
-                      : t('Leave blank to disable auto-decisions.')}
-                  </p>
-                </div>
-                <button
-                  onClick={handleSaveThreshold}
-                  disabled={savingThreshold}
-                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
-                >
-                  {savingThreshold ? t('Saving…') : t('Save')}
-                </button>
-              </div>
             </div>
 
             {/* Who enters marks. University only: some universities record marks centrally
@@ -799,7 +815,7 @@ export default function SettingsPage() {
                     { value: 'ADMIN_ONLY' as const, label: t('Administration only'), hint: t('Teachers can enter CA marks only. Exam and Resit marks are the administration\'s. Administrators can enter all three. You can still grant one teacher full access to one class when you need to.') },
                   ]).map(opt => (
                     <label key={opt.value}
-                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${marksMode === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-hover/50'}`}>
                       <input type="radio" name="marksEntryMode" value={opt.value}
                         checked={marksMode === opt.value}
                         // Cap reached: the unselected option is disabled rather than
@@ -959,7 +975,7 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={() => downloadExampleTemplateApi().catch(() => showToast(t('Download failed'), 'error'))}
-                    className="flex items-center gap-1.5 text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-lg hover:bg-muted transition flex-shrink-0 ml-4"
+                    className="flex items-center gap-1.5 text-xs border border-border text-muted-foreground px-3 py-1.5 rounded-lg hover:bg-hover transition flex-shrink-0 ml-4"
                   >
                     <Download size={13} /> {t('Example template')}
                   </button>
@@ -1101,6 +1117,46 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </section>
+
+          {/* ══ Attendance ═══════════════════════════════════════════════ */}
+          <section id="attendance" className="scroll-mt-8 space-y-4">
+            <h4 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">{t('Attendance')}</h4>
+
+            <div className={CARD}>
+              <CardHead
+                icon={CalendarCheck}
+                title={t('When a period counts as missed')}
+                desc={t('How long after a period starts a teacher can still arrive and count as having taught it. Once that time is up the period is missed, and nobody, including you, can mark them present for it again. Each period is judged on its own, so on a double period a teacher who arrives late loses only the first one.')}
+              />
+              <div className="mt-5 flex items-end gap-3">
+                <div className="flex-1 max-w-xs">
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    {t('Minutes after a period starts')}
+                  </label>
+                  <input
+                    type="number"
+                    min={0} max={240} step={5}
+                    placeholder={t('e.g. 15')}
+                    value={graceValue}
+                    onChange={(e) => setGraceValue(e.target.value)}
+                    className={FIELD}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {graceValue !== ''
+                      ? `${t('A period starting 07:30 is missed for good at')} ${graceExample}.`
+                      : t('Leave blank to keep the current rule: a period stays changeable until it ends.')}
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveGrace}
+                  disabled={savingGrace}
+                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
+                >
+                  {savingGrace ? t('Saving…') : t('Save')}
+                </button>
+              </div>
+            </div>
           </section>
 
           {/* ══ Data & Backup (offline installs only) ════════════════════ */}

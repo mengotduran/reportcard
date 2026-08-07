@@ -45,6 +45,18 @@ export const updateStudentApi = async (id: string, data: {
   return res.data
 }
 
+export const uploadStudentPhotoApi = async (id: string, file: File) => {
+  const formData = new FormData()
+  formData.append('photo', file)
+  const res = await api.post(`/students/${id}/photo`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return res.data
+}
+
+export const removeStudentPhotoApi = async (id: string) => {
+  const res = await api.delete(`/students/${id}/photo`)
+  return res.data
+}
+
 export const bulkPromoteStudentsApi = async (studentIds: string[]): Promise<{ promoted: number; message: string }> => {
   const res = await api.post('/students/bulk-promote', { studentIds })
   return res.data
@@ -99,9 +111,12 @@ export const downloadStudentImportTemplateApi = async (): Promise<Blob> => {
   return res.data
 }
 
-export const previewStudentImportApi = async (file: File): Promise<ImportPreviewResult> => {
+// `programme` is the Day/Evening filter the admin is on. The sheet has no column for the
+// sitting, so this is what tells a department that runs both which one to import into.
+export const previewStudentImportApi = async (file: File, programme?: string): Promise<ImportPreviewResult> => {
   const formData = new FormData()
   formData.append('file', file)
+  if (programme) formData.append('programme', programme)
   const res = await api.post('/students/import/preview', formData)
   return res.data
 }

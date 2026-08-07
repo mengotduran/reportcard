@@ -7,6 +7,8 @@ import PrintableReportCard, { PrintEntry, TranscriptSemesterData } from '@/compo
 import { useAuthStore } from '@/lib/store/auth.store'
 import { ArrowLeft, Printer } from 'lucide-react'
 import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor, DocVariant } from '@/lib/api/reportCardTemplate'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
+import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 
 // Build a per-semester bundle (subjects + entries, PrintableReportCard's shapes) from
 // one transcript report card. `subjects` is derived from the entries themselves since
@@ -15,7 +17,7 @@ function toSemesterData(card?: TranscriptReportCard): TranscriptSemesterData | u
   if (!card) return undefined
   return {
     term: { name: card.term.name, session: card.term.session },
-    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined, coefficient: e.subject.coefficient ?? undefined })),
+    subjects: card.entries.map(e => ({ id: e.subject.id, name: e.subject.name, code: e.subject.code, credit: e.subject.credit ?? undefined, coefficient: e.subject.coefficient ?? undefined, maxScore: e.subject.maxScore ?? undefined })),
     entries: card.entries.map((e): PrintEntry => ({
       subjectId: e.subject.id, score: e.score ?? 0, seq1Score: e.seq1Score, seq2Score: e.seq2Score,
       resitScore: e.resitScore, grade: e.grade ?? '', remarks: '',
@@ -38,6 +40,9 @@ export default function AnnualTranscriptPage() {
   // deliberate act (it gets sealed and sent), so it should be the one you opt into.
   const [variant, setVariant] = useState<DocVariant>('student')
   const [pendingPrint, setPendingPrint] = useState(false)
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
+  // A nursery transcript is three terms of ratings — no marks, no averages, no ranking.
+  const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
   const printRef = useRef<HTMLDivElement>(null)
 
   const session = searchParams.get('session') ?? undefined
@@ -47,9 +52,13 @@ export default function AnnualTranscriptPage() {
     Promise.all([
       getStudentTranscriptApi(studentId, session),
       getTemplateApi().catch(() => ({ config: {} })),
+      getPromotionScaleApi().catch(() => null),
+      getClassLevelsApi().catch(() => ({ classLevels: [] })),
     ])
-      .then(([transcript, tpl]) => {
+      .then(([transcript, tpl, promoScale, levels]) => {
         setData(transcript)
+        setPromotionScale(promoScale)
+        setGradingMode(levels.classLevels.find((c) => c.name === transcript.student.classLevel)?.gradingMode ?? 'NUMERIC')
         const saved = tpl.config as Partial<TemplateConfig> | undefined
         // The school's transcript design lives under saved.transcript (the top
         // level holds the standard/ledger report-card design; legacy rows from
@@ -66,10 +75,14 @@ export default function AnnualTranscriptPage() {
         const finalConfig: TemplateConfig = hasTranscriptSections
           ? (savedT as TemplateConfig)
           : { ...getDefaultTranscriptLayout(sType), ...(primaryColor ? { primaryColor } : {}), layoutType: 'transcript' }
-        // "Failing marks in red" is a school-wide policy stored at the top level, not
-        // part of the transcript design — read it from there so the transcript matches
-        // the report card (see the designer's handleSave).
+        // "Failing marks in red" is school-wide policy stored at the top level, not part
+        // of the transcript design — read it from there so the transcript matches the
+        // report card (see the designer's handleSave). "Show Decision" is the opposite on
+        // purpose: per-design, so finalConfig's OWN value (from savedT, or unset/false on
+        // the default layout) is left as-is rather than pulled from the top level.
         finalConfig.highlightFailingRed = saved?.highlightFailingRed ?? true
+        finalConfig.showStudentPhoto = saved?.showStudentPhoto ?? true
+        finalConfig.studentPhotoSize = saved?.studentPhotoSize
         setConfig(finalConfig)
       })
       .catch(() => setError('Failed to load transcript.'))
@@ -106,6 +119,7 @@ export default function AnnualTranscriptPage() {
     </div>
   )
   const isUniversity = (data.school.type ?? 'UNIVERSITY') === 'UNIVERSITY'
+  const isPrimary = data.school.type === 'PRIMARY'
   const periodWord = isUniversity ? 'semester' : 'term'
   // Safety net for direct URL access — the report-cards list already disables its
   // transcript button until every period is published, but nothing stops someone
@@ -133,9 +147,17 @@ export default function AnnualTranscriptPage() {
   // (Credits/CGPA/Remark at a university, Annual Average/Grade elsewhere).
   const allSubjects = periods.flatMap(p => p.subjects)
   const allEntries = periods.flatMap(p => p.entries)
-  // Annual average = mean of the year's term averages, each coefficient-weighted.
+  // Annual average = mean of the year's term averages. Secondary weights each term's
+  // average by subject coefficient; primary (Test+Exam, no coefficient — see
+  // reportcard.controller.ts saveEntries) takes a plain mean of subject totals instead.
   // University transcripts summarise by CGPA instead and ignore this.
   const termAverages = periods.map(p => {
+    if (isPrimary) {
+      const filled = p.subjects
+        .map(subj => p.entries.find(x => x.subjectId === subj.id))
+        .filter((e): e is typeof p.entries[number] => e?.score != null)
+      return filled.length > 0 ? filled.reduce((s, e) => s + e.score!, 0) / filled.length : 0
+    }
     let coef = 0, weighted = 0
     for (const subj of p.subjects) {
       const e = p.entries.find(x => x.subjectId === subj.id)
@@ -160,6 +182,7 @@ export default function AnnualTranscriptPage() {
       officialRightTextEn: data.school.officialRightTextEn, officialRightTextFr: data.school.officialRightTextFr,
     },
     student: { name: data.student.name, studentId: data.student.studentId, classLevel: data.student.classLevel, gender: data.student.gender ?? undefined },
+    studentPhoto: data.student.photo ?? undefined,
     term: { name: '', session: data.session },
     subjects: allSubjects,
     entries: allEntries,
@@ -167,11 +190,19 @@ export default function AnnualTranscriptPage() {
     // The document-level average is the ANNUAL one (each table resolves its own period's
     // average itself). Universities summarise by CGPA and never read this.
     average: annualAverage,
+    // The transcript IS the annual document — every printout of it has a full year's
+    // worth of terms behind it, so this is always the same figure as `average` above.
+    // Only used to gate Decision's live PASS/TRIAL/REPEAT computation (see
+    // PrintableReportCard's resolveStat), same rule the report card's own Third Term
+    // card uses.
+    annualAverage,
     config,
     gradeBands: data.gradingScale,
     classificationBands: data.classificationBands,
     transcriptSemesters: periodData,
     variant,
+    promotionScale,
+    gradingMode,
   }
 
   return (
@@ -215,7 +246,7 @@ export default function AnnualTranscriptPage() {
             <button
               onClick={() => handlePrint('student')}
               disabled={printing}
-              className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition disabled:opacity-50"
+              className="flex items-center gap-2 border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-hover transition disabled:opacity-50"
               title="The copy handed to students at the end of the term"
             >
               <Printer size={15} />

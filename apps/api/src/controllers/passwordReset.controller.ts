@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import prisma from '../config/prisma'
 import { sendPasswordResetEmail } from '../utils/email'
 import { hashToken, generateRawToken, RESET_TOKEN_TTL_MS as TOKEN_TTL_MS } from '../utils/resetToken'
+import { validateNewPassword } from '../utils/passwordValidation'
 
 // A resend within the same short window is almost always a double-click or an
 // impatient refresh, not a genuine second request — skip re-sending (and
@@ -20,7 +21,10 @@ export const forgotPassword = async (req: Request, res: Response) => {
     if (!email) { res.status(400).json({ message: 'Email is required' }); return }
 
     const user = await prisma.user.findUnique({ where: { email } })
-    if (!user || !user.isActive) { res.json(genericResponse); return }
+    // A found row's email always equals the non-empty string we searched for (checked above),
+    // so `!user.email` is unreachable — narrows the type for sendPasswordResetEmail below,
+    // and a username-only account (no email on file) simply never matches this lookup at all.
+    if (!user || !user.isActive || !user.email) { res.json(genericResponse); return }
 
     const alreadySentRecently = user.resetTokenExpiresAt != null
       && user.resetTokenExpiresAt.getTime() - Date.now() > TOKEN_TTL_MS - RESEND_COOLDOWN_MS
@@ -48,7 +52,8 @@ export const resetPassword = async (req: Request, res: Response) => {
     const token = String(req.body.token ?? '')
     const newPassword = String(req.body.newPassword ?? '')
     if (!token) { res.status(400).json({ message: 'Reset token is required' }); return }
-    if (newPassword.length < 6) { res.status(400).json({ message: 'Password must be at least 6 characters' }); return }
+    const passwordError = validateNewPassword(newPassword)
+    if (passwordError) { res.status(400).json({ message: passwordError }); return }
 
     const user = await prisma.user.findUnique({ where: { resetTokenHash: hashToken(token) } })
     if (!user || !user.resetTokenExpiresAt || user.resetTokenExpiresAt.getTime() < Date.now()) {

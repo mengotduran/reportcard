@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { getSubjectsApi } from '@/lib/api/subjects'
-import { getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
+import { getMarksExportApi, MarksExportStudent, getClassOverviewApi } from '@/lib/api/reportcards'
+import { getClassLevelsApi } from '@/lib/api/classLevels'
 import { ArrowLeft, BookOpen, Download } from 'lucide-react'
 import { seqFull } from '@/lib/sequences'
 import { useT, useLang } from '@/lib/i18n'
@@ -29,15 +30,28 @@ export default function ClassSubjectsPage() {
   const [selectedSeq, setSelectedSeq] = useState(0)
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
+  const [studentCount, setStudentCount] = useState<number | null>(null)
+  // A nursery class is rated, not marked: it has no sequences to choose between, so the
+  // selector below is hidden rather than shown with two meaningless options.
+  const [isCompetency, setIsCompetency] = useState(false)
   const { toast, showToast, hideToast } = useToast()
+  const noStudents = studentCount === 0
 
   useEffect(() => {
-    getSubjectsApi()
-      // A course scoped to one semester (university) only counts for that semester;
-      // a subject with no term (primary/secondary) always counts — see Subject.term.
-      .then((data) => setSubjects(data.subjects.filter((s: Subject) => s.classLevel === classLevel && (s.term == null || s.term === termName))))
-      .finally(() => setLoading(false))
-  }, [classLevel, termName])
+    Promise.all([
+      getSubjectsApi()
+        // A course scoped to one semester (university) only counts for that semester;
+        // a subject with no term (primary/secondary) always counts — see Subject.term.
+        .then((data) => setSubjects(data.subjects.filter((s: Subject) => s.classLevel === classLevel && (s.term == null || s.term === termName)))),
+      // Whether there's anyone to grade — gates whether a subject below can be entered at all.
+      termId ? getClassOverviewApi(termId, classLevel).then((r) => {
+        setStudentCount(r.students.length)
+        setIsCompetency(r.gradingMode === 'COMPETENCY')
+      }) : getClassLevelsApi().then((r) => {
+        setIsCompetency(r.classLevels.find((c) => c.name === classLevel)?.gradingMode === 'COMPETENCY')
+      }).catch(() => {}),
+    ]).finally(() => setLoading(false))
+  }, [classLevel, termName, termId])
 
   const handleExportMarks = async () => {
     if (!termId) { showToast(t('No term selected'), 'error'); return }
@@ -69,7 +83,7 @@ export default function ClassSubjectsPage() {
       {/* Header */}
       <div className="mb-6">
         <button onClick={() => router.back()}
-          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition inline-flex">
+          className="p-2 -ml-2 mb-2 text-muted-foreground hover:text-foreground hover:bg-hover rounded-lg transition inline-flex">
           <ArrowLeft size={20} />
         </button>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -80,16 +94,19 @@ export default function ClassSubjectsPage() {
                 <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">{termName}</span>
               )}
             </div>
-            <p className="text-sm text-muted-foreground">{t('Select a sequence and subject to enter marks')}</p>
+            <p className="text-sm text-muted-foreground">
+              {isCompetency ? t('Select a subject to record ratings') : t('Select a sequence and subject to enter marks')}
+            </p>
           </div>
           <button onClick={handleExportMarks} disabled={exporting}
-            className="flex items-center justify-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition flex-shrink-0 sm:ml-auto">
+            className="flex items-center justify-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 transition flex-shrink-0 sm:ml-auto">
             <Download size={16} /> {exporting ? t('Exporting...') : t('Export marks')}
           </button>
         </div>
       </div>
 
       {/* Sequence selector */}
+      {!isCompetency && (
       <div className="bg-card rounded-xl border border-border p-5 mb-5">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
           {isUniversity ? t('Select Assessment') : t('Select Sequence')}
@@ -107,6 +124,15 @@ export default function ClassSubjectsPage() {
           ))}
         </div>
       </div>
+      )}
+
+      {/* No students yet — every subject below would open onto an empty marks sheet, so
+          say so up front rather than letting the admin discover it one click at a time. */}
+      {!loading && noStudents && subjects.length > 0 && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-5">
+          <p className="text-sm text-amber-800">{t('No students in this class yet — add students before entering marks.')}</p>
+        </div>
+      )}
 
       {/* Subject list */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -123,15 +149,19 @@ export default function ClassSubjectsPage() {
           <div className="divide-y divide-border">
             {subjects.map((subject) => (
               <button key={subject.id}
-                onClick={() => router.push(
-                  `/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subject.id)}?termId=${termId}&termName=${encodeURIComponent(termName)}&subjectName=${encodeURIComponent(subject.name)}&sequence=${selectedSeq}`
-                )}
-                className="w-full flex items-center gap-4 px-5 py-4 hover:bg-primary/10 transition group text-left">
+                onClick={() => {
+                  if (noStudents) return
+                  router.push(
+                    `/report-cards/class/${encodeURIComponent(classLevel)}/${encodeURIComponent(subject.id)}?termId=${termId}&termName=${encodeURIComponent(termName)}&subjectName=${encodeURIComponent(subject.name)}&sequence=${selectedSeq}`
+                  )
+                }}
+                disabled={noStudents}
+                className="w-full flex items-center gap-4 px-5 py-4 hover:bg-primary/10 transition group text-left disabled:opacity-50 disabled:hover:bg-transparent disabled:cursor-not-allowed">
                 <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center flex-shrink-0">
                   <BookOpen size={16} className="text-violet-600" />
                 </div>
                 <span className="flex-1 font-medium text-foreground">{subject.name}</span>
-                <span className="text-primary text-sm group-hover:translate-x-1 transition">→</span>
+                {!noStudents && <span className="text-primary text-sm group-hover:translate-x-1 transition">→</span>}
               </button>
             ))}
           </div>

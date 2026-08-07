@@ -1,19 +1,23 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Fragment} from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
-import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal } from '@/lib/api/coverage'
-import { getTeacherAbsencesApi, getAbsenceCountsApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
+import { getCoverageApi, getTeacherHoursTotalsApi, CoverageRow, CoverageStatus, TeacherHoursTotal, UnassignedTarget } from '@/lib/api/coverage'
+import { getTeacherAbsencesApi, markAbsencesSeenApi, getAbsenceCountsApi, reportAbsenceApi, deleteAbsenceApi, TeacherAbsence } from '@/lib/api/teacherAbsence'
 import { getTeachersApi } from '@/lib/api/teachers'
 import { getTeacherTimetableApi, TimetableSlot } from '@/lib/api/timetable'
 import { formatHours } from '@/lib/formatHours'
 import CustomSelect from '@/components/ui/CustomSelect'
 import Pagination from '@/components/ui/Pagination'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useToast } from '@/lib/useToast'
+import { onRealtime } from '@/lib/socket'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 import { usePagination } from '@/lib/usePagination'
-import { Clock, CalendarOff, Search, X, Trash2, Users } from 'lucide-react'
+import { Clock, CalendarOff, Search, X, Trash2, Users, ChevronRight} from 'lucide-react'
+import { slotRunsOn, slotTitle } from '@/lib/timetableGrid'
 
 interface DrillTarget {
   teacherId: string
@@ -72,18 +76,28 @@ function todayInSchoolTime(): string {
 export default function TeachingHoursPage() {
   const t = useT()
   const { school } = useAuthStore()
+  // Only used to word the "period was lost" warning; the API is the real gate.
+  const graceMinutes = school?.absenceGraceMinutes ?? null
   const isUniversity = school?.type === 'UNIVERSITY'
   const { toast, showToast, hideToast } = useToast()
 
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<string | null>(null)
   const [rows, setRows] = useState<CoverageRow[]>([])
+  // Courses with an hours target but no lecturer — they produce no coverage row at all,
+  // so without naming them the empty state blames the wrong thing.
+  const [unassignedTargets, setUnassignedTargets] = useState<UnassignedTarget[]>([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<CoverageStatus | 'ALL'>('ALL')
 
   // By Course (existing coverage table, only courses with an hours target) vs By Teacher
   // (every teacher, every absence — a course with no target set is otherwise invisible).
-  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('course')
+  // Defaults to By Teacher, not By Course. A coverage row only exists for a course with a
+  // required-hours target, so By Course structurally CANNOT show an absence on any untargeted
+  // course — a school with 43 teachers and one target showed an admin a near-empty table
+  // while the teacher's own screen listed four absences. "Who has been absent" is what this
+  // page is opened for; hours-coverage tracking is one click away under By Course.
+  const [viewMode, setViewMode] = useState<'course' | 'teacher'>('teacher')
   const [teacherSearch, setTeacherSearch] = useState('')
   // Value stored is PERIODS missed per teacher. periodMinutes null = school hasn't set a
   // period length, so the numbers are event counts and we label them "absences" instead.
@@ -93,7 +107,12 @@ export default function TeachingHoursPage() {
   // "2 periods" vs "2 absences" — depends on whether a period length is configured.
   const unit = (n: number) => periodMinutes != null ? (n === 1 ? t('period') : t('periods')) : (n === 1 ? t('absence') : t('absences'))
 
+  const router = useRouter()
   const [drillDown, setDrillDown] = useState<DrillTarget | null>(null)
+  // Which course row is open. One at a time: the breakdown is for answering "who taught
+  // this", not for scanning every course at once.
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [showAllTeachers, setShowAllTeachers] = useState(false)
   const [absences, setAbsences] = useState<TeacherAbsence[]>([])
   const [absencesLoading, setAbsencesLoading] = useState(false)
 
@@ -111,17 +130,27 @@ export default function TeachingHoursPage() {
 
   const load = () => {
     setLoading(true)
-    getCoverageApi().then((d) => { setSession(d.session); setRows(d.rows) }).finally(() => setLoading(false))
+    getCoverageApi().then((d) => { setSession(d.session); setRows(d.rows); setUnassignedTargets(d.unassignedTargets ?? []) }).finally(() => setLoading(false))
   }
 
   useEffect(load, [])
-  useEffect(() => { getTeachersApi().then((d) => setTeachers(d.teachers)).catch(() => {}) }, [])
+  // Not a silent catch: if this fails the By Teacher view has nothing to list and would
+  // otherwise say "No teachers found", blaming the data for a network problem.
+  const [teachersFailed, setTeachersFailed] = useState(false)
+  useEffect(() => {
+    getTeachersApi()
+      .then((d) => { setTeachers(d.teachers); setTeachersFailed(false) })
+      .catch(() => setTeachersFailed(true))
+  }, [])
   const refreshCounts = () => {
     getAbsenceCountsApi()
       .then((d) => { setAbsenceCounts(Object.fromEntries(d.counts.map((c) => [c.teacherId, c.periods]))); setPeriodMinutes(d.periodMinutes) })
       .catch(() => {})
   }
   useEffect(refreshCounts, [])
+  // A teacher anywhere in the school reporting or retracting changes both the coverage rows
+  // and the per-teacher counts shown here.
+  useEffect(() => onRealtime('absences:changed', () => { load(); refreshCounts() }), [])
   useEffect(() => {
     getTeacherHoursTotalsApi()
       .then((d) => setHoursTotals(Object.fromEntries(d.totals.map((t) => [t.teacherId, t]))))
@@ -143,7 +172,9 @@ export default function TeachingHoursPage() {
     getTeacherTimetableApi(reportTeacherId).then((d) => setTeacherSlots(d.slots)).finally(() => setSlotsLoading(false))
   }, [reportTeacherId])
 
-  const daySlots = date ? teacherSlots.filter((s) => s.dayOfWeek === dayOfWeekFor(date) && s.subjectId) : []
+  // See the twin in my-teaching-hours: private classes are reportable, and each slot is
+  // only offered on the dates it actually runs.
+  const daySlots = date ? teacherSlots.filter((s) => slotRunsOn(s, date)) : []
   // An absence can only be reported for a period that hasn't ENDED yet — admins are no
   // longer exempt from that (the API enforces it either way).
   const reportableSlots = daySlots.filter((s) => !slotHasPassed(date, s.endTime))
@@ -160,8 +191,10 @@ export default function TeachingHoursPage() {
       if (drillDown && drillDown.teacherId === reportTeacherId) {
         // Refresh whichever drill-down was open — course-scoped or the full teacher list.
         if (drillDown.subjectName) {
-          const row = rows.find((r) => r.teacherId === drillDown.teacherId && r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel)
-          if (row) openDrillDown(row)
+          const row = rows.find((r) => r.subjectName === drillDown.subjectName && r.classLevel === drillDown.classLevel
+            && r.contributors.some((c) => c.teacherId === drillDown.teacherId))
+          const contributor = row?.contributors.find((c) => c.teacherId === drillDown.teacherId)
+          if (row && contributor) openDrillDown(row, contributor)
         } else {
           openTeacherDrillDown(drillDown.teacherId, drillDown.teacherName)
         }
@@ -178,17 +211,23 @@ export default function TeachingHoursPage() {
     if (statusFilter !== 'ALL' && r.status !== statusFilter) return false
     if (!search.trim()) return true
     const q = search.toLowerCase()
-    return r.teacherName.toLowerCase().includes(q) || r.subjectName.toLowerCase().includes(q) || r.classLevel.toLowerCase().includes(q)
+    return r.subjectName.toLowerCase().includes(q) || r.classLevel.toLowerCase().includes(q)
+      || r.contributors.some((c) => c.teacherName.toLowerCase().includes(q))
   })
 
   const { page, setPage, pageItems, totalPages } = usePagination(filtered, 15, `${search}|${statusFilter}`)
 
-  const openDrillDown = (row: CoverageRow) => {
-    setDrillDown({ teacherId: row.teacherId, teacherName: row.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
+  // A course row has no single teacher, so drilling in is done per contributor — absences
+  // belong to a person, not to a course. Opening this modal is a genuine, deliberate view —
+  // the real review action — so it's paired with markAbsencesSeenApi, unlike the plain read
+  // the 'absences:changed' listener above uses to keep the page's own data current.
+  const openDrillDown = (row: CoverageRow, c: { teacherId: string; teacherName: string }) => {
+    setDrillDown({ teacherId: c.teacherId, teacherName: c.teacherName, subjectName: row.subjectName, classLevel: row.classLevel })
     setAbsencesLoading(true)
-    getTeacherAbsencesApi(row.teacherId)
+    getTeacherAbsencesApi(c.teacherId)
       .then((d) => setAbsences(d.absences.filter((a) => a.subjectName === row.subjectName && a.classLevel === row.classLevel)))
       .finally(() => setAbsencesLoading(false))
+    markAbsencesSeenApi(c.teacherId).catch(() => {})
   }
 
   // "By Teacher" — every absence for this teacher, any course, targeted or not.
@@ -198,12 +237,18 @@ export default function TeachingHoursPage() {
     getTeacherAbsencesApi(teacherId)
       .then((d) => setAbsences(d.absences))
       .finally(() => setAbsencesLoading(false))
+    markAbsencesSeenApi(teacherId).catch(() => {})
   }
 
+  // Default hides the teachers with nothing recorded. A school with 43 staff and two
+  // absences was a wall of empty cards to scan; the page is opened to find who HAS been
+  // absent. Searching by name always looks at everyone, or the search would appear broken.
   const teacherRows = teachers
     .map((tch) => ({ ...tch, count: absenceCounts[tch.id] ?? 0 }))
+    .filter((tch) => teacherSearch.trim() || showAllTeachers || tch.count > 0)
     .filter((tch) => !teacherSearch.trim() || tch.name.toLowerCase().includes(teacherSearch.toLowerCase()))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  const hiddenTeacherCount = teachers.filter((tch) => (absenceCounts[tch.id] ?? 0) === 0).length
 
   // 4 teachers per row, paginated once there are more than 7 rows' worth (28 teachers).
   const TEACHER_COLS = 4
@@ -211,7 +256,16 @@ export default function TeachingHoursPage() {
   const { page: teacherPage, setPage: setTeacherPage, pageItems: teacherPageItems, totalPages: teacherTotalPages } =
     usePagination(teacherRows, TEACHER_COLS * TEACHER_ROWS_PER_PAGE, teacherSearch)
 
-  const handleDeleteAbsence = async (id: string) => {
+  // Deleting after the arrival window has closed means overriding a period the school
+  // counts as lost, so it is confirmed rather than done on one click. Before the window
+  // closes there is nothing to override and it stays a single click.
+  const [confirmLost, setConfirmLost] = useState<TeacherAbsence | null>(null)
+
+  const handleDeleteAbsence = async (id: string, graceExpired = false) => {
+    if (graceExpired) {
+      const target = absences.find((a) => a.id === id)
+      if (target) { setConfirmLost(target); return }
+    }
     try {
       await deleteAbsenceApi(id)
       setAbsences((prev) => prev.filter((a) => a.id !== id))
@@ -221,8 +275,13 @@ export default function TeachingHoursPage() {
       // refetch here so that's visible immediately rather than only on next page load.
       load()
       refreshCounts()
-    } catch {
-      showToast(t('Failed to remove absence'), 'error')
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to remove absence'), 'error')
+      // Could simply be a stale list: the period may have ended while it sat open.
+      load()
+    } finally {
+      setConfirmLost(null)
     }
   }
 
@@ -271,6 +330,27 @@ export default function TeachingHoursPage() {
               ? t('Counts are for the current semester — once it ends, next semester starts a fresh record.')
               : t('Counts are for the current academic year — once it ends, next year starts a fresh record.')}
           </p>
+          {(() => {
+            const withAbsences = teacherRows.filter((r) => r.count > 0)
+            const totalPeriods = withAbsences.reduce((sum, r) => sum + r.count, 0)
+            return (
+              <p className="text-sm font-semibold text-foreground mb-3">
+                {totalPeriods === 0
+                  ? t('No absences recorded yet.')
+                  : `${totalPeriods} ${t(totalPeriods === 1 ? 'period missed' : 'periods missed')} · ${withAbsences.length} ${t(withAbsences.length === 1 ? 'teacher' : 'teachers')}`}
+              </p>
+            )
+          })()}
+          {hiddenTeacherCount > 0 && !teacherSearch.trim() && (
+            <button
+              onClick={() => setShowAllTeachers((v) => !v)}
+              className="text-xs font-medium text-primary hover:underline mb-3 block"
+            >
+              {showAllTeachers
+                ? t('Hide teachers with no absences')
+                : `${t('Show all')} · ${hiddenTeacherCount} ${t('with none')}`}
+            </button>
+          )}
           <div className="relative mb-4">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -282,7 +362,9 @@ export default function TeachingHoursPage() {
           {teacherRows.length === 0 ? (
             <div className="bg-card rounded-xl border border-border text-center py-14">
               <Users size={32} className="mx-auto mb-3 text-muted-foreground" />
-              <p className="text-muted-foreground text-sm">{t('No teachers found.')}</p>
+              <p className={`text-sm ${teachersFailed ? 'text-destructive' : 'text-muted-foreground'}`}>
+                {teachersFailed ? t('Could not load teachers. Check your connection and reload.') : t('No teachers found.')}
+              </p>
             </div>
           ) : (
             <>
@@ -293,7 +375,7 @@ export default function TeachingHoursPage() {
                     <button
                       key={tch.id}
                       onClick={() => openTeacherDrillDown(tch.id, tch.name)}
-                      className="bg-card border border-border rounded-xl px-4 py-3.5 hover:bg-muted/40 hover:border-primary/30 transition text-left"
+                      className="bg-card border border-border rounded-xl px-4 py-3.5 hover:bg-hover/40 hover:border-primary/30 transition text-left"
                     >
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className="text-sm font-medium text-foreground truncate">{tch.name}</span>
@@ -320,9 +402,28 @@ export default function TeachingHoursPage() {
       ) : loading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">{t('Loading…')}</div>
       ) : rows.length === 0 ? (
-        <div className="bg-card rounded-xl border border-border text-center py-14">
+        <div className="bg-card rounded-xl border border-border text-center py-14 px-6">
           <Clock size={32} className="mx-auto mb-3 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">{t('No subjects have a required-hours target set yet. Set one from the Subjects page.')}</p>
+          {unassignedTargets.length > 0 ? (
+            <>
+              <p className="text-foreground text-sm font-medium">
+                {unassignedTargets.length === 1
+                  ? t('One course has an hours target but no lecturer assigned.')
+                  : `${unassignedTargets.length} ${t('courses have an hours target but no lecturer assigned.')}`}
+              </p>
+              <p className="text-muted-foreground text-sm mt-1">
+                {t('Hours are counted against the lecturer who teaches the course, so assign one from the Courses page and it will appear here.')}
+              </p>
+              <ul className="text-muted-foreground text-xs mt-3 space-y-0.5">
+                {unassignedTargets.slice(0, 6).map((u) => (
+                  <li key={`${u.classLevel}-${u.name}`}>{u.name} · {u.classLevel}</li>
+                ))}
+                {unassignedTargets.length > 6 && <li>+{unassignedTargets.length - 6}</li>}
+              </ul>
+            </>
+          ) : (
+            <p className="text-muted-foreground text-sm">{t('No subjects have a required-hours target set yet. Set one from the Subjects page.')}</p>
+          )}
         </div>
       ) : (
         <>
@@ -358,11 +459,28 @@ export default function TeachingHoursPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {pageItems.map((r) => (
-                  <tr key={`${r.teacherId}-${r.subjectId}`} className="hover:bg-muted/40 transition cursor-pointer" onClick={() => openDrillDown(r)}>
+                  <Fragment key={r.subjectId}>
+                  {/* The COURSE is the row: its target is stated once and compared against
+                      everything taught on it. Who taught what is one level down, because two
+                      teachers sharing a 30-hour course are at 30 between them, not 30 each. */}
+                  <tr className="hover:bg-hover/40 transition cursor-pointer" onClick={() => setExpanded(expanded === r.subjectId ? null : r.subjectId)}>
                     <td className="px-5 py-3 text-sm font-medium text-foreground">
-                      {r.teacherName}
+                      <span className="inline-flex items-center gap-1.5">
+                        <ChevronRight size={14} className={`text-muted-foreground transition-transform ${expanded === r.subjectId ? 'rotate-90' : ''}`} />
+                        {r.contributors.length === 1
+                          ? r.contributors[0].teacherName
+                          : `${r.contributors.length} ${t('teachers')}`}
+                      </span>
                       {r.periodsMissed > 0 && (
                         <span className="ml-2 inline-block text-xs font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full" title={`${r.periodsMissed} ${unit(r.periodsMissed)} ${t('missed')}`}>{r.periodsMissed}</span>
+                      )}
+                      {r.gaps.length > 0 && (
+                        <span
+                          className={`ml-2 inline-block text-xs font-semibold px-1.5 py-0.5 rounded-full ${r.gaps.some((g) => g.elapsed) ? 'text-red-700 bg-red-100' : 'text-amber-700 bg-amber-100'}`}
+                          title={r.gaps.map((g) => `${g.startDate} → ${g.endDate}`).join(', ')}
+                        >
+                          {r.gaps.some((g) => g.elapsed) ? t('no teacher') : t('unstaffed ahead')}
+                        </span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -378,6 +496,35 @@ export default function TeachingHoursPage() {
                       </span>
                     </td>
                   </tr>
+                  {expanded === r.subjectId && r.contributors.map((c) => (
+                    <tr key={c.teacherId} className="bg-muted/30 cursor-pointer hover:bg-hover/40 transition" onClick={() => openDrillDown(r, c)}>
+                      <td className="px-5 py-2 pl-11 text-sm text-foreground">
+                        {c.teacherName}
+                        {c.periodsMissed > 0 && (
+                          <span className="ml-2 inline-block text-xs font-semibold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-full">{c.periodsMissed}</span>
+                        )}
+                      </td>
+                      {/* The window they held it — what makes a mid-term handover legible. */}
+                      <td className="px-4 py-2 text-xs text-muted-foreground">
+                        {c.startedAt}{c.endedAt ? ` → ${c.endedAt}` : ` → ${t('present')}`}
+                      </td>
+                      <td className="px-4 py-2 text-center text-xs text-muted-foreground">—</td>
+                      <td className="px-4 py-2 text-center text-sm text-foreground">{formatHours(c.taughtHours)}</td>
+                      <td className="px-4 py-2 text-center text-sm text-foreground">{formatHours(c.projectedFinalHours)}</td>
+                      <td className="px-4 py-2 text-center text-xs text-muted-foreground">{t('click for absences')}</td>
+                    </tr>
+                  ))}
+                  {expanded === r.subjectId && r.gaps.map((g) => (
+                    <tr key={`${g.startDate}-${g.endDate}`} className="bg-muted/30">
+                      <td className="px-5 py-2 pl-11 text-sm text-muted-foreground italic" colSpan={2}>
+                        {g.elapsed ? t('No teacher held this course') : t('No teacher assigned from')} {g.startDate} → {g.endDate}
+                      </td>
+                      <td className="px-4 py-2 text-center text-xs text-muted-foreground" colSpan={4}>
+                        {g.elapsed ? t('these hours were not taught') : t('assign someone before this starts')}
+                      </td>
+                    </tr>
+                  ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table></div>
@@ -409,10 +556,18 @@ export default function TeachingHoursPage() {
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {/* seenByAdmin only locks a TEACHER out of retracting their own report —
                     an admin can remove one here regardless, right up until the period it
-                    was reported for has actually ENDED (hourHasPassed) — after that it's
+                    was reported for is FINAL (isFinal: start + the school's grace period) — after that it's
                     final for everyone, since there's no more chance the teacher shows up. */}
                 {absences.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2">
+                  // Opens THAT teacher's timetable at this period, ringed. The admin's
+                  // read-only view, since this is somebody else's schedule.
+                  <div key={a.id}
+                    onClick={() => drillDown?.teacherId && router.push(
+                      `/teacher-timetable?teacherId=${encodeURIComponent(drillDown.teacherId)}&teacherName=${encodeURIComponent(drillDown.teacherName)}`
+                      + `&missedSlotId=${encodeURIComponent(a.timetableSlotId)}&missedDate=${encodeURIComponent(a.date)}`
+                      + `&missedFrom=${encodeURIComponent(a.startTime)}&missedTo=${encodeURIComponent(a.endTime)}`,
+                    )}
+                    className="flex items-center justify-between text-sm bg-muted rounded-lg px-3 py-2 cursor-pointer hover:bg-hover transition">
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-foreground">{a.date} · {t(dayLabel(a.dayOfWeek))} {a.startTime}–{a.endTime}</span>
@@ -423,14 +578,24 @@ export default function TeachingHoursPage() {
                           already scopes the whole list to one course, so this would be
                           redundant there. */}
                       {!drillDown.subjectName && (a.subjectName || a.classLevel) && (
-                        <p className="text-xs text-muted-foreground mt-0.5">{a.subjectName} · {a.classLevel}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{a.subjectName}{a.classLevel ? ` · ${a.classLevel}` : ''}</p>
                       )}
                     </div>
+                    {/* The REASON has to be on screen, not only in a title tooltip: a
+                        greyed-out bin with no explanation reads as "admin cannot delete
+                        absences", when the actual rule is that this one period is over. */}
+                    {a.isFinal && (
+                      <span className="text-xs text-muted-foreground italic mr-2 whitespace-nowrap">{t('period over')}</span>
+                    )}
                     <button
-                      onClick={() => handleDeleteAbsence(a.id)}
-                      disabled={a.hourHasPassed}
+                      onClick={() => handleDeleteAbsence(a.id, a.graceExpired)}
+                      disabled={a.isFinal}
                       className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
-                      title={a.hourHasPassed ? t('This period has already passed and can no longer be removed') : t('Remove')}
+                      title={a.isFinal
+                        ? t('This period has already ended and can no longer be changed')
+                        : a.graceExpired
+                          ? t('This period was lost. You can still mark them present, with a warning.')
+                          : t('Remove')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -513,7 +678,7 @@ export default function TeachingHoursPage() {
                               disabled={wholeDay || passed}
                               onChange={(e) => setSelectedSlotIds(e.target.checked ? [...selectedSlotIds, s.id] : selectedSlotIds.filter((id) => id !== s.id))}
                             />
-                            {s.startTime}–{s.endTime} · {s.subjectName} <span className="text-xs text-muted-foreground">{s.classLevel}</span>
+                            {s.startTime}–{s.endTime} · {slotTitle(s)} {s.classLevel && <span className="text-xs text-muted-foreground">{s.classLevel}</span>}
                             {passed && <span className="text-xs text-muted-foreground italic">({t('already passed')})</span>}
                           </label>
                         )
@@ -525,7 +690,7 @@ export default function TeachingHoursPage() {
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowReportModal(false)}
-                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2.5 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button
@@ -540,6 +705,24 @@ export default function TeachingHoursPage() {
           </div>
         </div>
       )}
+
+      {/* Spells out what is being overridden: the period is already counted as lost, and
+          deleting the record marks the teacher present for it after the fact. */}
+      <ConfirmModal
+        isOpen={confirmLost != null}
+        title={t('This period was already lost')}
+        message={confirmLost
+          ? `${confirmLost.subjectName ?? t('This class')} · ${confirmLost.date} ${confirmLost.startTime}–${confirmLost.endTime}. ${
+              graceMinutes != null
+                ? `${t('The')} ${graceMinutes}${t('-minute window to arrive has passed, so this period counts as missed and not taught.')}`
+                : t('The window to arrive has passed, so this period counts as missed and not taught.')
+            } ${t('Removing it marks them present for the period anyway. Continue?')}`
+          : ''}
+        confirmLabel={t('Mark present anyway')}
+        confirmColor="red"
+        onConfirm={() => { if (confirmLost) handleDeleteAbsence(confirmLost.id) }}
+        onCancel={() => setConfirmLost(null)}
+      />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

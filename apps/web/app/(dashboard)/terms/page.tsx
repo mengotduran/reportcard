@@ -11,7 +11,9 @@ import Pagination from '@/components/ui/Pagination'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { useT } from '@/lib/i18n'
+import HolidaysSection from '@/components/HolidaysSection'
 import { usePagination } from '@/lib/usePagination'
+import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 
 interface Term {
   id: string
@@ -67,9 +69,13 @@ export default function TermsPage() {
   const [startingYear, setStartingYear] = useState(false)
   const [nyError, setNyError] = useState('')
 
+  // Only needed for the End Academic Year modal's summary bullet below — fetched once,
+  // not editable from here (see /promotion-scale for that).
+  const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
+
   useEffect(() => {
     if (!isAuthenticated) router.push('/login')
-    else fetchTerms()
+    else { fetchTerms(); getPromotionScaleApi().then(setPromotionScale).catch(() => {}) }
   }, [isAuthenticated])
 
   const fetchTerms = async () => {
@@ -227,7 +233,7 @@ export default function TermsPage() {
                 {t('Academic year')} <span className="font-bold">{currentSession}</span> {t('is active')}
               </p>
               <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">
-                {t('When school is done for the year, end the academic year to unlock promotions and compute PASS/REPEAT decisions.')}
+                {t('When school is done for the year, end the academic year to unlock promotions and compute Pass / Trial / Repeat decisions.')}
               </p>
             </div>
           </div>
@@ -324,6 +330,10 @@ export default function TermsPage() {
         </div>
       )}
 
+      {/* Holidays sit with Terms because they are the same calendar: terms say when
+          teaching happens, holidays carve out the days inside them when it does not. */}
+      <HolidaysSection />
+
       {/* ── Add / Edit modal ──────────────────────────────────────────── */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
@@ -367,7 +377,7 @@ export default function TermsPage() {
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={closeModal}
-                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                  className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                   {t('Cancel')}
                 </button>
                 <button type="submit" disabled={saving}
@@ -395,18 +405,17 @@ export default function TermsPage() {
             </p>
             <ul className="text-sm text-muted-foreground space-y-1.5 mb-4 pl-4 list-disc">
               <li>{tt('Unset the current term — no term will be active', 'Unset the current semester — no semester will be active')}</li>
-              {school?.repeatThreshold != null && (
+              {promotionScale?.trialMinimum != null && (
                 <li>
-                  {t('Auto-compute PASS / REPEAT on all report cards')}
-                  {isUniversity
-                    ? <> ({t('min CGPA:')} <strong className="text-foreground">{school.repeatThreshold}</strong>)</>
-                    : <> ({t('min average:')} <strong className="text-foreground">{school.repeatThreshold}</strong>)</>
-                  }
+                  {t('Auto-compute Pass / Promoted on Trial / Repeat on all report cards')}
+                  {' '}
+                  ({t('real pass:')} <strong className="text-foreground">{promotionScale.truePassMark}</strong>,{' '}
+                  {t('trial from:')} <strong className="text-foreground">{promotionScale.trialMinimum}</strong>)
                 </li>
               )}
-              {school?.repeatThreshold == null && (
+              {promotionScale != null && promotionScale.trialMinimum == null && (
                 <li className="text-amber-600 dark:text-amber-400">
-                  {tt('No pass threshold set — decisions won\'t be auto-computed (configure in Settings)', 'No CGPA threshold set — decisions won\'t be auto-computed (configure in Settings)')}
+                  {tt('No trial minimum set — decisions won\'t be auto-computed (configure in Promotion Scale)', 'No trial minimum set — decisions won\'t be auto-computed (configure in Promotion Scale)')}
                 </li>
               )}
               <li>{t('Unlock the')} <strong className="text-foreground">{t('Promote to Level 2')}</strong> {t('action for university students')}</li>
@@ -414,7 +423,7 @@ export default function TermsPage() {
             <p className="text-xs text-muted-foreground mb-5">{tt('You can still view and edit report cards after closing. Individual term records stay intact.', 'You can still view and edit report cards after closing. Individual semester records stay intact.')}</p>
             <div className="flex gap-3">
               <button type="button" onClick={() => setShowEndYear(false)}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleEndYear} disabled={endingYear}
@@ -459,13 +468,13 @@ export default function TermsPage() {
                     <button type="button"
                       onClick={() => setNyTerms((prev) => prev.slice(0, -1))}
                       disabled={nyTerms.length <= 1}
-                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted disabled:opacity-30 transition">
+                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-hover disabled:opacity-30 transition">
                       {t('– Remove')}
                     </button>
                     <button type="button"
                       onClick={() => setNyTerms((prev) => [...prev, { name: `${tt('Term', 'Semester')} ${prev.length + 1}`, startDate: '', endDate: '' }])}
                       disabled={nyTerms.length >= 4}
-                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted disabled:opacity-30 transition">
+                      className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-hover disabled:opacity-30 transition">
                       {t('+ Add')}
                     </button>
                   </div>
@@ -505,7 +514,7 @@ export default function TermsPage() {
 
             <div className="p-6 pt-4 border-t border-border flex gap-3">
               <button type="button" onClick={() => setShowNewYear(false)}
-                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-muted transition">
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
                 {t('Cancel')}
               </button>
               <button type="button" onClick={handleStartYear} disabled={startingYear || !nySession.trim()}

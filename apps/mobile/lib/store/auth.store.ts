@@ -20,6 +20,9 @@ interface School {
    *  administrators may save (the API enforces it; this only shapes the UI). Undefined on
    *  an older cached session reads as TEACHERS, matching the API's default. */
   marksEntryMode?: 'TEACHERS' | 'ADMIN_ONLY'
+  /** Minutes after a period starts before it counts as missed. Only used to word the
+   *  "this period was lost" warning; the API is the real gate. */
+  absenceGraceMinutes?: number | null
   logo: string | null
   coverImage: string | null
   coverImages: string[]

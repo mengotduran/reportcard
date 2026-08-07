@@ -1,4 +1,5 @@
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native'
+import { useEffect, useRef } from 'react'
+import { View, Text, ScrollView, TouchableOpacity, useWindowDimensions } from 'react-native'
 import { useTheme } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -15,6 +16,22 @@ export interface WeekGridSlot {
   title: string
   subtitle?: string | null
   isPrivate?: boolean
+  /** Arrived here from an absence or a notification naming THIS slot. Ringed rather
+   *  than restyled: it is a "you are looking at this one" marker, and must not be
+   *  confused with the absent/missed styling, which is data about the class itself. */
+  focused?: boolean
+  /** Runs on one date only. Matches the web twin so both grids can style it. */
+  isOneOff?: boolean
+  /** The class has been reported absent and has ALREADY happened: greyed out and struck
+   *  through, it was not taught. */
+  missed?: boolean
+  /** Reported absent but STILL TO COME. Marked in amber rather than grey, because nothing
+   *  has been lost yet and the teacher may still retract it. */
+  reportedAbsent?: boolean
+  /** Short note shown under the subtitle, e.g. the dates it was reported for. The weekly
+   *  grid repeats every week and carries no dates of its own, so without this "absent"
+   *  on a recurring slot would not say WHICH week. */
+  note?: string | null
 }
 
 export interface WeekGridBreak {
@@ -45,6 +62,7 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
 }) {
   const { colors, isDark } = useTheme()
   const t = useT()
+  const { width: screenWidth } = useWindowDimensions()
 
   const allStarts = [...slots.map((s) => toMinutes(s.startTime)), ...breaks.map((b) => toMinutes(b.startTime))]
   const allEnds = [...slots.map((s) => toMinutes(s.endTime)), ...breaks.map((b) => toMinutes(b.endTime))]
@@ -61,11 +79,35 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
   const privateBg = isDark ? 'rgba(245,158,11,0.12)' : '#fffbeb'
   const privateBorder = isDark ? 'rgba(245,158,11,0.35)' : '#fde68a'
   const privateText = isDark ? '#fbbf24' : '#92400e'
+  // Reported-but-upcoming is deliberately NOT the grey of a lost period: nothing has been
+  // missed yet, and the teacher can still retract it.
+  const absentBg = isDark ? 'rgba(148,163,184,0.16)' : '#f1f5f9'
+  const absentBorder = isDark ? 'rgba(148,163,184,0.5)' : '#cbd5e1'
+  const absentText = isDark ? '#cbd5e1' : '#475569'
   const slotBg = isDark ? 'rgba(240,62,47,0.14)' : '#FEF2F1'
   const slotBorder = isDark ? 'rgba(240,62,47,0.35)' : '#fecaca'
 
+  // Brings the ringed period into view. The grid is 772pt wide inside a horizontal
+  // scroller, so on a phone only Mon-Wed start on screen: a focused Thursday or Friday
+  // period is simply not visible, and the jump reads as having done nothing at all.
+  // Twin of the web grid's scrollIntoView, which gets this for free from the DOM.
+  const scroller = useRef<ScrollView>(null)
+  const focusedDay = slots.find((s) => s.focused)?.dayOfWeek
+  useEffect(() => {
+    if (!focusedDay) return
+    const dayIdx = DAY_ORDER.indexOf(focusedDay)
+    if (dayIdx < 0) return
+    // Centre the column when there is room either side; clamped so the first days don't
+    // scroll to a negative offset and the last don't overshoot the end of the grid.
+    const centred = GUTTER_WIDTH + dayIdx * COLUMN_WIDTH - (screenWidth - COLUMN_WIDTH) / 2
+    const x = Math.max(0, Math.min(centred, Math.max(0, totalWidth - screenWidth)))
+    // A frame's grace so the ScrollView has been laid out; scrollTo before that is a no-op.
+    const id = setTimeout(() => scroller.current?.scrollTo({ x, animated: true }), 150)
+    return () => clearTimeout(id)
+  }, [focusedDay, screenWidth, totalWidth])
+
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+    <ScrollView ref={scroller} horizontal showsHorizontalScrollIndicator={false}>
       <View style={{ width: totalWidth, borderWidth: 1, borderColor: colors.border, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.card }}>
         <View style={{ flexDirection: 'row' }}>
           {/* Hour gutter */}
@@ -117,16 +159,41 @@ export default function WeekGrid({ slots, breaks = [], onSlotClick }: {
                         style={{
                           position: 'absolute', left: 3, right: 3, top, height,
                           borderRadius: 8, borderWidth: 1, padding: 5, overflow: 'hidden',
-                          backgroundColor: s.isPrivate ? privateBg : slotBg,
-                          borderColor: s.isPrivate ? privateBorder : slotBorder,
+                          backgroundColor: s.missed ? colors.bgSecondary : s.reportedAbsent ? absentBg : s.isPrivate ? privateBg : slotBg,
+                          borderColor: s.missed ? colors.border : s.reportedAbsent ? absentBorder : s.isPrivate ? privateBorder : slotBorder,
+                          borderStyle: s.reportedAbsent ? 'dashed' : 'solid',
+                          opacity: s.missed ? 0.75 : 1,
+                          // The slot arrived at from an absence or notification. RN has no
+                          // ring, so a thicker branded border plus a lift does the same job
+                          // without touching the fill, which still carries the absent state.
+                          ...(s.focused ? {
+                            borderWidth: 2,
+                            borderColor: '#F03E2F',
+                            borderStyle: 'solid' as const,
+                            opacity: 1,
+                            shadowColor: '#F03E2F', shadowOpacity: 0.5, shadowRadius: 5,
+                            shadowOffset: { width: 0, height: 0 }, elevation: 4,
+                          } : {}),
                         }}
                       >
-                        <Text numberOfLines={1} style={{ fontSize: 10, fontWeight: '700', color: s.isPrivate ? privateText : colors.primary }}>
+                        <Text
+                          numberOfLines={1}
+                          style={{
+                            fontSize: 10, fontWeight: '700',
+                            color: s.missed ? colors.textMuted : s.reportedAbsent ? absentText : s.isPrivate ? privateText : colors.primary,
+                            textDecorationLine: s.missed ? 'line-through' : 'none',
+                          }}
+                        >
                           {s.title}
                         </Text>
                         {!!s.subtitle && (
-                          <Text numberOfLines={1} style={{ fontSize: 9, color: s.isPrivate ? privateText : colors.primary, opacity: 0.8 }}>
+                          <Text numberOfLines={1} style={{ fontSize: 9, color: s.missed ? colors.textMuted : s.reportedAbsent ? absentText : s.isPrivate ? privateText : colors.primary, opacity: 0.8 }}>
                             {s.subtitle}
+                          </Text>
+                        )}
+                        {!!s.note && (
+                          <Text numberOfLines={1} style={{ fontSize: 8, fontWeight: '700', color: s.missed ? colors.textMuted : absentText, marginTop: 1 }}>
+                            {s.note}
                           </Text>
                         )}
                       </TouchableOpacity>

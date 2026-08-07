@@ -100,6 +100,9 @@ export default function ForgotPasswordPage() {
               <a href="/login" className="mt-5 flex items-center justify-center gap-1.5 text-sm font-medium text-[#6f6553] dark:text-white/50 hover:text-primary transition-colors">
                 <ArrowLeft size={14} /> Back to sign in
               </a>
+              <p className="mt-4 text-center text-xs text-muted-foreground">
+                Sign in with a username instead of an email? Ask your school admin to reset your password for you.
+              </p>
             </>
           )}
         </div>

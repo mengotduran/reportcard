@@ -18,7 +18,8 @@ export interface ClassOverviewStudent {
     // Every entry's marks, straight off this one response — lets a marks-entry screen
     // build its rows without a per-student getReportCardApi round trip (see the mobile
     // marks screen's fetchData comment for why that used to matter on a phone network).
-    entries: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null }[]
+    // `grade` carries the RATING on a competency class (nursery), where there are no scores.
+    entries: { subjectId: string; seq1Score: number | null; seq2Score: number | null; resitScore: number | null; grade?: string | null }[]
   } | null
 }
 
@@ -31,6 +32,8 @@ export const getClassOverviewApi = async (termId: string, classLevel: string, su
   // teachers to edit anyway. See PastTermMarksGrant.
   isCurrentTerm: boolean
   pastTermEditGranted: boolean
+  /** How this class is assessed — marks, or a rating per subject. See ClassLevel.gradingMode. */
+  gradingMode?: 'NUMERIC' | 'COMPETENCY'
 }> => {
   const res = await api.get('/report-cards/class-overview', { params: { termId, classLevel, subjectId } })
   return res.data
@@ -46,8 +49,11 @@ export const setPastTermGrantApi = async (subjectId: string, termId: string, gra
   return res.data
 }
 
+// `rating` is the competency (nursery) path: the API takes it INSTEAD of any score and
+// stores it as the entry's grade. Leave the key off an entry entirely to keep whatever
+// rating it already has — sending `rating: null` is what clears one. See utils/competency.
 export const saveEntriesWithSeqApi = async (id: string, data: {
-  entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; remarks?: string }[]
+  entries: { subjectId: string; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null; score?: number | null; grade?: string | null; rating?: string | null; remarks?: string }[]
   remarks?: string
 }) => {
   const res = await api.put(`/report-cards/${id}/entries`, data)
@@ -193,7 +199,7 @@ export interface TranscriptEntry {
   seq2Score?: number | null
   resitScore?: number | null
   grade?: string | null
-  subject: { id: string; name: string; code?: string | null; credit?: number | null; coefficient?: number | null; term?: string | null; classLevel: string }
+  subject: { id: string; name: string; code?: string | null; credit?: number | null; coefficient?: number | null; term?: string | null; classLevel: string; maxScore?: number | null }
 }
 
 export interface TranscriptReportCard {
@@ -202,12 +208,15 @@ export interface TranscriptReportCard {
   entries: TranscriptEntry[]
   average?: number | null
   remarks?: string | null
+  // Stamped identically onto every card in the session once endAcademicYear has run — see
+  // PromotionScale. Null until then.
+  decision?: string | null
 }
 
 export interface StudentTranscript {
   student: {
     id: string; name: string; studentId: string; classLevel: string; gender?: string | null
-    dateOfBirth?: string | null; nationality?: string | null
+    dateOfBirth?: string | null; nationality?: string | null; photo?: string | null
   }
   // `stamp` is the official seal, printed on official copies via the designer's stamp
   // section (the endpoint selects it explicitly, see getStudentTranscript).

@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
 import { getStudents, createStudent, updateStudent, setStudentStatus, Student, StudentStatus, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
+import { stripProgrammeSuffix } from '@/lib/programme'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getDepartments, Department } from '@/lib/api/departments'
 import { getSubjects } from '@/lib/api/reportcards'
 import { getTerms } from '@/lib/api/terms'
@@ -59,6 +61,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   avatarText: { color: '#F03E2F', fontWeight: 'bold', fontSize: 16 },
   info: { flex: 1 },
   name: { fontSize: 15, fontWeight: '600', color: colors.text },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   meta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
   badgeActive: { backgroundColor: '#dcfce7' },
@@ -180,7 +183,7 @@ function StudentDetailModal({
           <View style={styles.detailRows}>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>{t('Class Level')}</Text>
-              <Text style={styles.detailValue}>{student.classLevel}</Text>
+              <Text style={styles.detailValue}>{stripProgrammeSuffix(student.classLevel)}</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.detailRow}>
@@ -390,11 +393,15 @@ function ImportStudentsModal({
   onClose,
   onImported,
   isUniversity,
+  programme,
 }: {
   visible: boolean
   onClose: () => void
   onImported: () => void
   isUniversity: boolean
+  /** The Day/Evening filter the screen is on. Sent with the file so a department that runs
+   *  both sittings knows which one the roster belongs to. */
+  programme: string
 }) {
   const { colors } = useTheme()
   const t = useT()
@@ -429,7 +436,7 @@ function ImportStudentsModal({
       setPreviewing(true)
       try {
         const mimeType = asset.mimeType ?? (asset.name.endsWith('.csv') ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        const data = await previewStudentImportApi(asset.uri, asset.name, mimeType)
+        const data = await previewStudentImportApi(asset.uri, asset.name, mimeType, programme)
         setPreview(data)
       } catch (err: any) {
         setImportError(err?.response?.data?.message ?? t('Failed to read that file. Make sure it is a valid .xlsx or .csv file.'))
@@ -607,6 +614,8 @@ export default function StudentsScreen() {
 
   const [students, setStudents] = useState<Student[]>([])
   const [classList, setClassList] = useState<ClassLevel[]>([])
+  // Day/Evening. Mobile has shown both cohorts mixed with nothing to tell them apart.
+  const programmeFilter = useProgrammeFilter(classList)
   const [departments, setDepartments] = useState<Department[]>([])
   const [liveSession, setLiveSession] = useState<string | undefined>()
   const [statusFilter, setStatusFilter] = useState<StudentStatus>('ACTIVE')
@@ -643,6 +652,10 @@ export default function StudentsScreen() {
           ? (activeSession ? { session: activeSession } : {})
           : { status: statusFilter }),
         page: pageNum, pageSize: STUDENT_PAGE_SIZE, ...(searchTerm ? { search: searchTerm } : {}),
+        // Sent to the server, not applied to the page after it arrives. A page-level filter
+        // showed "0 evening students" whenever none of them landed on the current page, and
+        // the only way to see one was to search for it by name.
+        ...(programmeFilter.programme !== 'ALL' ? { programme: programmeFilter.programme } : {}),
       }
       const [sData, clData, subData, termData, deptData] = await Promise.all([
         getStudents(studentParams),
@@ -667,7 +680,9 @@ export default function StudentsScreen() {
     } catch {
       setError(t('Failed to load students'))
     }
-  }, [isAdmin, isSecondary, activeSession, statusFilter])
+    // programme is in here so switching the chip refetches from page 1 rather than
+    // re-filtering whatever page is on screen.
+  }, [isAdmin, isSecondary, activeSession, statusFilter, programmeFilter.programme])
 
   // A newly created student only shows up in this list while viewing the LIVE
   // academic year — a past year's roster is scoped to students who already
@@ -714,6 +729,7 @@ export default function StudentsScreen() {
 
   // Search is applied SERVER-side now (name / matricule / class — same three fields),
   // so re-filtering here would only hide rows the server already matched.
+  // No client-side sitting filter here: the server already returned only this section.
   const filtered = students
 
   // Replaces the old silent "delete" (which never deleted anything — just set
@@ -760,6 +776,14 @@ export default function StudentsScreen() {
 
   return (
     <View style={styles.container}>
+      {programmeFilter.hasEvening && (
+        <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={programmeFilter.setProgramme}
+          />
+        </View>
+      )}
       <View style={styles.searchWrap}>
         <Ionicons name="search-outline" size={16} color="#9ca3af" style={{ marginRight: 8 }} />
         <TextInput
@@ -851,7 +875,12 @@ export default function StudentsScreen() {
             </View>
             <View style={styles.info}>
               <Text style={styles.name}>{item.name}</Text>
-              <Text style={styles.meta}>ID: {item.studentId} · {item.classLevel}</Text>
+              {/* The class name is stripped, so the badge is the only thing separating an
+                  evening student from a day student in the same programme. */}
+              <View style={styles.metaRow}>
+                <Text style={styles.meta}>ID: {item.studentId} · {stripProgrammeSuffix(item.classLevel)}</Text>
+                {programmeFilter.programmeOf(item.classLevel) === 'EVENING' && <EveningBadge />}
+              </View>
             </View>
             {(() => {
               const st = effectiveStatus(item)
@@ -928,6 +957,7 @@ export default function StudentsScreen() {
         onClose={() => setImportVisible(false)}
         onImported={handleStudentCreated}
         isUniversity={isUniversity}
+        programme={programmeFilter.programme}
       />
     </View>
   )

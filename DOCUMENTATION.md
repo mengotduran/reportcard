@@ -1,6 +1,7 @@
 # ReportCard System — Project Documentation
 
-> Last updated: 2026-07-21 (teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities)
+> Last updated: 2026-08-07 (**primary marking & averaging documented**: Test + Exam on a raw scale, average always coefficient-weighted and normalised to /20, pass mark 10/20, `recomputePrimaryAverages.ts` migration · the 0–20 default grading scale is secondary-only, primary defaults to 0–100 · **primary shared teaching teams**: hours split equally, a period is only missed when every member is absent · **an absence is reviewed by an explicit action, never by a background refetch** — reading the notification counts)
+> Previously (2026-07-31): an admin-recorded absence is never the teacher's to retract · the copy-marks shortcut is primary/secondary only, CA /30 and Exam /70 cannot fill each other · teaching hours coverage: per-subject/course requiredHours target, timetable-derived scheduled/taught hours, teacher self-reported absences · annual transcripts for all school types · official vs student copies + stamp · failing marks in red · resits · admin-only marks entry with capped, audited switching · published cards frozen · student birth details · Course wording for universities
 > This document is updated every time a new feature or change is made.
 ---
 
@@ -101,7 +102,7 @@ npx prisma studio          # View data at localhost:5555
 | Model | Key Fields |
 |-------|-----------|
 | `Subject` | name, classLevel, **maxScore** (default 20), **coefficient** (default 1) |
-| `ClassLevel` | name, hasStream (bool), order (sort position) |
+| `ClassLevel` | name, hasStream (bool), order (sort position), **gradingMode** (`NUMERIC` default / `COMPETENCY` — primary only, see §7 → *Nursery / pre-primary*), **scaleUnlockedAt** (superadmin's one-shot key to a frozen class — see §7 → *How a class is assessed is frozen…*) |
 | `Term` | name, session, startDate, endDate, **isCurrent** (bool) |
 | `TeacherSubject` | Junction: which teacher teaches which subject (one teacher per subject per class) |
 
@@ -190,24 +191,39 @@ Base URL: `http://localhost:5000/api`
 | Method | Route | Roles | Description |
 |--------|-------|-------|-------------|
 | GET | `/teacher-absences/me` | Any teacher | Own logged absences (optional `from`/`to`) |
-| GET | `/teacher-absences` | Admin, VP | A given `teacherId`'s absences |
-| POST | `/teacher-absences` | Any teacher (self), Admin/VP (on a teacher's behalf via `teacherId`) | Log an absence for a `date` — `wholeDay: true` (every real slot that weekday) or specific `timetableSlotIds` |
-| DELETE | `/teacher-absences/:id` | Own (teacher) or Admin/VP | Remove a logged absence |
+| GET | `/teacher-absences` | Admin, VP | A given `teacherId`'s absences. **Pure read — never marks anything reviewed** (see §20 Absences) |
+| POST | `/teacher-absences/mark-seen` | Admin, VP | Mark that `teacherId`'s absences **reviewed**, locking the teacher out of retracting them. The one and only writer of `seenByAdmin`; also called when an admin reads the `TEACHER_ABSENCE` notification |
+| POST | `/teacher-absences` | Any teacher (self), Admin/VP (on a teacher's behalf via `teacherId`) | Log an absence for a `date` — `wholeDay: true` (every real slot that weekday) or specific `timetableSlotIds`. Accepts a `days` array for a multi-day report |
+| DELETE | `/teacher-absences/:id` | Own (teacher) or Admin/VP | Remove a logged absence — clears **every period of that class on that date**, not just the row named |
+| GET | `/teacher-absences/counts` | Admin, VP | Every teacher's absence total in one query, for the By Teacher view |
+
+The list endpoints return **one entry per class per date**, not per period: a 07:30-09:10 double
+arrives as a single entry with `periods: 2`. Rows are still stored per period underneath — see
+§20 Absences for why both are true.
 
 ### Teaching Hours Coverage
 | Method | Route | Roles | Description |
 |--------|-------|-------|-------------|
 | GET | `/coverage/me` | Any teacher | Own coverage rows (per subject/course with a `requiredHours` target) for the active (or given `?session=`) academic session |
 | GET | `/coverage` | Admin, VP | School-wide coverage rows, optionally filtered by `?teacherId=` |
+| GET | `/coverage/hours-totals` | Admin, VP | Hours worked per teacher across every slot, for the By Teacher view |
 
-See §20 Teaching Hours Coverage for how the numbers are computed.
+A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[]` list. See §20.
+
+### Holidays
+| Method | Route | Roles | Description |
+|--------|-------|-------|-------------|
+| GET | `/holidays` | Any signed-in user | School closures (a teacher's own hours need them too) |
+| POST | `/holidays` | Admin, VP | Create — `name`, `startDate`, `endDate`, optional `programme` |
+| PUT | `/holidays/:id` | Admin, VP | Edit |
+| DELETE | `/holidays/:id` | Admin, VP | Remove — the teaching days go straight back into the hours count |
 
 ### Class Levels
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/class-levels` | List all class levels (sorted by order) |
-| POST | `/class-levels` | Create a class level |
-| PUT | `/class-levels/:id` | Edit class level |
+| GET | `/class-levels` | List all class levels (sorted by order). Each carries `scaleLockedBy`: the closed term that froze its mark total and grading mode for the year, or null |
+| POST | `/class-levels` | Create a class level. **Primary**: 400s unless the Test ceiling leaves room for an Exam (`0 < testMaxScore < maxScore`); an omitted `testMaxScore` defaults to 30% of the total |
+| PUT | `/class-levels/:id` | Edit class level. Same primary ceiling check, applied to the values the class will **end up** with (so shrinking `maxScore` under an existing `testMaxScore` is refused). **403** if the mark total or grading mode is frozen for the year and no superadmin unlock is open |
 | DELETE | `/class-levels/:id` | Delete class level |
 
 ### Terms
@@ -268,6 +284,7 @@ See §20 Teaching Hours Coverage for how the numbers are computed.
 | POST | `/superadmin/parent-schools` | Create a parent school group with sections |
 | PATCH | `/superadmin/schools/:id/toggle` | Activate / deactivate a school |
 | PATCH | `/superadmin/parent-schools/:id/toggle` | Activate / deactivate a parent group |
+| PATCH | `/superadmin/class-levels/:classLevelId/scale-unlock` | Hand a school a **one-shot** key to change a class's frozen mark total or grading mode (see §7 → *How a class is assessed is frozen…*). The school makes the change itself; the change spends the key |
 
 ### Demo Tenant
 | Method | Route | Description |
@@ -281,13 +298,22 @@ See §19 Demo Tenant for the full picture.
 
 ## 7. Grading & Mark Calculation
 
-### Per-subject marks (teacher fills in)
+Three school types, three marking models. This section describes **secondary**; primary is
+in *Primary marking & averaging* below and university in *University GPA Algorithm* after
+that. What they share: the letter grade and remark always come from the school's own
+grading scale, never hardcoded thresholds.
+
+### Per-subject marks (teacher fills in) — secondary
 
 The teacher fills in marks for **Sequence 1** and **Sequence 2**, both out of the subject's `maxScore` (default 20).
 
 ```
 Subject average = (Seq1 + Seq2) / 2   →   e.g. 15/20
 ```
+
+One component is enough: a subject with a Seq 1 and no Seq 2 counts the missing half as 0
+rather than vanishing from the average. `null` means **neither** was entered — that subject
+is unmarked and stays out of the average entirely (it is not a zero).
 
 ### Per-subject grade & remark (auto-filled)
 
@@ -306,7 +332,7 @@ The letter grade and remark both come from the school's grading-scale ranges (th
 
 **Badge style**: squared corners (borderRadius 4px), not circular pills — applied on both web and mobile.
 
-### Final (weighted) average
+### Final (weighted) average — secondary
 
 ```
 Note coefficientée = subject_average × coefficient
@@ -343,10 +369,301 @@ Overall % = (14.4 / 20) × 100 = 72%  →  "Good"
 | 8–9 | 40–49% | D | Below Average |
 | 0–7 | 0–39% | F | Fail |
 
+**This 0–20 default is for SECONDARY only.** Primary and university both default to the
+0–100 scale (`DEFAULT_UNIVERSITY_RANGES`), because both mark on a raw /100 scale. `GET
+/grading-scale` auto-migrates a stale 0–100 scale back to this 0–20 default — but **only for
+secondary**; doing it for primary silently wiped a correct primary scale on every page load.
+
+Readers must also cope with the column holding **two shapes**: a bare array (legacy) or
+`{ ranges, classificationBands, legendRows }` (what saves write today). Always parse via
+`utils/gradingScale.ts` → `parseStoredScale`, never read `GradingScale.ranges` directly.
+
 ### Class position
 
 Shown as ordinal: **1st**, **2nd**, **3rd**, etc.
 Auto-recalculated for all students in the same class/term every time any teacher saves marks.
+
+---
+
+### Primary marking & averaging (Test + Exam, average always /20)
+
+Primary is neither of the other two. Its subjects are marked on a **raw scale** like a
+university, but its report card states the average **out of 20** like a secondary one — the
+two are independent, and conflating them is the bug this design exists to prevent.
+
+#### Per-subject marks
+
+Two components per subject, stored in the same `seq1Score` / `seq2Score` columns everything
+else uses:
+
+| Component | Column | Out of |
+|---|---|---|
+| **Test** | `seq1Score` | `ClassLevel.testMaxScore` (default 30) |
+| **Exam** | `seq2Score` | `maxScore − testMaxScore` (derived, default 70) |
+| **Total** | `score` | `ClassLevel.maxScore` (default 100) |
+
+```
+Subject total = Test + Exam        →  e.g. 21 + 50 = 71/100
+```
+
+A direct sum, not an average of the two — the same shape as university's CA + Exam, and
+unlike secondary, where the two sequences are averaged. The Exam ceiling is **derived, never
+stored**: there is one `testMaxScore` and the rest of `maxScore` is the exam, so the two can
+never drift out of sync. Both are inherited from the class by `Subject` at creation time.
+
+#### The ceilings are the admin's, and the grade is normalised onto the scale
+
+`maxScore` and `testMaxScore` are set per class, so a school can mark out of anything: 30/70
+out of 100 is the default, 50/50 out of 100 and 20/20 out of 40 are equally valid. Only two
+numbers are ever stored, and **the Exam is derived** (`maxScore − testMaxScore`), so the
+parts can never stop adding up to the whole. Changing the split is a matter of moving
+`testMaxScore`; changing the *total* means moving `maxScore` with it.
+
+Two rules make an arbitrary ceiling work:
+
+1. **The average already divides by the subject's own `maxScore`** (see the formula below),
+   so it needs nothing else. A subject out of 40 scored 36 contributes 18/20 exactly as a
+   subject out of 100 scored 90 does.
+2. **The letter grade and remark are matched after normalising the mark onto the scale's own
+   top** — the scale's top being read from its bands (any band above 20 means a 0–100
+   scale), never assumed. This is what a primary card had wrong: it matched the **raw** mark,
+   which silently assumed every class was marked out of 100. A subject out of 40 scored 36
+   was looked up as "36" and stored an **F for a clean 90%**, while the report card *screen*
+   normalised the same mark and showed an **A** — so the screen and the printed card
+   disagreed about the same pupil. Fixed in `saveEntries` (`scoreForGrade`) and in
+   `PrintableReportCard`'s `entryGrade`/`entryRemark`, which now take the subject's ceiling
+   for primary. A class marked out of 100 is unaffected: dividing by 100 and multiplying by
+   100 is what the code was already doing implicitly.
+
+The ceilings are also **validated server-side, primary only** (`validatePrimaryScale`): the
+Test must be at least 1 and strictly less than the subject total, so the Exam always has
+something left. Enforced on create AND update, and on update the pair is checked as the
+class will *end up* — cutting `maxScore` down below a `testMaxScore` set earlier is refused
+with the same message. The web form's `max` attribute was the only thing guarding this
+before, and a form is a suggestion; the endpoint is what decides. When a caller omits
+`testMaxScore` it now defaults to **30% of the total** rather than a flat 30 — identical at
+the standard `maxScore` of 100 (the familiar 30/70), and coherent below it, where a flat 30
+used to produce a Test worth more than the whole subject.
+
+A `Subject` **inherits both ceilings from its class when it is created** and keeps them.
+Changing a class's ceilings afterwards does **not** rewrite subjects that already exist, so a
+class edited mid-year can hold subjects on two different scales. The average tolerates that
+(it normalises per subject), and so do the grades now, but nothing announces it: **set the
+ceilings before creating the subjects.** Which is most of the reason for the rule below.
+
+#### How a class is assessed is frozen for the rest of the year once a term has been published
+
+**The rule (all school types):** a class's `maxScore`, its `testMaxScore` (primary) and its
+`gradingMode` — marks or nursery ratings — can no longer be changed once that class has
+**published report cards in a term of the current academic year that is no longer the current
+term**. They stay frozen until the next academic year. Enforced in `updateClassLevel`;
+`frozenScaleClasses` is the check.
+
+Why it exists, for each half:
+
+- **The ceilings.** Cards have already been handed out scored against that total, and because
+  a `Subject` keeps its own copy of the ceilings (above), changing the class's would not
+  re-scale anything — it would leave the class holding two scales at once, silently.
+- **The mode.** A card already in a parent's hands either states an average and a position,
+  or deliberately states neither. Flipping the mode afterwards makes those cards describe a
+  class that no longer exists, and leaves the year's terms disagreeing about what a report
+  card even is.
+
+The details that matter:
+
+- **Judged per class**, not per school. A class created in the second term has no published
+  history of its own and stays fully editable, which is exactly when a school is most likely
+  to be setting one up.
+- **Changing within the current term is allowed.** The term is still open, nothing about it
+  is final, and a school correcting a setup mistake in week two must not need permission.
+- **Only a real CHANGE is refused.** Every other edit (rename, fee, order, department)
+  re-sends `maxScore`/`testMaxScore`/`gradingMode` untouched, and those saves keep working —
+  the check compares against what is already stored. `gradingMode` is compared *after*
+  `resolveGradingMode`, so a client sending COMPETENCY to a secondary class (where it
+  resolves back to NUMERIC) is not refused for a change it did not make.
+- **The refusal names what was moved** — the totals, the marks/ratings choice, or both.
+- **The academic year is the current term's session**; with no current term, the newest
+  term's, so the freeze cannot silently lift in the gap between two years.
+- **The escape hatch is the superadmin's**, and it is one-shot: `PATCH
+  /superadmin/class-levels/:id/scale-unlock` sets `ClassLevel.scaleUnlockedAt`, the school
+  then makes the change itself, and the change spends the grant (back to null). The
+  superadmin deliberately does not edit the number — the school knows what the total should
+  be, the superadmin is only deciding that changing it is warranted. It is a section on the
+  superadmin's existing school detail page, beside the per-term printing toggles.
+- The Classes form **disables both fields and says which term froze them** rather than
+  letting an admin type a number the API will refuse. `GET /class-levels` returns
+  `scaleLockedBy` (the closed term's name, or null) for exactly this.
+
+One grant covers both halves: a school unlocked to fix a wrong total can also correct the
+mode in the same save, and either one spends the key.
+
+#### Term average — coefficient-weighted, normalised to /20
+
+```
+Average = Σ( (score / maxScore) × 20 × coefficient ) / Σ(coefficient)
+```
+
+Two independent things are happening here:
+
+1. **Coefficients are applied.** Primary used to take a plain unweighted mean. Cameroon
+   primary has no national coefficient table (that is a GCE/secondary thing), but schools of
+   this kind do weight the core subjects — English/French/Maths above Arts/PE — and
+   `Subject.coefficient` was already stored and set per subject, just never read for primary.
+   It is now.
+2. **Each subject is normalised to /20 *before* weighting.** The average a Cameroonian
+   primary report card states is always out of 20, whatever scale the subjects were marked
+   on. Normalising per subject rather than on the final total means a class mixing
+   `maxScore`s (a /10 subject beside a /100 one) still averages correctly.
+
+Worked example — the Class 6 card used to verify this:
+
+| Subject | Score /100 | → /20 | Coeff | Weighted |
+|---|---|---|---|---|
+| English | 71 | 14.2 | 5 | 71.0 |
+| French | 76 | 15.2 | 5 | 76.0 |
+| Mathematics | 66 | 13.2 | 5 | 66.0 |
+| Science & Technology | 72 | 14.4 | 3 | 43.2 |
+| Social Studies | 70 | 14.0 | 3 | 42.0 |
+| Citizenship | 67 | 13.4 | 2 | 26.8 |
+| ICT | 77 | 15.4 | 2 | 30.8 |
+| Health Science | 70 | 14.0 | 2 | 28.0 |
+| Physical Education | 80 | 16.0 | 1 | 16.0 |
+| Music & Arts | 69 | 13.8 | 1 | 13.8 |
+| **Total** | **718** | | **29** | **413.6** |
+
+Average = 413.6 ÷ 29 = **14.26 / 20**
+
+**`totalScore` deliberately stays the RAW sum** (718 here), not the weighted figure: it is
+the "Overall Total" a teacher adds up by hand, and normalising it would make it reconcile
+with nothing else on the page.
+
+#### What inherits the /20
+
+`classAverage`, `bestAverage` and `annualAverage` are all means/maxes over the same
+`ReportCard.average` column, so they became /20 automatically — there is no separate
+conversion for any of them, and there must not be.
+
+Two consequences worth stating, because both were live defects until they were fixed:
+
+- **The pass mark is 10/20**, not 50/100 (`TRUE_PASS_MARK_PRIMARY` in `term.controller.ts`
+  and `promotionScale.controller.ts` — the same value as secondary's, kept under its own
+  name so the two stay independently adjustable).
+- **Anything matching the AVERAGE against the grading scale must scale it back up**, because
+  a primary scale is written 0–100 while its average is /20. This affects the overall `grade`
+  field and the `appreciation` field on the printed card, and `avgMaxScore` on the report
+  card screens. Getting it wrong reads a perfectly good 14.26/20 as 14.26/100, i.e. an F.
+  Per-**subject** grades are unaffected — those are raw /100 and match directly.
+
+The web and mobile report card screens **recompute this average client-side** as marks are
+typed, so their formula must mirror `saveEntries` exactly or the figure jumps the moment it
+is saved.
+
+#### Migration
+
+`apps/api/src/scripts/recomputePrimaryAverages.ts` rewrites `average`, `totalScore` and
+`position` for every primary school under the current rule (dry-run by default, `--apply` to
+write). Cards written under the old plain-/100-mean rule store a figure the whole app now
+reads as /20 — 69.4 would print as 69.4/20 and clear every threshold in sight. **Positions
+are re-derived too**: a uniform rescale preserves rank order, but introducing coefficients
+does not.
+
+#### Nursery / pre-primary — assessed by RATING, not by marks
+
+A Cameroonian nursery class is not marked and is not ranked. Each subject carries a
+developmental **rating**, and the report card has no total, no average and no position —
+ranking three-year-olds is exactly what this mode exists to avoid.
+
+**The mode is a stored field on the class, not a guess from its name.**
+`ClassLevel.gradingMode` is `NUMERIC` (default, every existing class) or `COMPETENCY`.
+Name-matching `/Nursery/` was rejected outright: class names are free text, a French section
+calls these *Maternelle*, and a school may want Class 1 rated too. It is **primary-only** —
+`resolveGradingMode` in `classlevel.controller.ts` forces `NUMERIC` for secondary and
+university, the same shape as `resolveProgramme`'s university-only gate.
+
+The three ratings are **fixed, not school-configurable**:
+
+| Rating | Meaning |
+|---|---|
+| `Attained` | The child has the competency |
+| `Developing` | On the way to it |
+| `Not Yet Attained` | Not there yet |
+
+**Where a rating is stored — and why it looks odd.** It goes in `ReportEntry.grade`,
+verbatim, as the English label (`apps/api/src/utils/competency.ts` is the single source;
+`apps/web/lib/competency.ts` and `apps/mobile/lib/competency.ts` mirror it for display).
+Deliberately the human-readable label rather than a code, for two reasons: every report card
+template already resolves and prints a `grade` column, and there is no second mapping layer
+to drift out of sync. **Translation happens at display time through `t()`, never in
+storage**, so a French section reads *Acquis / En cours d'acquisition / Non acquis* over the
+same stored rows.
+
+**`score`, `seq1Score` and `seq2Score` stay NULL on a competency entry.** That is what keeps
+the average, the total and the position empty *without any of the arithmetic knowing this
+mode exists* — a null score already means "not marked" everywhere. `saveEntries` takes a
+separate short path for these classes that returns before all the mark arithmetic, validates
+the rating against the fixed set (a bad value 400s **before** the delete, so a bad payload
+can never wipe a card), and explicitly nulls `average` / `totalScore` / `position`.
+
+**The carry-forward guard (data-loss trap).** The competency save replaces a card's entries
+wholesale, so a caller must re-send every subject on the card. A subject is keyed on whether
+the `rating` key is **present**, not whether it is truthy:
+
+- `rating` absent → keep whatever rating that subject already has;
+- `rating: null` or `''` → clear it (so "unset this" stays expressible);
+- `rating: '<one of the three>'` → set it.
+
+Without this, opening a nursery subject in an old numeric grid and hitting Save would wipe
+the whole class's ratings, since that grid re-sends every subject with seq1/seq2 and no
+`rating` key at all.
+
+**"Is this card complete?" is written in FOUR places**, and all four are competency-aware or
+a nursery card could never be published: `findPublishBlockers`, `getReadinessDetail`,
+`publishReportCard`, and `getClassReadiness` — the last keyed **per class**, because one
+primary school runs both modes at once (nursery rated, Class 1–6 marked). For a rated class,
+"complete" means every subject carries a rating.
+
+**The mode is not freely switchable forever.** It can be changed at will while a term is
+still open, but it freezes with the class's mark totals once a term of the year has closed
+with published cards — see *How a class is assessed is frozen…* above. Under that freeze it
+is the superadmin's one-shot unlock or nothing.
+
+**Clients never guess the mode.** `GET /report-cards/:id` and
+`GET /report-cards/class-overview` both return `gradingMode`, and the overview's entries
+carry `grade` so a marks sheet can build its rows from that one response. `marksFilled` on
+the overview is judged on ratings for a rated class, not on seq1/seq2.
+
+**What the UI does with it** (all of it branches on the class, never the school):
+
+- **Marks entry** — a rated class opens a **rating picker** instead of the numeric
+  spreadsheet: three buttons per pupil, no Test/Exam tabs, no maximum, no keyboard on
+  mobile. Tapping the rating a pupil already has clears it. A *"Rate everyone still blank"*
+  bar fills only the unrecorded pupils, so it can never overwrite a deliberate pick and
+  needs no confirmation. Only pupils whose rating actually changed are written.
+  (`CompetencyEntry.tsx` on web, `components/CompetencyMarksEntry.tsx` on mobile; the route
+  file dispatches to it after reading the class's mode.)
+- **Report card screens** — the average / overall grade / position / class average tiles are
+  replaced by a rated count and a plain statement that this class has none; the subject
+  table shows one Rating column.
+- **Printing** — the school's **saved design is reused**, with every measuring column
+  dropped at render time (score, Test/Exam, coefficient, credit, grade point, weight,
+  remarks, min/avg/max, jury decision) and the footer bands (TOTAL / TERM AVERAGE / CLASS
+  POSITION) suppressed, leaving subject + rating. The summary strip and the grading legend
+  are skipped entirely. One saved design therefore prints correct cards for both the nursery
+  and Class 1–6 of the same school. See `PrintableReportCard`'s `gradingMode` prop.
+- **AI remarks are not offered** on a rated card: the draft is written *from* the average,
+  and there isn't one. The general remark is still required to publish, written by hand.
+
+**Locks are identical to the numeric sheet's** — a published card, the school's
+`marksEntryMode`, and a closed term all behave exactly as they do for marks.
+
+#### Converting an existing nursery class
+
+`apps/api/src/scripts/convertClassToCompetency.ts` (dry-run by default, `--apply` to write)
+flips a class to `COMPETENCY` and rewrites its existing numeric cards as ratings: ≥70%
+`Attained`, ≥50% `Developing`, else `Not Yet Attained`, then nulls the card's average,
+total and position. Percentage-based, so it is independent of whatever `maxScore` the class
+was marked on. It is idempotent — an already-converted class is left alone. Live ratings are
+never derived from a score; only this one-off migration does that.
 
 ---
 
@@ -390,6 +707,46 @@ Semester GPA = Σ(WP for all courses in semester) / Σ(Credits for all courses i
 
 All courses registered in the semester are included, **including failed courses (F, GP=0)**.
 
+**A compulsory course with no marks counts as ZERO — it is not skipped.** A university
+department is a fixed course list: every student in it sits every course, no exceptions. So a
+compulsory course with no entry means the student did not sit it, which is a zero. It prints
+`00`, grades F, takes a FAIL jury decision, and carries its full credits into the GPA
+denominator at 0 grade points, exactly like any other failure. A missing CA or Exam component
+is treated the same way (`TOTAL = CA + Exam` with a missing part as 0), so one component is
+enough to give the course a real total.
+
+**Optional courses (`Subject.compulsory = false`) work by EXCLUSION, not by opting in.** Marking
+a course optional does not on its own take it off anybody: it only makes it possible to tick
+individual students off it, on Courses → the course → "Not taking". Everyone else still sits
+it, so an optional course with nobody excluded behaves exactly like a compulsory one. That
+default is deliberate — an opt-IN list would have silently emptied every optional course the
+day it shipped.
+
+A ticked-off student's course (`SubjectExclusion`) disappears completely and consistently: it
+is not listed on their report card, it never blocks publishing, and it contributes neither
+grade points nor credits to their GPA. Anything answering "which courses does this student
+offer" must consult it, or two screens will disagree about the same student.
+
+Two guards: a compulsory course refuses exclusions outright (make it optional first), and a
+student who already has a mark for the course cannot be ticked off it — the mark is evidence
+they sat it, so the marks have to be removed first as a deliberate act.
+
+Note the flag alone never excuses a course from the GPA. Only an exclusion does. Testing
+`compulsory !== false` in the GPA sums instead made every optional course vanish for the
+students who DO take it (caught by test, 2.29 vs 4.00 on a two-student class).
+
+**This is UNIVERSITY-ONLY.** Primary and secondary have optional subjects and streams, so an
+unmarked subject there stays out of the average entirely, which is what the API's average has
+always done ("skip unfilled subjects").
+
+Getting this wrong is what produced the original bug report: the report card detail page
+zeroed unmarked courses while the report cards LIST iterated only real entries and could not
+see them at all, so the same student's first semester read 1.33 (20/15) on one screen and
+1.67 (20/12) on the other. Any GPA computed from `reportCard.entries` alone is wrong for a
+university — it must be compared against the class's compulsory subject list for that term.
+Three places do this and must stay in step: `getReportCards` (per-card GPA and CGPA),
+`getReportCard` (CGPA), and the report card detail page's client-side semester GPA.
+
 #### Step 4 — CGPA (Cumulative GPA)
 
 ```
@@ -397,6 +754,27 @@ CGPA = Σ(WP for ALL courses, both semesters) / Σ(Credits for ALL courses, both
 ```
 
 Again, every registered course (pass or fail) is included — this matches standard university practice.
+
+**The CGPA appears only on the card that CLOSES the academic year**: the second semester at a
+university, the third term everywhere else (where the equivalent year-end figure is the
+**annual average**, which has always followed this rule). Judged from the session's own terms
+ordered by `startDate`, not by counting to a fixed number, so a school running a different
+shape still works.
+
+Why it is gated: the CGPA is cumulative over every published semester the student has, with no
+"up to this card" bound. On a first-semester card that meant showing a total that included the
+second semester's marks — results that did not exist when that card was issued — and the
+figure moved on its own the moment a later semester was published, so reprinting an old card
+gave a different number than the one handed out. A first semester now shows no cumulative at
+all, which is also why the first semester's GPA and CGPA no longer appear to disagree.
+
+**Classification (step 6) appears on EVERY semester**, unlike the CGPA. It answers "where does
+this student stand", which is worth knowing in December as much as in June. It bands the CGPA
+once the year has one, and that semester's own GPA before then, so the classification always
+describes a figure printed beside it on the same card.
+
+Only the CGPA itself is withheld, and it prints `—` rather than falling back to the semester
+GPA: that is a different figure and must never be relabelled as a cumulative one.
 
 #### Step 5 — Overall Credits Earned
 
@@ -458,11 +836,14 @@ School-wide toggle in Report Card Design (`highlightFailingRed`, default **on**,
 Each subject has:
 - **Name** — e.g. "Mathematics"
 - **Class Level** — selected from existing classes (dropdown)
-- **Max Score** — what marks are entered out of (default 20)
-- **Coefficient** — weight in the final average (default 1)
+- **Max Score** — what marks are entered out of. Default 20 (secondary); **100 for primary and university**. Inherited from the `ClassLevel` at creation.
+- **Test Max Score** — **primary only**: the Test component's ceiling out of `maxScore` (default 30). The Exam ceiling is `maxScore − testMaxScore`, derived rather than stored. Ignored by secondary/university. See §7 → *Primary marking & averaging*.
+- **Coefficient** — weight in the final average (default 1). Read by **secondary and primary**; a university weights by `credit` instead.
 - **Required Hours** (optional) — target teaching hours: per semester for universities (the row is already semester-scoped via `term`), per academic year for primary/secondary. Drives §20 Teaching Hours Coverage; leave blank to skip tracking a subject entirely.
 
 **Subject exclusivity**: each subject in a class belongs to exactly one teacher. Assigning it to a new teacher automatically removes it from the previous one. Admin sees a yellow notice listing what was reassigned.
+
+**Primary is the exception**: a primary class is taught by a shared **team of 1–3 teachers**, all of whom hold every subject in that class at once. That is a team, not a handover, and coverage/absences treat it as one — see §20 → *Primary shared teaching teams*.
 
 ---
 
@@ -483,7 +864,7 @@ Each subject has:
 A report card can only be published when **ALL** of these are true — checked in the API, not just the UI:
 
 1. The class has at least one **subject**.
-2. **Every subject has both sequences filled** (Seq1 AND Seq2) — i.e. every teacher has filled their marks. A subject with no assigned teacher still blocks until its marks are entered.
+2. **Every subject has both sequences filled** (Seq1 AND Seq2) — i.e. every teacher has filled their marks. A subject with no assigned teacher still blocks until its marks are entered. On a **rated (nursery) class** this rule reads "every subject carries a rating" instead — see §7 → *Nursery / pre-primary*.
 3. The report card has **general remarks** — **required for every class** (updated 2026-06-15; previously only classes with a class master).
 
 The bulk **"Publish Class"** action checks the whole class: the dropdown button is disabled until every student passes, and the API reports per-student `issues` (missing sequences / missing remarks / no subjects) for any it skips.
@@ -516,6 +897,7 @@ The admin report card detail page is **read-only for marks**. Admin sees subject
 - Go to: Classes → select class → select subject → select sequence
 - **Sequence labels are term-aware** (Cameroon system): Term 1 → Seq 1/2, Term 2 → Seq 3/4, Term 3 → Seq 5/6. Data still stores in `seq1Score`/`seq2Score`; only the displayed label changes (derived from the term name — see `lib/sequences.ts`, web + mobile).
 - Marks are entered one student per row, out of the subject's maxScore
+- A **"Copy marks from <other sequence> → fill here"** bar bulk-fills the tab from the other sequence. **Primary/secondary only.** It is never offered at a university, where CA is out of 30 and the Exam out of 70: neither is a sensible starting point for the other, since copying CA into Exam would silently halve every student and copying Exam into CA would write scores above the CA maximum. The shortcut only means something where both sequences share one `maxScore`. Resit has nothing to copy from either way. The bar also respects `ADMIN_ONLY` and per-row locks, or it would be a bulk back door around cells the user cannot type into.
 - The **REMARK** column shows live performance text (e.g. "Average") from the grading scale
 - Saving marks does **not** overwrite the general remarks set by the class master
 - Report card is auto-created for students who don't have one yet
@@ -715,7 +1097,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 | Terms | `/terms` | Admin |
 | Report Cards list | `/report-cards` | Admin (full list), Teachers/Class Master (class view) |
 | Report Card detail | `/report-cards/:id` | Admin (read-only) |
-| Marks entry | `/report-cards/class/:class/:subjectId` | CLASS_TEACHER, CLASS_MASTER |
+| Marks entry | `/report-cards/class/:class/:subjectId` | CLASS_TEACHER, CLASS_MASTER — a **rated (nursery) class** opens the rating picker instead of the numeric grid (§7) |
 | Card Design | `/report-card-design` | Admin |
 | Class List Design | `/class-list-design` | Admin (desktop-only) |
 | Grading Scale | `/grading-scale` | Admin |
@@ -739,7 +1121,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 | Schools | `(tabs)/schools.tsx` | SUPERADMIN | All schools grouped by ParentSchool; toggle active/inactive per group/section; FAB to create standalone school |
 | Classes | `(tabs)/report-cards.tsx` | Teachers, Class Master | Class list; tapping navigates to subjects screen |
 | Class subjects | `class/[classLevel].tsx` | CLASS_TEACHER, CLASS_MASTER | Subjects + sequence selector; CLASS_MASTER sees purple "Add/Edit General Remarks" banner at top |
-| Marks entry | `marks/[subjectId].tsx` | Teachers + Admin/VP | Enter marks; in-place **CA / Exam / Resit switcher** (`router.setParams`); rows lock read-only under `ADMIN_ONLY` (for teachers) and on published cards (for everyone), with a banner naming the remedy per role |
+| Marks entry | `marks/[subjectId].tsx` | Teachers + Admin/VP | Enter marks; in-place **CA / Exam / Resit switcher** (`router.setParams`), labelled **Test / Exam** for primary, where each component is capped at its own ceiling (the phone used to cap both at the subject total); rows lock read-only under `ADMIN_ONLY` (for teachers) and on published cards (for everyone), with a banner naming the remedy per role. A **rated (nursery) class** dispatches to `components/CompetencyMarksEntry.tsx` instead: one card per pupil, three tappable ratings, no keyboard (§7) |
 | Class Master remarks | `class-master/[classLevel].tsx` | CLASS_MASTER | Students list with averages + card status; bottom sheet modal to edit per-student general remarks |
 | Report card detail | `report-card/[id].tsx` | CLASS_TEACHER, CLASS_MASTER | Grading scale loaded; per-subject badge shows remark + color (squared); summary: Average (X.X), Grade (remark), Position (ordinal) |
 | Students | `(tabs)/students.tsx` | SCHOOL_ADMIN, VICE_PRINCIPAL | Admin student list; registration form includes optional Date/Place of Birth (DOB as `YYYY-MM-DD` text, same pattern as the fees ledger) |
@@ -824,17 +1206,161 @@ Enforced server-side in `apps/api/src/config/demo.ts` (`demoLimitBlock`) — ret
 Tracks whether a teacher actually covers the hours a Subject/Course is supposed to take — per **semester** for universities, per **academic year** for primary/secondary — computed from the existing weekly timetable rather than a separate day-by-day attendance register.
 
 ### How the numbers are computed
-- `Subject.requiredHours` (optional Int) is the target. A university course row is already scoped to one semester via `Subject.term`, so the target naturally means "this semester"; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
-- A teacher's `TimetableSlot` rows recur every week, so **scheduled hours** = for each matching term, how many times that slot's weekday occurs between the term's start/end dates × the slot's duration. This is available the moment a timetable exists, even before the term starts.
+- `Subject.requiredHours` (optional Int) is the target, and it belongs to the **course**, not to a teacher. Two lecturers sharing a 30-hour course are at 30 between them, never 30 each. (How that 30 is *split* between them differs for a primary teaching team — see *Primary shared teaching teams* below.) A university course row is already scoped to one semester via `Subject.term`; a primary/secondary subject row has no `term`, so the target means "this academic year" (summed across all terms in the session).
+- **A coverage row is one COURSE**, with a `contributors[]` breakdown naming who taught what and over which window, and a `gaps[]` list naming any stretch nobody held it. Status and `isFinal` are computed at course level, never taken from a contributor: each contributor measured its own slice against the full target, which is only right when there is exactly one of them.
+- **Scheduled hours** = for each term the course scopes to, how many times the slot's weekday occurs between the term's start/end dates × the slot's duration — **minus school closures** (see Holidays below), and **clamped to the window the teacher actually held the course**.
 - **Taught hours** = scheduled hours elapsed so far, minus any `TeacherAbsence` hours in that span.
-- **Projected/final hours** = full-period scheduled hours minus all logged absences (past + future planned ones). While the scope (term/year) is still open this is a live **projection**; once every scope term has ended it becomes the **final** total.
-- Status is `NO_TARGET` (no `requiredHours` set — excluded from the report), `UNDER`, `EXACT`, or `OVER`, compared against the projected/final total (0.5h tolerance for "exact").
-- All arithmetic lives in one place: `apps/api/src/utils/teachingHours.ts` (`computeCoverage`, `resolveScopeTerms`, `countWeekdayOccurrences`), shared by both the admin and teacher-facing endpoints so the numbers can never drift apart between the two views.
+- **Projected/final hours** = full-period scheduled hours minus all logged absences (past + future planned). While the scope is still open this is a live **projection**; once every scope term has ended it becomes the **final** total.
+- Status is `NO_TARGET`, `UNDER`, `EXACT`, or `OVER`, compared against the projected/final total (0.5h tolerance for "exact").
+- Counting runs **only inside real term dates**. The By Teacher totals used to collapse a whole session into one span, which counted the breaks *between* terms as teaching weeks; they now iterate the actual `Term` rows.
+- All arithmetic lives in one place: `apps/api/src/utils/teachingHours.ts` (`computeCoverage`, `resolveScopeTerms`, `countTeachingWeekdays`, `mergeDateRanges`), shared by both the admin and teacher-facing endpoints so the numbers can never drift apart between the two views.
+
+### Primary shared teaching teams (primary only)
+A primary class is taught by a **team of 1–3 teachers who hold every subject together** — not
+a handover, which is what `startedAt`/`endedAt` model everywhere else. Where 2+ teachers are
+*currently and concurrently* assigned to the same subject (`endedAt: null`), coverage treats
+them as one team:
+
+- **Hours are shared, not duplicated.** The class's periods are de-duplicated across the team
+  (each member holds their own `TimetableSlot` row for what is really the same class period,
+  so they are matched by day + time + window, never by row id), and each member is credited
+  an **equal share**: 2 teachers on a 30-hour class are at 15 each, 3 at 10 each. The shares
+  sum back to the class's real total, so no aggregation elsewhere had to change.
+- **A period is only missed when EVERY member is absent for it.** One teacher covering for
+  another is not a lost class, so the team's missed periods are the **intersection** of the
+  members' reports, not the union. Below 100% absence the hours are untouched.
+- **An individual's own absence still stands on their record** even when a teammate covered —
+  it is visible on their contributor line, it just does not dock the class's taught hours.
+- A teacher who has since **left** a shared class (`endedAt` set) drops out of the team and is
+  measured individually again, exactly like any ordinary handover.
+
+For this to mean anything the team must actually be **scheduled for the same periods** — a
+day-split timetable (one teacher Mondays, another Tuesdays) never produces a shared period, so
+"both absent at once" can never occur and the rule is inert.
+
+### Which courses appear
+A course earns a row by having an hours target **or** by having absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed.
+
+Gaps deliberately do **not** earn a row. Assignments rarely start on a term's first day, so nearly every course has an uncovered stretch; including them listed all 112 courses in one school and buried the two that mattered.
+
+### Holidays (`SchoolHoliday`)
+- A named, **inclusive** date range during which the school is closed — public holiday, mid-term break, anything that cancels teaching. Admin-managed on the Terms page, since it is the same academic calendar: terms say when teaching happens, holidays carve out the days inside them when it does not.
+- Ranges **may overlap** and are merged before subtracting, so "Easter 12-16 April" plus "Good Friday 14 April" removes that day once, not twice.
+- A period falling inside a closure is not counted as taught, and **an absence reported for such a period stops subtracting** — nobody missed a class that never ran. Without that, declaring a holiday after teachers had already reported would dock the hours twice.
+- `programme` (nullable) scopes a closure to one sitting. **NULL means the whole school**, which is what every holiday means by default. Only set it when one sitting runs through a closure the other observes. The picker is hidden for non-universities, since evening cohorts are a university concept for now.
+- Hours are **derived on read, never stored**, so declaring a closure after the fact retroactively corrects every total and deleting one puts those hours straight back. No backfill, nothing to repair.
+
+### Assignment history and mid-term handover (`TeacherSubject.startedAt` / `endedAt`)
+- An assignment records **when a teacher took a course and when they gave it up**. Hours only count inside that window, so a mid-term handover splits a course's hours between the two teachers at the date the admin recorded.
+- An ended assignment is **kept, never deleted** — it is the only record that the previous teacher ever taught it, and deleting it would erase the hours they are owed. Reassignment sets `endedAt`; it used to delete the row outright.
+- The handover date is set by the admin ("Effective from" on Assign Courses, defaulting to today), so recording a departure five days late still credits those five days to the right person. The outgoing teacher's timetable slots are archived **as of that date**, not "now".
+- Saving assignments is a **diff**, not delete-and-recreate. Re-saving an unchanged list must not reset anyone's `startedAt`, which would silently erase months of accrued hours.
+- **Deactivating a teacher closes their windows**, so a course they held immediately shows as an unstaffed gap rather than appearing covered forever. Reactivating deliberately does not reopen them.
+- `(userId, subjectId)` is no longer unique: a teacher may hold a course, hand it over, and take it back, which is two legitimate rows. "Only one ACTIVE assignment" is enforced in code.
+- Every read that means "currently holds this course" filters `endedAt: null` — marks access, dashboards, course lists, delete-warning counts. An ended row must never grant access or ownership.
+
+### Gap flagging
+A `gap` is a stretch of a term that no assignment window covers: nobody held the course, so nothing was taught and nothing accrued. Elapsed gaps are teaching already lost; upcoming ones are a staffing warning while there is still time to act.
+
+Anything **before a course's first-ever assignment is not a gap**. That stretch nearly always means the record did not exist yet, not that a class went untaught — a school setting the system up mid-term would otherwise see every course flagged. Gaps *between* assignments (a handover with nobody in the middle) and after the last one are still caught, which is the case that matters.
 
 ### Absences
-- `TeacherAbsence` — one row per missed period (`schoolId`, `teacherId`, `timetableSlotId`, `date` as `"YYYY-MM-DD"` text, `recordedById`). "Whole day absent" simply creates one of these for every slot the teacher has that weekday — not a separate kind of record.
-- A teacher can report their own absence; an admin/VP can log one on any teacher's behalf (e.g. informed some other way). Only real subject/course slots count — a private/personal timetable slot can't be marked absent since it isn't tied to any `requiredHours` target.
-- A teacher can plan ahead (a future date) as well as report after the fact — the projection accounts for both.
+- `TeacherAbsence` — one row per missed **period** (`schoolId`, `teacherId`, `timetableSlotId`, `date` as `"YYYY-MM-DD"` text, `periodIndex`, `recordedById`). Per period is what keeps the hours arithmetic and the "N periods missed" totals right.
+- **Reporting and deleting are atomic per SLOT.** The slot is the class the admin put on the timetable, so it is the smallest thing anyone can be absent from: a 07:30-09:10 double is one class of two periods, and "I will miss it" cannot mean half of it. Deleting one row therefore clears every period of that class on that date, and the list is grouped so it shows as a single entry with one delete button.
+- Only real subject/course slots count — a private/personal slot can't be marked absent.
 
-### Known simplification
-`TimetableSlot` isn't session-scoped or versioned (same as the rest of the timetable feature) — if the timetable changes mid-term, the projection is computed off the *current* schedule applied across the whole period, not what was actually true before the change.
+#### Who may report, and until when
+| | Teacher | Admin/VP |
+|---|---|---|
+| Report a class still to come | yes | yes |
+| Report a class already **started** | **no** | yes |
+| Report a class already **ended** | no | no |
+| Delete before an admin has reviewed | yes | yes |
+| Delete **after** an admin has reviewed | **no** | **yes** |
+| Delete an absence **an admin recorded** | **no** | **yes** |
+| Delete once the class is **over** | no | **no** |
+
+The cutoff is judged on the whole class, not on each period inside it. "Whole day" quietly skips classes past the cutoff and reports the rest; explicitly-picked ones are rejected outright, naming the date.
+
+`seenByAdmin` is written by an **explicit review action**, `POST /teacher-absences/mark-seen`, never as a side effect of fetching. Reviewing writes no notification (it is a read on the admin's side), so the teacher's screen is told over the realtime channel instead, or it would keep offering a delete the API now refuses.
+
+**What counts as a review** — either of:
+- An admin **opening** the teacher's absences: the per-teacher drill-down modal on Teaching Hours, or landing on `/teacher-timetable`. Fired from a genuine focus/open event only.
+- An admin **reading the `TEACHER_ABSENCE` notification**, individually or via *mark all read*. An admin who reads the notification and acts on it some other way (a phone call, a word in the corridor) has reviewed it; requiring the deeper drill-down left the teacher able to delete a report the admin had already dealt with.
+
+**What does NOT count**: any background refetch. `GET /teacher-absences` is a **pure read with no side effect**, which it had to become — the realtime `absences:changed` listener calls it, and both routers keep a screen mounted after you navigate away from it (pushed underneath whatever is on top now). Its listener therefore stays live and refetched every time *anyone* in the school reported an absence, which marked that teacher's absences reviewed within milliseconds of creation, routinely before an admin had opened the app at all. **A background sync must keep data current without ever counting as a review** — that split is the whole point, and collapsing it back reintroduces the bug.
+
+An absence an **admin recorded** is never the teacher's to retract, from the moment it is written and regardless of how far off the class is. `seenByAdmin` does not cover this on its own: it starts false on a record the teacher never filed, so until an admin next happened to open the list the subject of the record could quietly erase it, including before ever opening the notification that told them it existed. The test is `recordedById !== teacherId` (derived, no stored field), judged across the whole class because deleting clears every period of it. Teacher-facing lists show a padlock reading "recorded by admin"; admins are unaffected and still delete until the class ends.
+
+`School.absenceGraceMinutes` remains as a second cutoff on teacher retraction. It is null on every live school, so it has no effect today, and it is **not** part of the rules above.
+
+### Realtime
+Socket.IO runs on the same port as the REST API, so an offline install needs no extra host or firewall rule.
+
+- **Signals only, never data.** Every event is "something changed, refetch". All authorization stays in the REST controllers; pushing payloads through rooms would mean re-implementing school scoping in a second place, where the failure mode is silent cross-tenant leakage.
+- Rooms (`user:{id}`, `school:{id}`) are joined **server-side from the verified JWT**, never from client input.
+- Events: `notifications:changed` (including on **read**, or the bell badge sits stale while the list beside it shows everything read) and `absences:changed` (created, removed, **or locked** by an admin's review).
+- Polling is kept as a slow fallback (150s) so a dead socket degrades to stale rather than silently frozen. This is **not** push: nothing arrives while the app is closed.
+
+### Notifications (`Notification`)
+An in-app inbox, not OS push — nothing arrives while the app is closed. Fired on absence report/retraction, admin-logged/removed absences, and course reassignment. Admins see them in the sidebar bell; teachers on their mobile home header and the web sidebar.
+
+`Notification.data` stores **where tapping it leads**, captured when the notification is written rather than resolved on read. That is not an optimisation: a retraction DELETES the absence and a reassignment ARCHIVES the slots, so by the time anyone opens the message the state it describes is gone and nothing could look it up. Clients compare `data.teacherId` with their own id — their own timetable if it matches, the read-only view of that teacher's if not.
+
+Rows written before this exist have `data: null` and are simply not tappable. Admin-recipient ones can never be backfilled, because the teacher they concern is named only in the body prose.
+
+The timetable banner appears **only for things the grid cannot show** — a removed absence (the row is gone, so the week looks ordinary) or a reassigned course (its slots are archived, so they are absent entirely). A live absence is drawn on its own period from fetched data, never from route params, so it can never outlive the record.
+
+### Deleting a timetable version
+Refused when absences are recorded against it. `TeacherAbsence` cascades on `TimetableSlot`, so deleting those rows would destroy attendance history with no warning and silently rewrite the hours that subtract from it. The response names the count; the admin edits the current timetable instead, which archives rather than destroys.
+
+### Day and Evening sections (`ClassLevel.programme`)
+- A class belongs to the **day section** or the **evening section**. This records which section/intake a class is, **not what time it is taught**. A university's Level 3 (Degree) is taught in the evening but follows the day curriculum and continues from Level 2 day, so it is a DAY class; only Level 1 and Level 2 Evening are the evening section.
+- **Both sittings share the same department.** A university has no department rows: the department is parsed out of the class name, and every parser strips the section marker first, so `HND Nursing - Level 1` and its evening twin are one department, "Nursing". Secondary is the same by a different route, since a class points at a real `Department` row by id.
+- **Courses are per class, not per department.** Each sitting holds its own `Subject` rows, so the evening cohort can have its own credits, required hours and lecturer. Creating an evening class therefore offers to copy the day class's courses (the existing copy-subjects action); the copies are independent from then on, and nothing warns if the two drift apart.
+- A university runs the same programme twice with the **same lecturers and different students**. Each sitting is its own `ClassLevel`, so students, marks, positions and fees are already separate, and one lecturer can be assigned to both. The two sittings need not offer the same levels: an evening-only level is normal. Curriculum is cloned with the existing copy-subjects action.
+- A **secondary** evening programme with a genuinely different curriculum is NOT this: that is a separate `School` under the same `ParentSchool`. Note that `User.schoolId` is single, so shared staff would need two accounts.
+- The class NAME carries an `(Evening)` marker purely because classes are referenced by name (`Student.classLevel` and `Subject.classLevel` are strings, not foreign keys) and `ClassLevel` is unique on `(schoolId, name)`. `ClassLevel.programme` is the field that means it.
+- **"Evening" must never appear on a printed document.** The marker is stripped at the single entry point of `PrintableReportCard`, which every layout and the sections renderer pass through, and wherever a class name is displayed. Every university class-name parser (`univDept`, `univLevel`, `levelGroupOf`, `deptFromClassName`, …) normalises the name first, because their patterns anchor at the end of the string, which is exactly where the marker sits — getting this wrong dropped an evening class out of the Add Student picker entirely.
+
+### Day and Evening have independent bell schedules
+- The Timetable page's **Set Up Periods** editor has no "whole school" option any more. `TimetablePeriod.programme` is a required `DAY`/`EVENING` tag (default `DAY`), and for universities the modal shows two fully separate tabs — Day periods and Evening periods — each with its own list of teaching periods and breaks. Every other school type still sees one plain list, since Evening doesn't exist for them.
+- **Minutes-per-period is per sitting too**: `School.dayPeriodMinutes` and `School.eveningPeriodMinutes` (was one shared `periodMinutes`). An evening course runs its own curriculum with its own evaluations, so its missed-period count must never be measured against the day's period length, or the reverse. Resolved per class/course via `getProgrammeByClassLevel` + `periodMinutesFor` (`coverage.controller.ts` / `utils/teachingHours.ts`) everywhere a period count is derived from a slot's duration: timetable save validation, teacher-absence creation/listing/counts, and coverage/teaching-hours totals.
+- Migration `20260801151843_split_day_evening_period_minutes` backfilled every pre-existing period by clock time (`>= 16:30` → EVENING, else DAY) and copied the old shared `periodMinutes` into both new columns, so existing schools are unaffected until an admin sets the Evening value separately.
+
+### Which sitting a lecturer teaches
+`getTeachers` returns `programmes` — the distinct sittings of the classes their **live** course assignments belong to, so the Teachers list can badge a lecturer Day, Evening, or Day & Evening. Derived from assignments rather than timetable slots: an assignment is what generates the hours, and it survives a timetable being rebuilt. An ended assignment stops counting, so handing the evening course away drops them back to Day. Empty when they hold no courses, which shows as no badge rather than a guess.
+
+Shown for universities only — every other school type has DAY classes exclusively, so the badge would read the same on every row.
+
+### Walkthrough: evening department → lecturer assignment
+End-to-end steps for a university admin standing up a new evening sitting (this whole flow is university-only, see above):
+
+0. **Decide the department needs an evening sitting.** Only universities have one; if the day department already exists, its name and fees can be copied rather than retyped.
+1. **Classes page → Add Department.** If no evening classes exist yet, the Section toggle (Day/Evening) is open on the create modal — pick **Evening**. If evening classes already exist, the page shows ALL/DAY/EVENING chips above the department list; switch to the **Evening** chip first, then Add Department (the section is then locked to Evening for anything created from there).
+2. **Base it on the day department (optional but typical).** Tick "Take the department from the day section", pick the matching day department from the dropdown — this locks the Department Name field to match it (so the two stay one department) and copies its abbreviation/fee/max score. Tick which courses to copy across; copies are independent from that point (editing one never touches the other, and lecturers never carry over).
+3. **Fill in the rest:** Department Name (skip if taken from the day twin), Level (only Level 1 or Level 2 — Level 3 is day-only, it continues the day curriculum), Abbreviation (for student matricules), Max Score per Course, and the fee (Level 2's is its own entry fee, not derived from Level 1).
+4. **Save.** This creates one `ClassLevel` row, e.g. `HND Software Engineering - Level 1 (Evening)`. Repeat step 1–4 once per level if the evening sitting needs both Level 1 and Level 2.
+5. **Add courses, if not already copied in step 2.** Courses page → pick the department card (badged **Evening**) → pick the semester → Add Course. Courses live on the class, not the department, so day and evening keep separate course lists even though they share a department name.
+6. **Assign the lecturer.** Teachers page → open the lecturer → Assign Courses. The picker groups courses by class level, so the evening ones appear under their own `(Evening)`-labelled group, separate from the day group of the same department. Tick the evening courses, set "Effective from", and Save. One lecturer can hold both the day and evening sections of the same course — assignment is per class level, not exclusive.
+
+### Renaming a class carries its references
+A class is referenced **by name**, not by id: `Student.classLevel`, `Subject.classLevel`, `User.masterClassLevel` and `ExcelTemplate.classLevels` are all plain strings. `updateClassLevel` therefore rewrites all four in **one transaction** when the name changes, and reports what moved ("Moved with it: 22 students, 6 subjects/courses"). Renaming used to change only the `ClassLevel` row, which stranded everything pointing at it: students vanished from their class, courses lost their marks sheet, and the class master lost the class they write remarks for, all silently. **Deleting** a class carries the same exposure, so it is guarded: a class with students or subjects/courses is **refused** with the counts named ("still has 22 students and 6 courses"), because deleting must never be a quiet way to destroy a roster or a term's marks. Weak references hold no data of their own and are cleaned up instead of blocking: a class master assigned to it is unassigned, and the class is dropped from any Excel template's class list, both reported in the response.
+
+### Who can be scheduled for what
+- The timetable builder only offers a teacher the courses/subjects **they are already assigned**, scoped to the period now running: for a university, courses whose `Subject.term` is the current semester; for primary/secondary, subjects for the current academic year (`term` null means the whole year, which is how they are always stored).
+- **Assigning a course is not done here.** An admin assigns on the Teachers page (`assignTeacherSubjects`), which is also where the "a university course has exactly one lecturer" hand-over lives (it takes the course off the previous lecturer, archives their periods for it and notifies them). Saving a timetable no longer writes to `TeacherSubject` at all.
+- `saveTimetable` enforces the same rule, so a stale page can't get round it. Pairs already on the teacher's live timetable are grandfathered, because timetables built under the earlier "any course in the department" rule can hold a course since unassigned. In the builder, a slot already on the grid also keeps its own course selectable, so opening it to change a room can't blank the course.
+
+### Period structure (the school's bell schedule)
+- `School.periodMinutes` (optional Int) is how many minutes the school counts as **one teaching period**, e.g. 50. It is set once, school-wide, on Set Up Periods, and applies to every class of every type (university, primary, secondary). A 1h40 class is therefore 2 periods, not one long one.
+- A row in the period grid (`TimetablePeriod`) is **as many periods as the admin types** — the first row of the day can be a double period and the next a single. The admin only picks the start time and the number of periods; the end time is derived as start + N × `periodMinutes`, so a teaching row is always a whole number of periods. Breaks (`isBreak`) are exempt and can be any length.
+- A row that is *not* a whole number of periods (typically one saved before the school set its period length) is flagged in the grid and **blocks the save**, with every offending row named at once. It has to be corrected by hand: rounding it automatically would silently rewrite the school's real bell schedule.
+- The period rules apply to what is being added or **retimed**, not to what is already scheduled. A slot whose day/time/course is unchanged is left alone, because setting a period length (or reshaping the bell schedule) instantly makes every timetable built on the old grid non-conforming, and validating those too would leave an admin unable to save any change until every stale class had been retimed in the same sitting.
+- **A class may never run across a break.** A double period that reaches into one is really two blocks either side of it, and counting the break as taught time would inflate both hours totals and any absence logged against it. Enforced in the API (`saveTimetable`) as well as the builder. **Private/extra classes are exempt** — being off the period grid is what they are for — as are Saturday/Sunday classes, which already don't follow the grid.
+- Hours coverage above is counted in real 60-minute hours; **absences are counted in periods** (`slotPeriods`), so a missed 100-minute class is 2 periods missed. Until `periodMinutes` is set, that falls back to counting 1 per missed slot.
+
+### Timetable versions and the hours maths
+A coverage row uses the version of the timetable that was **live when the assignment window closed**: the current one (`archivedAt` null) for a teacher who still holds the course, and the rows archived *at* the handover for one who gave it up. Superseded versions — archived earlier because an admin re-saved — are excluded, so an old version is never counted alongside its replacement.
+
+This deliberately does **not** bound a slot by its `createdAt`. A timetable entered halfway through a term still describes the whole term, and counting only from the day it was typed in would rob teachers of hours they had already taught.

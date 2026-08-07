@@ -9,12 +9,15 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getCurrentTerm, getClassLevels, getClassOverview, getAllReportCards, bulkPublish, ReportCardSummary, Term } from '@/lib/api/reportcards'
 import { getClasses as getClassesFull } from '@/lib/api/classes'
+import { stripProgrammeSuffix } from '@/lib/programme'
+import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getDepartments, Department } from '@/lib/api/departments'
 import Pagination from '@/components/Pagination'
 
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
+import { onRealtimeDebounced } from '@/lib/socket'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -171,6 +174,12 @@ function TeacherReportCards() {
     fetchData()
   }, [fetchData]))
 
+  // Someone saved marks. Every row here is marks-derived (the filled/pending counts and
+  // publish readiness), so this list goes stale the moment any teacher saves and only a
+  // refocus would otherwise catch it. Read-only, no edit buffer, so refetching is always
+  // safe. Debounced because the signal arrives once per student in a class save.
+  useEffect(() => onRealtimeDebounced('marks:changed', () => { fetchData().catch(() => {}) }), [fetchData])
+
   const onRefresh = async () => {
     setRefreshing(true)
     await fetchData()
@@ -271,6 +280,9 @@ function AdminReportCards() {
   const isSecondary = school?.type === 'SECONDARY'
   const isUniversity = school?.type === 'UNIVERSITY'
   const [reportCards, setReportCards] = useState<AdminReportCard[]>([])
+  // Class rows carry the sitting; this flat list only holds class-name strings.
+  const [classDefs, setClassDefs] = useState<{ name: string; programme?: 'DAY' | 'EVENING' }[]>([])
+  const programmeFilter = useProgrammeFilter(classDefs)
   const [terms, setTerms] = useState<{ id: string; name: string; session: string; isCurrent: boolean }[]>([])
   const [selectedTermId, setSelectedTermId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -298,6 +310,9 @@ function AdminReportCards() {
   // timeout, which is what surfaced as "Failed to load report cards.". Search goes to
   // the server for the same reason: filtering only the loaded page would search 30 rows
   // and look like missing data.
+  // The class rows are the source of truth for the sitting; the table holds only names.
+  useEffect(() => { getClassesFull().then((d) => setClassDefs(d.classLevels)).catch(() => {}) }, [])
+
   const fetchData = useCallback(async (termId?: string | null, searchTerm = '', pageNum = 1) => {
     try {
       setError('')
@@ -307,10 +322,20 @@ function AdminReportCards() {
       const deptClassLevels = isSecondary && activeDeptId
         ? Object.entries(classDeptMap).filter(([, d]) => d === activeDeptId).map(([c]) => c)
         : []
+      // Day/Evening goes to the server too, for the same reason the department filter does:
+      // this list is one page at a time, so narrowing it client-side reported "no evening
+      // students" whenever none of them fell on the page being viewed.
+      const sittingClassLevels = programmeFilter.programme === 'ALL'
+        ? []
+        : classDefs.filter((c) => (c.programme ?? 'DAY') === programmeFilter.programme).map((c) => c.name)
+      // Both active -> the intersection, so the two filters narrow rather than fight.
+      const classLevelFilter = deptClassLevels.length && sittingClassLevels.length
+        ? deptClassLevels.filter((c) => sittingClassLevels.includes(c))
+        : deptClassLevels.length ? deptClassLevels : sittingClassLevels
       const [rcData, termData] = await Promise.all([
         getAllReportCards({
           ...(termId ? { termId } : { session: activeSession ?? undefined }),
-          ...(deptClassLevels.length > 0 ? { classLevels: deptClassLevels.join(',') } : {}),
+          ...(classLevelFilter.length > 0 ? { classLevels: classLevelFilter.join(',') } : {}),
           page: pageNum, pageSize: PAGE_SIZE, ...(searchTerm ? { search: searchTerm } : {}),
         }),
         getTerms(),
@@ -330,7 +355,9 @@ function AdminReportCards() {
     }
     // activeDeptId/classDeptMap are dependencies because the department filter is now
     // part of the REQUEST, not a post-filter — changing it must refetch from page 1.
-  }, [activeSession, isSecondary, departments.length, activeDeptId, classDeptMap])
+    // programme + classDefs are in here so switching the chip refetches from page 1 rather
+    // than re-filtering the page already on screen.
+  }, [activeSession, isSecondary, departments.length, activeDeptId, classDeptMap, programmeFilter.programme, classDefs])
 
   // Jump to a specific page — replaces the list rather than appending, and scrolls back
   // to the top so a new page starts where you'd expect to read it.
@@ -408,6 +435,7 @@ function AdminReportCards() {
 
   // Term, search AND department are all applied SERVER-side now (see fetchData) —
   // re-applying them here would only hide rows the server already matched.
+  // No client-side sitting filter: the server already returned only this section.
   const filtered = reportCards
 
   const grouped: Record<string, AdminReportCard[]> = {}
@@ -419,6 +447,16 @@ function AdminReportCards() {
 
   return (
     <View style={styles.container}>
+      {/* Day/Evening, above the term chips. Only appears once the school runs an evening
+          sitting, so nothing changes for a school with one. */}
+      {programmeFilter.hasEvening && (
+        <View style={{ paddingHorizontal: 12, paddingTop: 8 }}>
+          <ProgrammeChips
+            value={programmeFilter.programme}
+            onChange={programmeFilter.setProgramme}
+          />
+        </View>
+      )}
       {/* Term filter (active academic year only) */}
       {visibleTerms.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
@@ -529,7 +567,8 @@ function AdminReportCards() {
                     </View>
                     <View style={styles.rcInfo}>
                       <Text style={styles.rcName}>{rc.student.name}</Text>
-                      <Text style={styles.rcMeta}>{rc.term.name} · {rc.term.session}</Text>
+                      <Text style={styles.rcMeta}>{stripProgrammeSuffix(rc.student.classLevel)} · {rc.term.name}</Text>
+                      {programmeFilter.programmeOf(rc.student.classLevel) === 'EVENING' && <EveningBadge />}
                     </View>
                     <View style={styles.rcRight}>
                       {/* A university's `average` is a weighted mark out of 100, which
