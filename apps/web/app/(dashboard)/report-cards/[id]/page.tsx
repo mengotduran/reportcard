@@ -15,7 +15,10 @@ import { getTemplateApi, TemplateConfig, DEFAULT_CONFIG, mergeSavedStandardConfi
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa } from '@/lib/api/gradingScale'
 import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { gradeFromScore } from '@/lib/grading'
-import { isCompetencyRating, RATING_COLORS, CompetencyRating } from '@/lib/competency'
+import {
+  CompetencyLevel, DEFAULT_COMPETENCY_LEVELS, findLevel, levelLabel, ratingChipColors,
+} from '@/lib/competency'
+import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { useT } from '@/lib/i18n'
 
@@ -70,6 +73,11 @@ export default function ReportCardDetailPage() {
   const [readiness, setReadiness] = useState<ReadinessDetail | null>(null)
   const { toast, showToast, hideToast } = useToast()
   const tr = useT()
+  const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+  // The school's rating levels, for a COMPETENCY card. Built-ins until the fetch lands so
+  // the card renders straight away.
+  const [levels, setLevels] = useState<CompetencyLevel[]>(DEFAULT_COMPETENCY_LEVELS)
+  useEffect(() => { getCompetencyScaleApi().then(s => setLevels(s.levels)) }, [])
   const [reportCard, setReportCard] = useState<ReportCard | null>(null)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [entries, setEntries] = useState<Entry[]>([])
@@ -339,7 +347,9 @@ export default function ReportCardDetailPage() {
   // show (average, grade, position, class average) is meaningless here and is dropped
   // rather than printed as a dash: ranking three-year-olds is what this mode avoids.
   const isCompetency = reportCard.gradingMode === 'COMPETENCY'
-  const ratedCount = entries.filter((e) => isCompetencyRating(e.grade)).length
+  // Counts any rating the school HAS ever used, not only its current levels — a pupil rated
+  // before the scale was edited is still rated, and must not read as an unfinished card.
+  const ratedCount = entries.filter((e) => findLevel(levels, e.grade) !== null).length
 
   // Semester GPA: Σ(gradePoint × credit) / Σ(credit) — mirrors PrintableReportCard logic
   const semGpaInfo = (() => {
@@ -371,7 +381,7 @@ export default function ReportCardDetailPage() {
   // A competency card has no sequences at all, so "complete" there means every subject
   // carries a rating — the same rule the API's own publish gate applies.
   const localSeqsFilled = entries.length > 0 && (isCompetency
-    ? entries.every(e => isCompetencyRating(e.grade))
+    ? entries.every(e => findLevel(levels, e.grade) !== null)
     : entries.every(e => e.seq1Score != null && e.seq2Score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!(reportCard.remarks?.trim() || reportCard.remarksFr?.trim())
@@ -718,15 +728,20 @@ export default function ReportCardDetailPage() {
                     <tr key={subject.id} className="hover:bg-hover">
                       <td className="px-4 py-3 text-sm font-medium text-foreground">{subject.name}</td>
                       <td className="px-4 py-3">
-                        {isCompetencyRating(rating) ? (
-                          <span className="text-xs font-bold px-2.5 py-1 rounded"
-                            style={{
-                              backgroundColor: RATING_COLORS[rating as CompetencyRating].bg,
-                              color: RATING_COLORS[rating as CompetencyRating].text,
-                            }}>
-                            {tr(rating)}
-                          </span>
-                        ) : <span className="text-sm text-muted-foreground">{tr('Not recorded')}</span>}
+                        {/* Resolved against the school's levels, falling back to the stored
+                            wording: a rating recorded under an earlier scale still shows what
+                            the pupil was actually given rather than reading "Not recorded". */}
+                        {(() => {
+                          const level = findLevel(levels, rating)
+                          if (!level) return <span className="text-sm text-muted-foreground">{tr('Not recorded')}</span>
+                          const c = ratingChipColors(level)
+                          return (
+                            <span className="text-xs font-bold px-2.5 py-1 rounded"
+                              style={{ backgroundColor: c.bg, color: c.text }}>
+                              {levelLabel(level, lang, tr)}
+                            </span>
+                          )
+                        })()}
                       </td>
                     </tr>
                   )
