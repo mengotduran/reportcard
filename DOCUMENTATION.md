@@ -986,23 +986,29 @@ Every section also carries **`showOn`** (*Both copies* / *Official only* / *Stud
 - Grade badges: squared corners (not circular)
 
 ### Section-type defaults (Primary / Secondary / University)
-A school with **no saved report-card design** starts from a layout tailored to its `school.type` (`getDefaultLayoutForType`). Admins edit & save from there. The three are fully independent:
+A school with **no saved report-card design** starts from `getDefaultLayoutForType`. Admins edit & save from there.
 
-| Section | Tailored defaults |
-|---------|-------------------|
-| **Primary** | Teal theme · "PRIMARY SCHOOL REPORT CARD" · **Pupil** labels · summary boxes **Conduct / Attendance / No. on Roll** · "Class Teacher's Comment" · **Class Teacher + Head Teacher** signatures |
-| **Secondary** | Current look — Seq 1/2 · coefficients · /20 average · position · class-master remarks |
-| **University** | Navy theme · "STUDENT SEMESTER REPORT" · **Matric No / Programme / Semester** · **CA + Exam** columns · **GPA / CGPA / Total Credits** summary · **Course Adviser / HOD / Dean** signatures |
+Since the 2026 redesign the three types are **not** independent layouts: they share one. Same navy `#1d3557` theme and `#b58a2b` accent, the same "STUDENT REPORT CARD" title, the same "General Remarks" label, and the same ten sections in the same order — header · student info · marks table · summary strip · annual band · a panel row pairing the grading legend with **Conduct & Attendance** · remarks · a second panel row of two remarks blocks · stamp · text block. None of the three carries a signatures section. They differ in exactly two things:
+
+| Section | Marks columns (and totals bands) | Summary boxes |
+|---------|----------------------------------|---------------|
+| **Primary** | S/N · Subject · **Test** · **Exam** · Total /100 · Grade · Remark. No coefficient column, and **no totals bands at all** — see "Primary states each figure once" below | Term Average /20 · Class Average /20 · Position in Class · Best Average · Appreciation |
+| **Secondary** | S/N · Subject · **Coef** · Seq 1 · Seq 2 · Avg /20 · **Avg × Coef** · Grade · Remark, banded with TOTAL COEFFICIENTS / TOTAL POINTS OBTAINED / WEIGHTED AVERAGE /20 | identical to primary's five |
+| **University** | S/N · Code · Course Title · Credits · **CA** · Exam · Total /100 · Grade · **GP** · **WGP**, banded with TOTAL CREDITS / TOTAL POINTS / GPA | Total Credits · Semester GPA · Cumulative GPA · Class Average · Classification |
+
+Beyond those, only three labels vary: primary says **Pupil ID** where the others say Student ID, and university says **Programme** / **Semester** where the others say Class / Term.
+
+The per-type builders that gave each type its own colour, title and signature blocks (`getLegacyDefaultLayoutForType`) are **pre-redesign and no longer used** — kept only for reference and rollback. Conduct & Attendance survives as a hand-filled panel (Discipline / Punctuality / Days Absent / Late Arrivals / Warnings Issued), not as summary boxes.
 
 Hand-filled fields (Conduct, Attendance, GPA, CGPA, Credits) render as `—` placeholders — design only, no change to grade calculation.
+
+**Primary states each figure once.** A primary Standard card carries no `OVERALL TOTAL` / `TERM AVERAGE` bands under its marks table: the summary boxes directly below already give the term average, so a band there only repeated it under the Grade and Remark columns. Secondary keeps its bands (they total coefficients and weighted points, which no box shows), and **Ledger keeps its own** — that layout has no summary section at all, so its bands are the only place the figures appear. Applied in three places, because a default alone would never reach a school that had already saved a design: the default (`buildRedesignLayout`), the designer on load (`ensureNoPrimaryTotalsBands`, same one-time backfill idea as `ensureBirthRows`), and the print renderer, so a card is correct whether or not the admin ever re-saves. The shared gate is `dropsPrimaryTotalsBands`; nursery/competency cards drop all footer bands earlier and are unaffected.
 
 University default headers also include **Date of Birth** and **Place of Birth** rows (optional per student, blank when not recorded, printed spelled out — `12 May 2003` / `12 mai 2003` — because `12/05/2003` reads as 5 December to half the world). Already-saved university designs pick these rows up **once** in the designer (`ensureBirthRows`; deleting them afterwards sticks). **A changed default never reaches an already-saved design** — any new default row/section needs a one-time backfill like this.
 
 ### Annual transcript (all school types)
 
 A second design per school, stored under the template config's `transcript` key so it can never clobber the standard design. Edited on the same section canvas via the **Transcript** (university) / **Annual** (primary & secondary) layout thumbnail:
-
-**Primary states each figure once.** A primary Standard card carries no `OVERALL TOTAL` / `TERM AVERAGE` bands under its marks table: the summary boxes directly below already give the term average, so a band there only repeated it under the Grade and Remark columns. Secondary keeps its bands (they total coefficients and weighted points, which no box shows), and **Ledger keeps its own** — that layout has no summary section at all, so its bands are the only place the figures appear. Applied in three places, because a default alone would never reach a school that had already saved a design: the default (`buildRedesignLayout`), the designer on load (`ensureNoPrimaryTotalsBands`, same one-time backfill idea as `ensureBirthRows`), and the print renderer, so a card is correct whether or not the admin ever re-saves. The shared gate is `dropsPrimaryTotalsBands`; nursery/competency cards drop all footer bands earlier and are unaffected.
 
 - **Period tables are ordinal**: `transcriptSemester: 'sem1' | 'sem2' | 'sem3'` means the Nth period of the year — two semesters at a university, three terms elsewhere. Each table prints a **caption naming its period** (the student's real term name).
 - University tables: CODE / TITLE / CREDIT / MARK / GRADE / GRADE POINT / WEIGHTED POINT with per-semester TOTAL + SEMESTER GPA; summary box = Credits / **CGPA** / Remark. Primary & secondary tables: subject / coef / seqs / average / grade / remarks with TOTAL + TERM AVERAGE; summary = **Annual Average** / Grade.
