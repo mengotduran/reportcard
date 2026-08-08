@@ -422,6 +422,7 @@ const FR: Record<string, string> = {
   'Attained': 'Acquis',
   'Developing': 'En cours d\'acquisition',
   'Not Yet Attained': 'Non acquis',
+  'For nursery and pre-primary. Each subject is rated on your school\'s rating levels instead of marked. The report card carries no marks, no average and no position in class.': 'Pour la maternelle et le préscolaire. Chaque matière est évaluée selon les niveaux d\'appréciation de votre établissement au lieu d\'être notée. Le bulletin ne porte ni notes, ni moyenne, ni rang.',
   // Nursery rating-levels editor. The LEVEL NAMES themselves are not here: once a school
   // defines its own, they carry their own EN/FR pair (CompetencyScale.levels), because a
   // custom label has no translation entry to look up.

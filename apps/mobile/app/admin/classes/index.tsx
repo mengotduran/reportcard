@@ -682,7 +682,7 @@ export default function ClassesScreen() {
                 </View>
                 <Text style={styles.switchHint}>
                   {gradingMode === 'COMPETENCY'
-                    ? t('For nursery and pre-primary. Each subject is rated Attained, Developing or Not Yet Attained. The report card carries no marks, no average and no position in class.')
+                    ? t('For nursery and pre-primary. Each subject is rated on your school\'s rating levels instead of marked. The report card carries no marks, no average and no position in class.')
                     : t('Each subject is marked out of a maximum, and the report card carries an average and a position in class.')}
                 </Text>
               </>

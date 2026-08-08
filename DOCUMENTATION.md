@@ -581,13 +581,39 @@ calls these *Maternelle*, and a school may want Class 1 rated too. It is **prima
 `resolveGradingMode` in `classlevel.controller.ts` forces `NUMERIC` for secondary and
 university, the same shape as `resolveProgramme`'s university-only gate.
 
-The three ratings are **fixed, not school-configurable**:
+The ratings are **per school** (`CompetencyScale`, 2 to 6 levels), edited under **Grading
+Scale** on web and mobile and only offered when a class is actually on `COMPETENCY`. A school
+that has never customised them keeps **no row at all** and is served these three built-ins, so
+nothing changed for any existing school and the defaults can still be improved centrally:
 
 | Rating | Meaning |
 |---|---|
 | `Attained` | The child has the competency |
 | `Developing` | On the way to it |
 | `Not Yet Attained` | Not there yet |
+
+Each level carries `labelEn`, `labelFr`, a `short` code (for narrow print columns) and a
+`color`. **Both languages are stored on the level** because a custom label has no `t()` entry
+to look up; only the three built-ins go through `t()`.
+
+**Renaming a level is deliberately NOT retroactive**, and that falls straight out of storing
+the label verbatim: a card issued last term keeps the exact word it was printed with. The
+consequence every reader must handle is that a stored rating may be a label the school no
+longer has. Resolve one with **`findLevel`**, which falls back to rendering the stored wording
+in a neutral colour, never with a membership test against the live scale. `isRatingIn` is the
+strict check, and is for validating what a teacher just submitted, not for display.
+
+Two places that would otherwise lose data silently:
+
+- **The marks picker sends an untouched row without a `rating` key**, so the API carries
+  forward what is stored. Re-sending a rating from an older scale would fail the server's
+  "is this a current level" check and clear it. Only a row the teacher changed asserts a value.
+- **A rated card prints a `RATING SCALE` legend.** It used to print none, on the reasoning
+  that the built-ins explain themselves; that stops holding once a school names its own levels.
+
+Changing the levels is refused once a rated class has published cards for a closed term of the
+session, the same freeze the class form applies to mark ceilings and `gradingMode`
+(`utils/scaleFreeze.ts`, shared by both so there is one rule rather than two).
 
 **Where a rating is stored — and why it looks odd.** It goes in `ReportEntry.grade`,
 verbatim, as the English label (`apps/api/src/utils/competency.ts` is the single source;
