@@ -1,4 +1,4 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, ConductSec, AnnualBandSec, PanelRowSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn, accentOf, parseHeaderLines, headerLineStyle, clampStudentPhotoSize } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, ConductSec, AnnualBandSec, PanelRowSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn, accentOf, parseHeaderLines, headerLineStyle, clampStudentPhotoSize, dropsPrimaryTotalsBands, isPrimaryRedundantTotalsRow } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { stripProgrammeSuffix } from '@/lib/programme'
@@ -739,6 +739,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const subjectStats = props.subjectStats ?? {}
   // Nursery: this card measures nothing. See the gradingMode prop for what that removes.
   const isCompetency = props.gradingMode === 'COMPETENCY'
+  // Primary Standard only: the marks table's totals bands duplicate the summary boxes.
+  const dropTotalsBands = dropsPrimaryTotalsBands(school.type, cfg as { template?: string; layoutType?: string })
   // The columns a rated card has no value for. Everything else the design asks for
   // (row number, subject, subject_fr, grade) still prints, so the table keeps the
   // school's own look rather than becoming a second, unstyled table.
@@ -1361,7 +1363,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         }
         const headerRows = rawHeaderRows.map(stripRow)
         const dataRowTpl = rawDataRowTpl ? stripRow(rawDataRowTpl) : null
-        const footerRows = isCompetency ? [] : rawFooterRows
+        // Primary Standard repeats its term average in the summary boxes just below this
+        // table, so the OVERALL TOTAL / TERM AVERAGE bands come out here too — not only
+        // from the default — or a school that saved its design before the default changed
+        // would go on printing both. See dropsPrimaryTotalsBands for why Ledger is exempt.
+        const footerRows = isCompetency
+          ? []
+          : dropTotalsBands
+            ? rawFooterRows.filter((r: SheetRow) => !isPrimaryRedundantTotalsRow(r))
+            : rawFooterRows
 
         const resolveMarksField = (field: string, subj: PrintSubject, e: PrintEntry | undefined, si: number): React.ReactNode => {
           if (!field.startsWith('m:')) return resolveStat(field)

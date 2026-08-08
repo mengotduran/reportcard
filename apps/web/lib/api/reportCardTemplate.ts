@@ -857,13 +857,14 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
             { label: 'GPA', field: 'gpa' },
           ]
         : isPrimary
-          // Primary has no coefficient column of its own to total up, so it reports what it
-          // actually shows: the raw sum of the Total /100 column, then the term average —
-          // which is coefficient-weighted and stated out of 20 (see saveEntries).
-          ? [
-              { label: 'OVERALL TOTAL', field: 'total' },
-              { label: 'TERM AVERAGE /20', field: 'average' },
-            ]
+          // No band at all. The five summary boxes sit immediately below this table and
+          // already state the term average, so a band here only repeats it directly under
+          // the Grade and Remark columns — and primary has no coefficient column of its
+          // own to total up in the first place.
+          //
+          // Ledger keeps its equivalent bands (see getLedgerLayout): that layout has no
+          // summary section, so there the bands are the only place the figures appear.
+          ? []
           // Σ(avg × coef) — the numerator of the weighted average, matching the "Avg × Coef"
           // column above it. NOT `total` (Σ of the raw averages), which would not divide by
           // the coefficient total to give the term average.
@@ -1424,6 +1425,62 @@ function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sectio
 }
 
 /** Default report-card layout tailored to the school's section type. */
+/** Figures a primary card already states in the summary boxes under its marks table. */
+const PRIMARY_BOXED_TOTAL_FIELDS = new Set(['total', 'average'])
+
+/**
+ * Is this marks-table row one of the OVERALL TOTAL / TERM AVERAGE bands that a primary
+ * Standard card repeats in its summary boxes?
+ *
+ * Matched on the bound field rather than the label, because the label is freely editable
+ * in the designer and a school may well have renamed or translated it. The repeating data
+ * row is never a match: it binds `m:`-prefixed per-subject keys, not bare stat fields.
+ */
+export function isPrimaryRedundantTotalsRow(row: SheetRow): boolean {
+  if (row._isDataRow) return false
+  return row.cells.some((c) => c.field != null && PRIMARY_BOXED_TOTAL_FIELDS.has(c.field))
+}
+
+/**
+ * Should those bands be dropped for this card?
+ *
+ * Primary only, and Standard only. Ledger states every figure as a band and has no summary
+ * section at all, so dropping them there would remove the term average from the card
+ * entirely rather than de-duplicate it. Transcripts are a separate layout with their own
+ * per-period tables and are left alone.
+ */
+export function dropsPrimaryTotalsBands(
+  schoolType?: string,
+  cfg?: { template?: string; layoutType?: string } | null
+): boolean {
+  if (schoolType !== 'PRIMARY') return false
+  return cfg?.template !== 'ledger' && cfg?.layoutType !== 'ledger' && cfg?.layoutType !== 'transcript'
+}
+
+/**
+ * Take those bands out of an already-saved primary Standard design.
+ *
+ * Changing the default only reaches designs built after the change, so a primary school
+ * that had saved a layout would keep printing the duplicated rows. Applied on load in the
+ * designer so the canvas shows what will actually print; the print renderer drops them
+ * independently, so a card is correct whether or not the admin ever re-saves.
+ */
+export function ensureNoPrimaryTotalsBands<T extends Partial<TemplateConfig>>(cfg: T, schoolType?: string): T {
+  if (!dropsPrimaryTotalsBands(schoolType, cfg as { template?: string; layoutType?: string })) return cfg
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return cfg
+  let changed = false
+  const next = sections.map((sec) => {
+    const ms = sec as Partial<MarksTableSec> & { template?: SpreadsheetTable }
+    if (ms.type !== 'marks_table' || ms.transcriptSemester || !ms.template?.rows) return sec
+    const rows = ms.template.rows.filter((r) => !isPrimaryRedundantTotalsRow(r))
+    if (rows.length === ms.template.rows.length) return sec
+    changed = true
+    return { ...sec, template: { ...ms.template, rows } } as LayoutSection
+  })
+  return changed ? { ...cfg, sections: next } : cfg
+}
+
 /**
  * Give an already-saved university design the Date/Place of Birth rows, once.
  *

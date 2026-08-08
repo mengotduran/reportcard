@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import api from '@/lib/api/client'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
@@ -1855,7 +1855,11 @@ export default function ReportCardDesignPage() {
   // re-selecting your saved template reconstructs it identically either way.
   // Returns null if there's nothing meaningfully saved to merge.
   const buildMergedConfig = (saved: Partial<TemplateConfig> | null, lang: 'EN' | 'FR', sType: string) => {
-    const ensure = (cfg: any) => ensureMarksTables(cfg, sType)
+    // ensureNoPrimaryTotalsBands runs on every restore path that goes through here, so an
+    // already-saved primary Standard design loses its duplicated OVERALL TOTAL / TERM
+    // AVERAGE bands in the canvas as well as at print. Ledger restores are exempt inside
+    // the helper, not here, since `cfg` is what carries the template name.
+    const ensure = (cfg: any) => ensureNoPrimaryTotalsBands(ensureMarksTables(cfg, sType), sType)
     // Ledger isn't in getDefaultLayout's set — it has its own base builder
     // (special TOTAL/AVERAGE/POSITION footer rows baked into the marks table).
     const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(sType), layoutType: 'ledger' as const } : getDefaultLayout(tpl)
