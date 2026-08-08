@@ -1395,6 +1395,12 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           // rows (TERM AVERAGE / CLASS POSITION) end their labels at that same
           // border, so a mid-table border there sliced through the label text.
           'm:remarks': 110,
+          // A rated card puts a WORD in the grade column, not a letter. 40px fits "B+";
+          // "Attained" measured 66px and "Not Yet Attained" 120px, and the cell is
+          // white-space:nowrap, so both were being cut off mid-word on every nursery card.
+          // Safe to take the width here: a rated table is only S/N + Subject + Grade, and
+          // Subject is a flex column that simply gives up the slack.
+          ...(isCompetency ? { 'm:grade': 124 } : {}),
         }
         const FLEX_FIELDS = new Set(['m:subject', 'm:subject_fr'])
         // Fixed-width but prose-y: wrap to a second line rather than clipping.
