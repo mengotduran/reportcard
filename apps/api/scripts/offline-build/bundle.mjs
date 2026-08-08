@@ -9,6 +9,7 @@
 // resolution at all; see shims/better-sqlite3.shim.js). The actual .node
 // binary + its JS deps are copied alongside the executable by package.mjs.
 import { build } from 'esbuild'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -59,6 +60,44 @@ const offlineSwaps = {
     buildApi.onResolve({ filter: /^better-sqlite3$/ }, () => ({ path: betterSqlite3Shim }))
   },
 }
+
+// SQLITE_MIGRATIONS is hand-maintained, and a migration left out of it is
+// invisible until a school's machine tries to start: SQLite rewrites a whole
+// table to change one column, so the omitted migration's absence surfaces as a
+// *later* migration selecting a column nothing ever created. That shipped once
+// already — the installer crash-looped on `no such column: dayPeriodMinutes`.
+// Cheaper to refuse to build than to find out on someone's laptop.
+function assertMigrationRegistryComplete() {
+  const migrationsDir = path.join(apiRoot, 'prisma/sqlite/migrations')
+  const registrySrc = fs.readFileSync(path.join(apiRoot, 'src/config/sqliteMigrations.ts'), 'utf8')
+
+  const onDisk = fs
+    .readdirSync(migrationsDir)
+    .filter((d) => fs.existsSync(path.join(migrationsDir, d, 'migration.sql')))
+    .sort()
+  const registered = [...registrySrc.matchAll(/\{ name: '([^']+)'/g)].map((m) => m[1])
+
+  const missing = onDisk.filter((name) => !registered.includes(name))
+  const orphaned = registered.filter((name) => !onDisk.includes(name))
+  // Prisma names migrations by timestamp, so chronological order is also the
+  // order they must be applied in.
+  const misordered = registered.join() !== [...registered].sort().join()
+
+  if (missing.length || orphaned.length || misordered) {
+    const problems = [
+      missing.length && `missing from the registry: ${missing.join(', ')}`,
+      orphaned.length && `registered but no migration.sql on disk: ${orphaned.join(', ')}`,
+      misordered && 'registry entries are not in chronological order',
+    ].filter(Boolean)
+    throw new Error(
+      `sqliteMigrations.ts is out of sync with prisma/sqlite/migrations:\n  ${problems.join('\n  ')}`
+    )
+  }
+
+  console.log(`Migration registry OK (${registered.length} migrations)`)
+}
+
+assertMigrationRegistryComplete()
 
 await build({
   entryPoints: [path.join(apiRoot, 'src/index.ts')],
