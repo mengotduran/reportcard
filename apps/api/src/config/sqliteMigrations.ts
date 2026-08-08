@@ -46,6 +46,7 @@ import addStudentPhoto from '../../prisma/sqlite/migrations/20260803165754_add_s
 import addPrimaryTestExamAndExamNumber from '../../prisma/sqlite/migrations/20260805180037_add_primary_test_exam_and_exam_number/migration.sql'
 import addUsernameNullableEmail from '../../prisma/sqlite/migrations/20260805225200_add_username_nullable_email/migration.sql'
 import addClassGradingModeAndScaleUnlock from '../../prisma/sqlite/migrations/20260807120000_add_class_grading_mode_and_scale_unlock/migration.sql'
+import addCompetencyScale from '../../prisma/sqlite/migrations/20260808202600_add_competency_scale/migration.sql'
 
 export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   { name: '20260624111054_init', sql: init },
@@ -89,4 +90,9 @@ export const SQLITE_MIGRATIONS: { name: string; sql: string }[] = [
   // one-shot key to a frozen mark ceiling). One migration because both columns reached the
   // SQLite schema together; SQLite adds columns by rebuilding the table, so they share one.
   { name: '20260807120000_add_class_grading_mode_and_scale_unlock', sql: addClassGradingModeAndScaleUnlock },
+  // Per-school rating levels for COMPETENCY classes. A plain CREATE TABLE, so it carries no
+  // ordering hazard of its own — but it still has to be listed here or the offline installer
+  // simply never creates the table. That is exactly the omission this file's header warns
+  // about, and the build guard in bundle.mjs now refuses to build without this line.
+  { name: '20260808202600_add_competency_scale', sql: addCompetencyScale },
 ]

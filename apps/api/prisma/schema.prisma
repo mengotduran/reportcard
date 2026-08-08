@@ -76,6 +76,7 @@ model School {
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
   gradingScale             GradingScale?
+  competencyScale          CompetencyScale?
   promotionScale           PromotionScale?
   reportCards        ReportCard[]
   reportCardTemplate ReportCardTemplate?
@@ -97,6 +98,24 @@ model GradingScale {
   id        String   @id @default(uuid())
   schoolId  String   @unique
   ranges    Json     @default("[]")
+  updatedAt DateTime @updatedAt
+  school    School   @relation(fields: [schoolId], references: [id])
+}
+
+// The developmental ratings a COMPETENCY class is assessed on (see utils/competency.ts).
+// Deliberately its own table rather than another column on GradingScale: that row is read
+// and AUTO-MIGRATED on every load (getGradingScale rewrites a stale 0-100 scale in place),
+// and entangling nursery ratings with that rewrite is how a correct scale gets wiped.
+//
+// `levels` is an ordered array, highest attainment first:
+//   { id, labelEn, labelFr, short, color }
+// Empty array = this school has never customised them, so the API serves the built-in
+// defaults. Labels carry both languages because a custom label cannot go through t(),
+// which only knows the three built-in English strings.
+model CompetencyScale {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  levels    Json     @default("[]")
   updatedAt DateTime @updatedAt
   school    School   @relation(fields: [schoolId], references: [id])
 }

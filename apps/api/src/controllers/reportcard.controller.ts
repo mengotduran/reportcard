@@ -3,7 +3,8 @@ import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { generateRemark, classifyRemarkSource } from '../utils/aiRemarks'
 import { parseStoredScale } from '../utils/gradingScale'
-import { COMPETENCY_RATINGS, isCompetencyRating } from '../utils/competency'
+import { isRatingIn, ratingLabels } from '../utils/competency'
+import { levelsForSchool } from './competencyscale.controller'
 import { emitToSchool } from '../config/socket'
 
 // Roles that teach. Everyone else who may save marks (SCHOOL_ADMIN, VICE_PRINCIPAL) is
@@ -1020,16 +1021,20 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
     // which is entirely about marks this mode does not have.
     if (isCompetency) {
       const incoming = entries as { subjectId: string; rating?: unknown; remarks?: string }[]
-      // Validated against the fixed set, not trusted from the client: `grade` is free text
-      // at the database level, so an unchecked value would put arbitrary strings on a
+      // Validated against THIS SCHOOL's levels, not trusted from the client: `grade` is free
+      // text at the database level, so an unchecked value would put arbitrary strings on a
       // printed report card. An empty/absent rating is allowed and means "not yet recorded".
+      //
+      // A school that has never customised its scale gets the built-in three, so this is
+      // identical to the old fixed check for every existing school.
+      const levels = await levelsForSchool(schoolId)
       const invalid = incoming.filter((e) => {
         const r = e.rating
-        return r != null && String(r).trim() !== '' && !isCompetencyRating(r)
+        return r != null && String(r).trim() !== '' && !isRatingIn(levels, r)
       })
       if (invalid.length > 0) {
         res.status(400).json({
-          message: `Invalid rating. Must be one of: ${COMPETENCY_RATINGS.join(', ')}.`,
+          message: `Invalid rating. Must be one of: ${ratingLabels(levels).join(', ')}.`,
         })
         return
       }
@@ -1043,7 +1048,7 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       const priorRating = new Map(priorEntries.map((e) => [e.subjectId, e.grade]))
       const resolveRating = (e: { subjectId: string; rating?: unknown }): string | null => {
         if (!('rating' in e)) return priorRating.get(e.subjectId) ?? null
-        return isCompetencyRating(e.rating) ? e.rating : null
+        return isRatingIn(levels, e.rating) ? (e.rating as string) : null
       }
 
       await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })

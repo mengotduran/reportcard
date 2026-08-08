@@ -132,6 +132,7 @@ model School {
   reportCardTemplate       ReportCardTemplate?
   classListTemplate        ClassListTemplate?
   gradingScale             GradingScale?
+  competencyScale          CompetencyScale?
   promotionScale           PromotionScale?
   feePayments              FeePayment[]
   hndRegistrationPayments  HndRegistrationPayment[]
@@ -148,6 +149,16 @@ model GradingScale {
   id        String   @id @default(uuid())
   schoolId  String   @unique
   ranges    Json     @default("[]")
+  updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id])
+}
+
+// Mirrors the Postgres schema — see the fuller comment there.
+model CompetencyScale {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  levels    Json     @default("[]")
   updatedAt DateTime @updatedAt
 
   school School @relation(fields: [schoolId], references: [id])
