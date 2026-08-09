@@ -457,13 +457,30 @@ Against the local dev database (5 schools, 1,984 students, 5,204 report cards, 4
 - **Retention proven by running the job three times with `RETAIN_DAILY=2`**: it deleted one per run and kept the two newest, confirmed by listing the surviving keys.
 - Test database dropped and the MinIO container removed afterwards; port 9000 confirmed free.
 
-### 19.5 Not done yet
+### 19.5 Uploads are backed up too (added 2026-08-09)
 
-- **The uploads volume is not backed up.** `UPLOAD_DIR=/data/uploads` on a real Railway volume (`api-volume`) — correctly persistent, so nothing is being lost on deploy, but **nothing copies it off-platform**. It is 1.4 MB across 8 files today only because no real school is on the system; student photos are the growth driver. These files are *less* recoverable than the database: a school's official stamp and logo are originals they handed over, and report cards print without their letterhead if they are gone. Needs a superadmin-only manifest + file endpoint (reusing `apps/api/src/utils/zip.ts` and the section 17 route as the model, locked to SUPERADMIN plus its own secret for the cross-tenant reason section 17 gives) and an **incremental** sync — copying only changed files, never re-uploading every photo nightly, which is the only thing in this design that could ever cost money.
-- **Nothing is scheduled yet.** The workflow is committed but has never run: it needs the R2 bucket, the GitHub secrets, and a push. This machine has no GitHub push credentials.
+School logos, official stamps and cover images live as FILES on the Railway volume (`api-volume`, `UPLOAD_DIR=/data/uploads`) and are invisible to a row-level database dump. They are *less* recoverable than the database: a school's stamp is an original they handed over, and a report card prints without its letterhead if it is gone.
+
+`src/routes/uploadsBackup.routes.ts` exposes two operator-only endpoints, and `syncUploads()` in the backup script mirrors the folder into `uploads/` in the same bucket.
+
+- **Secret-guarded, not login-guarded.** The caller is a machine. A user JWT would mean a long-lived token for a real account, and revoking it would disable someone's login. `UPLOADS_BACKUP_SECRET` belongs to nobody and rotates on its own. Compared with `crypto.timingSafeEqual`.
+- **Fails SHUT.** With the secret unset the route 503s rather than falling back to no auth — this endpoint crosses tenants (every school's files), so a misconfigured deploy must never fail open. Verified: 503 before the secret was set.
+- **Path traversal is the real risk here**, since the filename comes from the URL. The resolved path must sit inside `UPLOAD_DIR`, and `realpath` is checked *after* containment to catch a symlink inside the folder pointing out of it. Verified against `../`, `../../`, `%2f`-encoded, double-encoded, `....//` and an absolute `/etc/passwd` — all 400/404, none 200.
+- **Incremental, and this is the only cost decision in the design.** Re-uploading every file nightly would multiply the photo library by the retention count; copying only what changed keeps R2 at roughly the size of the folder. Uploaded filenames are unique per upload, so name + size is a sound "already backed up" test.
+- **Never deletes from the mirror.** A file that vanishes from the server is exactly what a backup exists to recover.
+- Runs **after** the database is safely stored, so a failure in the uploads half cannot cost that night's database backup. Both secrets absent = skipped with a log line, not a failed run.
+
+**Express 5 trap:** a `*name` wildcard param comes back as an ARRAY of path segments, not a string. `String(...)` on it quietly yields `a,b.png` and 404s every nested file; it must be `.join('/')`.
+
+**Verified (2026-08-09, local, against the running dev API and a MinIO stand-in):** cold run copied all 12 files; a second run copied 0 and skipped 12, proving it is genuinely incremental; adding one new file copied exactly 1 and skipped 12; the stored object's MD5 matched the original byte for byte. Auth verified from all three directions (correct secret 200, wrong secret 401, no header 401, unset secret 503).
+
+### 19.6 Not done yet
+
+- **Nothing is scheduled for the uploads half in production yet** — needs `UPLOADS_BACKUP_SECRET` set on Railway, plus `API_BASE_URL` and `UPLOADS_BACKUP_SECRET` added as GitHub secrets.
+- ~~Nothing is scheduled yet~~ **DONE**: the database half went live 2026-08-09, first manual run green in 43s, object confirmed in the bucket.
 - **Restore has never been drilled against a real production dump**, only against the local dev database. Worth doing once for real.
 
-### 19.6 Cost
+### 19.7 Cost
 
 $0/month, on measured numbers rather than estimates. R2's free allowance (confirmed against Cloudflare's pricing page 2026-08-09) is **10 GB-month storage, 1M Class A operations, 10M Class B, and egress is always free**; above it, storage is $0.015/GB-month. This job stores ~420 MB (42 copies × ~10 MB) and performs ~200 writes a month — about **4%** of the storage allowance and **0.02%** of the write allowance. Reaching even $1/month would take roughly 77 GB stored.
 

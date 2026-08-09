@@ -24,6 +24,7 @@ import demoRoutes from './routes/demo.routes'
 import feesRoutes from './routes/fees.routes'
 import hndRegistrationRoutes from './routes/hndRegistration.routes'
 import backupRoutes from './routes/backup.routes'
+import uploadsBackupRoutes from './routes/uploadsBackup.routes'
 import excelTemplateRoutes from './routes/excelTemplate.routes'
 import timetableRoutes from './routes/timetable.routes'
 import pastTermGrantRoutes from './routes/pastTermGrant.routes'
@@ -68,6 +69,8 @@ app.use('/api/fees', feesRoutes)
 app.use('/api/hnd-registration', hndRegistrationRoutes)
 app.use('/api/demo', demoRoutes)
 app.use('/api/backup', backupRoutes)
+// Operator-only, secret-guarded, disabled unless UPLOADS_BACKUP_SECRET is set. See the route file.
+app.use('/api/uploads-backup', uploadsBackupRoutes)
 app.use('/api/excel-templates', excelTemplateRoutes)
 app.use('/api/timetable', timetableRoutes)
 app.use('/api/past-term-grants', pastTermGrantRoutes)
