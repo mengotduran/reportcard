@@ -11,6 +11,7 @@ import { getClassLevelsApi, ClassLevel } from '@/lib/api/classLevels'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix, withProgrammeSuffix, PROGRAMME_LABELS } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
+import { STUDENT_PHOTO_UPLOADS_ENABLED } from '@/lib/features'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
 import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle } from 'lucide-react'
@@ -982,8 +983,13 @@ export default function StudentsPage() {
             {error && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{error}</div>}
             {/* Photo prints in the identity box at the top of the report card, in the frame
                 that otherwise sits empty. Only available once the student exists (upload
-                needs an id) — a brand new "Add Student" form has nothing to attach it to yet. */}
-            {editingId ? (
+                needs an id) — a brand new "Add Student" form has nothing to attach it to yet.
+
+                While STUDENT_PHOTO_UPLOADS_ENABLED is off, this whole block collapses to
+                nothing unless the student already HAS a photo, in which case it still shows
+                with a Remove button so an existing file can be cleared. The report card's
+                photo frame is unaffected either way and still prints for a physical photo. */}
+            {editingId && (STUDENT_PHOTO_UPLOADS_ENABLED || editingPhoto) && (
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-16 h-20 rounded-lg border border-border bg-muted flex items-center justify-center overflow-hidden shrink-0">
                   {editingPhoto
@@ -991,10 +997,12 @@ export default function StudentsPage() {
                     : <span className="text-[9px] uppercase tracking-wide text-muted-foreground text-center px-1">{t('No Photo')}</span>}
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <button type="button" onClick={() => photoInputRef.current?.click()} disabled={uploadingPhoto}
-                    className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-50">
-                    {uploadingPhoto ? t('Uploading...') : editingPhoto ? t('Change Photo') : t('Upload Photo')}
-                  </button>
+                  {STUDENT_PHOTO_UPLOADS_ENABLED && (
+                    <button type="button" onClick={() => photoInputRef.current?.click()} disabled={uploadingPhoto}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-50">
+                      {uploadingPhoto ? t('Uploading...') : editingPhoto ? t('Change Photo') : t('Upload Photo')}
+                    </button>
+                  )}
                   {editingPhoto && (
                     <button type="button" onClick={handlePhotoRemove}
                       className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-destructive hover:bg-destructive/10">
@@ -1005,7 +1013,8 @@ export default function StudentsPage() {
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePhotoUpload(f); e.target.value = '' }} />
                 </div>
               </div>
-            ) : (
+            )}
+            {!editingId && STUDENT_PHOTO_UPLOADS_ENABLED && (
               <p className="text-xs text-muted-foreground mb-4">{t('You can add a photo once the student is saved.')}</p>
             )}
             <form onSubmit={handleSubmit} className="space-y-3">
