@@ -10,7 +10,10 @@ import {
   getClassOverview, getReportCard, createReportCard,
   saveEntries, setPastTermGrant,
 } from '@/lib/api/reportcards'
-import { COMPETENCY_RATINGS, CompetencyRating, RATING_COLORS, isCompetencyRating } from '@/lib/competency'
+import {
+  CompetencyLevel, CompetencyRating, DEFAULT_COMPETENCY_LEVELS, findLevel, levelLabel,
+} from '@/lib/competency'
+import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { onRealtimeDebounced } from '@/lib/socket'
@@ -62,6 +65,12 @@ export default function CompetencyMarksEntry() {
   const t = useT()
   const s = makeStyles(colors)
   const pulse = useSkeletonPulse()
+  const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+
+  // The school's own rating levels. Built-ins until the fetch lands, and on failure, so a
+  // teacher can always rate a class even on a bad connection.
+  const [levels, setLevels] = useState<CompetencyLevel[]>(DEFAULT_COMPETENCY_LEVELS)
+  useEffect(() => { getCompetencyScaleApi().then(sc => setLevels(sc.levels)) }, [])
 
   const decodedSubjectId = decodeURIComponent(subjectId)
   const decodedClass = decodeURIComponent(classLevel)
@@ -96,9 +105,15 @@ export default function CompetencyMarksEntry() {
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
     const loaded: Row[] = sorted.map((st) => {
       const entry = st.reportCard?.entries?.find((e) => e.subjectId === decodedSubjectId)
-      // Anything that isn't one of the three reads as unrecorded: a class switched over
-      // from marks can still be holding a stale numeric grade here.
-      const rating: CompetencyRating | '' = isCompetencyRating(entry?.grade) ? (entry!.grade as CompetencyRating) : ''
+      // Loaded VERBATIM, not filtered against the school's current levels. A rating saved
+      // under an earlier scale is still this pupil's real rating, and blanking it here would
+      // both hide it and clear it on the next save. A stale numeric grade from a class
+      // switched over from marks is excluded: a letter is not a rating.
+      const stored = entry?.grade
+      const rating: CompetencyRating | '' =
+        typeof stored === 'string' && stored.trim() !== '' && !/^[A-F][+-]?$/.test(stored.trim())
+          ? stored
+          : ''
       const isPublished = st.reportCard?.status === 'PUBLISHED'
       const grantedToMe = st.reportCard?.marksEditGrantedTo === user?.id
       const frozenByPublish = isPublished && !grantedToMe
@@ -179,10 +194,17 @@ export default function CompetencyMarksEntry() {
       await Promise.all(withCards.map((r, i) => {
         const rc = rcDetails[i]
         const allSubjectIds = Array.from(new Set([...rc.entries.map((e) => e.subject.id), decodedSubjectId]))
-        const entries = allSubjectIds.map((sid) =>
-          sid === decodedSubjectId
-            ? { subjectId: sid, rating: r.rating === '' ? null : r.rating }
-            : { subjectId: sid })
+        // An UNTOUCHED row is sent without a `rating` key, exactly like the other subjects,
+        // so the API carries forward whatever is stored. That matters for a rating saved
+        // under an earlier scale: re-sending it would fail the server's "is this one of the
+        // school's current levels" check and clear it. Only a row the teacher actually
+        // changed asserts a new value (or null, to unset one).
+        const entries = allSubjectIds.map((sid) => {
+          if (sid !== decodedSubjectId) return { subjectId: sid }
+          const loadedRating = loadedRatingsRef.current[r.studentId] ?? ''
+          if (r.rating === loadedRating) return { subjectId: sid }
+          return { subjectId: sid, rating: r.rating === '' ? null : r.rating }
+        })
         return saveEntries(r.reportCardId!, { entries: entries as any })
       }))
       Alert.alert(t('Saved'), t('Ratings saved.'))
@@ -288,10 +310,10 @@ export default function CompetencyMarksEntry() {
         <View style={s.fillBar}>
           <Text style={s.fillBarLabel}>{t('Rate everyone still blank:')}</Text>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
-            {COMPETENCY_RATINGS.map((rating) => (
-              <TouchableOpacity key={rating} onPress={() => fillBlanks(rating)}
-                style={[s.fillChip, { borderColor: RATING_COLORS[rating] }]}>
-                <Text style={[s.fillChipText, { color: RATING_COLORS[rating] }]}>{t(rating)}</Text>
+            {levels.map((level) => (
+              <TouchableOpacity key={level.id} onPress={() => fillBlanks(level.labelEn)}
+                style={[s.fillChip, { borderColor: level.color }]}>
+                <Text style={[s.fillChipText, { color: level.color }]}>{levelLabel(level, lang, t)}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -318,14 +340,14 @@ export default function CompetencyMarksEntry() {
               {row.isLocked && <Text style={{ fontSize: 11 }}>🔒</Text>}
             </View>
             <View style={{ flexDirection: 'row', gap: 6 }}>
-              {COMPETENCY_RATINGS.map((rating) => {
-                const picked = row.rating === rating
-                const c = RATING_COLORS[rating]
+              {levels.map((level) => {
+                const picked = row.rating === level.labelEn
+                const c = level.color
                 return (
                   <TouchableOpacity
-                    key={rating}
+                    key={level.id}
                     disabled={row.isLocked}
-                    onPress={() => setRating(row.studentId, rating)}
+                    onPress={() => setRating(row.studentId, level.labelEn)}
                     activeOpacity={0.7}
                     style={[
                       s.ratingBtn,
@@ -333,11 +355,21 @@ export default function CompetencyMarksEntry() {
                     ]}>
                     <Text style={[s.ratingBtnText, { color: picked ? c : colors.textSecondary, fontWeight: picked ? '700' : '500' }]}
                       numberOfLines={2}>
-                      {t(rating)}
+                      {levelLabel(level, lang, t)}
                     </Text>
                   </TouchableOpacity>
                 )
               })}
+              {/* A rating recorded under a scale this school has since changed. Shown rather
+                  than left invisible, so the teacher can see what the pupil actually has.
+                  Saving without touching it keeps it (see the save handler). */}
+              {row.rating !== '' && !levels.some((l) => l.labelEn === row.rating) && (
+                <View style={[s.ratingBtn, { borderColor: '#475569', borderStyle: 'dashed', backgroundColor: '#4755691a' }]}>
+                  <Text style={[s.ratingBtnText, { color: '#475569', fontWeight: '700' }]} numberOfLines={2}>
+                    {findLevel(levels, row.rating)?.labelEn ?? row.rating}
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
         ))}

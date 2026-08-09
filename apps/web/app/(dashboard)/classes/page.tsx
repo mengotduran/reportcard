@@ -1426,7 +1426,7 @@ export default function ClassesPage() {
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {form.gradingMode === 'COMPETENCY'
-                      ? t('For nursery and pre-primary. Each subject is rated Attained, Developing or Not Yet Attained. The report card carries no marks, no average and no position in class.')
+                      ? t('For nursery and pre-primary. Each subject is rated on your school\'s rating levels instead of marked. The report card carries no marks, no average and no position in class.')
                       : t('Marked out of a score, with a Test and an Exam. The report card shows an average out of 20 and a position in class.')}
                   </p>
                 </div>

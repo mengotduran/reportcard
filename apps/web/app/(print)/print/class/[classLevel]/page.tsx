@@ -5,6 +5,8 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import { getReportCardsApi } from '@/lib/api/reportcards'
 import { getTemplateApi, TemplateConfig, mergeSavedStandardConfig } from '@/lib/api/reportCardTemplate'
 import { getGradingScaleApi, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
+import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
+import { CompetencyLevel, DEFAULT_COMPETENCY_LEVELS } from '@/lib/competency'
 import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 import PrintableReportCard, { PrintEntry } from '@/components/ui/PrintableReportCard'
@@ -43,6 +45,9 @@ export default function PrintClassPage() {
   const [cards, setCards] = useState<RawRC[]>([])
   const [config, setConfig] = useState<TemplateConfig | null>(null)
   const [gradingRanges, setGradingRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  // Rating levels for a COMPETENCY class. Fetched here alongside the grading scale and
+  // passed down, so PrintableReportCard stays a pure renderer.
+  const [competencyLevels, setCompetencyLevels] = useState<CompetencyLevel[]>(DEFAULT_COMPETENCY_LEVELS)
   const [classBands, setClassBands] = useState<ClassificationBand[]>(DEFAULT_CLASSIFICATION_BANDS)
   const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
   // The whole run is one class, so one mode covers every card in it.
@@ -54,14 +59,16 @@ export default function PrintClassPage() {
     if (!_hasHydrated) return
     const load = async () => {
       try {
-        const [rcData, tplData, scaleData, promoScale, levels] = await Promise.all([
+        const [rcData, tplData, scaleData, promoScale, levels, compScale] = await Promise.all([
           getReportCardsApi({ termId, classLevel }),
           getTemplateApi().catch(() => ({ config: {} })),
           getGradingScaleApi().catch(() => ({ ranges: DEFAULT_RANGES, classificationBands: [], legendRows: [] })),
           getPromotionScaleApi().catch(() => null),
           getClassLevelsApi().catch(() => ({ classLevels: [] })),
+          getCompetencyScaleApi(),
         ])
         setPromotionScale(promoScale)
+        setCompetencyLevels(compScale.levels)
         setGradingMode(levels.classLevels.find((c) => c.name === classLevel)?.gradingMode ?? 'NUMERIC')
         const published: RawRC[] = rcData.reportCards.filter((rc: RawRC) => rc.status === 'PUBLISHED')
         if (published.length === 0) { setStatus('empty'); return }
@@ -102,6 +109,10 @@ export default function PrintClassPage() {
 
   const schoolData = {
     name: school?.name ?? '', type: school?.type ?? 'SECONDARY', logo: school?.logo ?? null, stamp: school?.stamp ?? null,
+    // Without this the whole card falls back to English: every renderer reads its language
+    // off school.language, and this object simply never carried it. A French section's bulk
+    // class print came out entirely in English, headers and all.
+    language: school?.language ?? 'EN',
     email: school?.email, phone: school?.phone, address: school?.address, website: school?.website,
     authorizationNumber: school?.authorizationNumber,
     officialLeftTextEn: school?.officialLeftTextEn, officialLeftTextFr: school?.officialLeftTextFr,
@@ -175,6 +186,7 @@ export default function PrintClassPage() {
               subjectStats={classSubjectStats}
               promotionScale={promotionScale}
               gradingMode={gradingMode}
+              competencyLevels={competencyLevels}
             />
           </div>
         )

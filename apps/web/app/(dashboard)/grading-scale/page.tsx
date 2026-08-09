@@ -12,12 +12,23 @@ import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
 import { Save, Plus, Trash2, Pencil, X, ChevronUp, ChevronDown, Info } from 'lucide-react'
 import { useT } from '@/lib/i18n'
+import { getClassLevelsApi } from '@/lib/api/classLevels'
+import CompetencyScaleEditor from './CompetencyScaleEditor'
 
 export default function GradingScalePage() {
   const router = useRouter()
   const { isAuthenticated, school } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const t = useT()
+  // Whether to offer the nursery rating editor at all. Keyed off a class actually being on
+  // COMPETENCY rather than off school type, since a primary school with no nursery has no
+  // use for it.
+  const [hasCompetencyClass, setHasCompetencyClass] = useState(false)
+  useEffect(() => {
+    getClassLevelsApi()
+      .then((r) => setHasCompetencyClass(r.classLevels.some((c) => c.gradingMode === 'COMPETENCY')))
+      .catch(() => setHasCompetencyClass(false))
+  }, [])
   const isUniversity = school?.type === 'UNIVERSITY'
   // Primary now grades on the raw Test+Exam total (like university's CA+Exam), not a /20
   // normalised sequence average — see reportcard.controller.ts saveEntries.
@@ -652,6 +663,10 @@ export default function GradingScalePage() {
           </div>
         </div>
       )}
+
+      {/* Nursery rating levels. Only for a school that actually runs a COMPETENCY class —
+          the two scales sit together because one primary school uses both at once. */}
+      {hasCompetencyClass && <CompetencyScaleEditor onToast={showToast} />}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

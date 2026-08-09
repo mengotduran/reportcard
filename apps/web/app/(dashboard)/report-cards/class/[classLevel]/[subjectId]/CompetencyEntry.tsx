@@ -5,7 +5,11 @@ import {
   getClassOverviewApi, getReportCardApi, createReportCardApi,
   saveEntriesWithSeqApi, setPastTermGrantApi,
 } from '@/lib/api/reportcards'
-import { COMPETENCY_RATINGS, CompetencyRating, RATING_COLORS, isCompetencyRating } from '@/lib/competency'
+import {
+  CompetencyLevel, CompetencyRating, DEFAULT_COMPETENCY_LEVELS,
+  findLevel, levelLabel, ratingChipColors,
+} from '@/lib/competency'
+import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
 import { ArrowLeft, Save, Check } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -51,6 +55,13 @@ export default function CompetencyEntryPage() {
   const subjectName = decodeURIComponent(searchParams.get('subjectName') ?? '')
   const termName = searchParams.get('termName') ?? ''
   const t = useT()
+  const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
+
+  // The school's own rating levels. Starts as the built-ins so the picker draws immediately
+  // and still works if the request fails — a teacher rating a class must never be blocked by
+  // a settings lookup.
+  const [levels, setLevels] = useState<CompetencyLevel[]>(DEFAULT_COMPETENCY_LEVELS)
+  useEffect(() => { getCompetencyScaleApi().then(s => setLevels(s.levels)) }, [])
 
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   // Same rule the numeric sheet uses, minus the university branches: a competency class only
@@ -91,9 +102,18 @@ export default function CompetencyEntryPage() {
     const sorted = [...overview.students].sort((a, b) => a.name.localeCompare(b.name))
     const loaded: Row[] = sorted.map((s) => {
       const entry = s.reportCard?.entries.find((e) => e.subjectId === subjectId)
-      // Anything that isn't one of the three is treated as unrecorded rather than shown:
-      // a class switched over from marks can still hold a stale numeric grade here.
-      const rating: CompetencyRating | '' = isCompetencyRating(entry?.grade) ? entry!.grade as CompetencyRating : ''
+      // Loaded VERBATIM, not filtered against the school's current levels. A rating saved
+      // under an older scale is still this pupil's real rating, and blanking it here would
+      // both hide it and clear it on the next save. The picker below shows an unrecognised
+      // value as its own chip so it is visible rather than silently carried.
+      //
+      // A stale numeric grade from a class switched over from marks is excluded, since a
+      // letter like "B+" is not a rating at all — findLevel returns null for it.
+      const stored = entry?.grade
+      const rating: CompetencyRating | '' =
+        typeof stored === 'string' && stored.trim() !== '' && !/^[A-F][+-]?$/.test(stored.trim())
+          ? stored
+          : ''
       const isPublished = s.reportCard?.status === 'PUBLISHED'
       const grantedToMe = s.reportCard?.marksEditGrantedTo === user?.id
       const frozenByPublish = isPublished && !grantedToMe
@@ -175,6 +195,13 @@ export default function CompetencyEntryPage() {
         const entries = allSubjectIds.map((sid) => {
           const existing = rc.entries.find((e: any) => e.subject.id === sid) as any
           if (sid === subjectId) {
+            // An UNTOUCHED row is sent without a `rating` key, exactly like the other
+            // subjects, so the API carries forward whatever is stored. That matters for a
+            // rating saved under an older scale: re-sending it would fail the server's
+            // "is this one of the school's current levels" check and clear it. Only a row
+            // the teacher actually changed asserts a new value (or null, to unset one).
+            const loadedRating = loadedRatingsRef.current[r.studentId] ?? ''
+            if (r.rating === loadedRating) return { subjectId: sid, remarks: existing?.remarks || '' }
             return { subjectId: sid, rating: r.rating === '' ? null : r.rating, remarks: existing?.remarks || '' }
           }
           return { subjectId: sid, remarks: existing?.remarks || '' }
@@ -300,17 +327,16 @@ export default function CompetencyEntryPage() {
       {editableRows.some((r) => r.rating === '') && (
         <div className="flex items-center gap-2 flex-wrap bg-violet-50 border-b border-violet-200 px-4 py-2.5">
           <span className="text-sm font-semibold text-violet-700">{t('Rate everyone still blank:')}</span>
-          {COMPETENCY_RATINGS.map((rating) => (
-            <button key={rating} onClick={() => fillBlanks(rating)}
-              className="text-xs font-semibold px-2.5 py-1 rounded-lg border transition hover:opacity-80"
-              style={{
-                backgroundColor: RATING_COLORS[rating].bg,
-                color: RATING_COLORS[rating].text,
-                borderColor: RATING_COLORS[rating].border,
-              }}>
-              {t(rating)}
-            </button>
-          ))}
+          {levels.map((level) => {
+            const c = ratingChipColors(level)
+            return (
+              <button key={level.id} onClick={() => fillBlanks(level.labelEn)}
+                className="text-xs font-semibold px-2.5 py-1 rounded-lg border transition hover:opacity-80"
+                style={{ backgroundColor: c.bg, color: c.text, borderColor: c.border }}>
+                {levelLabel(level, lang, t)}
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -345,16 +371,17 @@ export default function CompetencyEntryPage() {
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-center gap-2 flex-wrap">
-                      {COMPETENCY_RATINGS.map((rating) => {
-                        const picked = row.rating === rating
-                        const c = RATING_COLORS[rating]
+                      {levels.map((level) => {
+                        const picked = row.rating === level.labelEn
+                        const c = ratingChipColors(level)
+                        const label = levelLabel(level, lang, t)
                         return (
                           <button
-                            key={rating}
+                            key={level.id}
                             type="button"
                             disabled={row.isLocked}
-                            onClick={() => setRating(row.studentId, rating)}
-                            title={picked ? t('Tap again to clear') : t(rating)}
+                            onClick={() => setRating(row.studentId, level.labelEn)}
+                            title={picked ? t('Tap again to clear') : label}
                             className={[
                               'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 text-xs font-semibold transition',
                               row.isLocked ? 'cursor-not-allowed' : 'cursor-pointer hover:opacity-90',
@@ -363,10 +390,24 @@ export default function CompetencyEntryPage() {
                             style={picked ? { backgroundColor: c.bg, color: c.text, borderColor: c.text } : undefined}
                           >
                             {picked && <Check size={12} />}
-                            {t(rating)}
+                            {label}
                           </button>
                         )
                       })}
+                      {/* A rating recorded under a scale this school has since changed. Shown
+                          as its own chip rather than left invisible, so the teacher can see
+                          what the pupil actually has and re-rate deliberately. Saving without
+                          touching it keeps it (see the save handler). */}
+                      {row.rating !== '' && !levels.some((l) => l.labelEn === row.rating) && (
+                        <span
+                          title={t('Recorded under an earlier rating scale')}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-dashed text-xs font-semibold"
+                          style={{ backgroundColor: '#47556918', color: '#475569', borderColor: '#47556955' }}
+                        >
+                          <Check size={12} />
+                          {findLevel(levels, row.rating)?.labelEn ?? row.rating}
+                        </span>
+                      )}
                     </div>
                   </td>
                 </tr>

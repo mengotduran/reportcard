@@ -15,7 +15,10 @@ import {
 import { getGradingScale, gradeFromScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { onRealtimeDebounced } from '@/lib/socket'
-import { isCompetencyRating, RATING_COLORS, CompetencyRating } from '@/lib/competency'
+import {
+  CompetencyLevel, DEFAULT_COMPETENCY_LEVELS, findLevel, levelLabel,
+} from '@/lib/competency'
+import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 
@@ -163,6 +166,9 @@ export default function ReportCardDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
   const { user } = useAuthStore()
+  // The school's rating levels, for a COMPETENCY card. Built-ins until the fetch lands.
+  const [levels, setLevels] = useState<CompetencyLevel[]>(DEFAULT_COMPETENCY_LEVELS)
+  useEffect(() => { getCompetencyScaleApi().then(sc => setLevels(sc.levels)) }, [])
   const [reportCard, setReportCard] = useState<ReportCardDetail | null>(null)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [entries, setEntries] = useState<Entry[]>([])
@@ -305,7 +311,9 @@ export default function ReportCardDetailScreen() {
   // one primary school runs both modes at once. Ratings are recorded on the class sheet,
   // never typed here, so this card stays read-only for them.
   const isCompetency = reportCard.gradingMode === 'COMPETENCY'
-  const ratedCount = entries.filter((e) => isCompetencyRating(e.grade)).length
+  // Counts any rating the school HAS ever used, not only its current levels: a pupil rated
+  // before the scale was edited is still rated.
+  const ratedCount = entries.filter((e) => findLevel(levels, e.grade) !== null).length
 
   // Publish readiness — same rules as admin and web. Prefer the backend's
   // readiness detail once loaded, since it also catches subjects with zero
@@ -313,7 +321,7 @@ export default function ReportCardDetailScreen() {
   // A competency card has no sequences at all, so "complete" there means every subject
   // carries a rating — the same rule the API's own publish gate applies.
   const localSeqsFilled = entries.length > 0 && (reportCard.gradingMode === 'COMPETENCY'
-    ? entries.every(e => isCompetencyRating(e.grade))
+    ? entries.every(e => findLevel(levels, e.grade) !== null)
     : entries.every(e => e.score !== '' && e.score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
@@ -463,13 +471,20 @@ export default function ReportCardDetailScreen() {
             return (
               <View key={subject.id} style={styles.subjectRow}>
                 <Text style={styles.subjectName}>{subject.name}</Text>
-                {isCompetencyRating(rating) ? (
-                  <View style={[styles.gradePill, { backgroundColor: `${RATING_COLORS[rating]}18` }]}>
-                    <Text style={[styles.gradeText, { color: RATING_COLORS[rating] }]}>{t(rating)}</Text>
-                  </View>
-                ) : (
-                  <Text style={{ fontSize: 12, color: colors.textMuted }}>{t('Not recorded')}</Text>
-                )}
+                {/* Resolved against the school's levels, falling back to the stored
+                    wording, so a rating from an earlier scale still reads correctly
+                    instead of showing as "Not recorded". */}
+                {(() => {
+                  const level = findLevel(levels, rating)
+                  if (!level) return <Text style={{ fontSize: 12, color: colors.textMuted }}>{t('Not recorded')}</Text>
+                  return (
+                    <View style={[styles.gradePill, { backgroundColor: `${level.color}18` }]}>
+                      <Text style={[styles.gradeText, { color: level.color }]}>
+                        {levelLabel(level, reportCard?.school?.language === 'FR' ? 'FR' : 'EN', t)}
+                      </Text>
+                    </View>
+                  )
+                })()}
               </View>
             )
           }

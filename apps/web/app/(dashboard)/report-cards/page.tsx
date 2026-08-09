@@ -431,7 +431,9 @@ export default function ReportCardsPage() {
   const { isAuthenticated, user, school, activeSession } = useAuthStore()
   // A university teaches courses, not subjects, and its year is split into semesters.
   const isUniversity = school?.type === 'UNIVERSITY'
-  // Primary grades on a raw Test+Exam /100 total now, same display convention as university.
+  // Primary marks each SUBJECT on a raw Test+Exam total out of 100 — but its average is
+  // coefficient-weighted and normalised to /20, exactly like secondary. Only the per-subject
+  // columns follow the university's /100 convention; the average never does.
   const isPrimary = school?.type === 'PRIMARY'
   // Same relabelling the sidebar does (UNIVERSITY_NAV_LABELS in the dashboard layout): the
   // data is a Term either way, only the word the school uses for it changes.
@@ -769,7 +771,9 @@ export default function ReportCardsPage() {
           ...data.subjects.map((subj) => ({ label: subj, value: (s: MarksExportStudent) => s.scores[subj] ?? '' })),
           // This export reads ReportCard.average, which for a university is a weighted
           // mark out of 100, not a /20 average — label it for what it actually is.
-          { label: (isUniversity || isPrimary) ? tr('Total / 100') : tr('Average / 20'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
+          // Primary is NOT in that group: its subject marks are /100 but its average is
+          // normalised to /20, the same figure its report card prints.
+          { label: isUniversity ? tr('Total / 100') : tr('Average / 20'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
           { label: tr('Rank'), value: (s) => s.position ?? '' },
         ])
         files.push({ name: datedFilename(`school-marks-${data.term.name}`), content: csv })
@@ -963,9 +967,15 @@ export default function ReportCardsPage() {
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.term.name}, {rc.term.session}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{rc.entries.length} {tr('subjects')}</td>
                   <td className="px-4 py-3 text-sm font-medium text-foreground">
+                    {/* Primary is /20 like secondary, NOT /100. Its per-subject marks are raw
+                        out of 100, but the average it stores is coefficient-weighted and
+                        normalised to 20 (see saveEntries) — this row read "13.9 / 100" for a
+                        pupil whose own card said "13.9  TERM AVERAGE /20" and whose raw
+                        subject mean was 69.8. A rated nursery card has no average at all and
+                        correctly falls through to the dash. */}
                     {isUniversity
                       ? (rc.gpa != null ? rc.gpa.toFixed(2) : '—')
-                      : (rc.average != null ? `${rc.average.toFixed(1)} / ${isPrimary ? 100 : 20}` : '—')}
+                      : (rc.average != null ? `${rc.average.toFixed(1)} / 20` : '—')}
                   </td>
                   <td className="px-4 py-3">
                     {/* Admin-authored wording (see /promotion-scale), rendered verbatim like

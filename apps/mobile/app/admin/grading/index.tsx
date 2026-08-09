@@ -7,6 +7,8 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getGradingScale, saveGradingScale, GradeRange, DEFAULT_RANGES } from '@/lib/api/gradingScale'
+import { getClasses } from '@/lib/api/classes'
+import CompetencyScaleEditor from '@/components/CompetencyScaleEditor'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
 
@@ -138,6 +140,14 @@ export default function GradingScaleScreen() {
   const styles = makeStylesStyles(colors)
   const t = useT()
   const [ranges, setRanges] = useState<GradeRange[]>(DEFAULT_RANGES)
+  // Whether to offer the nursery rating editor at all. Keyed off a class actually being on
+  // COMPETENCY rather than off school type: a primary school with no nursery has no use for it.
+  const [hasCompetencyClass, setHasCompetencyClass] = useState(false)
+  useEffect(() => {
+    getClasses()
+      .then((r) => setHasCompetencyClass(r.classLevels.some((c) => c.gradingMode === 'COMPETENCY')))
+      .catch(() => setHasCompetencyClass(false))
+  }, [])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -268,6 +278,10 @@ export default function GradingScaleScreen() {
           )}
       </TouchableOpacity>
       </>)}
+
+      {/* Nursery rating levels. Only for a school that actually runs a COMPETENCY class:
+          a primary school uses both scales at once, so they belong on one screen. */}
+      {hasCompetencyClass && <CompetencyScaleEditor />}
     </ScrollView>
   )
 }

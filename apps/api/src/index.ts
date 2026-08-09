@@ -18,6 +18,7 @@ import departmentRoutes from './routes/department.routes'
 import reportCardTemplateRoutes from './routes/reportcardtemplate.routes'
 import classListTemplateRoutes from './routes/classlisttemplate.routes'
 import gradingScaleRoutes from './routes/gradingscale.routes'
+import competencyScaleRoutes from './routes/competencyscale.routes'
 import promotionScaleRoutes from './routes/promotionScale.routes'
 import demoRoutes from './routes/demo.routes'
 import feesRoutes from './routes/fees.routes'
@@ -61,6 +62,7 @@ app.use('/api/departments', departmentRoutes)
 app.use('/api/report-card-template', reportCardTemplateRoutes)
 app.use('/api/class-list-template', classListTemplateRoutes)
 app.use('/api/grading-scale', gradingScaleRoutes)
+app.use('/api/competency-scale', competencyScaleRoutes)
 app.use('/api/promotion-scale', promotionScaleRoutes)
 app.use('/api/fees', feesRoutes)
 app.use('/api/hnd-registration', hndRegistrationRoutes)

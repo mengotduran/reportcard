@@ -25,7 +25,10 @@ import {
 import { getTeachers, Teacher } from '@/lib/api/teachers'
 import api from '@/lib/api/client'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { isCompetencyRating, RATING_COLORS } from '@/lib/competency'
+import {
+  CompetencyLevel, DEFAULT_COMPETENCY_LEVELS, findLevel, levelLabel,
+} from '@/lib/competency'
+import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
 import { getGradingScale, gradeFromScore, isFailingScore, gradePointForScore20, classificationForGpa, GradeRange, ClassificationBand, DEFAULT_RANGES, DEFAULT_CLASSIFICATION_BANDS } from '@/lib/api/gradingScale'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT } from '@/lib/i18n'
@@ -236,6 +239,9 @@ export default function AdminReportCardDetail() {
   const styles = makeStylesStyles(colors)
   const tr = useT()
   const { school } = useAuthStore()
+  // The school's rating levels, for a COMPETENCY card. Built-ins until the fetch lands.
+  const [levels, setLevels] = useState<CompetencyLevel[]>(DEFAULT_COMPETENCY_LEVELS)
+  useEffect(() => { getCompetencyScaleApi().then(sc => setLevels(sc.levels)) }, [])
   // Print's school-wide "failing marks in red" policy, honoured on this screen too. One
   // config fetch; default ON matches the print side.
   const [redFailing, setRedFailing] = useState(true)
@@ -441,11 +447,13 @@ export default function AdminReportCardDetail() {
   // Nursery: a rating per subject and nothing else. Read from the CLASS, not the school —
   // one primary school runs both modes at once, its nursery rated and Class 1-6 marked.
   const isCompetency = reportCard.gradingMode === 'COMPETENCY'
-  const ratedCount = reportCard.entries.filter(e => isCompetencyRating(e.grade)).length
+  // Counts any rating the school HAS ever used, not only its current levels: a pupil rated
+  // before the scale was edited is still rated, and must not read as an unfinished card.
+  const ratedCount = reportCard.entries.filter(e => findLevel(levels, e.grade) !== null).length
   // A competency card has no sequences at all, so "complete" there means every subject
   // carries a rating — the same rule the API's own publish gate applies.
   const localSeqsFilled = reportCard.entries.length > 0 && (isCompetency
-    ? reportCard.entries.every(e => isCompetencyRating(e.grade))
+    ? reportCard.entries.every(e => findLevel(levels, e.grade) !== null)
     : reportCard.entries.every(e => (e as any).seq1Score != null && (e as any).seq2Score != null))
   const allSeqsFilled = readiness ? readiness.allSeqsFilled : localSeqsFilled
   const hasRemarks = !!reportCard.remarks?.trim()
@@ -764,7 +772,11 @@ export default function AdminReportCardDetail() {
               // just the rating, which is the whole card.
               if (isCompetency) {
                 const rating = entry?.grade
-                const rc = isCompetencyRating(rating) ? RATING_COLORS[rating] : null
+                // Resolved against the school's levels, falling back to the stored wording:
+                // a rating recorded under an earlier scale still shows what the pupil was
+                // given rather than reading as unrecorded.
+                const level = findLevel(levels, rating)
+                const rc = level?.color ?? null
                 return (
                   <View key={subject.id} style={[styles.scoreCard, rc ? { borderLeftWidth: 3, borderLeftColor: rc } : null]}>
                     <View style={styles.scoreCardInner}>
@@ -774,7 +786,7 @@ export default function AdminReportCardDetail() {
                       <View style={styles.scoreRight}>
                         {rc ? (
                           <View style={[styles.gradeBadge, { backgroundColor: '#f3f4f6' }]}>
-                            <Text style={[styles.gradeText, { color: rc }]}>{tr(rating as string)}</Text>
+                            <Text style={[styles.gradeText, { color: rc }]}>{levelLabel(level!, isFr ? 'FR' : 'EN', tr)}</Text>
                           </View>
                         ) : (
                           <Text style={{ fontSize: 11, color: colors.textMuted }}>{tr('Not recorded')}</Text>

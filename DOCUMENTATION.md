@@ -580,7 +580,10 @@ calls these *Maternelle*, and a school may want Class 1 rated too. It is **prima
 `resolveGradingMode` in `classlevel.controller.ts` forces `NUMERIC` for secondary and
 university, the same shape as `resolveProgramme`'s university-only gate.
 
-The three ratings are **fixed, not school-configurable**:
+The ratings are **per school** (`CompetencyScale`, 2 to 6 levels), edited under **Grading
+Scale** on web and mobile and only offered when a class is actually on `COMPETENCY`. A school
+that has never customised them keeps **no row at all** and is served these three built-ins, so
+nothing changed for any existing school and the defaults can still be improved centrally:
 
 | Rating | Meaning |
 |---|---|
@@ -588,21 +591,47 @@ The three ratings are **fixed, not school-configurable**:
 | `Developing` | On the way to it |
 | `Not Yet Attained` | Not there yet |
 
+Each level carries `labelEn`, `labelFr`, a `short` code (for narrow print columns) and a
+`color`. **Both languages are stored on the level** because a custom label has no `t()` entry
+to look up; only the three built-ins go through `t()`.
+
+**Renaming a level is deliberately NOT retroactive**, and that falls straight out of storing
+the label verbatim: a card issued last term keeps the exact word it was printed with. The
+consequence every reader must handle is that a stored rating may be a label the school no
+longer has. Resolve one with **`findLevel`**, which falls back to rendering the stored wording
+in a neutral colour, never with a membership test against the live scale. `isRatingIn` is the
+strict check, and is for validating what a teacher just submitted, not for display.
+
+Two places that would otherwise lose data silently:
+
+- **The marks picker sends an untouched row without a `rating` key**, so the API carries
+  forward what is stored. Re-sending a rating from an older scale would fail the server's
+  "is this a current level" check and clear it. Only a row the teacher changed asserts a value.
+- **A rated card prints a `RATING SCALE` legend.** It used to print none, on the reasoning
+  that the built-ins explain themselves; that stops holding once a school names its own levels.
+
+Changing the levels is refused once a rated class has published cards for a closed term of the
+session, the same freeze the class form applies to mark ceilings and `gradingMode`
+(`utils/scaleFreeze.ts`, shared by both so there is one rule rather than two).
+
 **Where a rating is stored — and why it looks odd.** It goes in `ReportEntry.grade`,
 verbatim, as the English label (`apps/api/src/utils/competency.ts` is the single source;
 `apps/web/lib/competency.ts` and `apps/mobile/lib/competency.ts` mirror it for display).
 Deliberately the human-readable label rather than a code, for two reasons: every report card
 template already resolves and prints a `grade` column, and there is no second mapping layer
-to drift out of sync. **Translation happens at display time through `t()`, never in
-storage**, so a French section reads *Acquis / En cours d'acquisition / Non acquis* over the
-same stored rows.
+to drift out of sync. **Translation happens at display time, never in storage** — `levelLabel`
+picks the level's own `labelEn` / `labelFr` by section language, and only the built-ins
+additionally route through `t()` (a custom label has no `t()` entry, which is why both
+languages live on the level). So a French section reads *Acquis / En cours d'acquisition /
+Non acquis* over the same stored rows.
 
 **`score`, `seq1Score` and `seq2Score` stay NULL on a competency entry.** That is what keeps
 the average, the total and the position empty *without any of the arithmetic knowing this
 mode exists* — a null score already means "not marked" everywhere. `saveEntries` takes a
 separate short path for these classes that returns before all the mark arithmetic, validates
-the rating against the fixed set (a bad value 400s **before** the delete, so a bad payload
-can never wipe a card), and explicitly nulls `average` / `totalScore` / `position`.
+the rating against **this school's own levels** (`levelsForSchool` + `isRatingIn`; a bad value
+400s **before** the delete, so a bad payload can never wipe a card), and explicitly nulls
+`average` / `totalScore` / `position`.
 
 **The carry-forward guard (data-loss trap).** The competency save replaces a card's entries
 wholesale, so a caller must re-send every subject on the card. A subject is keyed on whether
@@ -610,7 +639,7 @@ the `rating` key is **present**, not whether it is truthy:
 
 - `rating` absent → keep whatever rating that subject already has;
 - `rating: null` or `''` → clear it (so "unset this" stays expressible);
-- `rating: '<one of the three>'` → set it.
+- `rating: '<one of the school's current levels>'` → set it.
 
 Without this, opening a nursery subject in an old numeric grid and hitting Save would wipe
 the whole class's ratings, since that grid re-sends every subject with seq1/seq2 and no
@@ -635,8 +664,9 @@ the overview is judged on ratings for a rated class, not on seq1/seq2.
 **What the UI does with it** (all of it branches on the class, never the school):
 
 - **Marks entry** — a rated class opens a **rating picker** instead of the numeric
-  spreadsheet: three buttons per pupil, no Test/Exam tabs, no maximum, no keyboard on
-  mobile. Tapping the rating a pupil already has clears it. A *"Rate everyone still blank"*
+  spreadsheet: one button per level per pupil (so 2 to 6, whatever the school defined), no
+  Test/Exam tabs, no maximum, no keyboard on mobile. Tapping the rating a pupil already has
+  clears it. A *"Rate everyone still blank"*
   bar fills only the unrecorded pupils, so it can never overwrite a deliberate pick and
   needs no confirmation. Only pupils whose rating actually changed are written.
   (`CompetencyEntry.tsx` on web, `components/CompetencyMarksEntry.tsx` on mobile; the route
@@ -985,15 +1015,23 @@ Every section also carries **`showOn`** (*Both copies* / *Official only* / *Stud
 - Grade badges: squared corners (not circular)
 
 ### Section-type defaults (Primary / Secondary / University)
-A school with **no saved report-card design** starts from a layout tailored to its `school.type` (`getDefaultLayoutForType`). Admins edit & save from there. The three are fully independent:
+A school with **no saved report-card design** starts from `getDefaultLayoutForType`. Admins edit & save from there.
 
-| Section | Tailored defaults |
-|---------|-------------------|
-| **Primary** | Teal theme · "PRIMARY SCHOOL REPORT CARD" · **Pupil** labels · summary boxes **Conduct / Attendance / No. on Roll** · "Class Teacher's Comment" · **Class Teacher + Head Teacher** signatures |
-| **Secondary** | Current look — Seq 1/2 · coefficients · /20 average · position · class-master remarks |
-| **University** | Navy theme · "STUDENT SEMESTER REPORT" · **Matric No / Programme / Semester** · **CA + Exam** columns · **GPA / CGPA / Total Credits** summary · **Course Adviser / HOD / Dean** signatures |
+Since the 2026 redesign the three types are **not** independent layouts: they share one. Same navy `#1d3557` theme and `#b58a2b` accent, the same "STUDENT REPORT CARD" title, the same "General Remarks" label, and the same ten sections in the same order — header · student info · marks table · summary strip · annual band · a panel row pairing the grading legend with **Conduct & Attendance** · remarks · a second panel row of two remarks blocks · stamp · text block. None of the three carries a signatures section. They differ in exactly two things:
+
+| Section | Marks columns (and totals bands) | Summary boxes |
+|---------|----------------------------------|---------------|
+| **Primary** | S/N · Subject · **Test** · **Exam** · Total /100 · Grade · Remark. No coefficient column, and **no totals bands at all** — see "Primary states each figure once" below | Term Average /20 · Class Average /20 · Position in Class · Best Average · Appreciation |
+| **Secondary** | S/N · Subject · **Coef** · Seq 1 · Seq 2 · Avg /20 · **Avg × Coef** · Grade · Remark, banded with TOTAL COEFFICIENTS / TOTAL POINTS OBTAINED / WEIGHTED AVERAGE /20 | identical to primary's five |
+| **University** | S/N · Code · Course Title · Credits · **CA** · Exam · Total /100 · Grade · **GP** · **WGP**, banded with TOTAL CREDITS / TOTAL POINTS / GPA | Total Credits · Semester GPA · Cumulative GPA · Class Average · Classification |
+
+Beyond those, only three labels vary: primary says **Pupil ID** where the others say Student ID, and university says **Programme** / **Semester** where the others say Class / Term.
+
+The per-type builders that gave each type its own colour, title and signature blocks (`getLegacyDefaultLayoutForType`) are **pre-redesign and no longer used** — kept only for reference and rollback. Conduct & Attendance survives as a hand-filled panel (Discipline / Punctuality / Days Absent / Late Arrivals / Warnings Issued), not as summary boxes.
 
 Hand-filled fields (Conduct, Attendance, GPA, CGPA, Credits) render as `—` placeholders — design only, no change to grade calculation.
+
+**Primary states each figure once.** A primary Standard card carries no `OVERALL TOTAL` / `TERM AVERAGE` bands under its marks table: the summary boxes directly below already give the term average, so a band there only repeated it under the Grade and Remark columns. Secondary keeps its bands (they total coefficients and weighted points, which no box shows), and **Ledger keeps its own** — that layout has no summary section at all, so its bands are the only place the figures appear. Applied in three places, because a default alone would never reach a school that had already saved a design: the default (`buildRedesignLayout`), the designer on load (`ensureNoPrimaryTotalsBands`, same one-time backfill idea as `ensureBirthRows`), and the print renderer, so a card is correct whether or not the admin ever re-saves. The shared gate is `dropsPrimaryTotalsBands`; nursery/competency cards drop all footer bands earlier and are unaffected.
 
 University default headers also include **Date of Birth** and **Place of Birth** rows (optional per student, blank when not recorded, printed spelled out — `12 May 2003` / `12 mai 2003` — because `12/05/2003` reads as 5 December to half the world). Already-saved university designs pick these rows up **once** in the designer (`ensureBirthRows`; deleting them afterwards sticks). **A changed default never reaches an already-saved design** — any new default row/section needs a one-time backfill like this.
 

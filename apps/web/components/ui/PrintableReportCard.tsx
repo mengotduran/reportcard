@@ -1,9 +1,9 @@
-import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, ConductSec, AnnualBandSec, PanelRowSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn, accentOf, parseHeaderLines, headerLineStyle, clampStudentPhotoSize } from '@/lib/api/reportCardTemplate'
+import { TemplateConfig, DEFAULT_CONFIG, LayoutSection, HeaderSec, StudentInfoSec, MarksTableSec, SummarySec, RemarksSec, SignaturesSec, TextBlockSec, DividerSec, GradingLegendSec, StampSec, ConductSec, AnnualBandSec, PanelRowSec, marksColumnOrder, CLASSIFICATION_BANDS, DEFAULT_TRANSCRIPT_LEGEND, MiniTable, SpreadsheetTable, SheetCell, SheetRow, buildOfficialContactLine, officialTextBlockHtml, officialTextScaleFor, resolveOfficialText, OFFICIAL_HEADER_FONT, TranscriptPeriod, transcriptPeriodLabel, DocVariant, sectionShowsOn, accentOf, parseHeaderLines, headerLineStyle, clampStudentPhotoSize, dropsPrimaryTotalsBands, isPrimaryRedundantTotalsRow } from '@/lib/api/reportCardTemplate'
 import { GradeRange, ClassificationBand, DEFAULT_CLASSIFICATION_BANDS, gradePointForScore20, classificationForGpa, juryDecisionForScore, isFailingScore } from '@/lib/api/gradingScale'
 import { gradeForScore20 } from '@/lib/grading'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { translate } from '@/lib/i18n'
-import { isCompetencyRating } from '@/lib/competency'
+import { CompetencyLevel, DEFAULT_COMPETENCY_LEVELS, findLevel, levelLabel } from '@/lib/competency'
 
 export interface PrintEntry {
   subjectId: string
@@ -74,6 +74,12 @@ export interface PrintableReportCardProps {
    * existing caller and every marked class is untouched.
    */
   gradingMode?: 'NUMERIC' | 'COMPETENCY'
+  /**
+   * The school's rating levels, for a COMPETENCY card. Passed in like `gradeBands` rather
+   * than fetched here, so this stays a pure renderer and a print page makes one request.
+   * Omitted = the built-in three, which is what an uncustomised school gets anyway.
+   */
+  competencyLevels?: CompetencyLevel[]
 }
 
 // Colour a failed subject's marks print in when the admin enables it school-wide.
@@ -184,11 +190,21 @@ function Logo({ url, size, color }: { url?: string | null; size: number; color: 
  * always used — a secondary mark and its 0-20 scale already share units, and so do a
  * university's /100 course and its 0-100 scale.
  */
-function entryGrade(e: PrintEntry | undefined, bands: GradeRange[], lang: 'EN' | 'FR' = 'EN', outOf?: number): string {
+function entryGrade(
+  e: PrintEntry | undefined,
+  bands: GradeRange[],
+  lang: 'EN' | 'FR' = 'EN',
+  outOf?: number,
+  levels: CompetencyLevel[] = DEFAULT_COMPETENCY_LEVELS,
+): string {
   // A competency (nursery) entry has no score at all — its rating IS the grade, stored
-  // verbatim in English and translated here, at print time. Checked before the score so
+  // verbatim in English and rendered here, at print time. Checked before the score so
   // it prints on any layout, including the older non-section ones.
-  if (isCompetencyRating(e?.grade)) return translate(e!.grade as string, lang)
+  //
+  // findLevel, not a membership test: a card issued under an earlier scale must still print
+  // the wording it was issued with rather than falling through to a dash.
+  const level = findLevel(levels, e?.grade)
+  if (level) return levelLabel(level, lang, (s) => translate(s, lang))
   if (!e || e.score == null) return '—'
   return gradeForScore20(onBandScale(e.score, bands, outOf), bands).grade || '—'
 }
@@ -739,6 +755,12 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
   const subjectStats = props.subjectStats ?? {}
   // Nursery: this card measures nothing. See the gradingMode prop for what that removes.
   const isCompetency = props.gradingMode === 'COMPETENCY'
+  // The school's rating levels. The legacy (pre-redesign) layouts below keep the built-in
+  // defaults: a school still on one of those has, by definition, not been through the
+  // designer since custom scales existed.
+  const competencyLevels = props.competencyLevels ?? DEFAULT_COMPETENCY_LEVELS
+  // Primary Standard only: the marks table's totals bands duplicate the summary boxes.
+  const dropTotalsBands = dropsPrimaryTotalsBands(school.type, cfg as { template?: string; layoutType?: string })
   // The columns a rated card has no value for. Everything else the design asks for
   // (row number, subject, subject_fr, grade) still prints, so the table keeps the
   // school's own look rather than becoming a second, unstyled table.
@@ -1294,7 +1316,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           case 'seq1':         return e?.seq1Score ?? '—'
           case 'seq2':         return renderSeq2(e)
           case 'score':        return renderScore(e)
-          case 'grade':        return entryGrade(e, bands, lang, isPrimary ? subj.maxScore : undefined)
+          case 'grade':        return entryGrade(e, bands, lang, isPrimary ? subj.maxScore : undefined, competencyLevels)
           case 'remarks':      return entryRemark(e, bands, isPrimary ? subj.maxScore : undefined)
           case 'code':         return courseCode(subj, i)
           case 'credit':       return subj.credit ?? '—'
@@ -1361,7 +1383,15 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         }
         const headerRows = rawHeaderRows.map(stripRow)
         const dataRowTpl = rawDataRowTpl ? stripRow(rawDataRowTpl) : null
-        const footerRows = isCompetency ? [] : rawFooterRows
+        // Primary Standard repeats its term average in the summary boxes just below this
+        // table, so the OVERALL TOTAL / TERM AVERAGE bands come out here too — not only
+        // from the default — or a school that saved its design before the default changed
+        // would go on printing both. See dropsPrimaryTotalsBands for why Ledger is exempt.
+        const footerRows = isCompetency
+          ? []
+          : dropTotalsBands
+            ? rawFooterRows.filter((r: SheetRow) => !isPrimaryRedundantTotalsRow(r))
+            : rawFooterRows
 
         const resolveMarksField = (field: string, subj: PrintSubject, e: PrintEntry | undefined, si: number): React.ReactNode => {
           if (!field.startsWith('m:')) return resolveStat(field)
@@ -1385,6 +1415,12 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           // rows (TERM AVERAGE / CLASS POSITION) end their labels at that same
           // border, so a mid-table border there sliced through the label text.
           'm:remarks': 110,
+          // A rated card puts a WORD in the grade column, not a letter. 40px fits "B+";
+          // "Attained" measured 66px and "Not Yet Attained" 120px, and the cell is
+          // white-space:nowrap, so both were being cut off mid-word on every nursery card.
+          // Safe to take the width here: a rated table is only S/N + Subject + Grade, and
+          // Subject is a flex column that simply gives up the slack.
+          ...(isCompetency ? { 'm:grade': 124 } : {}),
         }
         const FLEX_FIELDS = new Set(['m:subject', 'm:subject_fr'])
         // Fixed-width but prose-y: wrap to a second line rather than clipping.
@@ -1810,9 +1846,39 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
 
     if (sec.type === 'grading_legend') {
       const s = sec as GradingLegendSec
-      // The legend explains mark bands, and a rated card has no marks to look up. Its
-      // three ratings say what they mean in words, so nothing replaces it.
-      if (isCompetency) return null
+      // A rated card has no mark bands to look up, so the numeric legend below is wrong for
+      // it — but it still needs a key. This used to print nothing, on the reasoning that
+      // "Attained / Developing / Not Yet Attained" explain themselves. That stopped holding
+      // once a school could name its own levels: a parent handed a card reading "Emerging"
+      // has no way to tell whether that is the top of the scale or the bottom. Printing them
+      // in order, highest first, answers that without a word of explanation.
+      if (isCompetency) {
+        return (
+          <div key={sec.id} style={{ marginBottom: 10 }}>
+            <table style={{ borderCollapse: 'collapse', border: `1px solid rgba(${rgb},0.3)`, width: '100%' }}>
+              <thead>
+                <tr>
+                  <th colSpan={2} style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center' }}>
+                    {t('RATING SCALE')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {competencyLevels.map((level) => (
+                  <tr key={level.id}>
+                    <td style={{ padding: '2px 6px', fontSize: 10, borderBottom: '1px solid #eef2f7', borderRight: '1px solid #e5e7eb', textAlign: 'center', fontWeight: 'bold', width: 46, color: level.color }}>
+                      {level.short}
+                    </td>
+                    <td style={{ padding: '2px 6px', fontSize: 10, borderBottom: '1px solid #eef2f7', textAlign: 'left' }}>
+                      {levelLabel(level, lang, t)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
       // University grading scales carry a gradePoint (/4.0) per band; a plain
       // secondary/primary scale doesn't, so it isn't filtered — every band is
       // shown as-is (grade, mark range, remark) with no GPA-specific columns.
