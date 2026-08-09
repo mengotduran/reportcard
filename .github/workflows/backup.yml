@@ -67,4 +67,10 @@ jobs:
           BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
           PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
           PG_RESTORE: /usr/lib/postgresql/18/bin/pg_restore
+          # The uploads half. School logos, stamps and cover images are files on a Railway
+          # volume that a database dump cannot see. If these two are unset the job still
+          # backs up the database and simply logs that the uploads sync was skipped, so a
+          # missing secret degrades rather than failing the night's backup.
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          UPLOADS_BACKUP_SECRET: ${{ secrets.UPLOADS_BACKUP_SECRET }}
         run: node backup.mjs

@@ -178,6 +178,66 @@ async function prune(prefix, keep) {
   log(`prune ${prefix}: deleted ${doomed.length}, kept ${keys.length - doomed.length}`)
 }
 
+// ── Uploads ───────────────────────────────────────────────────────────────────
+
+/**
+ * Mirror the server's uploads folder into R2, INCREMENTALLY.
+ *
+ * School logos, official stamps and cover images are files on a Railway volume, invisible
+ * to a row-level database dump, and less recoverable than the database: a stamp is an
+ * original the school handed over, and a report card prints without its letterhead if it is
+ * gone.
+ *
+ * Incremental on purpose, and this is the only decision here that affects cost. Re-uploading
+ * every file each night would multiply the photo library by the retention count (30 daily
+ * copies of every image); copying only what changed keeps R2 at roughly the size of the
+ * folder itself. Uploaded filenames are unique per upload, so "same name and same size"
+ * is a sound test for "already backed up".
+ *
+ * Files are never DELETED from the mirror when they disappear from the server. A file
+ * removed by accident is precisely what a backup exists to recover.
+ */
+async function syncUploads() {
+  const base = process.env.API_BASE_URL
+  const secret = process.env.UPLOADS_BACKUP_SECRET
+  if (!base || !secret) {
+    log('uploads sync skipped (API_BASE_URL / UPLOADS_BACKUP_SECRET not set)')
+    return
+  }
+
+  const headers = { 'x-backup-secret': secret }
+  const res = await fetch(`${base}/api/uploads-backup/manifest`, { headers })
+  if (!res.ok) throw new Error(`manifest failed: ${res.status} ${await res.text()}`)
+  const { files, totalBytes } = await res.json()
+  log(`uploads manifest: ${files.length} files, ${(totalBytes / 1024 / 1024).toFixed(2)} MB`)
+
+  // What the mirror already holds, so only the difference is transferred.
+  const have = new Map()
+  let token
+  do {
+    const page = await s3.send(new ListObjectsV2Command({
+      Bucket: BUCKET, Prefix: 'uploads/', ContinuationToken: token,
+    }))
+    for (const o of page.Contents ?? []) have.set(o.Key, o.Size)
+    token = page.IsTruncated ? page.NextContinuationToken : undefined
+  } while (token)
+
+  let copied = 0, skipped = 0
+  for (const f of files) {
+    const key = `uploads/${f.name}`
+    if (have.get(key) === f.size) { skipped++; continue }
+    const fileRes = await fetch(`${base}/api/uploads-backup/file/${f.name.split('/').map(encodeURIComponent).join('/')}`, { headers })
+    if (!fileRes.ok) throw new Error(`fetch ${f.name} failed: ${fileRes.status}`)
+    const body = Buffer.from(await fileRes.arrayBuffer())
+    if (body.length !== f.size) {
+      throw new Error(`size mismatch fetching ${f.name}: manifest ${f.size}, got ${body.length}`)
+    }
+    await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body }))
+    copied++
+  }
+  log(`uploads sync: ${copied} copied, ${skipped} already present`)
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -200,6 +260,10 @@ async function main() {
 
     await prune('db/daily/', RETAIN_DAILY)
     await prune('db/monthly/', RETAIN_MONTHLY)
+
+    // Deliberately AFTER the database is safely stored: if the uploads half fails, the
+    // night's database backup has already been taken rather than being lost with it.
+    await syncUploads()
     log('done')
   } finally {
     await rm(dir, { recursive: true, force: true })
