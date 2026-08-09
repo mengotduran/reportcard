@@ -13,7 +13,7 @@
 | **Cloud SaaS** | PostgreSQL (Neon) | Schools with reliable internet, multi-tenant hosted | ✅ Live |
 | **Offline, single device** | SQLite | A school with no/poor internet, one computer runs everything | 🔲 Planned, not built |
 | **Offline, multiple devices (local "center server")** | SQLite | Same as above, but several devices (teacher laptops, tablets, admin PC) share one server over the school's LAN | 🔲 Planned — same build as single-device, no separate work |
-| **Future: cloud sync** | SQLite ⇄ Postgres | An offline school that occasionally connects to the internet to back up / sync to the cloud | 🔲 Deferred — not being built yet |
+| **Cloud + local replica** | Postgres → SQLite (one way) | **Every** cloud school: a read-only mirror of its own data on a machine it owns, for data ownership and read-only access during an outage | 🔲 Designed 2026-08-09, not built — see section 9 |
 
 Mobile (the React Native/Expo app) is **online-only**. For offline/local use, any device (including phones/tablets) just opens the responsive web app in a browser pointed at the local server — no native offline mobile work needed.
 
@@ -164,12 +164,86 @@ The "ongoing cost" above was theoretical until now: the SQLite schema hadn't bee
 
 ---
 
-## 9. Future: cloud sync (deferred — not being built now)
+## 9. Local replica — every cloud school mirrors its own data (PLANNED, decided 2026-08-09)
 
-Explicitly out of scope for the current phase, per the decision to focus on offline-first before any "online syncing Postgres and all the rest." Noted here so the intent isn't lost:
-- The general idea: an offline SQLite install occasionally connects to the internet and pushes/pulls changes to a central cloud Postgres — for backup, cross-device access, or remote support.
-- Even with sync, **the school's machine would still only ever run SQLite** — Postgres stays purely on the cloud side as the central reconciliation point. Sync doesn't mean installing Postgres locally.
-- There *was* early, unfinished groundwork for this sitting in the Postgres migration history — `SyncTombstone` / `SyncToken` / `SyncCursor` tables and `School.accessExpiresAt` / `restrictionNote` columns — but it was never wired to any Prisma model or app code, and was **actually dropped from production on 2026-07-02** as part of applying migration `20260627081138_add_school_acronym_batch` (confirmed empty in prod first — see section 2a). If this phase gets picked up, it starts from scratch, not from this leftover scaffolding.
+> Status: **designed, not built.** This section replaces the earlier "future cloud sync, deferred" note. The direction was decided 2026-08-09: every cloud school gets a continuously-synced, **read-only** copy of its own data on a machine it owns.
+
+### 9.1 What this is for, and the one thing it is NOT for
+
+Three separate goals were on the table. Two are in scope:
+
+1. **The school owns a copy of its own data** — independent of Neon, Railway, Vercel and of us.
+2. **The school can still READ its data during a cloud outage** — open the local app, look up a pupil, print a report card.
+
+The third, **the school keeps WRITING while the cloud is down and merges later**, is deliberately **out of scope**. The moment both copies accept writes, this becomes a distributed-systems problem: conflict resolution, clock skew, split-brain, a merge UI, and a failure mode of silent corruption in *both* copies rather than a visible outage. One-way replication with a single writer has none of that, by construction. Revisit only as its own project.
+
+**The trap this section exists to avoid.** The motivating worry was "if the online DB dies *or the logic misbehaves*, we have two places to pull from." A live mirror does **not** protect against the second one: a bug that writes 400 wrong averages is replicated to the school's machine within seconds, and now there are two identical copies of the corrupted data. Protection against bad logic is **history**, not a second live copy. Hence 9.5 — dated snapshots are a required part of this feature, not an extra.
+
+### 9.2 Shape
+
+Cloud Postgres is the **only writer**. The school's machine runs the existing offline build in **replica mode**: same SQLite file, same schema, same migration runner, same single-binary API, same web UI, same installer — this is ~90% built already (sections 12-18), which is the main reason for this shape over a purpose-built sync agent.
+
+```
+   Cloud (authoritative)                        School's machine (read-only replica)
+   ┌───────────────────────┐                    ┌──────────────────────────────┐
+   │ Postgres (Neon)       │                    │ SQLite  (the same schema)    │
+   │   + ChangeLog table   │  ── HTTPS pull ──► │   + applied up to seq N      │
+   │   (append-only)       │   since=<seq>      │   + 30 dated snapshots       │
+   └───────────────────────┘                    └──────────────┬───────────────┘
+             ▲                                                 │
+             │ every write, via ONE Prisma client extension    │ browser, LAN
+             │                                          ┌──────▼──────┐
+        the live API                                    │ read-only   │
+                                                        │ web app     │
+                                                        └─────────────┘
+```
+
+**Pull, not push.** The replica asks for changes; the cloud never initiates. This survives the school being switched off for a week, behind NAT, or on a phone hotspot, with no server-side queue, retry or delivery tracking.
+
+### 9.3 The change feed
+
+- New append-only `ChangeLog` table in Postgres: `schoolId`, `model`, `rowId`, `op` (CREATE/UPDATE/DELETE), `payload` (the row, JSON), `seq` (monotonic per school), `at`.
+- Written by **one Prisma client extension** on `$allOperations` in `src/config/prisma.ts`. That file is the single client export for the whole API, so one file covers all 27 models and every route — including routes written later. Doing this per-controller would mean auditing every write path by hand and would rot on the first new feature.
+- **Deletes need real tombstones.** A replica cannot infer a deletion from absence, so `op: DELETE` rows must be in the feed.
+- **Retention**: the log is prunable per school once every registered replica has acknowledged past a `seq`. A replica that falls too far behind (or is brand new) takes a **full seed snapshot** instead of replaying from zero.
+
+**Two schema facts that make this tractable, both verified 2026-08-09:**
+- **All 27 models use `@default(uuid())` primary keys.** No integer sequences anywhere, so replicated rows cannot collide and IDs are stable across both databases.
+- **Only 4 models have no direct `schoolId`**: `School` (it *is* the school), `ParentSchool` (its parent), `TeacherSubject` and `ReportEntry` (children, reachable via their parent). These 4 need an explicit tenant resolver in the extension; the other 23 are a direct field read.
+
+### 9.4 Schema-version handshake (the highest-risk part)
+
+Schema drift between the Postgres and SQLite schemas is a *build-time* problem today, and this project has already been bitten by it twice (section 8a, and the 2026-07-01 production incident in section 2a). Replication turns it into a **live, per-school, in-the-field** problem: the cloud starts writing a column an older replica's schema does not have.
+
+**Required, not optional:** every pull sends the replica's `_app_migrations` version. The server compares it against the migration set the payload shape assumes and, when the replica is too old, **refuses the feed with an explicit "update your local copy"** rather than streaming changes it cannot apply. Half-applying a feed into a mismatched schema is the one failure here that silently destroys the copy's integrity.
+
+### 9.5 Snapshots (what actually protects against bad logic)
+
+The replica keeps ~30 dated snapshots alongside the live mirror, produced with the SQLite **Online Backup API** already used and verified for the backup feature (section 17 — a naive file copy is unsafe under WAL). Live mirror answers "the cloud is down right now"; snapshots answer "something wrote garbage on Tuesday."
+
+### 9.6 Auth, uploads, and visibility
+
+- **Auth**: a per-school, revocable **sync token** — not a user JWT. The replica is a machine, not a person, and its credential must be revocable without disabling a human's login.
+- **Uploads are files, not rows.** Logos, stamps and cover images live in `UPLOAD_DIR` and are invisible to a row-level change feed. They need their own manifest pass, or the replica prints report cards with missing logos.
+- **Fleet visibility is part of the feature, because the rollout is mandatory** (decided 2026-08-09: *every* cloud school, not opt-in). A replica that silently stopped syncing three weeks ago is worse than no replica, because the data is believed to be safe when it is not. A superadmin screen must list every school's **last successful sync** with a staleness threshold, or "mandatory" is unenforceable and failures are invisible.
+- **Onboarding consequence of mandatory**: a school needs a machine that stays powered on. Schools currently operating on phones alone (mobile is online-only, section 1) cannot satisfy this as-is — that gap has to be handled in onboarding rather than assumed away.
+
+### 9.7 Prior scaffolding — do not resurrect
+
+There *was* unfinished groundwork in the Postgres migration history — `SyncTombstone` / `SyncToken` / `SyncCursor` tables and `School.accessExpiresAt` / `restrictionNote` columns — never wired to any Prisma model or app code, and **dropped from production on 2026-07-02** via `20260627081138_add_school_acronym_batch` (confirmed empty in prod first, section 2a). This starts from scratch; the names above are free to reuse but the old definitions are gone.
+
+### 9.8 Build order
+
+1. `ChangeLog` model + migration (Postgres **and** the SQLite mirror schema, per section 8's discipline).
+2. The Prisma client extension that records every write, plus the tenant resolver for the 4 parentless models. **Verify by exercising real routes and diffing the log against the actual rows**, not by reading the code.
+3. `GET /api/sync/changes?since=` + sync-token auth + the version handshake (9.4).
+4. Full-seed endpoint for a new or too-far-behind replica.
+5. Replica mode in the offline build: pull loop, apply transaction, cursor persistence, read-only enforcement in the local UI.
+6. Snapshots + retention (9.5).
+7. Uploads manifest sync (9.6).
+8. Superadmin fleet/staleness screen (9.6).
+
+Steps 1-4 are cloud-side and independently useful (they are also what a future two-way sync would need). Steps 5-8 are the school-side half.
 
 ---
 
@@ -345,3 +419,52 @@ The explicit requirement: a school with an offline install already running needs
 - Linux/macOS fixes are one-line, low-risk changes to scripts already otherwise verified (Linux on real hardware in section 15); not re-run end-to-end here since the change is small enough to review directly, but worth exercising for real (install, bump a version, "update" over it, confirm the new process is actually the one running) before this is relied on for a real school.
 
 **Releasing an update, in practice**: bump `MyAppVersion` in `reportcard-system.iss` (currently `1.1.0`) so the installed version is distinguishable, make the schema/code changes (adding new entries to `SQLITE_MIGRATIONS` rather than editing old ones, per section 8's discipline), rebuild the full release (`assemble-release.mjs`), recompile the installer, carry it to the school, run it. Existing data and the school's own settings survive; any new migrations apply on first start after the update.
+
+---
+
+## 19. Cloud backup — nightly off-site copy of the production database (BUILT 2026-08-09, not yet scheduled)
+
+### 19.1 The gap this closes
+
+Until this, **every school's data existed in exactly one place**: the Neon Postgres database, on the **Free plan** (0.5 GB storage, 100 compute hours/month, no SLA, no support, short restore window). There was no `pg_dump` anywhere in the repo, no scheduled job, and no export to storage under our control — the backup tooling in section 17 is deliberately offline-only and returns a 503 stub in the cloud build. Neon's own point-in-time restore is real but is **not a backup you control**: it goes away with the account, the billing status or the vendor.
+
+Compounding it, there are **38 hard deletes across the API** (18 in `superadmin.controller.ts`) and nothing is soft-deleted, so a wrong click or a bad `where` destroys data permanently with no undo. The realistic threat here is not a datacentre fire; it is a mis-click, a bad migration (see section 2a), or a script run against prod.
+
+### 19.2 Design
+
+**Runs on GitHub Actions, stores to Cloudflare R2.** Deliberately two vendors that are neither Neon, Railway nor Vercel. One of the scenarios being protected against is a Railway or Neon account suspension or a lapsed card; a backup job hosted inside the thing it protects you from dies in exactly that scenario and takes the backups with it.
+
+- `scripts/backup/backup.mjs` — its own package, **outside the npm workspaces** (`apps/*`, `packages/*`), so the AWS SDK never enters the API or web bundles.
+- `.github/workflows/backup.yml` — nightly at 02:15 UTC, plus `workflow_dispatch` for taking one on demand before anything risky. A `concurrency` group prevents two runs racing on the prune step.
+- Retention: **30 daily**, plus **12 monthly** taken on the 1st. The daily window answers "someone broke it this month"; the monthly archive answers "what did this school's records look like at the end of last academic year", which is what a school actually asks for.
+- **Encrypted at rest with `gpg` symmetric AES-256**, passphrase passed on fd 0 so it never appears in `argv` (which `ps` exposes to every user on the machine).
+
+### 19.3 Four things that would have failed silently, found by testing rather than review
+
+1. **Production Neon runs PostgreSQL 18.4** (confirmed live via `railway ssh`). `pg_dump` refuses to dump a server newer than itself, and GitHub's runners ship an older client, so the workflow installs `postgresql-client-18` from PGDG explicitly. Without it the job fails every single night. (The dev machine's own `pg_dump` is 14 — it cannot dump production at all, which is also why production dumps can never be taken from here; see section 2a gotcha 1, outbound 5432 is blocked from this machine anyway.)
+2. **A dump smaller than 1 KB is refused.** `pg_dump` "succeeding" against an empty or wrong database, then that dump rotating through the retention window, is how you lose data while believing you are protected.
+3. **The archive's table of contents is parsed with `pg_restore --list` before upload**, and a dump listing zero tables is refused. A truncated or corrupt archive is caught while there is still a good backup in the bucket, not on the day it is needed.
+4. **Every upload is read back with HEAD and its size compared.** An upload that reports success but stored a truncated object is a real S3 failure mode, and the check costs one request out of a million-per-month free allowance.
+
+Backup keys are named so a plain lexicographic sort is also chronological, which is what lets pruning work off a sorted listing with no date parsing and no timezone or clock-change hazard.
+
+### 19.4 Verified end to end (2026-08-09, local)
+
+Against the local dev database (5 schools, 1,984 students, 5,204 report cards, 41,582 report entries, 87 users) with a throwaway **MinIO** container standing in for R2 (`S3_ENDPOINT` override exists for exactly this):
+
+- dump → TOC verify → encrypt → upload → HEAD size check: all pass; 1.95 MB dump, 1.90 MB encrypted.
+- **A real restore drill, not just "the file exists"**: downloaded the object back out of object storage, decrypted it, restored into a *fresh* database with `pg_restore`, and counted rows — all five tables came back with the exact original counts. This is the discipline section 17 applied to the offline backup, held to here too.
+- **Retention proven by running the job three times with `RETAIN_DAILY=2`**: it deleted one per run and kept the two newest, confirmed by listing the surviving keys.
+- Test database dropped and the MinIO container removed afterwards; port 9000 confirmed free.
+
+### 19.5 Not done yet
+
+- **The uploads volume is not backed up.** `UPLOAD_DIR=/data/uploads` on a real Railway volume (`api-volume`) — correctly persistent, so nothing is being lost on deploy, but **nothing copies it off-platform**. It is 1.4 MB across 8 files today only because no real school is on the system; student photos are the growth driver. These files are *less* recoverable than the database: a school's official stamp and logo are originals they handed over, and report cards print without their letterhead if they are gone. Needs a superadmin-only manifest + file endpoint (reusing `apps/api/src/utils/zip.ts` and the section 17 route as the model, locked to SUPERADMIN plus its own secret for the cross-tenant reason section 17 gives) and an **incremental** sync — copying only changed files, never re-uploading every photo nightly, which is the only thing in this design that could ever cost money.
+- **Nothing is scheduled yet.** The workflow is committed but has never run: it needs the R2 bucket, the GitHub secrets, and a push. This machine has no GitHub push credentials.
+- **Restore has never been drilled against a real production dump**, only against the local dev database. Worth doing once for real.
+
+### 19.6 Cost
+
+$0/month, on measured numbers rather than estimates. R2's free allowance (confirmed against Cloudflare's pricing page 2026-08-09) is **10 GB-month storage, 1M Class A operations, 10M Class B, and egress is always free**; above it, storage is $0.015/GB-month. This job stores ~420 MB (42 copies × ~10 MB) and performs ~200 writes a month — about **4%** of the storage allowance and **0.02%** of the write allowance. Reaching even $1/month would take roughly 77 GB stored.
+
+**Neon stays on Free for now.** With off-site backups in place the free tier's failure mode becomes an *outage* rather than *loss*. The trigger to upgrade to Launch is the day a real school's records go in — not for durability, which this section now handles, but for the 0.5 GB storage ceiling and the 100 compute-hour cap, neither of which a backup helps with.

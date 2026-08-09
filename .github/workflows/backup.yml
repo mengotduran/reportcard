@@ -1,0 +1,70 @@
+# Nightly off-site backup of the production database.
+#
+# Runs on GitHub Actions ON PURPOSE, not on Railway: one of the scenarios this protects
+# against is the Railway account itself being suspended or its card failing, and a backup
+# job hosted there would die in exactly that scenario, taking the backups with it. Same
+# reasoning for storing the result on Cloudflare R2 rather than anywhere owned by Neon,
+# Railway or Vercel. See DEPLOYMENT_ARCHITECTURE.md section 19.
+#
+# Cost: ~2 minutes of Actions time a night (free allowance is 2,000 minutes/month) and a
+# few hundred MB in R2 (free allowance is 10 GB-month). Both stay free at this scale.
+
+name: Nightly backup
+
+on:
+  schedule:
+    # 02:15 UTC — 03:15 in Cameroon, comfortably after any evening marks entry and well
+    # before morning use. Cron on GitHub is best-effort and can be delayed under load, which
+    # is fine for a backup but means "it ran at 02:15 sharp" is not something to rely on.
+    - cron: '15 2 * * *'
+  # So a backup can be taken on demand before anything risky (a migration, a data script).
+  workflow_dispatch:
+
+concurrency:
+  # Two overlapping runs would race on the prune step and could delete each other's uploads.
+  group: nightly-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Production Neon runs PostgreSQL 18, and pg_dump REFUSES to dump a server newer than
+      # itself. The runner's bundled client is older, so install 18 explicitly from PGDG.
+      # Without this the job fails every night with a version-mismatch error.
+      - name: Install PostgreSQL 18 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          /usr/lib/postgresql/18/bin/pg_dump --version
+
+      - name: Install backup script dependencies
+        working-directory: scripts/backup
+        run: npm install --no-audit --no-fund
+
+      - name: Back up database to R2
+        working-directory: scripts/backup
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+          PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
+          PG_RESTORE: /usr/lib/postgresql/18/bin/pg_restore
+        run: node backup.mjs
