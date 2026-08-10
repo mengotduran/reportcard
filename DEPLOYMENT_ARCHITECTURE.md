@@ -474,13 +474,66 @@ School logos, official stamps and cover images live as FILES on the Railway volu
 
 **Verified (2026-08-09, local, against the running dev API and a MinIO stand-in):** cold run copied all 12 files; a second run copied 0 and skipped 12, proving it is genuinely incremental; adding one new file copied exactly 1 and skipped 12; the stored object's MD5 matched the original byte for byte. Auth verified from all three directions (correct secret 200, wrong secret 401, no header 401, unset secret 503).
 
-### 19.6 Not done yet
+### 19.6 HOW TO RESTORE — the checklist (drilled for real 2026-08-10)
 
-- **Nothing is scheduled for the uploads half in production yet** — needs `UPLOADS_BACKUP_SECRET` set on Railway, plus `API_BASE_URL` and `UPLOADS_BACKUP_SECRET` added as GitHub secrets.
-- ~~Nothing is scheduled yet~~ **DONE**: the database half went live 2026-08-09, first manual run green in 43s, object confirmed in the bucket.
-- **Restore has never been drilled against a real production dump**, only against the local dev database. Worth doing once for real.
+> Read this first, before anything else in an emergency. It has been executed end to end against a real production backup, not written from memory.
 
-### 19.7 Cost
+**⚠️ You need PostgreSQL 17 or newer to read these backups.** The archives are custom format **version 1.16**. `pg_restore` 14 and 16 both refuse them outright with `unsupported version (1.16) in file header` — verified, not assumed. On a strange machine in the middle of a real incident this is the thing that will stop you, so install the client FIRST:
+
+```bash
+# Ubuntu/Debian. ~2 MB, and a different host to Docker Hub (which was unreachable when this was drilled).
+sudo install -d /usr/share/postgresql-common/pgdg
+sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+  -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+  | sudo tee /etc/apt/sources.list.d/pgdg.list
+sudo apt-get update && sudo apt-get install -y postgresql-client-18
+```
+
+*(Put these in a script and run `sudo bash script.sh` rather than pasting them. A wrapped paste in a narrow terminal silently breaks the URL mid-string and writes a corrupt `pgdg.list` — that happened twice while drilling this.)*
+
+**1. Get the backup.** Cloudflare R2 → bucket `bulletin-backups` → `db/daily/` (or `db/monthly/`). Keys sort chronologically, so the newest is last. Download it. `uploads/` in the same bucket holds the logos/stamps/cover images, as plain files needing no decryption.
+
+**2. Decrypt.** The passphrase is the `BACKUP_GPG_PASSPHRASE` GitHub secret. **It is not stored anywhere inside this system — if it is lost, every backup is permanently unreadable.**
+
+```bash
+gpg --batch --pinentry-mode loopback --passphrase 'PASSPHRASE' \
+    --decrypt --output prod.dump <file>.dump.gpg
+```
+
+`--pinentry-mode loopback` matters on a desktop: without it GPG pops a graphical passphrase dialog instead of taking the one you supplied.
+
+**3. Sanity-check before trusting it.** `head -c 5 prod.dump` must read `PGDMP`, and:
+
+```bash
+/usr/lib/postgresql/18/bin/pg_restore --list prod.dump | head
+```
+
+The header names the source database (`dbname: neondb`) and the entry count, which is how you confirm you grabbed the right archive.
+
+**4. Restore into a NEW database, never over a live one.**
+
+```bash
+createdb -h <host> -U <user> restored
+/usr/lib/postgresql/18/bin/pg_restore -h <host> -U <user> -d restored \
+  --no-owner --no-acl prod.dump
+```
+
+`--no-owner --no-acl` are required: the dump references `neondb_owner`, a role that exists only on Neon, and without these every GRANT fails.
+
+**Expected, harmless error when restoring into PostgreSQL 14/15/16:** `unrecognized configuration parameter "transaction_timeout"` — a 17+ setting. One error, ignored, no data affected. Anything else deserves a closer look.
+
+**5. Verify with row counts, not vibes.** Compare against the live database (or the last known figures). At the 2026-08-10 drill: School 4, User 19, Student 42, ReportCard 69, ReportEntry 299, Subject 32, ClassLevel 6, Term 4 — **all eight matched exactly.**
+
+Also confirm **password hashes survived** (`SELECT count(*) FROM "User" WHERE password LIKE '$2%'` — 19/19 at the drill). A restore where nobody can log in is not a restore.
+
+### 19.7 Not done yet
+
+- ~~The uploads half is not scheduled~~ **DONE 2026-08-09/10**: secret set on Railway and GitHub, code deployed, `uploads/` confirmed sitting beside `db/` in the bucket.
+- Node 20 deprecation warning on `actions/checkout@v4` / `setup-node@v4`. Cosmetic.
+- No **automated** alert if a nightly run fails. GitHub emails on a failed workflow, which is thin but real. A stale-backup check (nothing new in `db/daily/` for 48h) would be better.
+
+### 19.8 Cost
 
 $0/month, on measured numbers rather than estimates. R2's free allowance (confirmed against Cloudflare's pricing page 2026-08-09) is **10 GB-month storage, 1M Class A operations, 10M Class B, and egress is always free**; above it, storage is $0.015/GB-month. This job stores ~420 MB (42 copies × ~10 MB) and performs ~200 writes a month — about **4%** of the storage allowance and **0.02%** of the write allowance. Reaching even $1/month would take roughly 77 GB stored.
 
