@@ -1,4 +1,5 @@
 'use client'
+import { useEffect, useState } from 'react'
 import { useBodyScrollLock } from '@/lib/useBodyScrollLock'
 
 interface ConfirmModalProps {
@@ -16,14 +17,32 @@ interface ConfirmModalProps {
   confirming?: boolean
   /** Label shown while `confirming` is true. */
   confirmingLabel?: string
+  /** When set, the confirm button stays disabled until the user types this exact
+   *  string. For irreversible, unrecoverable actions only: deleting a school takes
+   *  its students, report cards and marks with it, and nothing here is soft-deleted.
+   *  A plain yes/no modal is dismissed by reflex; retyping the name cannot be, and it
+   *  also forces the reader to check WHICH row they are on, which is the mistake that
+   *  actually happens when a delete icon sits beside everyday buttons. */
+  confirmPhrase?: string
 }
 
 export default function ConfirmModal({
   isOpen, title, message, confirmLabel = 'Confirm',
-  confirmColor = 'blue', onConfirm, onCancel, confirming = false, confirmingLabel = 'Working...'
+  confirmColor = 'blue', onConfirm, onCancel, confirming = false, confirmingLabel = 'Working...',
+  confirmPhrase,
 }: ConfirmModalProps) {
   useBodyScrollLock(isOpen)
+  const [typed, setTyped] = useState('')
+
+  // Clear between openings. Without this the previous school's name is still sitting
+  // in the box when the modal reopens, so the next delete would be one click again —
+  // and worse, it could be pre-satisfied for a DIFFERENT school than the one typed.
+  useEffect(() => { setTyped('') }, [isOpen, confirmPhrase])
+
   if (!isOpen) return null
+
+  const phraseSatisfied = !confirmPhrase || typed.trim() === confirmPhrase
+  const blocked = confirming || !phraseSatisfied
 
   const colorMap = {
     red:   'bg-destructive hover:bg-destructive/90 text-white',
@@ -36,6 +55,27 @@ export default function ConfirmModal({
       <div className="bg-card border border-border rounded-xl w-full max-w-sm p-6">
         <h3 className="font-semibold text-foreground text-[15px] mb-2">{title}</h3>
         <p className="text-muted-foreground text-sm mb-6">{message}</p>
+
+        {confirmPhrase && (
+          <div className="mb-6">
+            <label className="block text-sm text-muted-foreground mb-2">
+              Type <span className="font-mono font-semibold text-foreground break-all">{confirmPhrase}</span> to confirm
+            </label>
+            <input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              disabled={confirming}
+              autoFocus
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder={confirmPhrase}
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+            />
+          </div>
+        )}
+
         <div className="flex gap-3">
           <button
             onClick={onCancel}
@@ -46,8 +86,8 @@ export default function ConfirmModal({
           </button>
           <button
             onClick={onConfirm}
-            disabled={confirming}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${colorMap[confirmColor]}`}
+            disabled={blocked}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${colorMap[confirmColor]}`}
           >
             {confirming ? confirmingLabel : confirmLabel}
           </button>

@@ -141,7 +141,12 @@ export default function SuperAdminPage() {
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [toggleTarget, setToggleTarget] = useState<{ id: string; name: string; isActive: boolean; kind: 'school' | 'parent' } | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; students: number; reportCards: number } | null>(null)
+  // `phrase` is what the superadmin must retype to unlock the delete button. It is the
+  // SUBDOMAIN rather than the display name: a section's name here is built as
+  // "<parent> — <TYPE>", which is long, contains characters that are awkward to type and
+  // is not unique enough to prove you picked the right row. The subdomain is short, exact,
+  // unique per school, and is printed on the row you just clicked.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; students: number; reportCards: number; phrase: string } | null>(null)
   const [deletingSection, setDeletingSection] = useState(false)
   const [deleteParentTarget, setDeleteParentTarget] = useState<{ id: string; name: string } | null>(null)
   const [deletingParent, setDeletingParent] = useState(false)
@@ -514,7 +519,7 @@ export default function SuperAdminPage() {
                           <ExternalLink size={14} />
                         </button>
                         <button
-                          onClick={() => setDeleteTarget({ id: section.id, name: `${parent.name} — ${section.type}`, students: section._count.students, reportCards: section._count.reportCards })}
+                          onClick={() => setDeleteTarget({ id: section.id, name: `${parent.name} — ${section.type}`, students: section._count.students, reportCards: section._count.reportCards, phrase: section.subdomain })}
                           className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition flex-shrink-0"
                           title="Delete section"
                         >
@@ -603,7 +608,7 @@ export default function SuperAdminPage() {
                           title="View details">
                           <ExternalLink size={14} />
                         </button>
-                        <button onClick={() => setDeleteTarget({ id: school.id, name: school.name, students: school._count.students, reportCards: school._count.reportCards })}
+                        <button onClick={() => setDeleteTarget({ id: school.id, name: school.name, students: school._count.students, reportCards: school._count.reportCards, phrase: school.subdomain })}
                           className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition" title="Delete">
                           <Trash2 size={14} />
                         </button>
@@ -946,6 +951,7 @@ export default function SuperAdminPage() {
         confirmLabel="Delete Permanently"
         confirmColor="red"
         confirming={deletingSection}
+        confirmPhrase={deleteTarget?.phrase}
         onConfirm={handleDeleteSchool}
         onCancel={() => setDeleteTarget(null)}
       />
@@ -953,10 +959,11 @@ export default function SuperAdminPage() {
       <ConfirmModal
         isOpen={!!deleteParentTarget}
         title="Delete Parent School"
-        message={deleteParentTarget ? `Permanently delete "${deleteParentTarget.name}"? This cannot be undone.` : ''}
+        message={deleteParentTarget ? `Permanently delete "${deleteParentTarget.name}" and every section under it? This cannot be undone.` : ''}
         confirmLabel="Delete Permanently"
         confirmColor="red"
         confirming={deletingParent}
+        confirmPhrase={deleteParentTarget?.name}
         onConfirm={handleDeleteParentSchool}
         onCancel={() => setDeleteParentTarget(null)}
       />
