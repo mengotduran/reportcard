@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs'
+import { Prisma } from '@prisma/client'
 import prisma from '../config/prisma'
 import { DEMO_SUBDOMAIN } from '../config/demo'
 
@@ -42,34 +43,53 @@ function autoRemark(pct: number): string {
 }
 
 /**
- * Deletes ALL data belonging to the demo school (FK-safe order) and rebuilds it.
- * Only ever touches the demo tenant. Returns a small summary for logging.
+ * The wipe-and-rebuild itself. Takes a transaction client rather than the global
+ * `prisma` so that the destructive half and the rebuilding half either BOTH land or
+ * NEITHER does — see `resetDemoSchool` below for why that matters.
  */
-export async function resetDemoSchool() {
-  const existing = await prisma.school.findUnique({ where: { subdomain: DEMO_SUBDOMAIN } })
+async function rebuildDemoSchool(tx: Prisma.TransactionClient, hashed: string) {
+  const existing = await tx.school.findUnique({ where: { subdomain: DEMO_SUBDOMAIN } })
 
   if (existing) {
     const schoolId = existing.id
-    // Children first — most relations are onDelete: Restrict.
-    await prisma.feePayment.deleteMany({ where: { schoolId } })
-    await prisma.reportEntry.deleteMany({ where: { reportCard: { schoolId } } })
-    await prisma.reportCard.deleteMany({ where: { schoolId } })
-    await prisma.teacherSubject.deleteMany({ where: { subject: { schoolId } } })
-    await prisma.subject.deleteMany({ where: { schoolId } })
-    await prisma.student.deleteMany({ where: { schoolId } })
-    await prisma.term.deleteMany({ where: { schoolId } })
-    await prisma.classLevel.deleteMany({ where: { schoolId } })
-    await prisma.gradingScale.deleteMany({ where: { schoolId } })
-    await prisma.reportCardTemplate.deleteMany({ where: { schoolId } })
-    await prisma.classListTemplate.deleteMany({ where: { schoolId } })
-    await prisma.user.deleteMany({ where: { schoolId } })
-    await prisma.school.delete({ where: { id: schoolId } })
+    // Children first — almost every relation to School is onDelete: Restrict, so any
+    // table missing from this list makes the final `school.delete()` throw.
+    //
+    // THIS LIST GOES STALE. It was written when the school had 12 child tables; twelve
+    // more have been added since (timetables, absences, notifications, departments,
+    // competency and promotion scales, Excel templates, past-term grants...). Every one
+    // of them silently broke this function the day it was introduced. If you add a model
+    // with a `schoolId`, add it here too, or give its School relation onDelete: Cascade.
+    await tx.notification.deleteMany({ where: { schoolId } })
+    await tx.teacherAbsence.deleteMany({ where: { schoolId } })
+    await tx.timetableSlot.deleteMany({ where: { schoolId } })
+    await tx.timetablePeriod.deleteMany({ where: { schoolId } })
+    await tx.pastTermMarksGrant.deleteMany({ where: { schoolId } })
+    await tx.marksEntryModeChange.deleteMany({ where: { schoolId } })
+    await tx.hndRegistrationPayment.deleteMany({ where: { schoolId } })
+    await tx.subjectExclusion.deleteMany({ where: { schoolId } })
+    await tx.excelTemplate.deleteMany({ where: { schoolId } })
+    await tx.competencyScale.deleteMany({ where: { schoolId } })
+    await tx.promotionScale.deleteMany({ where: { schoolId } })
+    await tx.feePayment.deleteMany({ where: { schoolId } })
+    await tx.reportEntry.deleteMany({ where: { reportCard: { schoolId } } })
+    await tx.reportCard.deleteMany({ where: { schoolId } })
+    await tx.teacherSubject.deleteMany({ where: { subject: { schoolId } } })
+    await tx.subject.deleteMany({ where: { schoolId } })
+    await tx.student.deleteMany({ where: { schoolId } })
+    await tx.term.deleteMany({ where: { schoolId } })
+    await tx.classLevel.deleteMany({ where: { schoolId } })
+    // After ClassLevel: ClassLevel.departmentId points here with onDelete: Restrict.
+    await tx.department.deleteMany({ where: { schoolId } })
+    await tx.gradingScale.deleteMany({ where: { schoolId } })
+    await tx.reportCardTemplate.deleteMany({ where: { schoolId } })
+    await tx.classListTemplate.deleteMany({ where: { schoolId } })
+    await tx.user.deleteMany({ where: { schoolId } })
+    await tx.school.delete({ where: { id: schoolId } })
   }
 
-  const hashed = await bcrypt.hash(DEMO_PASSWORD, 12)
-
   // --- School ---------------------------------------------------------------
-  const school = await prisma.school.create({
+  const school = await tx.school.create({
     data: {
       name: 'Greenfield Demo Secondary',
       type: 'SECONDARY',
@@ -83,7 +103,7 @@ export async function resetDemoSchool() {
 
   // --- Users ----------------------------------------------------------------
   const [admin, classMaster] = await Promise.all([
-    prisma.user.create({
+    tx.user.create({
       data: {
         schoolId,
         name: 'Demo Administrator',
@@ -92,7 +112,7 @@ export async function resetDemoSchool() {
         role: 'SCHOOL_ADMIN',
       },
     }),
-    prisma.user.create({
+    tx.user.create({
       data: {
         schoolId,
         name: 'Mr. Tabe (Class Master)',
@@ -110,7 +130,7 @@ export async function resetDemoSchool() {
   const classFees = [150000, 165000, 180000]
   await Promise.all(
     classNames.map((name, i) =>
-      prisma.classLevel.create({ data: { schoolId, name, order: i + 1, maxScore: 20, feeAmount: classFees[i] } })
+      tx.classLevel.create({ data: { schoolId, name, order: i + 1, maxScore: 20, feeAmount: classFees[i] } })
     )
   )
 
@@ -126,7 +146,7 @@ export async function resetDemoSchool() {
   for (const className of classNames) {
     subjectsByClass[className] = []
     for (const s of subjectTemplate) {
-      const created = await prisma.subject.create({
+      const created = await tx.subject.create({
         data: { schoolId, name: s.name, classLevel: className, maxScore: 20, coefficient: s.coefficient },
       })
       subjectsByClass[className].push({ id: created.id, coefficient: s.coefficient })
@@ -136,19 +156,19 @@ export async function resetDemoSchool() {
   // Assign the class master to a couple of Form 1 subjects so they can fill marks.
   await Promise.all(
     subjectsByClass['Form 1'].slice(0, 2).map(s =>
-      prisma.teacherSubject.create({ data: { userId: classMaster.id, subjectId: s.id } })
+      tx.teacherSubject.create({ data: { userId: classMaster.id, subjectId: s.id } })
     )
   )
 
   // --- Terms ----------------------------------------------------------------
   const session = '2025/2026'
-  const firstTerm = await prisma.term.create({
+  const firstTerm = await tx.term.create({
     data: { schoolId, name: 'First Term', session, startDate: new Date('2025-09-08'), endDate: new Date('2025-12-19'), isCurrent: true },
   })
-  await prisma.term.create({
+  await tx.term.create({
     data: { schoolId, name: 'Second Term', session, startDate: new Date('2026-01-05'), endDate: new Date('2026-04-03'), isCurrent: false },
   })
-  await prisma.term.create({
+  await tx.term.create({
     data: { schoolId, name: 'Third Term', session, startDate: new Date('2026-04-20'), endDate: new Date('2026-07-10'), isCurrent: false },
   })
 
@@ -180,7 +200,7 @@ export async function resetDemoSchool() {
       const name = `${firstNames[(i + seq) % firstNames.length]} ${lastNames[(i + seq * 2) % lastNames.length]}`
       seq++
       const studentId = `2025-${String(++studentCount).padStart(4, '0')}`
-      const student = await prisma.student.create({
+      const student = await tx.student.create({
         data: { schoolId, name, studentId, classLevel: className, guardianName: 'Guardian ' + name.split(' ')[0], guardianPhone: '+237 670 000 0' + String(i) },
       })
 
@@ -219,7 +239,7 @@ export async function resetDemoSchool() {
       const average = totalCoeff > 0 ? totalWeighted / totalCoeff : null
 
       const requiresRemarks = className === 'Form 1' // has a class master
-      await prisma.reportCard.create({
+      await tx.reportCard.create({
         data: {
           studentId: student.id,
           schoolId,
@@ -245,14 +265,42 @@ export async function resetDemoSchool() {
     }
 
     // Positions within each class by average (desc).
-    const cards = await prisma.reportCard.findMany({
+    const cards = await tx.reportCard.findMany({
       where: { schoolId, termId: firstTerm.id, student: { classLevel: className } },
       orderBy: [{ average: 'desc' }, { id: 'asc' }],
     })
-    await Promise.all(cards.map((c, idx) => prisma.reportCard.update({ where: { id: c.id }, data: { position: idx + 1 } })))
+    await Promise.all(cards.map((c, idx) => tx.reportCard.update({ where: { id: c.id }, data: { position: idx + 1 } })))
   }
 
   return { schoolId, students: studentCount, reportCards: cardCount, logins: DEMO_LOGINS }
+}
+
+/**
+ * Deletes ALL data belonging to the demo school (FK-safe order) and rebuilds it.
+ * Only ever touches the demo tenant. Returns a small summary for logging.
+ *
+ * ATOMIC ON PURPOSE. This function destroys a whole school before recreating it, and
+ * nothing in this product is soft-deleted. Run unwrapped, any failure after the
+ * `school.delete` — a validation error, an FK restriction, a dropped connection on a
+ * free-tier database, the process being killed mid-run — leaves the tenant permanently
+ * gone with nothing in its place, which looks exactly like unexplained data loss rather
+ * than a failed job. Inside a transaction the same failure rolls back to the demo school
+ * the recruiters already had.
+ *
+ * The timeout is deliberately far above what the seed needs (it writes ~14 students and
+ * ~14 report cards sequentially). Prisma's 5s default is a rollback waiting to happen the
+ * first time the database is cold or the network is slow, and a spurious rollback here is
+ * harmless whereas a spurious COMMIT of a half-built school is not.
+ */
+export async function resetDemoSchool() {
+  // Hashed out here rather than inside: bcrypt at cost 12 is ~200ms of pure CPU that
+  // touches no row, and there is no reason to hold a write transaction open for it.
+  const hashed = await bcrypt.hash(DEMO_PASSWORD, 12)
+
+  return prisma.$transaction((tx) => rebuildDemoSchool(tx, hashed), {
+    maxWait: 15_000,
+    timeout: 120_000,
+  })
 }
 
 // Allow running directly: `ts-node src/scripts/seedDemo.ts` or `node dist/scripts/seedDemo.js`
