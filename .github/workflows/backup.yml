@@ -73,4 +73,8 @@ jobs:
           # missing secret degrades rather than failing the night's backup.
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           UPLOADS_BACKUP_SECRET: ${{ secrets.UPLOADS_BACKUP_SECRET }}
+          # Dead man's switch. The one failure this whole job cannot detect about itself is
+          # not running at all, so an external monitor alerts on the ABSENCE of this ping.
+          # Optional: unset means no heartbeat, and the backup is otherwise unaffected.
+          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
         run: node backup.mjs

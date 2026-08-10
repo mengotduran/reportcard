@@ -66,6 +66,37 @@ const s3 = new S3Client({
 
 const log = (...args) => console.log(`[backup ${new Date().toISOString()}]`, ...args)
 
+/**
+ * Dead man's switch.
+ *
+ * GitHub emails when a run FAILS. Nothing catches a run that never happens — the schedule
+ * being disabled after 60 days of repo inactivity, the workflow file being lost in a merge,
+ * Actions being switched off, the repo renamed. In every one of those the result is silence,
+ * and silence is indistinguishable from success. That is the failure mode this exists for,
+ * and it cannot be detected from inside this job: a check that runs here cannot notice that
+ * this job did not run.
+ *
+ * So the monitor is external and inverted — it alerts because a ping DIDN'T arrive. Point
+ * `HEARTBEAT_URL` at any dead-man's-switch service (healthchecks.io, Cronitor, BetterStack);
+ * they all use the same convention of a base URL for success and `/fail` for failure.
+ *
+ * Never throws. A monitoring outage must not turn a perfectly good backup into a failed one.
+ */
+async function heartbeat(suffix = '') {
+  const url = process.env.HEARTBEAT_URL
+  if (!url) return
+  try {
+    await fetch(`${url}${suffix}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(10_000),
+    })
+    log(`heartbeat sent${suffix}`)
+  } catch (err) {
+    // Deliberately swallowed and only logged.
+    log(`heartbeat failed (ignored): ${err.message}`)
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Run a command to completion, rejecting on a non-zero exit. stdin is optional — used to
@@ -264,15 +295,21 @@ async function main() {
     // Deliberately AFTER the database is safely stored: if the uploads half fails, the
     // night's database backup has already been taken rather than being lost with it.
     await syncUploads()
+
+    // Only after BOTH halves are stored. Pinging earlier would tell the monitor everything
+    // is fine while the uploads sync was still able to fail.
+    await heartbeat()
     log('done')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   // Non-zero exit is what makes GitHub Actions mark the run failed and email you. A backup
   // job that fails quietly is indistinguishable from one that never ran.
   console.error(`[backup] FAILED: ${err.message}`)
+  // Tells the monitor immediately rather than making it wait for the grace period to lapse.
+  await heartbeat('/fail')
   process.exit(1)
 })
