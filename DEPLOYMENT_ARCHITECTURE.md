@@ -531,7 +531,21 @@ Also confirm **password hashes survived** (`SELECT count(*) FROM "User" WHERE pa
 
 - ~~The uploads half is not scheduled~~ **DONE 2026-08-09/10**: secret set on Railway and GitHub, code deployed, `uploads/` confirmed sitting beside `db/` in the bucket.
 - Node 20 deprecation warning on `actions/checkout@v4` / `setup-node@v4`. Cosmetic.
-- No **automated** alert if a nightly run fails. GitHub emails on a failed workflow, which is thin but real. A stale-backup check (nothing new in `db/daily/` for 48h) would be better.
+- ~~No automated alert if a run stops happening~~ **DONE 2026-08-10, see 19.7a.**
+
+### 19.7a Dead man's switch — catching a backup that stops happening
+
+GitHub emails when a run **fails**. Nothing caught a run that **never happens**: the schedule being disabled after 60 days of repo inactivity (a real GitHub behaviour), the workflow file lost in a merge, Actions switched off, the repo renamed. Each produces silence, and silence was indistinguishable from success.
+
+**This cannot be detected from inside the job** — a check that runs here cannot notice that this job did not run. So the monitor is external and inverted: it alerts because a ping *didn't* arrive.
+
+`backup.mjs` pings `HEARTBEAT_URL` on success, and `HEARTBEAT_URL/fail` on failure (the convention healthchecks.io, Cronitor and BetterStack all share). Point it at any of them; healthchecks.io's free tier covers this with no card.
+
+Three properties, all verified by test rather than by reading the code:
+- **Pings only after BOTH halves are stored.** Pinging earlier would report success while the uploads sync could still fail.
+- **A monitoring outage never fails a good backup.** The ping is wrapped, swallowed and only logged — verified against an unreachable URL: `heartbeat failed (ignored)`, exit 0.
+- **A failed backup still exits non-zero** so GitHub's own email still fires; the `/fail` ping is in addition, not instead. Verified: exit 1.
+- Unset `HEARTBEAT_URL` = no heartbeat, backup otherwise unaffected. Verified: exit 0, no request made.
 
 ### 19.8 Cost
 
