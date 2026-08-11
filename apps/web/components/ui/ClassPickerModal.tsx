@@ -4,7 +4,15 @@ import { X, Check } from 'lucide-react'
 import { useT } from '@/lib/i18n'
 import type { ClassReadiness } from '@/lib/api/reportcards'
 
-export interface ClassOption { classLevel: string; readiness?: ClassReadiness }
+export interface ClassOption {
+  classLevel: string
+  readiness?: ClassReadiness
+  /** Pupils on this class's roll (ACTIVE only, from GET /class-levels). Shown so picking
+   *  classes to publish or print is an informed choice rather than a guess at how much is
+   *  behind each name. Optional: a class with no ClassLevel row has no roll to state, and
+   *  showing "0" there would read as an empty class rather than an undefined one. */
+  studentCount?: number
+}
 
 /**
  * Pick one OR several classes for an action (bulk publish / class list / print).
@@ -74,7 +82,12 @@ export default function ClassPickerModal({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     {showReadiness && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ready ? 'bg-green-500' : 'bg-destructive'}`} />}
-                    <p className="font-medium text-foreground text-sm">{o.classLevel}</p>
+                    <p className="font-medium text-foreground text-sm truncate">{o.classLevel}</p>
+                    {o.studentCount !== undefined && (
+                      <span className="ml-auto pl-2 text-xs text-muted-foreground flex-shrink-0 tabular-nums">
+                        {o.studentCount} {t(o.studentCount === 1 ? 'student' : 'students')}
+                      </span>
+                    )}
                   </div>
                   {showReadiness && r && !r.ready && (
                     <div className="flex flex-wrap gap-1 mt-1">

@@ -1,9 +1,10 @@
 'use client'
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { getReportCardsApi, createReportCardApi, deleteReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
+import { getReportCardsApi, createReportCardApi, getCurrentTermApi, getClassLevelsApi, getClassOverviewApi, bulkPublishApi, getClassReadinessApi, ClassReadiness, getMarksExportApi, MarksExportStudent } from '@/lib/api/reportcards'
+import type { StudentStatus } from '@/lib/api/students'
 import { getClassLevelsApi as getClassLevelsFullApi, ClassLevel as ClassLevelDef } from '@/lib/api/classLevels'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix } from '@/lib/programme'
@@ -25,11 +26,20 @@ import { ClassListDocOptions, classListPrintPortalHtml } from '@/lib/classListDo
 import ClassPickerModal, { ClassOption } from '@/components/ui/ClassPickerModal'
 import { getClassListTemplateApi, mergeClassListConfig } from '@/lib/api/classListTemplate'
 import Pagination from '@/components/ui/Pagination'
+import CustomSelect from '@/components/ui/CustomSelect'
 import { usePagination } from '@/lib/usePagination'
 import { getGradingScaleApi, GradeRange } from '@/lib/api/gradingScale'
 import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { useT } from '@/lib/i18n'
 import { ExcelTemplate, listExcelTemplatesApi, downloadExcelTranscriptApi, fetchExcelPreviewHtmlApi } from '@/lib/api/excelTemplates'
+
+// Mirrors STATUS_TABS on the Students page, so the two screens name the same three states
+// the same way.
+const STUDENT_STATUS_TABS: { value: StudentStatus; label: string }[] = [
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'DISABLED', label: 'Disabled' },
+  { value: 'DISMISSED', label: 'Dismissed' },
+]
 
 interface RawEntry {
   id: string; score: number; seq1Score?: number | null; seq2Score?: number | null; resitScore?: number | null
@@ -435,6 +445,9 @@ export default function ReportCardsPage() {
   // coefficient-weighted and normalised to /20, exactly like secondary. Only the per-subject
   // columns follow the university's /100 convention; the average never does.
   const isPrimary = school?.type === 'PRIMARY'
+  // Secondary stores a non-default department's classes with a " (Department)" suffix, which
+  // is stripped for display exactly as the Students page and the class cards above do.
+  const isSecondary = school?.type === 'SECONDARY'
   // Same relabelling the sidebar does (UNIVERSITY_NAV_LABELS in the dashboard layout): the
   // data is a Term either way, only the word the school uses for it changes.
   const ts = (termStr: string, semesterStr: string) => tr(isUniversity ? semesterStr : termStr)
@@ -460,6 +473,12 @@ export default function ReportCardsPage() {
     if (typeof window !== 'undefined') sessionStorage.setItem(FILTER_TERM_STORAGE_KEY, termId)
   }
   const [searchQuery, setSearchQuery] = useState('')
+  const [studentStatusFilter, setStudentStatusFilter] = useState<StudentStatus>('ACTIVE')
+  // 'all' or one class name. Matches the Students page's filter, which this list never had:
+  // it filters by term and by name, so finding one class meant reading past every other.
+  const [classFilter, setClassFilter] = useState('all')
+  // Which term/status fetch is the newest — see fetchReportCards.
+  const fetchSeq = useRef(0)
   // Day/Evening. This list is flat, one row per student across every class, so without it the
   // two sittings are interleaved and the only thing telling them apart is reading the marker
   // at the end of the Class column. The teacher view has had these chips all along; this one
@@ -467,7 +486,6 @@ export default function ReportCardsPage() {
   const [classDefs, setClassDefs] = useState<ClassLevelDef[]>([])
   const programmeFilter = useProgrammeFilter(classDefs)
   const [form, setForm] = useState({ studentId: '', termId: '' })
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
   const [printing, setPrinting] = useState(false)
   // Class-list print data — rendered into an off-screen in-page portal and
@@ -629,12 +647,41 @@ export default function ReportCardsPage() {
     }
   }
 
-  const fetchReportCards = async (termId?: string) => {
-    const data = await getReportCardsApi(termId ? { termId } : { session: activeSession ?? undefined })
-    setReportCards(data.reportCards)
-    // Refresh readiness when data changes
-    if (termId) {
-      getClassReadinessApi(termId).then(d => setClassReadiness(d.readiness)).catch(() => {})
+  // `statusVal` is passed explicitly rather than read from state by the status handler:
+  // setState is not applied by the time the handler calls this, so reading state here
+  // would fetch the tab you just left. Same pattern as the Students page.
+  //
+  // `showLoading` is on for a tab switch and off for a background refresh (after publishing
+  // or creating a card). Without it the previous tab's rows stay on screen until the new
+  // request lands, which does not read as "loading" — it reads as those cards belonging to
+  // the term you just picked, and they are one click away from being printed as such. A
+  // refresh in place has no such problem: the rows are already the right ones.
+  const fetchReportCards = async (termId?: string, statusVal: StudentStatus = studentStatusFilter, showLoading = false) => {
+    // Only the newest request may write to state. Clicking First Term then Second Term
+    // fires two, and the slower one landing last would leave Second Term selected while
+    // First Term's cards are displayed.
+    const seq = ++fetchSeq.current
+    if (showLoading) setLoading(true)
+    try {
+      const data = await getReportCardsApi({
+        ...(termId ? { termId } : { session: activeSession ?? undefined }),
+        studentStatus: statusVal,
+      })
+      if (seq !== fetchSeq.current) return
+      setReportCards(data.reportCards)
+      // Refresh readiness when data changes
+      if (termId) {
+        getClassReadinessApi(termId).then(d => { if (seq === fetchSeq.current) setClassReadiness(d.readiness) }).catch(() => {})
+      }
+    } catch {
+      if (seq !== fetchSeq.current) return
+      // Cleared rather than left alone: keeping the old tab's rows under the new tab's
+      // heading is worse than showing nothing, because nothing about them says they are
+      // stale. The toast is what explains the blank.
+      if (showLoading) setReportCards([])
+      showToast(tr('Failed to load report cards'), 'error')
+    } finally {
+      if (showLoading && seq === fetchSeq.current) setLoading(false)
     }
   }
 
@@ -642,7 +689,17 @@ export default function ReportCardsPage() {
     setFilterTermId(termId)
     setSearchQuery('')
     setPage(1)
-    fetchReportCards(termId || undefined)
+    fetchReportCards(termId || undefined, studentStatusFilter, true)
+  }
+
+  // Students who have left keep every card they ever earned — a dismissed student still
+  // needs a transcript to transfer — but they belong in their own tab rather than mixed
+  // into the everyday list, where there is nothing to tell them apart from a current one.
+  const handleStatusFilter = (status: StudentStatus) => {
+    setStudentStatusFilter(status)
+    setSearchQuery('')
+    setPage(1)
+    fetchReportCards(filterTermId || undefined, status, true)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -669,18 +726,6 @@ export default function ReportCardsPage() {
     }
   }
 
-  const handleDeleteConfirm = async () => {
-    if (!deleteTarget) return
-    try {
-      await deleteReportCardApi(deleteTarget)
-      setDeleteTarget(null)
-      fetchReportCards(filterTermId || undefined)
-      showToast(tr('Report card deleted'))
-    } catch {
-      showToast(tr('Failed to delete report card'), 'error')
-    }
-  }
-
   // Only the active academic year's terms are shown/exported.
   const visibleTerms = terms.filter(t => t.session === activeSession)
   const currentTerm = visibleTerms.find(t => t.isCurrent)
@@ -689,8 +734,26 @@ export default function ReportCardsPage() {
   // Active term chip, or every term of the active year when "All Terms" is selected.
   const exportTargetTerms = () => (filterTermId ? visibleTerms.filter((t) => t.id === filterTermId) : visibleTerms)
 
+  // Class roll per class, for the filter labels. Same source and same ACTIVE-only meaning
+  // as the Students page, so the two screens never disagree about how big a class is.
+  const rollOf = useMemo(
+    () => new Map(classDefs.map((c) => [c.name, c.studentCount ?? 0])),
+    [classDefs],
+  )
+
+  // Filtered client-side, unlike the term and status tabs. Those change what the server
+  // returns; every card for the chosen term is already loaded here, so narrowing to one
+  // class is instant and needs no round trip — the same treatment programme and search get.
+  const classFilterOptions = classDefs
+    .filter((c) => programmeFilter.matches(c.name))
+    .map((c) => ({
+      value: c.name,
+      label: `${stripProgrammeSuffix(isSecondary ? stripDeptSuffix(c.name) : c.name)} (${c.studentCount ?? 0})`,
+    }))
+
   const filteredCards = reportCards
     .filter(rc => programmeFilter.matches(rc.student.classLevel))
+    .filter(rc => classFilter === 'all' || rc.student.classLevel === classFilter)
     .filter(rc => !searchQuery || rc.student.name.toLowerCase().includes(searchQuery.toLowerCase()))
 
   // Paginate the table; reset to page 1 when the year or search changes. Term
@@ -702,7 +765,7 @@ export default function ReportCardsPage() {
   // persistKey remembers the page across "open a report card, then hit Back".
   // ready=false while the initial fetch is in flight, so the empty placeholder
   // array doesn't clamp a restored page back down to 1 before real data loads.
-  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(filteredCards, 15, `${activeSession}|${searchQuery}`, 'report-cards-list-page', !loading)
+  const { page, setPage, totalPages, pageItems, total, pageSize } = usePagination(filteredCards, 15, `${activeSession}|${searchQuery}|${classFilter}`, 'report-cards-list-page', !loading)
 
   type ExportStudent = { id: string; name: string; studentId: string; classLevel: string; guardianName?: string | null; guardianPhone?: string | null; guardianEmail?: string | null; isActive?: boolean }
 
@@ -851,16 +914,37 @@ export default function ReportCardsPage() {
         </div>
       </div>
 
+      {/* Disabled while a switch is in flight, so a second click cannot queue a fetch whose
+          result would land after the one you actually want. The chips also stop looking
+          clickable, which is the feedback that the tab row itself is doing something. */}
       <div className="flex gap-2 mb-4 flex-wrap">
         <button
           onClick={() => handleFilterChange('')}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${!filterTermId ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
+          disabled={loading}
+          className={`px-3 py-1.5 rounded-full text-xs font-medium transition disabled:opacity-60 disabled:cursor-wait ${!filterTermId ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
         >{ts('All Terms', 'All Semesters')}</button>
         {visibleTerms.map(term => (
           <button key={term.id} onClick={() => handleFilterChange(term.id)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filterTermId === term.id ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
+            disabled={loading}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition disabled:opacity-60 disabled:cursor-wait ${filterTermId === term.id ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
           >
             {term.name} {term.isCurrent ? tr('(Current)') : ''}
+          </button>
+        ))}
+      </div>
+
+      {/* Student status, on its own row so it reads as a separate question from the term.
+          Defaults to Active: a school's everyday view is its current pupils, and before
+          this row existed a student who had been dismissed sat in the list indistinguishable
+          from one still enrolled. Their cards are not deleted or hidden, just moved to
+          their own tab, since a dismissed student still needs a transcript to transfer. */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {STUDENT_STATUS_TABS.map((tab) => (
+          <button key={tab.value} onClick={() => handleStatusFilter(tab.value)}
+            disabled={loading}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition disabled:opacity-60 disabled:cursor-wait ${studentStatusFilter === tab.value ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
+          >
+            {tr(tab.label)}
           </button>
         ))}
       </div>
@@ -880,19 +964,38 @@ export default function ReportCardsPage() {
         />
       )}
 
-      <div className="relative mb-4 max-w-sm">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          placeholder={tr('Search student...')}
-          className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-        {searchQuery && (
-          <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition">
-            <X size={13} />
-          </button>
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="relative max-w-sm flex-1 min-w-[200px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder={tr('Search student...')}
+            className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+
+        {classFilterOptions.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground flex-shrink-0">{isUniversity ? tr('Department') : tr('Class')}</span>
+            <CustomSelect
+              className="w-52"
+              compact
+              value={classFilter}
+              onChange={(v) => { setClassFilter(v); setPage(1) }}
+              placeholder={isUniversity ? tr('All Departments') : tr('All Classes')}
+              options={[
+                { value: 'all', label: isUniversity ? tr('All Departments') : tr('All Classes') },
+                ...classFilterOptions,
+              ]}
+            />
+          </div>
         )}
       </div>
 
@@ -917,7 +1020,15 @@ export default function ReportCardsPage() {
       ) : reportCards.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
           <FileText size={32} className="mx-auto mb-2 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">{tr('No report cards yet.')}</p>
+          {/* An empty Disabled or Dismissed tab is the normal case, not a missing-data
+              problem, so it must not say "No report cards yet" as though something failed. */}
+          <p className="text-muted-foreground text-sm">
+            {studentStatusFilter === 'ACTIVE'
+              ? tr('No report cards yet.')
+              : studentStatusFilter === 'DISABLED'
+                ? tr('No report cards for disabled students.')
+                : tr('No report cards for dismissed students.')}
+          </p>
         </div>
       ) : filteredCards.length === 0 ? (
         <div className="bg-card rounded-xl border border-border text-center py-12">
@@ -1051,10 +1162,10 @@ export default function ReportCardsPage() {
                           </button>
                         )
                       })()}
-                      <button onClick={() => setDeleteTarget(rc.id)}
-                        className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition" title={tr('Delete')}>
-                        <Trash2 size={14} />
-                      </button>
+                      {/* No delete button here on purpose. A published card is an issued
+                          document a parent may already hold a copy of, and the card is
+                          re-created automatically for any active student anyway. Unpublish
+                          is the way to reopen one for correction. */}
                     </div>
                   </td>
                 </tr>
@@ -1107,16 +1218,6 @@ export default function ReportCardsPage() {
         </div>
       )}
 
-      <ConfirmModal
-        isOpen={!!deleteTarget}
-        title={tr('Delete Report Card')}
-        message={tr('Are you sure you want to delete this report card? This action cannot be undone.')}
-        confirmLabel={tr('Delete')}
-        confirmColor="red"
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteTarget(null)}
-      />
-
       {/* Excel transcript preview modal */}
       {excelPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setExcelPreview(null)}>
@@ -1151,7 +1252,7 @@ export default function ReportCardsPage() {
         open={classPicker === 'publish'}
         title={tr('Publish report cards')}
         subtitle={ts('Select the class(es) to publish for this term.', 'Select the department(s) to publish for this semester.')}
-        options={unpublishedClasses.map((cl): ClassOption => ({ classLevel: cl, readiness: classReadiness[cl] }))}
+        options={unpublishedClasses.map((cl): ClassOption => ({ classLevel: cl, readiness: classReadiness[cl], studentCount: rollOf.get(cl) }))}
         showReadiness
         confirmLabel={tr('Publish')}
         busy={pickerBusy}
@@ -1162,7 +1263,7 @@ export default function ReportCardsPage() {
         open={classPicker === 'classList'}
         title={tr('Print class list')}
         subtitle={tr('Select the class(es) to print.')}
-        options={[...new Set([...unpublishedClasses, ...publishedClasses])].sort().map((cl): ClassOption => ({ classLevel: cl }))}
+        options={[...new Set([...unpublishedClasses, ...publishedClasses])].sort().map((cl): ClassOption => ({ classLevel: cl, studentCount: rollOf.get(cl) }))}
         confirmLabel={tr('Print')}
         busy={pickerBusy}
         onClose={() => setClassPicker(null)}
@@ -1172,7 +1273,7 @@ export default function ReportCardsPage() {
         open={classPicker === 'printClass'}
         title={tr('Print report cards')}
         subtitle={tr('Select the class(es) to print.')}
-        options={publishedClasses.map((cl): ClassOption => ({ classLevel: cl }))}
+        options={publishedClasses.map((cl): ClassOption => ({ classLevel: cl, studentCount: rollOf.get(cl) }))}
         confirmLabel={tr('Print')}
         busy={pickerBusy}
         onClose={() => setClassPicker(null)}

@@ -12,9 +12,17 @@ import { getClasses as getClassesFull } from '@/lib/api/classes'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getDepartments, Department } from '@/lib/api/departments'
+import type { StudentStatus } from '@/lib/api/students'
 import Pagination from '@/components/Pagination'
 
 const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+
+// Mirrors STATUS_TABS on the Students screen, so the two name the same three states alike.
+const STUDENT_STATUS_TABS: { value: StudentStatus; label: string }[] = [
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'DISABLED', label: 'Disabled' },
+  { value: 'DISMISSED', label: 'Dismissed' },
+]
 import { getTerms } from '@/lib/api/terms'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { onRealtimeDebounced } from '@/lib/socket'
@@ -295,6 +303,11 @@ function AdminReportCards() {
   const [classDeptMap, setClassDeptMap] = useState<Record<string, string | null>>({})
   const [page, setPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+  // Defaults to Active: the everyday view is the school's current pupils. Students who
+  // have left keep every card they earned — a dismissed student still needs a transcript
+  // to transfer — they just live in their own tab instead of sitting in the main list
+  // with nothing to tell them apart from a student still enrolled.
+  const [studentStatus, setStudentStatus] = useState<StudentStatus>('ACTIVE')
   const listRef = useRef<FlatList<string>>(null)
   // Typing hits the server now, so debounce it rather than firing a request per keystroke.
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -336,6 +349,7 @@ function AdminReportCards() {
         getAllReportCards({
           ...(termId ? { termId } : { session: activeSession ?? undefined }),
           ...(classLevelFilter.length > 0 ? { classLevels: classLevelFilter.join(',') } : {}),
+          studentStatus,
           page: pageNum, pageSize: PAGE_SIZE, ...(searchTerm ? { search: searchTerm } : {}),
         }),
         getTerms(),
@@ -356,8 +370,9 @@ function AdminReportCards() {
     // activeDeptId/classDeptMap are dependencies because the department filter is now
     // part of the REQUEST, not a post-filter — changing it must refetch from page 1.
     // programme + classDefs are in here so switching the chip refetches from page 1 rather
-    // than re-filtering the page already on screen.
-  }, [activeSession, isSecondary, departments.length, activeDeptId, classDeptMap, programmeFilter.programme, classDefs])
+    // than re-filtering the page already on screen. studentStatus is here for the same
+    // reason: it is part of the REQUEST, so switching tab has to go back to the server.
+  }, [activeSession, isSecondary, departments.length, activeDeptId, classDeptMap, programmeFilter.programme, classDefs, studentStatus])
 
   // Jump to a specific page — replaces the list rather than appending, and scrolls back
   // to the top so a new page starts where you'd expect to read it.
@@ -457,6 +472,24 @@ function AdminReportCards() {
           />
         </View>
       )}
+      {/* Student status. Mirrors the web dashboard's row and the Students screen's tabs,
+          so all three name the same states the same way. Switching refetches from page 1
+          rather than narrowing the page on screen: this list is paginated, so filtering
+          here would empty a page while later pages still held matches. */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={{ flexDirection: 'row', paddingHorizontal: 12, paddingTop: 8, gap: 8 }}>
+        {STUDENT_STATUS_TABS.map((tab) => (
+          <TouchableOpacity key={tab.value} onPress={() => setStudentStatus(tab.value)}
+            style={{ flexShrink: 0, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+              borderColor: studentStatus === tab.value ? '#F03E2F' : colors.border,
+              backgroundColor: studentStatus === tab.value ? '#FEF2F1' : colors.card }}>
+            <Text style={{ fontSize: 12, fontWeight: '600', color: studentStatus === tab.value ? '#F03E2F' : colors.textSecondary }}>
+              {t(tab.label)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       {/* Term filter (active academic year only) */}
       {visibleTerms.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}

@@ -143,18 +143,34 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
     const search = String(req.query.search ?? '').trim()
     const like = (value: string) => (IS_OFFLINE_BUILD ? { contains: value } : { contains: value, mode: 'insensitive' as const })
 
+    // Every condition on the STUDENT relation has to be merged into one object rather than
+    // spread as separate `student:` keys. Object spread keeps only the last value for a
+    // repeated key, so the old shape meant a class filter and a department filter could not
+    // both apply — whichever spread came second silently discarded the other.
+    const studentWhere: Record<string, unknown> = {}
+    if (classLevel) studentWhere.classLevel = String(classLevel)
+    // Comma-separated set of classes — how a secondary school's DEPARTMENT filter is
+    // expressed (a department spans several classes). Must be server-side once the list is
+    // paginated: filtering a page client-side can empty it out while later pages still hold
+    // matches, which reads as "no report cards" rather than "keep going".
+    if (classLevels) {
+      studentWhere.classLevel = { in: String(classLevels).split(',').map((c) => c.trim()).filter(Boolean) }
+    }
+    // Active / Disabled / Dismissed, driving the tabs on the report cards screen. A student
+    // who has left keeps every card they ever earned — a dismissed student still needs a
+    // transcript to transfer — but they belong in their own tab rather than mixed into the
+    // everyday list. Unset means no status filter at all, which is what the transcript and
+    // print routes want: those address one student who has already been chosen.
+    const studentStatus = String(req.query.studentStatus ?? '').trim().toUpperCase()
+    if (['ACTIVE', 'DISABLED', 'DISMISSED'].includes(studentStatus)) {
+      studentWhere.status = studentStatus
+    }
+
     const where = {
       schoolId,
       ...(termId ? { termId: String(termId) } : {}),
       ...(session ? { term: { session: String(session) } } : {}),
-      ...(classLevel ? { student: { classLevel: String(classLevel) } } : {}),
-      // Comma-separated set of classes — how a secondary school's DEPARTMENT filter is
-      // expressed (a department spans several classes). Must be server-side once the
-      // list is paginated: filtering a page client-side can empty it out while later
-      // pages still hold matches, which reads as "no report cards" rather than "keep going".
-      ...(classLevels
-        ? { student: { classLevel: { in: String(classLevels).split(',').map((c) => c.trim()).filter(Boolean) } } }
-        : {}),
+      ...(Object.keys(studentWhere).length ? { student: studentWhere } : {}),
       ...(search
         ? {
             OR: [
@@ -1357,27 +1373,8 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
   }
 }
 
-// Delete report card
-export const deleteReportCard = async (req: AuthRequest, res: Response) => {
-  try {
-    const id = String(req.params.id)
-    const schoolId = req.user!.schoolId!
-
-    const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
-    if (!reportCard) {
-      res.status(404).json({ message: 'Report card not found' })
-      return
-    }
-
-    await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
-    await prisma.reportCard.delete({ where: { id } })
-
-    res.json({ message: 'Report card deleted' })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: 'Server error' })
-  }
-}
+// deleteReportCard was removed deliberately — see the comment where its route used to be
+// in routes/reportcard.routes.ts. Use unpublishReportCard to reopen a card for correction.
 
 // Returns all students in a class with their report card status for a given term
 export const getClassOverview = async (req: AuthRequest, res: Response) => {
@@ -1497,17 +1494,31 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
  * General remarks may only be written once every subject the student offers is
  * marked: all compulsory subjects + any optional subject they have an entry for.
  * Mirrors the report-card screen's "all sequences filled" gate.
+ *
+ * This is the FIFTH place "is this card complete?" is written, alongside
+ * findPublishBlockers, getReadinessDetail, publishReportCard and saveEntries — and it has
+ * to be competency-aware for the same reason they are. A rated (nursery) entry stores
+ * `score: null` deliberately, with the rating in `grade`, so a score-only check reports
+ * every fully rated card as unmarked. That made a nursery card impossible to write a
+ * general remark on, and since publishing requires one, impossible to publish at all:
+ * the only way a rated card ever got a remark was the competency branch of saveEntries
+ * writing it alongside the ratings.
  */
 async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string): Promise<boolean> {
   const rc = await prisma.reportCard.findFirst({
     where: { id: reportCardId }, select: { studentId: true, student: { select: { classLevel: true } }, term: { select: { name: true } } },
   })
   if (!rc) return false
-  const [classSubjects, entries] = await Promise.all([
+  const [classSubjects, entries, levelRow] = await Promise.all([
     prisma.subject.findMany({ where: { schoolId, classLevel: rc.student.classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, compulsory: true } }),
-    prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true } }),
+    prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true, grade: true } }),
+    // Resolved from the CLASS, not the school: one primary school runs both modes at once,
+    // its nursery classes rated while Class 1-6 stay marked.
+    prisma.classLevel.findFirst({ where: { schoolId, name: rc.student.classLevel }, select: { gradingMode: true } }),
   ])
-  const scoreBy = new Map(entries.map((e) => [e.subjectId, e.score]))
+  const isCompetency = levelRow?.gradingMode === 'COMPETENCY'
+  // "Has this subject been assessed?" — a rating for a rated class, a score otherwise.
+  const assessedBy = new Map(entries.map((e) => [e.subjectId, isCompetency ? (e.grade?.trim() ? e.grade : null) : e.score]))
   // A course the student has been ticked off is not theirs to have marks for, so it can
   // never be what blocks their card.
   const excluded = (await excludedSubjectIdsFor([rc.studentId])).get(rc.studentId) ?? new Set<string>()
@@ -1519,9 +1530,9 @@ async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string):
     // counts once the student has actually started it — they have streams and electives
     // that nobody is formally ticked off.
     if (school?.type === 'UNIVERSITY') return true
-    return s.compulsory !== false || scoreBy.has(s.id)
+    return s.compulsory !== false || assessedBy.has(s.id)
   })
-  return offered.length > 0 && offered.every((s) => scoreBy.get(s.id) != null)
+  return offered.length > 0 && offered.every((s) => assessedBy.get(s.id) != null)
 }
 
 export const updateRemarks = async (req: AuthRequest, res: Response) => {

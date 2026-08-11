@@ -3,7 +3,7 @@ import {
   getReportCards, getReportCard, createReportCard,
   saveEntries, updateRemarks, generateRemarks, publishReportCard, unpublishReportCard,
   grantEditPermission, revokeEditPermission, bulkPublish,
-  deleteReportCard, getClassOverview, getClassReadiness, getReadinessDetail,
+  getClassOverview, getClassReadiness, getReadinessDetail,
   getMarksExport, getStudentTranscript
 } from '../controllers/reportcard.controller'
 import { protect, restrictTo } from '../middleware/auth'
@@ -27,6 +27,15 @@ router.put('/:id/unpublish', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), unpub
 router.post('/bulk-publish', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), bulkPublish)
 router.put('/:id/grant-edit', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), grantEditPermission)
 router.put('/:id/revoke-edit', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), revokeEditPermission)
-router.delete('/:id', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), deleteReportCard)
+
+// There is deliberately NO delete route for a report card. A card is an issued document:
+// once published, a parent may be holding a printed copy, and deleting the school's copy
+// does not recall theirs — it only makes the school's record disagree with the paper in
+// their hand, with nothing left to show it ever existed. Corrections go through unpublish
+// (above) and re-entry, which keeps the record and its history.
+//
+// A card is also auto-created for every active student when a term opens, so deleting one
+// for an active student was never permanent anyway. See §Students in DOCUMENTATION.md for
+// the same reasoning applied to students themselves.
 
 export default router
