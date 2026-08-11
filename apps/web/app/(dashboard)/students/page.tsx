@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import {
-  getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, StudentStatus,
+  getStudentsApi, getStudentClassLevelsApi, createStudentApi, updateStudentApi, setStudentStatusApi, deleteStudentApi, getStudentDeletableApi, StudentStatus,
   bulkPromoteStudentsApi, uploadStudentPhotoApi, removeStudentPhotoApi,
   downloadStudentImportTemplateApi, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow,
 } from '@/lib/api/students'
@@ -14,8 +14,9 @@ import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { STUDENT_PHOTO_UPLOADS_ENABLED } from '@/lib/features'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle } from 'lucide-react'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle, Trash2 } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
 import CustomSelect from '@/components/ui/CustomSelect'
@@ -99,9 +100,12 @@ function univLevelBadge(classLevel: string) {
 
 export default function StudentsPage() {
   const router = useRouter()
-  const { isAuthenticated, activeSession, setActiveSession, school } = useAuthStore()
+  const { isAuthenticated, activeSession, setActiveSession, school, user } = useAuthStore()
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
+  // Deleting is admin-only; everyone else who can reach this page uses Change Status.
+  // The API enforces this too — this only keeps a button that would always 403 off the row.
+  const canDelete = user?.role === 'SCHOOL_ADMIN'
   // Primary is the only type with no department layer at all — see the table header.
   const isPrimary = !isUniversity && !isSecondary
   const { toast, showToast, hideToast } = useToast()
@@ -137,6 +141,12 @@ export default function StudentsPage() {
   const [statusTarget, setStatusTarget] = useState<Student | null>(null)
   const [newStatus, setNewStatus] = useState<StudentStatus>('ACTIVE')
   const [statusSaving, setStatusSaving] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Student | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  // '' = allowed. Filled from the server when the dialog opens, so the button is dead
+  // with the reason on screen rather than refusing after the name has been typed out.
+  const [deleteBlockedReason, setDeleteBlockedReason] = useState('')
+  const [checkingDeletable, setCheckingDeletable] = useState(false)
   const [feesTarget, setFeesTarget] = useState<{ id: string; name: string } | null>(null)
   const [feesByStudent, setFeesByStudent] = useState<Record<string, FeeOverviewRow>>({})
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
@@ -489,6 +499,52 @@ export default function StudentsPage() {
     }
   }
 
+  // Deleting is for a row that should never have existed — a duplicate, or a name typed
+  // into the wrong class. A student who has actually sat a term has a report card, and
+  // the API refuses rather than destroying a record the school may have to produce years
+  // from now.
+  //
+  // Asking the server on open, rather than only on submit, is the difference between a
+  // rule the admin can see and a rule that ambushes them: being made to type a full name
+  // and only then told it was never possible is worse than not offering the button.
+  // A failed check blocks rather than opens up — if we cannot confirm it is safe, it is
+  // not safe, and the delete itself re-checks anyway.
+  const openDeleteModal = async (s: Student) => {
+    setDeleteTarget(s)
+    setDeleteBlockedReason('')
+    setCheckingDeletable(true)
+    try {
+      const result = await getStudentDeletableApi(s.id)
+      setDeleteBlockedReason(result.deletable ? '' : result.message)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      setDeleteBlockedReason(e.response?.data?.message || t('Could not check whether this student can be deleted. Try again.'))
+    } finally {
+      setCheckingDeletable(false)
+    }
+  }
+
+  // The 409 path stays even with the check above: the pre-flight can go stale between
+  // opening the dialog and confirming (a fee recorded on another screen, a term opened),
+  // and the server is the only thing that decides.
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteStudentApi(deleteTarget.id)
+      showToast(`${deleteTarget.name} ${t('was deleted')}`)
+      setDeleteTarget(null)
+      fetchStudents(activeClass)
+      fetchFilterClasses()
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to delete student'), 'error')
+      setDeleteTarget(null)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   // Bulk import (transfer an existing Excel/CSV roster instead of one-at-a-time
   // entry) — same flow for every school type, see lib/api/students.ts.
   const openImportModal = () => {
@@ -638,13 +694,28 @@ export default function StudentsPage() {
     fetchStudents('all', '')
   }
 
+  // How many pupils are on each class's roll, from the class definitions rather than the
+  // loaded page — `students` only holds the current filter, so counting it would report the
+  // class you are already looking at and 0 for every other. ACTIVE only, per the API.
+  const rollOf = useMemo(
+    () => new Map(definedClasses.map((c) => [c.name, c.studentCount ?? 0])),
+    [definedClasses],
+  )
+
   // Class dropdown options, narrowed to the active department (secondary) and
-  // shown with department suffixes stripped.
+  // shown with department suffixes stripped. The roll is appended so picking a class is an
+  // informed choice rather than a guess at where the pupils are.
   const classFilterOptions = (isSecondary && deptFilter !== 'all'
     ? filterClasses.filter((cls) => deptIdOfClass(cls) === deptFilter)
     : filterClasses
   ).filter((cls) => programmeFilter.matches(cls))
-    .map((cls) => ({ value: cls, label: stripProgrammeSuffix(isSecondary ? stripDeptSuffix(cls) : cls) }))
+    .map((cls) => {
+      const label = stripProgrammeSuffix(isSecondary ? stripDeptSuffix(cls) : cls)
+      // A class a student sits in but which has no ClassLevel row has no roll to show;
+      // labelling it "(0)" would read as an empty class rather than an undefined one.
+      const roll = rollOf.get(cls)
+      return { value: cls, label: roll === undefined ? label : `${label} (${roll})` }
+    })
 
   // The roster to display: when a department is selected (and no single class),
   // narrow the server roster to that department's classes client-side.
@@ -959,6 +1030,12 @@ export default function StudentsPage() {
                         className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
                         <UserX size={14} />
                       </button>
+                      {canDelete && (
+                        <button onClick={() => openDeleteModal(s)} title={t('Delete Student')}
+                          className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1554,6 +1631,31 @@ export default function StudentsPage() {
           </div>
         </div>
       )}
+
+      {/* Typing the student's name, not a yes/no. The delete icon sits in a row of everyday
+          buttons beside Fees, Edit and Change Status, so the mistake to design against is
+          "deleted the wrong row", which a confirm dialog does not catch because it asks you
+          to confirm the act rather than the target. Same reasoning as deleting a school.
+
+          `message` is deliberately empty while blocked: the reason box already says who and
+          why and what to do instead, so asking "permanently delete X?" above it would pose a
+          question that has no yes. */}
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        title={t('Delete Student')}
+        message={!deleteTarget || deleteBlockedReason
+          ? ''
+          : `${t('Permanently delete')} ${deleteTarget.name} (${deleteTarget.studentId})? ${t('This cannot be undone. If this student has really left, use Change Status to disable or dismiss them instead, which keeps their record.')}`}
+        confirmLabel={t('Delete Permanently')}
+        confirmColor="red"
+        confirming={deleting}
+        confirmingLabel={t('Deleting...')}
+        confirmPhrase={deleteTarget?.name}
+        blockedReason={deleteBlockedReason}
+        checking={checkingDeletable}
+        onConfirm={handleDelete}
+        onCancel={() => { setDeleteTarget(null); setDeleteBlockedReason('') }}
+      />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </div>

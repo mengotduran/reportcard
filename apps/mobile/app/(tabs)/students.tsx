@@ -7,7 +7,7 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
-import { getStudents, createStudent, updateStudent, setStudentStatus, Student, StudentStatus, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow } from '@/lib/api/students'
+import { getStudents, createStudent, updateStudent, setStudentStatus, deleteStudent, getStudentDeletable, Student, StudentStatus, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
@@ -26,6 +26,11 @@ const stripDeptSuffix = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').t
 const STATUS_TABS: StudentStatus[] = ['ACTIVE', 'DISABLED', 'DISMISSED']
 // Rows per request — the roster is fetched a page at a time rather than all at once.
 const STUDENT_PAGE_SIZE = 40
+
+// Height of the pager bar pinned to the bottom of this screen: 10pt padding top and
+// bottom, a 26pt row of controls, and its 1pt top border. The FAB floats over the same
+// corner, so it has to clear this or it sits on the "next page" arrow.
+const PAGER_HEIGHT = 47
 
 // Older cached data may not carry `status` yet — fall back to isActive so a
 // stale client still renders a sensible badge instead of crashing.
@@ -84,6 +89,12 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     backgroundColor: '#F03E2F', justifyContent: 'center', alignItems: 'center',
     shadowColor: '#F03E2F', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 10, elevation: 8,
   },
+  // Applied only while the pager is on screen. The FAB and the pager's forward arrow both
+  // live in the bottom-right corner, and at bottom: 28 the button covers it — the arrow is
+  // reachable in theory and not in practice. Lifted a thumb's width clear of the bar; on a
+  // single-page roster there is no bar, so the FAB stays where it has always been rather
+  // than floating oddly high.
+  fabAbovePager: { bottom: PAGER_HEIGHT + 20 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   detailSheet: {
     backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24,
@@ -120,6 +131,43 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
     backgroundColor: '#fee2e2', borderRadius: 12, paddingVertical: 13,
   },
   deleteActionText: { fontSize: 14, fontWeight: '600', color: '#ef4444' },
+  // Quiet on purpose: no fill, muted text. Change Status above it is the action an admin
+  // nearly always wants, and this one should not compete with it for a tap.
+  deletePermanentBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 12, marginTop: 10,
+  },
+  deletePermanentText: { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+  // The confirm dialog is centred, unlike the bottom sheets above, so it reads as an
+  // interruption rather than another panel to swipe through. modalOverlay pins its child
+  // to the bottom, so this fills the overlay and re-centres inside it.
+  confirmWrap: { flex: 1, justifyContent: 'center', padding: 24 },
+  confirmSheet: { backgroundColor: colors.card, borderRadius: 20, padding: 22 },
+  confirmTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 8 },
+  confirmMessage: { fontSize: 13, lineHeight: 19, color: colors.textSecondary, marginBottom: 18 },
+  confirmBlocked: {
+    flexDirection: 'row', gap: 8, padding: 12, borderRadius: 10, marginBottom: 18,
+    backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fecaca',
+  },
+  confirmBlockedText: { flex: 1, fontSize: 13, lineHeight: 19, color: '#b91c1c' },
+  confirmChecking: { fontSize: 13, color: colors.textSecondary, marginBottom: 18 },
+  confirmLabel: { fontSize: 12, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  confirmInput: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+    padding: 12, fontSize: 14, color: colors.text, backgroundColor: colors.inputBg, marginBottom: 18,
+  },
+  confirmActions: { flexDirection: 'row', gap: 10 },
+  confirmCancelBtn: {
+    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 13,
+    borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+  },
+  confirmCancelText: { fontSize: 14, fontWeight: '600', color: colors.textSecondary },
+  confirmDeleteBtn: {
+    flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 13,
+    borderRadius: 12, backgroundColor: '#ef4444',
+  },
+  confirmDeleteBtnDisabled: { opacity: 0.4 },
+  confirmDeleteText: { fontSize: 14, fontWeight: '600', color: '#fff' },
   formLabel: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
   required: { color: '#ef4444' },
   formInput: {
@@ -150,6 +198,8 @@ function StudentDetailModal({
   onChangeStatus,
   onEdit,
   onFees,
+  onDelete,
+  canDelete,
 }: {
   student: Student | null
   visible: boolean
@@ -157,6 +207,8 @@ function StudentDetailModal({
   onChangeStatus: (student: Student) => void
   onEdit: (student: Student) => void
   onFees: (student: Student) => void
+  onDelete: (student: Student) => void
+  canDelete: boolean
 }) {
   const { colors } = useTheme()
   const styles = makeStylesStyles(colors)
@@ -219,7 +271,111 @@ function StudentDetailModal({
               <Text style={styles.deleteActionText}>{t('Change Status')}</Text>
             </TouchableOpacity>
           </View>
+          {/* Deliberately below the pair above and quieter than either: Change Status is
+              what an admin nearly always wants, and deleting is only ever for a row that
+              should not exist. Admins only, and the API refuses once anything is on record. */}
+          {canDelete && (
+            <TouchableOpacity style={styles.deletePermanentBtn} onPress={() => onDelete(student)}>
+              <Ionicons name="trash-outline" size={15} color={colors.textSecondary} />
+              <Text style={styles.deletePermanentText}>{t('Delete Student')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
+      </View>
+    </Modal>
+  )
+}
+
+/**
+ * Typed confirmation for deleting a student, matching the web dashboard.
+ *
+ * A plain Alert is not enough here and Alert.prompt is iOS-only, so this is a real modal.
+ * The point of retyping the name is not friction for its own sake: the delete action sits
+ * on a detail sheet reached by tapping a row, and the mistake that actually happens is
+ * having the wrong student open. Confirming the ACT does not catch that; typing the name
+ * of the student in front of you does.
+ *
+ * The typed value resets every time the modal opens, so the previous student's name can
+ * never sit in the box pre-satisfying the check for a different student.
+ */
+function DeleteStudentModal({
+  student, visible, deleting, checking, blockedReason, onCancel, onConfirm,
+}: {
+  student: Student | null
+  visible: boolean
+  deleting: boolean
+  checking: boolean
+  /** '' = allowed. Set from the server when the dialog opens, so the button is dead with
+   *  the reason on screen instead of refusing after the whole name has been typed. */
+  blockedReason: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const { colors } = useTheme()
+  const styles = makeStylesStyles(colors)
+  const t = useT()
+  const [typed, setTyped] = useState('')
+
+  useEffect(() => { setTyped('') }, [visible, student?.id])
+
+  if (!student) return null
+  const isBlocked = !!blockedReason
+  const canConfirm = !isBlocked && !checking && !deleting && typed.trim() === student.name
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.confirmWrap}>
+          <View style={styles.confirmSheet}>
+            <Text style={styles.confirmTitle}>{t('Delete Student')}</Text>
+
+            {isBlocked ? (
+              // The reason already names who, why and what to do instead, so posing
+              // "permanently delete X?" above it would be asking a question with no yes.
+              <View style={styles.confirmBlocked}>
+                <Ionicons name="alert-circle-outline" size={16} color="#ef4444" />
+                <Text style={styles.confirmBlockedText}>{blockedReason}</Text>
+              </View>
+            ) : (
+              <Text style={styles.confirmMessage}>
+                {t('Permanently delete')} {student.name} ({student.studentId})?{' '}
+                {t('This cannot be undone. If this student has really left, use Change Status to disable or dismiss them instead, which keeps their record.')}
+              </Text>
+            )}
+
+            {checking && <Text style={styles.confirmChecking}>{t('Checking…')}</Text>}
+
+            {!isBlocked && !checking && (
+              <>
+                <Text style={styles.confirmLabel}>{t('Type the student\'s name to confirm')}</Text>
+                <TextInput
+                  value={typed}
+                  onChangeText={setTyped}
+                  editable={!deleting}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder={student.name}
+                  placeholderTextColor={colors.textSecondary}
+                  style={styles.confirmInput}
+                />
+              </>
+            )}
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.confirmCancelBtn} onPress={onCancel} disabled={deleting}>
+                {/* Nothing is being cancelled when the action was never available. */}
+                <Text style={styles.confirmCancelText}>{isBlocked ? t('Close') : t('Cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmDeleteBtn, !canConfirm && styles.confirmDeleteBtnDisabled]}
+                onPress={onConfirm}
+                disabled={!canConfirm}
+              >
+                <Text style={styles.confirmDeleteText}>{deleting ? t('Deleting…') : t('Delete Permanently')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </View>
     </Modal>
   )
@@ -609,6 +765,9 @@ export default function StudentsScreen() {
   const router = useRouter()
   const { user, activeSession, setActiveSession, school } = useAuthStore()
   const isAdmin = ADMIN_ROLES.includes(user?.role ?? '')
+  // Narrower than isAdmin: a vice-principal can disable or dismiss, which is reversible,
+  // but deleting is not. Matches the API, which restricts the route to SCHOOL_ADMIN.
+  const canDelete = user?.role === 'SCHOOL_ADMIN'
   const isUniversity = school?.type === 'UNIVERSITY'
   const isSecondary = school?.type === 'SECONDARY'
 
@@ -625,6 +784,10 @@ export default function StudentsScreen() {
   const [error, setError] = useState('')
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
   const [detailVisible, setDetailVisible] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Student | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteBlockedReason, setDeleteBlockedReason] = useState('')
+  const [checkingDeletable, setCheckingDeletable] = useState(false)
   const [createVisible, setCreateVisible] = useState(false)
   const [feesStudent, setFeesStudent] = useState<Student | null>(null)
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
@@ -732,6 +895,12 @@ export default function StudentsScreen() {
   // No client-side sitting filter here: the server already returned only this section.
   const filtered = students
 
+  // Pagination renders nothing on a single page, so the FAB only needs lifting when this
+  // is true. Computed once here rather than twice, so the bar and the button that has to
+  // dodge it can never disagree about whether it is on screen.
+  const studentTotalPages = Math.max(1, Math.ceil(studentTotal / STUDENT_PAGE_SIZE))
+  const pagerVisible = !loading && !isSuperAdmin && studentTotalPages > 1
+
   // Replaces the old silent "delete" (which never deleted anything — just set
   // isActive: false with no visible status and no way back). See
   // Student.status in schema.prisma.
@@ -758,6 +927,45 @@ export default function StudentsScreen() {
   const handleEditStudent = (student: Student) => {
     setDetailVisible(false)
     Alert.alert(t('Edit'), t('Full edit is available on the web dashboard for now.'))
+  }
+
+  // Asked on open rather than only on submit: being made to type a full name and only
+  // then told it was never possible is worse than not offering the button. A failed check
+  // blocks rather than opens up — if we cannot confirm it is safe, it is not safe.
+  const openDeleteModal = async (s: Student) => {
+    setDeleteTarget(s)
+    setDeleteBlockedReason('')
+    setCheckingDeletable(true)
+    try {
+      const result = await getStudentDeletable(s.id)
+      setDeleteBlockedReason(result.deletable ? '' : result.message)
+    } catch (err: any) {
+      setDeleteBlockedReason(
+        err?.response?.data?.message ?? t('Could not check whether this student can be deleted. Try again.'),
+      )
+    } finally {
+      setCheckingDeletable(false)
+    }
+  }
+
+  // The 409 path stays even with the check above: the pre-flight can go stale between
+  // opening the dialog and confirming (a fee recorded elsewhere, a term opened), and the
+  // server is the only thing that decides.
+  const handleDeleteStudent = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteStudent(deleteTarget.id)
+      setDeleteTarget(null)
+      setDetailVisible(false)
+      fetchStudents()
+    } catch (err: any) {
+      const message = err?.response?.data?.message ?? t('Failed to delete student')
+      setDeleteTarget(null)
+      Alert.alert(t('Cannot delete'), message)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const handleExport = async () => {
@@ -903,7 +1111,7 @@ export default function StudentsScreen() {
       {!loading && !isSuperAdmin && (
         <Pagination
           page={studentPage}
-          totalPages={Math.max(1, Math.ceil(studentTotal / STUDENT_PAGE_SIZE))}
+          totalPages={studentTotalPages}
           total={studentTotal}
           pageSize={STUDENT_PAGE_SIZE}
           onPage={goToStudentPage}
@@ -912,7 +1120,7 @@ export default function StudentsScreen() {
 
       {isAdmin && (
         <TouchableOpacity
-          style={[styles.fab, !hasCurrentTerm && { opacity: 0.5 }]}
+          style={[styles.fab, pagerVisible && styles.fabAbovePager, !hasCurrentTerm && { opacity: 0.5 }]}
           onPress={() => {
             if (!hasCurrentTerm) {
               Alert.alert(t('No current term'), t('Set a current academic year/term before adding students.'))
@@ -925,6 +1133,10 @@ export default function StudentsScreen() {
         </TouchableOpacity>
       )}
 
+      {/* onDelete closes the detail sheet FIRST. Two React Native Modals visible at once
+          leaves the app unresponsive to touch on Android, which is why onFees below hands
+          over the same way. Opening the delete dialog without closing this one froze the
+          screen outright. */}
       <StudentDetailModal
         student={selectedStudent}
         visible={detailVisible}
@@ -932,6 +1144,18 @@ export default function StudentsScreen() {
         onChangeStatus={handleChangeStatus}
         onEdit={handleEditStudent}
         onFees={(s) => { setDetailVisible(false); setFeesStudent(s) }}
+        onDelete={(s) => { setDetailVisible(false); openDeleteModal(s) }}
+        canDelete={canDelete}
+      />
+
+      <DeleteStudentModal
+        student={deleteTarget}
+        visible={!!deleteTarget}
+        deleting={deleting}
+        checking={checkingDeletable}
+        blockedReason={deleteBlockedReason}
+        onCancel={() => { setDeleteTarget(null); setDeleteBlockedReason('') }}
+        onConfirm={handleDeleteStudent}
       />
 
       {feesStudent && (

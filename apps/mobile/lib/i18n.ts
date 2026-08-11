@@ -151,6 +151,15 @@ const FR: Record<string, string> = {
   'Add Student': 'Ajouter un élève',
   'Edit Student': 'Modifier l\'élève',
   'Delete Student': 'Supprimer l\'élève',
+  'Permanently delete': 'Supprimer définitivement',
+  'This cannot be undone. If this student has really left, use Change Status to disable or dismiss them instead, which keeps their record.':
+    'Cette action est irréversible. Si cet élève a réellement quitté l\'établissement, utilisez Changer le statut pour le désactiver ou le renvoyer, ce qui conserve son dossier.',
+  'Type the student\'s name to confirm': 'Saisissez le nom de l\'élève pour confirmer',
+  'Delete Permanently': 'Supprimer définitivement',
+  'Cannot delete': 'Suppression impossible',
+  'Checking…': 'Vérification…',
+  'Could not check whether this student can be deleted. Try again.':
+    'Impossible de vérifier si cet élève peut être supprimé. Veuillez réessayer.',
   'total students': 'élèves au total',
   'All': 'Toutes',
   // ── Day / Evening sections, and the class delete confirmation ──

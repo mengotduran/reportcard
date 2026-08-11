@@ -70,6 +70,31 @@ export const setStudentStatusApi = async (id: string, status: StudentStatus) => 
   return res.data
 }
 
+// For a mis-typed or duplicated row only, and admin-only. The API refuses with 409
+// once the student has a report card or any payment against them, because at that
+// point they are an academic record the school may have to produce years later —
+// setStudentStatusApi above is the way an actual student leaves. Callers should show
+// the server's message rather than a generic failure: it names what is on record and
+// points at Disable/Dismiss.
+export const deleteStudentApi = async (id: string) => {
+  const res = await api.delete(`/students/${id}`)
+  return res.data
+}
+
+export interface StudentDeletable {
+  deletable: boolean
+  message: string
+  counts: { reportCards: number; feePayments: number; hndRegistrationPayments: number }
+}
+
+// Asked when the delete dialog opens so the button can be dead from the start with the
+// reason on screen, instead of refusing after the admin has typed the whole name. The
+// server answers from the same helper that enforces the delete, so the two cannot drift.
+export const getStudentDeletableApi = async (id: string): Promise<StudentDeletable> => {
+  const res = await api.get(`/students/${id}/deletable`)
+  return res.data
+}
+
 // Bulk import — see apps/api/src/utils/studentImport.ts. Two steps: preview
 // (parses + validates, writes nothing) then commit (creates only the rows
 // the admin reviewed) — never re-uploads the raw file twice, so a corrected

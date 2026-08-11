@@ -629,3 +629,130 @@ export const commitStudentImport = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ message: 'Server error' })
   }
 }
+
+/**
+ * DELETE /api/students/:id
+ *
+ * Deletes a student outright. This exists for ONE case: a data-entry mistake — a
+ * duplicate row, a name typed into the wrong class, a registration that was never a
+ * real child. It is not the way a student leaves the school.
+ *
+ * A student who has been graded is an academic record, not a row. Schools are expected
+ * to produce a transcript years after a student has gone, so once anything has been
+ * recorded against them the delete path closes for good and the only exits are DISABLED
+ * or DISMISSED, which keep the record and take them out of rosters, class lists and
+ * report runs. That is the same line every school information system draws, and it is
+ * why the checks below are on the server rather than in the confirmation dialog: the
+ * typed-name prompt in the UI guards against clicking the wrong row, this guards the
+ * record itself.
+ *
+ * Applies to all three school types. "Has a report card" is the check that carries the
+ * rule for every one of them: a card is created for each active student when a term
+ * opens, so a student who has sat so much as one term or semester has one, whether or
+ * not any mark was ever entered into it.
+ */
+/**
+ * Everything that makes a student a record rather than a typo.
+ *
+ * Deliberately shared by `GET /students/:id/deletable` and `DELETE /students/:id`, so the
+ * greyed-out button and the refusal can never disagree. A pre-flight check that says one
+ * thing while the enforcement says another is worse than having no pre-flight at all: it
+ * teaches the admin to trust a button that is sometimes lying.
+ *
+ * All three are counted every time and reported together, so the answer is never "fix one
+ * thing, try again, discover the next one".
+ */
+const getStudentDeleteBlockers = async (studentId: string, studentName: string) => {
+  const [reportCards, feePayments, hndPayments] = await Promise.all([
+    prisma.reportCard.count({ where: { studentId } }),
+    prisma.feePayment.count({ where: { studentId } }),
+    prisma.hndRegistrationPayment.count({ where: { studentId } }),
+  ])
+
+  const counts = { reportCards, feePayments, hndRegistrationPayments: hndPayments }
+  if (reportCards === 0 && feePayments === 0 && hndPayments === 0) {
+    return { deletable: true as const, counts, message: '' }
+  }
+
+  const reasons: string[] = []
+  if (reportCards > 0) reasons.push(reportCards === 1 ? 'a report card' : `${reportCards} report cards`)
+  if (feePayments > 0) reasons.push(feePayments === 1 ? 'a fee payment' : `${feePayments} fee payments`)
+  if (hndPayments > 0) reasons.push(hndPayments === 1 ? 'a registration payment' : `${hndPayments} registration payments`)
+  const list = reasons.length === 1 ? reasons[0]
+    : `${reasons.slice(0, -1).join(', ')} and ${reasons[reasons.length - 1]}`
+
+  return {
+    deletable: false as const,
+    counts,
+    message: `${studentName} has ${list} on record and cannot be deleted. Mark them Disabled or Dismissed instead, which removes them from class lists and report cards while keeping their record.`,
+  }
+}
+
+/**
+ * GET /api/students/:id/deletable
+ *
+ * Asked before the delete dialog opens, so an admin is told up front that this student
+ * cannot be deleted and why, rather than typing out a name in full and only then being
+ * refused. Read-only, and the real enforcement still lives in deleteStudent below: this
+ * exists to make the UI honest, not to be trusted by it.
+ */
+export const getStudentDeletable = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+
+    const student = await prisma.student.findFirst({ where: { id, schoolId } })
+    if (!student) {
+      res.status(404).json({ message: 'Student not found' })
+      return
+    }
+
+    const blockers = await getStudentDeleteBlockers(id, student.name)
+    res.json({ ...blockers, reason: blockers.deletable ? undefined : 'HAS_ACADEMIC_RECORD' })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const deleteStudent = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const schoolId = req.user!.schoolId!
+
+    const student = await prisma.student.findFirst({ where: { id, schoolId } })
+    if (!student) {
+      res.status(404).json({ message: 'Student not found' })
+      return
+    }
+
+    const blockers = await getStudentDeleteBlockers(id, student.name)
+    if (!blockers.deletable) {
+      res.status(409).json({
+        message: blockers.message,
+        reason: 'HAS_ACADEMIC_RECORD',
+        counts: blockers.counts,
+      })
+      return
+    }
+
+    // SubjectExclusion is the only remaining child row, and it cascades at the database
+    // level. It is still deleted explicitly, inside the same transaction as the student,
+    // so that adding a future table hanging off Student fails loudly here rather than
+    // half-completing the delete and leaving a student listed with nothing behind them —
+    // the failure mode that emptied a school through seedDemo and deleteSchool.
+    await prisma.$transaction(async (tx) => {
+      await tx.subjectExclusion.deleteMany({ where: { studentId: id } })
+      await tx.student.delete({ where: { id } })
+    })
+
+    // Only once the row is definitely gone: a file deleted before a failed transaction
+    // would strand the student with a broken photo path.
+    if (student.photo) deleteFile(student.photo)
+
+    res.json({ message: `${student.name} was deleted`, id })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
