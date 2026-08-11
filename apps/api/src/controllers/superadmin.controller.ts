@@ -473,24 +473,51 @@ export const deleteSchool = async (req: Request, res: Response) => {
     // marks-entry-mode switch logged) left an orphaned row blocking deletion outright.
     // The API swallowed that FK error into a generic 500 with no detail — see the fix
     // to the message below too. Order: children before parents.
-    const reportCardIds = (await prisma.reportCard.findMany({ where: { schoolId: id }, select: { id: true } })).map((r) => r.id)
-    await prisma.reportEntry.deleteMany({ where: { reportCardId: { in: reportCardIds } } })
-    await prisma.reportCard.deleteMany({ where: { schoolId: id } })
-    await prisma.teacherSubject.deleteMany({ where: { user: { schoolId: id } } })
-    await prisma.feePayment.deleteMany({ where: { schoolId: id } })
-    await prisma.hndRegistrationPayment.deleteMany({ where: { schoolId: id } })
-    await prisma.excelTemplate.deleteMany({ where: { schoolId: id } })
-    await prisma.marksEntryModeChange.deleteMany({ where: { schoolId: id } })
-    await prisma.student.deleteMany({ where: { schoolId: id } })
-    await prisma.subject.deleteMany({ where: { schoolId: id } })
-    await prisma.term.deleteMany({ where: { schoolId: id } })
-    await prisma.classLevel.deleteMany({ where: { schoolId: id } })
-    await prisma.department.deleteMany({ where: { schoolId: id } })
-    await prisma.gradingScale.deleteMany({ where: { schoolId: id } })
-    await prisma.reportCardTemplate.deleteMany({ where: { schoolId: id } })
-    await prisma.classListTemplate.deleteMany({ where: { schoolId: id } })
-    await prisma.user.deleteMany({ where: { schoolId: id } })
-    await prisma.school.delete({ where: { id } })
+    //
+    // THIS LIST GOES STALE, and when it does the failure is much worse than "delete did
+    // not work": without the transaction below, every delete that already ran stayed
+    // committed and only the final school.delete rolled off, leaving a school still
+    // listed in superadmin with zero students and zero report cards. That is not a
+    // failed delete, it looks exactly like unexplained data loss. It happened for real
+    // on production on 2026-08-11, blocked by timetable slots, timetable periods,
+    // notifications and teacher absences, none of which existed when this list was
+    // written. If you add a model with a schoolId, add it here.
+    await prisma.$transaction(async (tx) => {
+      const reportCardIds = (await tx.reportCard.findMany({ where: { schoolId: id }, select: { id: true } })).map((r) => r.id)
+      await tx.reportEntry.deleteMany({ where: { reportCardId: { in: reportCardIds } } })
+      await tx.reportCard.deleteMany({ where: { schoolId: id } })
+      await tx.teacherSubject.deleteMany({ where: { OR: [{ user: { schoolId: id } }, { subject: { schoolId: id } }] } })
+      await tx.timetableSlot.deleteMany({ where: { schoolId: id } })
+      await tx.timetablePeriod.deleteMany({ where: { schoolId: id } })
+      await tx.teacherAbsence.deleteMany({ where: { schoolId: id } })
+      await tx.notification.deleteMany({ where: { schoolId: id } })
+      await tx.pastTermMarksGrant.deleteMany({ where: { schoolId: id } })
+      await tx.subjectExclusion.deleteMany({ where: { schoolId: id } })
+      await tx.schoolHoliday.deleteMany({ where: { schoolId: id } })
+      await tx.feePayment.deleteMany({ where: { schoolId: id } })
+      await tx.hndRegistrationPayment.deleteMany({ where: { schoolId: id } })
+      await tx.excelTemplate.deleteMany({ where: { schoolId: id } })
+      await tx.marksEntryModeChange.deleteMany({ where: { schoolId: id } })
+      await tx.competencyScale.deleteMany({ where: { schoolId: id } })
+      await tx.promotionScale.deleteMany({ where: { schoolId: id } })
+      await tx.student.deleteMany({ where: { schoolId: id } })
+      await tx.subject.deleteMany({ where: { schoolId: id } })
+      await tx.term.deleteMany({ where: { schoolId: id } })
+      await tx.classLevel.deleteMany({ where: { schoolId: id } })
+      // After ClassLevel: ClassLevel.departmentId points here and restricts.
+      await tx.department.deleteMany({ where: { schoolId: id } })
+      await tx.gradingScale.deleteMany({ where: { schoolId: id } })
+      await tx.reportCardTemplate.deleteMany({ where: { schoolId: id } })
+      await tx.classListTemplate.deleteMany({ where: { schoolId: id } })
+      await tx.user.deleteMany({ where: { schoolId: id } })
+      await tx.school.delete({ where: { id } })
+    }, {
+      // A real school is far bigger than the demo one (hundreds of students, thousands
+      // of report entries), and Prisma's 5s default would abort part way through a
+      // perfectly good delete. A rollback here is free; a half-delete is not.
+      maxWait: 15_000,
+      timeout: 120_000,
+    })
 
     res.json({ message: 'School deleted' })
   } catch (error: any) {
