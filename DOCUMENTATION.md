@@ -172,13 +172,47 @@ Base URL: `http://localhost:5000/api`
 | POST | `/auth/create-superadmin` | Create the first superadmin |
 
 ### Students
-| Method | Route | Description |
-|--------|-------|-------------|
-| GET | `/students` | List all students |
-| POST | `/students` | Create a student |
-| PUT | `/students/:id` | Edit a student |
-| DELETE | `/students/:id` | Delete a student |
-| GET | `/students/class-levels` | Get distinct class levels |
+| Method | Route | Roles | Description |
+|--------|-------|-------|-------------|
+| GET | `/students` | Any | List all students |
+| POST | `/students` | Admin, VP, Class teacher | Create a student |
+| PUT | `/students/:id` | Admin, VP, Class teacher | Edit a student |
+| PUT | `/students/:id/status` | Admin, VP | Set `ACTIVE` / `DISABLED` / `DISMISSED`. **The normal way a student leaves** |
+| DELETE | `/students/:id` | Admin only | Delete a student outright. **Refuses with 409** once they have a report card or any payment (see below) |
+| GET | `/students/:id/deletable` | Admin only | Read-only pre-flight: `{ deletable, counts, message }`. Asked when the delete dialog opens |
+| GET | `/students/class-levels` | Any | Get distinct class levels |
+
+**Deleting a student is for a data-entry mistake only** — a duplicate row, a name typed into
+the wrong class, a registration that was never a real child. It is not how a student leaves.
+
+A student who has been graded is an academic record, not a row: schools are expected to
+produce a transcript years after a student has gone, so once anything has been recorded
+against them the delete path closes for good. The API refuses with `409` and
+`reason: 'HAS_ACADEMIC_RECORD'` when the student has any **report card**, **fee payment** or
+**HND registration payment**, and its message names the counts and points at the status route
+instead. The check is the same for primary, secondary and university; "has a report card"
+carries the rule for all three, because a card is created for every active student when a term
+opens, so anyone who has sat so much as one term or semester has one.
+
+`DISABLED` and `DISMISSED` are the real exits. They keep the record and take the student out
+of rosters, class lists, bulk print and exports, and they are reversible.
+
+Both dashboards require the admin to **type the student's full name** before the delete button
+activates, the same pattern as deleting a school. That guards against the mistake that actually
+happens with a delete icon sat beside everyday buttons: deleting the wrong row. A yes/no prompt
+confirms the act rather than the target, so it does not help there.
+
+**The dialog asks the server before it opens.** `GET /students/:id/deletable` decides whether
+the student can be deleted at all; when they cannot, the confirm button is dead from the start,
+the name box is not shown (there is nothing to type your way past), and the reason is stated in
+the dialog. Being made to type out a full name and only then refused is worse than not offering
+the button. Both that route and `DELETE` read the **same** `getStudentDeleteBlockers` helper, so
+the greyed-out button and the eventual refusal can never disagree; a pre-flight that contradicts
+the enforcement is worse than none, because it teaches admins to trust a button that lies.
+
+The `409` is still enforced on delete regardless. The pre-flight can go stale between opening
+the dialog and confirming (a fee recorded on another screen, a term opened), and only the server
+decides. If the pre-flight itself fails, the dialog blocks rather than opens up.
 
 ### Subjects
 | Method | Route | Description |
@@ -248,10 +282,41 @@ A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[
 | PUT | `/report-cards/:id/unpublish` | Admin, VP | Unpublish (unlocks for editing) |
 | POST | `/report-cards/bulk-publish` | Admin, VP | Publish a whole class; skips + reports students not ready |
 | PUT | `/report-cards/:id/grant-edit` · `/revoke-edit` | Admin, VP | Grant/revoke one-time edit on a published card |
-| DELETE | `/report-cards/:id` | Admin, VP | Delete a report card |
+| ~~DELETE~~ | ~~`/report-cards/:id`~~ | — | **Removed.** A report card cannot be deleted, by anyone (see below) |
 | GET | `/report-cards/class-overview` | All | Students + card status for a class/term |
 | GET | `/report-cards/class-readiness?termId` | Admin, VP | Per-class publish readiness (drives bulk-publish gating) |
 | GET | `/report-cards/:id/readiness-detail` | Admin, VP | Which teacher is missing marks / who must write remarks |
+
+`GET /report-cards` also takes **`studentStatus`** (`ACTIVE` / `DISABLED` / `DISMISSED`),
+which drives the status tabs on both dashboards. Unset returns every status, which is what
+the transcript and print routes want since those address one already-chosen student.
+
+**A report card cannot be deleted.** The route was removed outright rather than guarded.
+
+A card is an **issued document**: once published, a parent may be holding a printed copy,
+and deleting the school's copy does not recall theirs. It only makes the school's record
+disagree with the paper in their hand, with nothing left to show the card ever existed. That
+is worse than a wrong card you can see and correct. Grade records are treated as append-only
+across the sector for this reason, corrected by amendment rather than erasure.
+
+The correction path is **`PUT /report-cards/:id/unpublish`**, which reopens the card for
+editing and keeps its history. There is also nothing to clean up by deleting: a card is
+auto-created for every active student when a term opens, so deleting one for an active
+student was never permanent to begin with.
+
+This also closes a hole in the student rules above: while report cards could be deleted, an
+admin could delete a student's cards and then delete the student, walking straight around
+the retention guard.
+
+**Students who have left keep their report cards.** `DISABLED` and `DISMISSED` students are
+not hidden and nothing of theirs is removed. Their cards move to their own tab, defaulting
+to Active so the everyday view is the school's current pupils. A dismissed student still
+needs a transcript to transfer, so their cards stay fully viewable and printable; they are
+only kept out of bulk operations for the current term (bulk publish already filters on
+`isActive`).
+
+Filtering is **server-side**. The list is paginated, so narrowing it on the client would
+empty a page while later pages still held matches.
 
 ### Teachers
 | Method | Route | Description |
