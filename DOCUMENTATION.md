@@ -1396,7 +1396,9 @@ day-split timetable (one teacher Mondays, another Tuesdays) never produces a sha
 "both absent at once" can never occur and the rule is inert.
 
 ### Which courses appear
-A course earns a row by having an hours target **or** by having absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed.
+A course earns a row by having an hours target, **any hours at all** (scheduled, taught or projected), **or** absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed. It also withheld hours already worked: a teacher could teach a whole term on a course nobody had set a target for, and the one screen the school looks at to answer "how much has been taught" showed nothing. Untargeted rows carry their taught and projected hours with status `NO_TARGET`, which both clients already colour neutrally, sort last and offer as a "No target" filter.
+
+What still earns nothing is a course with a teacher, no target, no absences and **no hours whatsoever** — never timetabled, nothing taught, nothing projected. There are hundreds of those (217 at one secondary school, every one reading 0/0) and they would bury the rows carrying real work.
 
 Gaps deliberately do **not** earn a row. Assignments rarely start on a term's first day, so nearly every course has an uncovered stretch; including them listed all 112 courses in one school and buried the two that mattered.
 

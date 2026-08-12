@@ -480,16 +480,23 @@ async function buildCoverageRows(schoolId: string, session: string, teacherId?: 
     }]
   })]
 
-  // A course earns a row by having an hours target OR by having absences recorded against
-  // it. Without the second condition an absence on an untargeted course is invisible here —
-  // an admin could delete everything the view showed and still have absences on record.
+  // Every course a teacher actually holds earns a row, target or no target. Hours taught are
+  // a record of work done, and withholding them until an admin sets a target meant a teacher
+  // could teach a whole term and have this screen show nothing — the one place the school
+  // looks to answer "how much has been taught". Untargeted rows carry their taught and
+  // projected hours with status NO_TARGET; both clients already colour that neutrally, sort
+  // it last (see URGENCY) and offer a "No target" filter, so the courses with a target to
+  // measure against still lead.
   //
-  // Gaps deliberately do NOT earn a row: almost every course has an uncovered stretch
-  // (assignments rarely start exactly at the term's first day), so including them listed all
-  // 112 courses in the school and buried the two that mattered. A gap is a warning ON a
-  // course you are already tracking, not a reason to start tracking one.
+  // What still does NOT earn a row: a course with a teacher, no target, no absences and no
+  // hours at all — nothing scheduled, nothing taught, nothing projected. Those are courses
+  // that exist on paper and have never been timetabled, and there are hundreds of them (217
+  // at one secondary school here, every one reading 0/0). They would bury the rows that
+  // carry actual work, which is the same "listed all 112 courses" trap the targeted-only
+  // filter was written to avoid. A gap alone still does not earn a row either.
   return groupByCourse(parts, holidays)
-    .filter((r) => r.requiredHours != null || r.periodsMissed > 0)
+    .filter((r) => r.requiredHours != null || r.periodsMissed > 0
+      || r.scheduledHours > 0 || r.taughtHours > 0 || r.projectedFinalHours > 0)
 }
 
 /** "YYYY-MM-DD" for a Date, in whole calendar days like the rest of the hours maths. */
