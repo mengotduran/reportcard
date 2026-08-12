@@ -134,14 +134,18 @@ export default function LoginScreen() {
               <Ionicons name="mail-outline" size={18} color={colors.textFaint} style={styles.inputIcon} />
               <TextInput
                 style={styles.inputField}
-                placeholder="Email"
+                placeholder="Email or username"
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
                 autoCorrect={false}
                 spellCheck={false}
                 keyboardType="email-address"
-                textContentType="emailAddress"
+                // The field takes either identifier (a teacher with no email logs in with a
+                // username — see User.username), so AutoFill is told "username", not
+                // "emailAddress", which would offer only addresses. Matches web's
+                // autoComplete="username".
+                textContentType="username"
                 returnKeyType="next"
                 onSubmitEditing={() => passwordRef.current?.focus()}
                 placeholderTextColor={colors.textFaint}

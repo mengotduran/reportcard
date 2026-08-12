@@ -1271,7 +1271,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 
 | Screen | File | Who | Description |
 |--------|------|-----|-------------|
-| Login | `login.tsx` | All | Email + password |
+| Login | `login.tsx` | All | **Email or username** + password |
 | Home (SuperAdmin) | `(tabs)/index.tsx` | SUPERADMIN | Red header, 4 stat cards (schools/groups/students/active), "Manage Schools" button |
 | Home (teacher/master) | `(tabs)/index.tsx` | CLASS_TEACHER, CLASS_MASTER | School banner; purple "Manage Remarks" for CLASS_MASTER, blue "Enter My Classes" for CLASS_TEACHER |
 | Home (admin) | `(tabs)/index.tsx` | SCHOOL_ADMIN, VICE_PRINCIPAL | Dashboard stats cards |

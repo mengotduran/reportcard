@@ -112,7 +112,7 @@ export default function LoginPage() {
               onChange={(e) => handleEmailChange(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && document.getElementById('pw-input')?.focus()}
               className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-shadow"
-              placeholder="you@school.com"
+              placeholder="Email or username"
               autoComplete="username"
             />
           </div>
