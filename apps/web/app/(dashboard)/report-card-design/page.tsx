@@ -1862,7 +1862,11 @@ export default function ReportCardDesignPage() {
     const ensure = (cfg: any) => ensureNoPrimaryTotalsBands(ensureMarksTables(cfg, sType), sType)
     // Ledger isn't in getDefaultLayout's set — it has its own base builder
     // (special TOTAL/AVERAGE/POSITION footer rows baked into the marks table).
-    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(sType), layoutType: 'ledger' as const } : getDefaultLayout(tpl)
+    // getDefaultLayout MUST be given the school type. Without it every base is built as a
+    // secondary card — coef/weighted marks columns and the TOTAL COEFFICIENTS / TOTAL POINTS
+    // OBTAINED / WEIGHTED AVERAGE bands — and a primary or university school merging onto
+    // that base picks up the wrong table whenever the saved config has no sections of its own.
+    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(sType), layoutType: 'ledger' as const } : getDefaultLayout(tpl, sType)
     if (saved && (saved as any).sections?.length > 0) {
       const base = baseFor((saved.template as TemplateName) || 'classic')
       return ensure(localizeLayout({ ...base, ...saved } as any, lang))
@@ -1998,7 +2002,12 @@ export default function ReportCardDesignPage() {
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.template === name && saved?.layoutType !== 'transcript') ? buildMergedConfig(saved, lang, sType) : null
-    const layout = restored ?? getDefaultLayout(name)
+    // A theme is a PALETTE, not a different card. The fallback has to be built for this
+    // school's type and localized exactly like loadStandardLayout's, or picking a theme
+    // rebuilds the layout as a secondary one: a primary school's marks table came back with
+    // Coef / Avg × Coef columns and the three totals bands it is specifically built without,
+    // and a French section came back with English headers.
+    const layout = restored ?? ensureMarksTables(localizeLayout(getDefaultLayout(name, sType), lang), sType)
     setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))
