@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import api from '@/lib/api/client'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands, ensureAnnualAverageRow,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
@@ -1908,6 +1908,10 @@ export default function ReportCardDesignPage() {
       // picked up the Stamp/Seal section Ledger/Annual defaults gained after the Official/
       // Student copy split. Standard already had it from day one, so it's excluded.
       Object.assign(merged, ensureStampSection(merged, merged.template === 'ledger' || merged.layoutType === 'transcript'))
+      // And the annual document's Annual Average row, for the legacy case where a
+      // transcript design was saved at the top level. Only annual layouts get the row;
+      // everything else just gets the marker so this stops running on every load.
+      Object.assign(merged, ensureAnnualAverageRow(merged, sType, merged.layoutType === 'transcript'))
       // "Failing marks in red" is stored school-wide at the top level (see handleSave),
       // so stamp it onto whichever layout loaded — the checkbox must read the same in
       // every view, not whatever a layout happened to be saved with.
@@ -2061,7 +2065,9 @@ export default function ReportCardDesignPage() {
     const layout = hasTranscriptSections
       ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
       : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
-    const seeded = ensureStampSection(ensureBirthRows(layout, schoolType), true)
+    // Same backfill the transcript print path runs, so what the designer shows is what
+    // will print (and so an admin can move or delete the row, which then sticks).
+    const seeded = ensureAnnualAverageRow(ensureStampSection(ensureBirthRows(layout, schoolType), true), schoolType)
     setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))

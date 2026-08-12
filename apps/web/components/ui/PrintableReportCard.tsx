@@ -231,6 +231,12 @@ export interface TranscriptSemesterData {
   term: { name: string; session: string }
   subjects: PrintSubject[]
   entries: PrintEntry[]
+  /** This period's OWN average, straight off its report card (ReportCard.average). The
+   *  one figure the rest of the app agrees on: it is what the card prints, what the list
+   *  shows, what positions rank on and what the annual average is the mean of. The
+   *  transcript used to re-derive it from the entries instead, which put a primary
+   *  transcript on a different scale from that pupil's own report card. */
+  average?: number | null
 }
 
 // ─── Classic ─────────────────────────────────────────────────────────────────
@@ -1256,11 +1262,28 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
           if (field === 'gpa')       return (scopedAgg.gpaCredit > 0 ? scopedAgg.wp / scopedAgg.gpaCredit : 0).toFixed(2)
           if (field === 'coefTotal') return String(scopedAgg.coef)
           // Scoped to this period — the document-level 'average' is the ANNUAL one.
-          // Primary: plain mean of subject totals (Overall Total / Number of subjects),
-          // no coefficient weighting — see reportcard.controller.ts saveEntries.
-          if (field === 'average')   return isPrimary
-            ? (scopedAgg.filled > 0 ? scopedAgg.mark / scopedAgg.filled : 0).toFixed(2)
-            : (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(2)
+          //
+          // The card's OWN stored average, never a figure re-derived here. Primary's
+          // subjects are marked raw out of the class's ceiling but its average is
+          // coefficient-weighted and normalised to /20 (see saveEntries and
+          // [[primary_average_always_20]]); the plain mean of subject totals this used to
+          // print put the transcript on a /100 scale while the pupil's own report card,
+          // the report cards list and the position ranking were all on /20 — one pupil
+          // reading 77.60 here and 15.5 there for the same term.
+          //
+          // Falling back to the derived figure only covers a card whose average was never
+          // computed (nothing to disagree with in that case).
+          //
+          // One decimal outside a university, matching the report card's own TERM AVERAGE
+          // and the report cards list. Two never fitted: the hero cell is a narrow numeric
+          // column at 15px, so "16.34" printed as "16.3" with the 4 cut off by the border.
+          if (field === 'average') {
+            const dp = school.type === 'UNIVERSITY' ? 2 : 1
+            if (semData?.average != null) return semData.average.toFixed(dp)
+            return isPrimary
+              ? (scopedAgg.filled > 0 ? scopedAgg.mark / scopedAgg.filled : 0).toFixed(dp)
+              : (scopedAgg.coef > 0 ? scopedAgg.weightedMark / scopedAgg.coef : 0).toFixed(dp)
+          }
         }
         return resolveStat(field)
       }
@@ -1996,8 +2019,13 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             }
             {leftTables.map(st => renderSpreadsheet(st, resolveStat))}
             </div>
-            {/* RIGHT — configurable spreadsheet tables (university only) */}
-            {isUniv && rightTables.length > 0 && (
+            {/* RIGHT — configurable spreadsheet tables. Gated on `isUniv` until now, which
+                is not the school type but "this grading scale carries grade points": a
+                primary or secondary scale has none, so its OVERALL SUMMARY table — the one
+                holding Annual Average and Grade on the annual report — was built by the
+                default layout and then silently never rendered. A section only draws the
+                tables its own design declares, so there is nothing to gate here. */}
+            {rightTables.length > 0 && (
               <div style={{ flex: '1', display: 'flex', flexDirection: rightLayout === 'rows' ? 'column' : 'row', gap: 8 }}>
                 {rightTables.map(st => renderSpreadsheet(st, resolveStat))}
               </div>

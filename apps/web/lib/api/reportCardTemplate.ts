@@ -161,6 +161,9 @@ export interface TemplateConfig {
    * same backfill idiom as birthRowsSeeded (see ensureStampSection).
    */
   stampSeeded?: boolean
+  /** Same backfill idiom again: the annual document's Annual Average row has been offered
+   *  to this saved design once (see ensureAnnualAverageRow). */
+  annualAverageRowSeeded?: boolean
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -591,12 +594,12 @@ function seedTranscriptTermMarksTable(color: string, schoolType?: string): Sprea
         id: `mfoot_${ts + 3}`,
         cells: isPrimary
           ? [
-              { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+              { text: 'TERM AVERAGE /20:', bold: true, colSpan: 4, align: 'right', textColor: color },
               { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
               { text: '', colSpan: 1 },
             ]
           : [
-              { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+              { text: 'TERM AVERAGE /20:', bold: true, colSpan: 4, align: 'right', textColor: color },
               { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
               { text: '', colSpan: 2 },
             ],
@@ -1351,6 +1354,11 @@ export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig 
         id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
         rows: [
           { id: uid('rr'), cells: [{ text: 'Credits Earned', bold: true }, { field: 'credits' }] },
+          // Every annual document states the year's average, whatever the school type —
+          // a university's is a credit-weighted mark out of 100 (what ReportCard.average
+          // holds there), which is why the scale is spelled out rather than assumed. The
+          // GPA rows below say something different: how those marks convert to points.
+          { id: uid('rr'), cells: [{ text: 'Annual Average /100', bold: true }, { field: 'average' }] },
           { id: uid('rr'), cells: [{ text: 'Cumulative GPA', bold: true }, { field: 'cgpa' }] },
           { id: uid('rr'), cells: [{ text: 'Remark', bold: true }, { field: 'classification' }] },
         ],
@@ -1403,7 +1411,10 @@ function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sectio
       rightTables: [{
         id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
         rows: [
-          { id: uid('rr'), cells: [{ text: 'Annual Average', bold: true }, { field: 'average' }] },
+          // /20 on both primary and secondary: subjects are marked on the class's own
+          // ceiling but the average is normalised, the same figure the report card prints
+          // under "TERM AVERAGE /20" (see primary's note in saveEntries).
+          { id: uid('rr'), cells: [{ text: 'Annual Average /20', bold: true }, { field: 'average' }] },
           { id: uid('rr'), cells: [{ text: 'Grade', bold: true }, { field: 'grade' }] },
         ],
       }],
@@ -1539,6 +1550,55 @@ export function ensureStampSection<T extends Partial<TemplateConfig>>(cfg: T, ap
   const next = [...sections]
   next.splice(idx < 0 ? next.length : idx, 0, stamp)
   return { ...cfg, sections: next, stampSeeded: true }
+}
+
+/**
+ * Give an already-saved ANNUAL (transcript) design its Annual Average row, once — same
+ * idiom as ensureBirthRows/ensureStampSection above.
+ *
+ * An annual document that does not state the year's average is missing the one figure it
+ * exists to report, and a school whose transcript design predates this would never get it
+ * from a changed default. University designs never had the row at all (they summarised by
+ * CGPA alone); primary/secondary ones had it, but it was suppressed at render time by a
+ * gate that only let these tables print when the grading scale carried grade points.
+ *
+ * Idempotent by two independent means: the seeded marker, and a field check that leaves any
+ * table already binding `average` alone. Once seeded, a deliberate deletion sticks.
+ */
+export function ensureAnnualAverageRow<T extends Partial<TemplateConfig>>(cfg: T, schoolType?: string, applies = true): T {
+  if (cfg.annualAverageRowSeeded) return cfg
+  if (!applies) return { ...cfg, annualAverageRowSeeded: true }
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, annualAverageRowSeeded: true }
+
+  const idx = sections.findIndex(s => s.type === 'grading_legend')
+  if (idx < 0) return { ...cfg, annualAverageRowSeeded: true }
+  const legend = sections[idx] as GradingLegendSec & { rightTables?: SpreadsheetTable[] }
+  const tables = legend.rightTables
+  if (!Array.isArray(tables) || tables.length === 0) return { ...cfg, annualAverageRowSeeded: true }
+  // Already states it — under whatever label the school has renamed it to, which is why
+  // this matches on the bound field and not on the text.
+  if (tables.some(t => t.rows?.some(r => r.cells?.some(c => c.field === 'average')))) {
+    return { ...cfg, annualAverageRowSeeded: true }
+  }
+
+  const isUni = schoolType === 'UNIVERSITY'
+  const row: SheetRow = {
+    id: uid('rr'),
+    cells: [
+      { text: isUni ? 'Annual Average /100' : 'Annual Average /20', bold: true, align: 'left' },
+      { field: 'average' },
+    ],
+  }
+  // Second row at a university, matching the fresh default: under Credits Earned and above
+  // the GPA rows, since it describes the same marks those points are derived from.
+  const at = isUni ? Math.min(1, tables[0].rows.length) : 0
+  const rows = [...tables[0].rows]
+  rows.splice(at, 0, row)
+  const nextTables = [{ ...tables[0], rows }, ...tables.slice(1)]
+  const next = [...sections]
+  next[idx] = { ...legend, rightTables: nextTables } as LayoutSection
+  return { ...cfg, sections: next, annualAverageRowSeeded: true }
 }
 
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
