@@ -1685,6 +1685,20 @@ export default function ReportCardDesignPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
+  // The tool bar is ~190px of controls above a card that is what the admin is actually
+  // trying to look at. Collapsing it leaves a slim bar (title, this toggle, Save) so the
+  // design gets the screen. Remembered per browser: someone who works collapsed should not
+  // have to re-collapse on every visit.
+  const [toolsOpen, setToolsOpen] = useState(true)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setToolsOpen(window.localStorage.getItem(DESIGN_TOOLS_STORAGE_KEY) !== 'closed')
+  }, [])
+  const toggleTools = () => setToolsOpen(open => {
+    const next = !open
+    if (typeof window !== 'undefined') window.localStorage.setItem(DESIGN_TOOLS_STORAGE_KEY, next ? 'open' : 'closed')
+    return next
+  })
   const [colorText, setColorText] = useState(config.primaryColor)
   const [accentText, setAccentText] = useState(accentOf(config))
   const [bgText, setBgText] = useState(config.bgColor || '#ffffff')
@@ -2213,12 +2227,21 @@ export default function ReportCardDesignPage() {
       {/* ── Designer — desktop / tablet only ── */}
       <div className="hidden md:block">
       {/* ── Sticky header (main row + optional spreadsheet toolbar row) ── */}
-      <div className="sticky top-0 z-30 bg-card border-b border-border -mx-8 -mt-8 px-8 mb-6">
+      {/* rc-design-toolbar: the colour palette measures this to avoid opening behind it. */}
+      <div className="rc-design-toolbar sticky top-0 z-30 bg-card border-b border-border -mx-8 -mt-8 px-8 mb-6">
       <div className="py-3 flex items-center gap-4 flex-wrap">
-        <div>
+        <div className="flex items-center gap-2">
           <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
+          <button onClick={toggleTools}
+            title={toolsOpen ? tr('Hide the tools and give the card the screen') : tr('Show the design tools')}
+            className="flex items-center gap-1 border border-border text-muted-foreground px-2 py-1 rounded-lg text-xs hover:bg-hover hover:text-foreground transition">
+            {toolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {toolsOpen ? tr('Hide tools') : tr('Show tools')}
+          </button>
         </div>
 
+
+        {toolsOpen && (<>
         {/* Theme picker. Each swatch shows the theme's two colours, since that is now the
             only difference between them — the layout is shared. Hidden in transcript mode,
             which picks its own layout on the right. */}
@@ -2561,10 +2584,14 @@ export default function ReportCardDesignPage() {
             </>
           )}
         </div>
+        </>)}
 
         <div className="flex-1" />
 
-        {/* Add section */}
+        {/* Add section — a design tool, so it travels with the rest of them. Save stays
+            visible when collapsed: an admin who tidied the bar away to look at the card
+            should not have to bring it back just to keep their work. */}
+        {toolsOpen && (
         <button ref={addMenuBtnRef}
           onClick={() => {
             if (addMenuCoords) { setAddMenuCoords(null); return }
@@ -2574,6 +2601,7 @@ export default function ReportCardDesignPage() {
           className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-hover transition">
           <Plus size={14} /> {tr('Add Section')}
         </button>
+        )}
 
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
@@ -2582,7 +2610,10 @@ export default function ReportCardDesignPage() {
         </button>
       </div>{/* end main row */}
 
-      {/* Second row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
+      {/* Second row: spreadsheet table toolbar — always in layout so the sticky bar never
+          resizes as cells are selected. Collapsed, that reservation would defeat the point,
+          so it is rendered only when there IS a selected cell to act on. */}
+      {(toolsOpen || !!pageActiveTableId) && (
       <div className="py-1.5 border-t border-border" style={{ color: '#374151', visibility: pageActiveTableId ? 'visible' : 'hidden' }}>
         <SpreadsheetToolbar
           table={pageActiveTableId ? activeTableRef.current : null}
@@ -2598,6 +2629,7 @@ export default function ReportCardDesignPage() {
           color={config.primaryColor}
         />
       </div>
+      )}
       </div>{/* end sticky wrapper */}
 
       {/* ── Canvas ── */}
@@ -2681,7 +2713,7 @@ export default function ReportCardDesignPage() {
 
       {/* ── Right sidebar: Layout switcher (university only) ── */}
       {schoolType === 'UNIVERSITY' && (
-        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: 110 }}>
+        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: toolsOpen ? 110 : 58 }}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
             <LayoutTemplate size={12} /> Layout
           </p>
@@ -2804,7 +2836,7 @@ export default function ReportCardDesignPage() {
 
       {/* ── Right sidebar: Layout switcher (secondary/primary only) ── */}
       {schoolType !== 'UNIVERSITY' && (
-        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: 110 }}>
+        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: toolsOpen ? 110 : 58 }}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
             <LayoutTemplate size={12} /> Layout
           </p>

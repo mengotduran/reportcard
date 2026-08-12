@@ -1098,6 +1098,12 @@ Every section also carries **`showOn`** (*Both copies* / *Official only* / *Stud
 - **Position**: shown as `3rd` (ordinal)
 - Grade badges: squared corners (not circular)
 
+### Hide tools
+
+The toolbar is ~190px of controls sitting above the thing an admin is actually trying to look at. **Hide tools**, beside the title, collapses it to a 57px bar — 131px of card back, and the sticky LAYOUT rail moves up with it. The choice is remembered per browser (`localStorage`, `report-card-design-tools`), so someone who works collapsed does not re-collapse on every visit.
+
+**Save Design stays visible when collapsed**: having tidied the bar away to look at the card, you should not have to bring it back just to keep your work. Add Section travels with the rest of the tools. The second row (the spreadsheet cell toolbar) normally holds its space so the bar never resizes as cells are selected; collapsed, that reservation would defeat the point, so it appears only when there IS a selected cell — a collapsed bar grows from 57px to 98px while you are editing a table, then shrinks back.
+
 ### Colour: the picker repaints the design
 
 A table's colours live **on its cells** (`bgColor` / `textColor`, written when the table was seeded) rather than being read from the design's `primaryColor` at render time — that is what lets an admin colour one column differently from the rest, which the cell toolbar exists for. The consequence was that the **Color** box only moved the parts that read `primaryColor` live (captions, rules, hero text) and left every table header on the colour it was born with: an Annual layout seeded teal `#0f766e` stayed teal however many times Color changed, on screen and on paper.
