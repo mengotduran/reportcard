@@ -123,7 +123,13 @@ export interface TemplateConfig {
   // `showOn` scopes the watermark to one printed copy, the way a section's does — it is
   // what stamps UNOFFICIAL across a student copy while the sealed official stays clean.
   // Undefined = both copies, so existing watermarks are unaffected.
-  watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
+  // Every field is OPTIONAL because only what an admin actually set is stored — a field left
+  // alone keeps resolving to its default, and some of those defaults depend on `type` (a logo
+  // watermark is upright and 240px, text is diagonal and 80px). Writing the resolved defaults
+  // into the saved object instead would freeze a text tilt onto a logo the moment the type
+  // changed. Readers must therefore default every field: see the designer's `watermark` and
+  // PrintableReportCard's Watermark, which resolve the same ones.
+  watermark?: { enabled?: boolean; type?: 'text' | 'logo'; text?: string; color?: string; opacity?: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
   // top-level layout type — 'standard' (section-based designer), 'transcript' (the
   // annual/multi-period stacked design), or 'ledger' (totals-merged-into-the-table style)
   layoutType?: 'standard' | 'transcript' | 'ledger'
@@ -164,6 +170,8 @@ export interface TemplateConfig {
   /** Same backfill idiom again: the annual document's Annual Average row has been offered
    *  to this saved design once (see ensureAnnualAverageRow). */
   annualAverageRowSeeded?: boolean
+  /** And once for moving a centred seal to the right (see ensureStampOnRight). */
+  stampAlignSeeded?: boolean
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -1013,7 +1021,7 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
     // copy must never carry it (see StampSec's own doc comment). Missing entirely let it
     // print on BOTH copies for every school on the default (Standard) layout until that was
     // found and fixed separately from this.
-    { id: uid('stp'), type: 'stamp', size: 92, align: 'center', label: 'School Stamp', showOn: 'official' },
+    { id: uid('stp'), type: 'stamp', size: 92, align: 'right', label: 'School Stamp', showOn: 'official' },
     {
       id: uid('ft'), type: 'text_block',
       content: t.footerText || 'This document is an official record and is invalid without the school stamp.',
@@ -1663,6 +1671,38 @@ export function primaryColorTargets(cfg: Partial<TemplateConfig>): (string | und
   return [...out]
 }
 
+/**
+ * Put the seal on the RIGHT, once, on a design that still has it centred.
+ *
+ * Every layout seeded it right except Standard, which seeded `align: 'center'` — so the
+ * everyday report card was the one document whose stamp sat in the middle of the page,
+ * under the signatures rather than beside them, which is not where a school stamps.
+ * Changing the default only reaches designs built afterwards, so this moves an existing one.
+ *
+ * Only a stamp still on the OLD default is touched, and the marker means it happens once:
+ * a school that then deliberately centres its seal keeps it centred. Recurses into
+ * `panel_row` children, where a layout can pair the seal with a remarks block.
+ */
+export function ensureStampOnRight<T extends Partial<TemplateConfig>>(cfg: T): T {
+  if (cfg.stampAlignSeeded) return cfg
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, stampAlignSeeded: true }
+  let changed = false
+  const move = (secs: LayoutSection[]): LayoutSection[] => secs.map((sec) => {
+    if (sec.type === 'panel_row') {
+      const row = sec as PanelRowSec
+      if (!Array.isArray(row.children)) return sec
+      const kids = move(row.children as LayoutSection[])
+      return kids === row.children ? sec : { ...row, children: kids } as LayoutSection
+    }
+    if (sec.type !== 'stamp' || (sec as StampSec).align !== 'center') return sec
+    changed = true
+    return { ...sec, align: 'right' as const }
+  })
+  const next = move(sections)
+  return changed ? { ...cfg, sections: next, stampAlignSeeded: true } : { ...cfg, stampAlignSeeded: true }
+}
+
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   // Since the 2026 redesign every school type gets the SAME layout, differing only in its
   // marks columns and stat boxes (see buildRedesignLayout). The per-type builders below
@@ -1754,7 +1794,10 @@ export function mergeSavedStandardConfig(saved: Partial<TemplateConfig> | null |
   if (Object.keys(top).length === 0 || top.layoutType === 'transcript')
     return { ...getDefaultLayoutForType(schoolType), ...policy }
   const base = TEMPLATE_DEFAULTS[(top.template as TemplateName) ?? 'classic']
-  return { ...base, ...top } as TemplateConfig
+  // Applied here rather than at each call site: this is the one path every standard-layout
+  // reader shares (the card page, the class print page, the report cards list), so the seal
+  // moves on paper whether or not the admin ever reopens the designer.
+  return ensureStampOnRight({ ...base, ...top } as TemplateConfig)
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────

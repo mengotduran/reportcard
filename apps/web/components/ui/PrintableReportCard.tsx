@@ -183,7 +183,10 @@ function Watermark({ cfg, schoolLogo, schoolName, variant = 'official' }: { cfg:
   // Scoped watermarks (an UNOFFICIAL stamp across the student copy) skip the other copy.
   if (wm.showOn && wm.showOn !== variant) return null
   const opacity = (wm.opacity ?? 8) / 100
-  const rotation = wm.rotation ?? -45
+  // Type-aware, matching the designer: a logo watermark is upright and centred by default
+  // (a tilted crest reads as a mistake), text runs diagonally like a SPECIMEN stamp. An
+  // explicit rotation, from the slider or the Center button, always wins.
+  const rotation = wm.rotation ?? (wm.type === 'logo' ? 0 : -45)
   const x = wm.x ?? 50
   const y = wm.y ?? 50
   // High z-index so the (faint) watermark stamps ON TOP of all content — a

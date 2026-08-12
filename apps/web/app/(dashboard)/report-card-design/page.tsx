@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import api from '@/lib/api/client'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands, ensureAnnualAverageRow,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands, ensureAnnualAverageRow, ensureStampOnRight,
   recolorSections, primaryColorTargets,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
@@ -1823,9 +1823,28 @@ export default function ReportCardDesignPage() {
   // Logo mode has no `text`/`color` keys at all (JSON drops undefined), and
   // feeding undefined into the controlled text/color inputs below flips them
   // to uncontrolled (React console error). Every field must always be defined.
-  const watermark = { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null as string | null, size: 240, rotation: -45, ...(config.watermark ?? {}) }
+  //
+  // Two of those defaults depend on the TYPE. A logo watermark sits upright in the middle of
+  // the page — a tilted crest reads as a mistake — while text runs diagonally, which is what
+  // a "SPECIMEN" stamp is expected to do. Size likewise: 240px is a picture, 80px is a font
+  // size, and the single 240 that used to cover both meant a text watermark defaulted to a
+  // 240px font, past the end of its own 20-160 slider. Both match PrintableReportCard's
+  // Watermark, which must resolve the same defaults or the canvas and the paper disagree.
+  const wmType = (config.watermark?.type ?? 'text') as 'text' | 'logo'
+  const watermark = {
+    enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8,
+    logoUrl: null as string | null,
+    size: wmType === 'logo' ? 240 : 80,
+    rotation: wmType === 'logo' ? 0 : -45,
+    ...(config.watermark ?? {}),
+  }
+  // Merge onto the SAVED object, not the defaulted one above. Merging onto the defaults
+  // materialised every one of them on the first click — so ticking the checkbox wrote
+  // rotation: -45, and switching to Logo then carried the text tilt with it and made the
+  // type-aware default unreachable. Storing only what was actually set keeps a field on its
+  // default until someone moves that slider.
   const setWatermark = (patch: Partial<typeof watermark>) =>
-    setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
+    setConfig(c => ({ ...c, watermark: { ...(c.watermark ?? {}), ...patch } }))
   const wmUploadRef = useRef<HTMLInputElement>(null)
   const [uploadingStamp, setUploadingStamp] = useState(false)
   const [showRemoveStamp, setShowRemoveStamp] = useState(false)
@@ -1941,6 +1960,8 @@ export default function ReportCardDesignPage() {
       // transcript design was saved at the top level. Only annual layouts get the row;
       // everything else just gets the marker so this stops running on every load.
       Object.assign(merged, ensureAnnualAverageRow(merged, sType, merged.layoutType === 'transcript'))
+      // And the seal to the right, once, on a Standard design that still has it centred.
+      Object.assign(merged, ensureStampOnRight(merged))
       // "Failing marks in red" is stored school-wide at the top level (see handleSave),
       // so stamp it onto whichever layout loaded — the checkbox must read the same in
       // every view, not whatever a layout happened to be saved with.
@@ -2072,7 +2093,7 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.layoutType !== 'transcript' && saved?.layoutType !== 'ledger' && (saved as any)?.sections?.length > 0)
       ? buildMergedConfig(saved, lang, sType) : null
-    const layout = ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType)
+    const layout = ensureStampOnRight(ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType))
     setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))
@@ -2420,12 +2441,19 @@ export default function ReportCardDesignPage() {
                   onClick={() => setWatermark({ type: 'logo' })}>{tr('Logo')}</button>
               </div>
 
+              {/* KEYS ARE LOAD-BEARING. These two branches are sibling <div>s in the same
+                  position, so without them React reconciles one into the other and matches
+                  their children BY INDEX: the text branch's colour <input> and the logo
+                  branch's hidden file <input> are both `input`, so React reused the node and
+                  swapped its type, taking `value` from "#000000" to undefined — a controlled
+                  input turning uncontrolled, which is the console error clicking Logo threw.
+                  A key per branch makes React unmount one and mount the other instead. */}
               {(watermark.type ?? 'text') === 'text' ? (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <input type="text" value={watermark.text} onChange={e => setWatermark({ text: e.target.value })}
+                <div key="wm-text" className="flex items-center gap-1.5 flex-wrap">
+                  <input type="text" value={watermark.text ?? ''} onChange={e => setWatermark({ text: e.target.value })}
                     placeholder={schoolName}
                     className="border border-border rounded px-2 py-1 text-xs w-28" />
-                  <input type="color" value={watermark.color} onChange={e => setWatermark({ color: e.target.value })}
+                  <input type="color" value={watermark.color ?? '#000000'} onChange={e => setWatermark({ color: e.target.value })}
                     className="w-7 h-7 rounded border border-border cursor-pointer" title={tr('Watermark color')} />
 
                   {/* Font size */}
@@ -2465,7 +2493,7 @@ export default function ReportCardDesignPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div key="wm-logo" className="flex items-center gap-1.5 flex-wrap">
                   {/* Preview thumbnail */}
                   {(watermark.logoUrl || schoolLogo)
                     ? <img src={watermark.logoUrl || schoolLogo!} alt="wm" className="w-7 h-7 object-contain rounded border border-border" />
