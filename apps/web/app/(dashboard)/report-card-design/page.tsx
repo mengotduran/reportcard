@@ -32,50 +32,12 @@ import {
   SHEET_FIELD_OPTIONS, SheetRange,
 } from '@/components/ui/SpreadsheetEditor'
 
-// ── Sample data for canvas preview ──────────────────────────────────────────
-const SD = {
-  school: { name: 'Your School Name', type: 'SECONDARY' },
-  student: { name: 'Nguemo Alice', studentId: 'STU001', classLevel: 'Form 4 Science', guardianName: 'Nguemo Jean' },
-  term: { name: 'First Term', session: '2025/2026' },
-  subjects: ['Mathematics','Physics','Chemistry','English Language','History'],
-  entries: [15,13,17,11,18],
-  seq1: [14,12,16,10,17],
-  seq2: [16,14,18,12,19],
-  grades: ['B','C','A','D','A+'],
-  remarks: ['Good','Satisfactory','Excellent','Needs improvement','Outstanding'],
-  position: 3,
-}
+const DESIGN_TOOLS_STORAGE_KEY = 'report-card-design-tools'
 
-// ── University sample data (scores /100, GPA derived from DEFAULT_UNIVERSITY_RANGES) ──
-const U_SEQ1    = [23, 19, 25, 17, 21]         // CA /30
-const U_SEQ2    = [53, 43, 58, 39, 50]         // Exam /70
-const U_SCORES  = U_SEQ1.map((s, i) => s + U_SEQ2[i])  // [76, 62, 83, 56, 71]
-function _gpForScore(score: number) {
-  const sorted = [...DEFAULT_UNIVERSITY_RANGES].sort((a, b) => b.minScore - a.minScore)
-  const r = sorted.find(x => score >= x.minScore && score <= x.maxScore)
-  return { grade: r?.grade ?? 'F', gp: r?.gradePoint ?? 0 }
-}
-const U_GP     = U_SCORES.map(_gpForScore)
-
-const SD_UNI = {
-  student: {
-    name: 'Nguemo Alice',
-    studentId: 'UNI/2025/HND/3/COMP1/042',
-    classLevel: 'HND Computer Science - Level 1',
-    guardianName: '—',
-    gender: 'F',
-  },
-  term:        { name: 'First Semester', session: '2024/2025' },
-  subjects:    ['Introduction to Programming', 'Mathematics for Computing', 'Computer Architecture', 'Database Management', 'Operating Systems'],
-  codes:       ['CS101', 'MA101', 'CS102', 'DB201', 'CS201'],
-  entries:     U_SCORES,
-  seq1:        U_SEQ1,
-  seq2:        U_SEQ2,
-  grades:      U_GP.map(g => g.grade),
-  remarks:     ['Very Good', 'Good', 'Excellent', 'Fairly Good', 'Very Good'],
-  juryDecisions: ['VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED'],
-  position:    3,
-}
+// No sample data on the canvas. Every bound value renders as its `[field]` key instead
+// (see resolveField and the marks table's cells), so there is nothing here to drift out of
+// step with what actually prints — and nothing that can be mistaken for a design carrying
+// one student's details.
 
 // Bilingual labels are authored "Français / English"; show only the school's language.
 function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
@@ -98,24 +60,17 @@ function localizeLayout<T extends { sections?: any[] }>(layout: T, lang: 'EN' | 
   }
 }
 
-function resolveField(field: string, schoolName: string, schoolType?: string) {
-  const isUni = schoolType === 'UNIVERSITY'
-  const stu  = isUni ? SD_UNI.student : SD.student
-  const term = isUni ? SD_UNI.term    : SD.term
-  const map: Record<string, string> = {
-    'student.name':        stu.name,
-    'student.studentId':   stu.studentId,
-    'student.classLevel':  stu.classLevel,
-    'student.guardianName': stu.guardianName,
-    'student.gender':      isUni ? SD_UNI.student.gender : '—',
-    // Sample values: these are optional per student, so a real card may print them blank.
-    'student.dateOfBirth': '12 May 2003',
-    'student.placeOfBirth': 'Bamenda',
-    'term.name':           term.name,
-    'term.session':        term.session,
-    'school.name':         schoolName,
-  }
-  return map[field] ?? field
+/**
+ * What a bound student-info value shows ON THE CANVAS: its `[field]` key, never an example.
+ *
+ * Same convention as every other bound cell in the designer (`[m:subject]`, `[average]`,
+ * `[gpa]`) and for the same reason: these values are filled in per student at print time, so
+ * a plausible-looking "Nguemo Alice / Form 4 Science / 12 May 2003" invited the reading that
+ * the design carries that data, and made it impossible to tell at a glance WHICH field a row
+ * is bound to without opening its dropdown.
+ */
+function resolveField(field: string) {
+  return `[${field}]`
 }
 
 // ── Color system ─────────────────────────────────────────────────────────────
@@ -766,7 +721,7 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
   )
 }
 
-function RenderStudentInfo({ sec, color, schoolName, schoolType, showPhoto, photoSize, update }: { sec: StudentInfoSec; color: string; schoolName: string; schoolType?: string; showPhoto: boolean; photoSize: number; update: (s: StudentInfoSec) => void }) {
+function RenderStudentInfo({ sec, color, showPhoto, photoSize, update }: { sec: StudentInfoSec; color: string; showPhoto: boolean; photoSize: number; update: (s: StudentInfoSec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
   const FIELD_OPTIONS = [
@@ -838,7 +793,7 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, showPhoto, phot
             <span style={{ color: '#9ca3af' }}>:</span>
             {/* Colorable value — select text and pick color to style all values */}
             <ColorableCell
-              sampleText={resolveField(row.field, schoolName, schoolType)}
+              sampleText={resolveField(row.field)}
               color={row.valueColor ?? currentValueColor}
               onColorChange={c => syncValueColor(c)}
               style={{ flex: 1, minWidth: 0 }}
@@ -1748,7 +1703,7 @@ export default function ReportCardDesignPage() {
       case 'header':
         return <RenderHeader sec={sec} color={config.primaryColor} accent={accentOf(config)} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={update} />
       case 'student_info':
-        return <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} showPhoto={config.showStudentPhoto ?? true} photoSize={clampStudentPhotoSize(config.studentPhotoSize)} update={update} />
+        return <RenderStudentInfo sec={sec} color={config.primaryColor} showPhoto={config.showStudentPhoto ?? true} photoSize={clampStudentPhotoSize(config.studentPhotoSize)} update={update} />
       case 'marks_table':
         return <RenderMarksTable sec={sec} color={config.primaryColor} schoolType={schoolType} update={update} />
       case 'summary':
@@ -2583,7 +2538,7 @@ export default function ReportCardDesignPage() {
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
-        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
+        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder · [square brackets] are filled in per student when the card prints{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
         {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
         {/* The canvas mirrors the printed page: on the redesign it takes the same double
