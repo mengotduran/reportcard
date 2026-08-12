@@ -288,8 +288,26 @@ A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[
 | GET | `/report-cards/:id/readiness-detail` | Admin, VP | Which teacher is missing marks / who must write remarks |
 
 `GET /report-cards` also takes **`studentStatus`** (`ACTIVE` / `DISABLED` / `DISMISSED`),
-which drives the status tabs on both dashboards. Unset returns every status, which is what
-the transcript and print routes want since those address one already-chosen student.
+which drives the status filter on both dashboards — a **Status** dropdown beside the class
+filter on the web, matching the Students page control exactly, and pills on mobile. Unset
+returns every status, which is what the transcript and print routes want since those address
+one already-chosen student.
+
+**The exports on that screen follow the filters on screen.** Both buttons ("Export data"
+and "Export data (with marks)") send the selected term, class and student status, then apply
+the browser-side programme and search filters on top, so the file is the table. Selecting
+"All Terms" still writes one file per term of the active year, and a term with no cards yet
+simply produces no file. When the table is empty both buttons are disabled rather than
+producing a zero-row download, and the scope line beside them names every filter the file
+will carry. `GET /report-cards/marks-export` gained **`studentStatus`** for this (default
+`ACTIVE`); it judges on `status` alone, like `GET /report-cards`, because its old
+`isActive: true` clause returned an empty file for any Disabled or Dismissed export.
+
+The web report cards table also carries the **Change Status** action (admin/VP, the same
+`PUT /students/:id/status` the Students page uses, in the same modal with the same wording).
+A student leaves mid-term while their cards are what you have on screen, and sending an
+admin to another screen to record that is the friction worth removing. Moving one out of the
+tab you are viewing removes the row from it, which is where their cards now live.
 
 **A report card cannot be deleted.** The route was removed outright rather than guarded.
 

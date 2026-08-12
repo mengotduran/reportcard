@@ -809,6 +809,11 @@ const FR: Record<string, string> = {
   'Export': 'Exporter',
   'Export school data': 'Exporter les données de l\'école',
   'Export school data (with marks)': 'Exporter les données de l\'école (avec notes)',
+  // The report cards export follows the filters on screen, so it is not always the whole
+  // school any more — see the scope line beside these buttons.
+  'Export data': 'Exporter les données',
+  'Export data (with marks)': 'Exporter les données (avec notes)',
+  'Nothing to export with these filters': 'Rien à exporter avec ces filtres',
   'Rank': 'Rang',
   'No term selected': 'Aucun trimestre sélectionné',
   'Classes to export': 'Classes à exporter',

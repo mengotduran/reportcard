@@ -9,12 +9,12 @@ import { getClassLevelsApi as getClassLevelsFullApi, ClassLevel as ClassLevelDef
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ui/ProgrammeFilter'
 import { stripProgrammeSuffix } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
-import { getStudentsApi } from '@/lib/api/students'
+import { getStudentsApi, setStudentStatusApi } from '@/lib/api/students'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
 import { buildCsv, saveCsv, datedFilename } from '@/lib/csv'
 import { downloadZip } from '@/lib/zip'
-import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download, Scroll, FileSpreadsheet, Search } from 'lucide-react'
+import { FileText, Plus, Trash2, Eye, X, CheckCircle, Clock, Printer, Send, AlertTriangle, List, Download, Scroll, FileSpreadsheet, Search, UserX } from 'lucide-react'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Toast from '@/components/ui/Toast'
 import { useToast } from '@/lib/useToast'
@@ -99,7 +99,9 @@ interface ReportCard {
   // the annual transcript action (a year-end document). That's the second
   // semester at a university and the third term at a primary/secondary school.
   isFinalTerm?: boolean
-  student: { id: string; name: string; classLevel: string; studentId: string }
+  // `status` is the STUDENT's Active/Disabled/Dismissed state, not the card's
+  // Draft/Published one above — the row shows and can change both.
+  student: { id: string; name: string; classLevel: string; studentId: string; status?: StudentStatus }
   term: { id: string; name: string; session: string }
   entries: { id: string; score: number; grade: string; subject: { name: string } }[]
 }
@@ -503,6 +505,12 @@ export default function ReportCardsPage() {
   const [excelPreview, setExcelPreview] = useState<{ html: string; studentId: string; studentName: string; classLevel: string; session: string } | null>(null)
   const [loadingPreview, setLoadingPreview] = useState<string | null>(null)
   const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
+  // Change a student's Active/Disabled/Dismissed state from this table, same as the
+  // Students page. A student leaves mid-term while their cards are what you are looking
+  // at, and having to go find them on another screen to record that is the whole friction.
+  const [statusTarget, setStatusTarget] = useState<{ id: string; name: string } | null>(null)
+  const [newStudentStatus, setNewStudentStatus] = useState<StudentStatus>('ACTIVE')
+  const [statusSaving, setStatusSaving] = useState(false)
   const isAdmin = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
 
   useEffect(() => { getGradingScaleApi().then(d => setGradeBands(d.ranges)).catch(() => {}) }, [])
@@ -510,7 +518,12 @@ export default function ReportCardsPage() {
   // card from endAcademicYear; this just resolves it to the school's own custom wording.
   useEffect(() => { getPromotionScaleApi().then(setPromotionScale).catch(() => {}) }, [])
   // The class row is the source of truth for the sitting; this table only holds name strings.
-  useEffect(() => { getClassLevelsFullApi().then(d => setClassDefs(d.classLevels)).catch(() => {}) }, [])
+  // Re-run after a status change too: `studentCount` counts ACTIVE students, so dismissing
+  // one leaves every class filter showing a roll that is one too high until it reloads.
+  const loadClassDefs = useCallback(() => {
+    getClassLevelsFullApi().then(d => setClassDefs(d.classLevels)).catch(() => {})
+  }, [])
+  useEffect(() => { loadClassDefs() }, [loadClassDefs])
   useEffect(() => {
     if (school?.type !== 'UNIVERSITY') return
     listExcelTemplatesApi().then(d => setExcelTemplates(d.templates)).catch(() => {})
@@ -702,6 +715,29 @@ export default function ReportCardsPage() {
     fetchReportCards(filterTermId || undefined, status, true)
   }
 
+  const openStatusModal = (rc: ReportCard) => {
+    setStatusTarget({ id: rc.student.id, name: rc.student.name })
+    setNewStudentStatus(rc.student.status ?? 'ACTIVE')
+  }
+
+  const handleStatusSave = async () => {
+    if (!statusTarget) return
+    setStatusSaving(true)
+    try {
+      await setStudentStatusApi(statusTarget.id, newStudentStatus)
+      showToast(`${statusTarget.name} — ${tr(STUDENT_STATUS_TABS.find((s) => s.value === newStudentStatus)?.label ?? newStudentStatus)}`)
+      setStatusTarget(null)
+      // The list is filtered BY status, so a student moved out of the tab you are on
+      // leaves it. That is the point: the tabs are where their cards live now.
+      fetchReportCards(filterTermId || undefined)
+      loadClassDefs()
+    } catch {
+      showToast(tr('Failed to update status'), 'error')
+    } finally {
+      setStatusSaving(false)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -751,10 +787,40 @@ export default function ReportCardsPage() {
       label: `${stripProgrammeSuffix(isSecondary ? stripDeptSuffix(c.name) : c.name)} (${c.studentCount ?? 0})`,
     }))
 
-  const filteredCards = reportCards
-    .filter(rc => programmeFilter.matches(rc.student.classLevel))
-    .filter(rc => classFilter === 'all' || rc.student.classLevel === classFilter)
-    .filter(rc => !searchQuery || rc.student.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  // The filters the table applies in the browser, over rows the server already narrowed by
+  // term and student status. Written once and reused by both exports: an export that quietly
+  // ignores a filter hands back a file that does not match what was on screen when it was
+  // asked for, and nothing in the file says so.
+  const matchesOnScreen = (name: string, classLevel: string) =>
+    programmeFilter.matches(classLevel)
+    && (classFilter === 'all' || classLevel === classFilter)
+    && (!searchQuery || name.toLowerCase().includes(searchQuery.toLowerCase()))
+
+  const filteredCards = reportCards.filter(rc => matchesOnScreen(rc.student.name, rc.student.classLevel))
+
+  // An empty table means an empty file, so both export buttons go dead rather than
+  // producing a zero-row download (or a "Nothing to export" toast after the click, which
+  // tells you afterwards what the table already showed). Also covers the initial load,
+  // where nothing is known yet.
+  const nothingToExport = filteredCards.length === 0
+
+  // Reads in the same order the filter controls apply: period, class, status, search.
+  const exportScopeLabel = [
+    filterTermId && activeTerm
+      ? `${activeTerm.name} ${activeTerm.session}`
+      : `${ts('All Terms', 'All Semesters')}, ${tr('one file each')}`,
+    classFilter !== 'all' ? stripProgrammeSuffix(isSecondary ? stripDeptSuffix(classFilter) : classFilter) : null,
+    tr(STUDENT_STATUS_TABS.find((s) => s.value === studentStatusFilter)?.label ?? 'Active'),
+    searchQuery ? `“${searchQuery}”` : null,
+  ].filter(Boolean).join(' · ')
+
+  // Filename tail, so exporting three classes one after another does not produce three
+  // files with the same name. ACTIVE is left out: it is the default and every existing
+  // filename means it already.
+  const exportFileSuffix = [
+    classFilter !== 'all' ? stripProgrammeSuffix(classFilter).replace(/[^\w]+/g, '-').toLowerCase() : '',
+    studentStatusFilter !== 'ACTIVE' ? studentStatusFilter.toLowerCase() : '',
+  ].filter(Boolean).join('-')
 
   // Paginate the table; reset to page 1 when the year or search changes. Term
   // filter is deliberately NOT in this key — fetchAll() re-asserts filterTermId
@@ -796,19 +862,28 @@ export default function ReportCardsPage() {
           { label: tr('Guardian Phone'), value: (s: ExportStudent) => s.guardianPhone || '' },
           { label: tr('Guardian Email'), value: (s: ExportStudent) => s.guardianEmail || '' },
         ]
-        const res = await getReportCardsApi({ termId: term.id })
+        // Same term, class and status the table is showing — then the browser-side filters
+        // on top, so the file is the list you were looking at. Status is judged by the
+        // server on `status` alone (the old `isActive !== false` line here dropped every
+        // row of a Disabled or Dismissed export, since those two flags move together).
+        const res = await getReportCardsApi({
+          termId: term.id,
+          studentStatus: studentStatusFilter,
+          ...(classFilter !== 'all' ? { classLevel: classFilter } : {}),
+        })
         const seen = new Set<string>()
         const students: ExportStudent[] = []
-        // Disabled/Dismissed students are excluded from this export too — see Student.status in schema.prisma.
         for (const rc of (res.reportCards as { student: ExportStudent }[])) {
-          if (rc.student && rc.student.isActive !== false && !seen.has(rc.student.id)) { seen.add(rc.student.id); students.push(rc.student) }
+          if (!rc.student || seen.has(rc.student.id)) continue
+          if (!matchesOnScreen(rc.student.name, rc.student.classLevel)) continue
+          seen.add(rc.student.id); students.push(rc.student)
         }
         if (students.length === 0) continue
-        files.push({ name: datedFilename(`school-students-${term.name}`), content: buildCsv(students, cols) })
+        files.push({ name: datedFilename(`students-${term.name}${exportFileSuffix ? `-${exportFileSuffix}` : ''}`), content: buildCsv(students, cols) })
       }
       if (files.length === 0) { showToast(tr('Nothing to export'), 'error'); return }
       if (files.length === 1) saveCsv(files[0].name, files[0].content)
-      else downloadZip(datedFilename('school-students-all-terms', 'zip'), files)
+      else downloadZip(datedFilename(`students-all-terms${exportFileSuffix ? `-${exportFileSuffix}` : ''}`, 'zip'), files)
       showToast(tr('Export started'))
     } catch {
       showToast(tr('Failed to export'), 'error')
@@ -825,9 +900,14 @@ export default function ReportCardsPage() {
     try {
       const files: { name: string; content: string }[] = []
       for (const term of targets) {
-        const data = await getMarksExportApi(term.id)
-        if (data.students.length === 0) continue
-        const csv = buildCsv(data.students, [
+        const data = await getMarksExportApi(
+          term.id,
+          classFilter !== 'all' ? classFilter : undefined,
+          studentStatusFilter,
+        )
+        const rows = data.students.filter((s) => matchesOnScreen(s.name, s.classLevel))
+        if (rows.length === 0) continue
+        const csv = buildCsv(rows, [
           { label: tr('Class'), value: (s) => stripProgrammeSuffix(s.classLevel) },
           { label: tr('Name'), value: (s) => s.name },
           { label: tr('Student ID'), value: (s) => s.studentIdCode },
@@ -839,11 +919,11 @@ export default function ReportCardsPage() {
           { label: isUniversity ? tr('Total / 100') : tr('Average / 20'), value: (s) => (s.average != null ? s.average.toFixed(1) : '') },
           { label: tr('Rank'), value: (s) => s.position ?? '' },
         ])
-        files.push({ name: datedFilename(`school-marks-${data.term.name}`), content: csv })
+        files.push({ name: datedFilename(`marks-${data.term.name}${exportFileSuffix ? `-${exportFileSuffix}` : ''}`), content: csv })
       }
       if (files.length === 0) { showToast(tr('Nothing to export'), 'error'); return }
       if (files.length === 1) saveCsv(files[0].name, files[0].content)
-      else downloadZip(datedFilename('school-marks-all-terms', 'zip'), files)
+      else downloadZip(datedFilename(`marks-all-terms${exportFileSuffix ? `-${exportFileSuffix}` : ''}`, 'zip'), files)
       showToast(tr('Export started'))
     } catch {
       showToast(tr('Failed to export'), 'error')
@@ -933,22 +1013,6 @@ export default function ReportCardsPage() {
         ))}
       </div>
 
-      {/* Student status, on its own row so it reads as a separate question from the term.
-          Defaults to Active: a school's everyday view is its current pupils, and before
-          this row existed a student who had been dismissed sat in the list indistinguishable
-          from one still enrolled. Their cards are not deleted or hidden, just moved to
-          their own tab, since a dismissed student still needs a transcript to transfer. */}
-      <div className="flex gap-2 mb-4 flex-wrap">
-        {STUDENT_STATUS_TABS.map((tab) => (
-          <button key={tab.value} onClick={() => handleStatusFilter(tab.value)}
-            disabled={loading}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition disabled:opacity-60 disabled:cursor-wait ${studentStatusFilter === tab.value ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:bg-hover'}`}
-          >
-            {tr(tab.label)}
-          </button>
-        ))}
-      </div>
-
       {/* Day/Evening, on its own row under the terms so the two filters read as separate
           questions. Only appears once the school actually runs an evening sitting. */}
       {programmeFilter.hasEvening && (
@@ -997,20 +1061,42 @@ export default function ReportCardsPage() {
             />
           </div>
         )}
+
+        {/* Same control, same place and same order as the Students page: the filters sit
+            beside the search in the order they narrow, class then status. Defaults to
+            Active — a school's everyday view is its current pupils. Their cards are never
+            deleted or hidden, just moved to their own list, since a dismissed student
+            still needs a transcript to transfer. */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground flex-shrink-0">{tr('Status')}</span>
+          <CustomSelect
+            className="w-36"
+            compact
+            value={studentStatusFilter}
+            onChange={(v) => handleStatusFilter(v as StudentStatus)}
+            options={STUDENT_STATUS_TABS.map((tab) => ({ value: tab.value, label: tr(tab.label) }))}
+          />
+        </div>
       </div>
 
+      {/* The scope line spells out every filter the file will carry, in the order the
+          controls above apply them. An export that silently followed the filters would be
+          just as wrong as one that ignored them: what is in the file has to be readable
+          before the download, not guessed at from the row count afterwards. */}
       {isAdmin && (
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <span className="text-xs text-muted-foreground">
-            {tr('Export')} · {filterTermId && activeTerm ? `${activeTerm.name} ${activeTerm.session}` : `${ts('All Terms', 'All Semesters')}, ${tr('one file each')}`}:
+            {tr('Export')} · {exportScopeLabel}:
           </span>
-          <button onClick={handleExportSchool} disabled={exporting || terms.length === 0}
-            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-hover disabled:opacity-50 transition">
-            <Download size={14} /> {tr('Export school data')}
+          <button onClick={handleExportSchool} disabled={exporting || terms.length === 0 || nothingToExport}
+            title={nothingToExport ? tr('Nothing to export with these filters') : undefined}
+            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
+            <Download size={14} /> {tr('Export data')}
           </button>
-          <button onClick={handleExportSchoolMarks} disabled={exporting || terms.length === 0}
-            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-hover disabled:opacity-50 transition">
-            <Download size={14} /> {tr('Export school data (with marks)')}
+          <button onClick={handleExportSchoolMarks} disabled={exporting || terms.length === 0 || nothingToExport}
+            title={nothingToExport ? tr('Nothing to export with these filters') : undefined}
+            className="flex items-center gap-1.5 border border-border text-foreground px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
+            <Download size={14} /> {tr('Export data (with marks)')}
           </button>
         </div>
       )}
@@ -1162,6 +1248,14 @@ export default function ReportCardsPage() {
                           </button>
                         )
                       })()}
+                      {/* Admin/VP only, matching PUT /students/:id/status — the same two
+                          roles the Students page gates this on. */}
+                      {isAdmin && (
+                        <button onClick={() => openStatusModal(rc)} title={tr('Change Status')}
+                          className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition">
+                          <UserX size={14} />
+                        </button>
+                      )}
                       {/* No delete button here on purpose. A published card is an issued
                           document a parent may already hold a copy of, and the card is
                           re-created automatically for any active student anyway. Unpublish
@@ -1173,6 +1267,48 @@ export default function ReportCardsPage() {
             </tbody>
           </table></div>
           <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPage={setPage} />
+        </div>
+      )}
+
+      {/* Deliberately the same modal, wording and i18n keys as the Students page, so the
+          two screens do not describe the same three states in two different ways. */}
+      {statusTarget && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-card rounded-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-foreground text-lg">{tr('Change Status')}</h3>
+              <button onClick={() => setStatusTarget(null)} className="text-muted-foreground hover:text-foreground">
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">{statusTarget.name}</p>
+            <div className="space-y-2 mb-5">
+              {STUDENT_STATUS_TABS.map((tab) => (
+                <label key={tab.value} className="flex items-center gap-3 cursor-pointer border border-border rounded-lg px-3 py-2.5 hover:bg-hover transition">
+                  <input type="radio" name="rc-student-status" value={tab.value}
+                    checked={newStudentStatus === tab.value}
+                    onChange={() => setNewStudentStatus(tab.value)}
+                    className="accent-primary" />
+                  <span className="text-sm text-foreground">{tr(tab.label)}</span>
+                </label>
+              ))}
+            </div>
+            {newStudentStatus !== 'ACTIVE' && (
+              <p className="text-xs text-muted-foreground mb-4">
+                {tr('A disabled or dismissed student is excluded from bulk report card printing and most active rosters. You can switch them back to Active at any time.')}
+              </p>
+            )}
+            <div className="flex gap-3">
+              <button type="button" onClick={() => setStatusTarget(null)}
+                className="flex-1 border border-border text-foreground py-2 rounded-lg text-sm hover:bg-hover transition">
+                {tr('Cancel')}
+              </button>
+              <button type="button" onClick={handleStatusSave} disabled={statusSaving}
+                className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
+                {statusSaving ? tr('Saving...') : tr('Save')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

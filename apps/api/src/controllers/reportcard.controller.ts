@@ -503,6 +503,12 @@ export const getMarksExport = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const termId = String(req.query.termId || '')
     const classLevel = req.query.classLevel ? String(req.query.classLevel) : undefined
+    // Which students to include, matching the status filter on the screen that asked for
+    // this file. Defaults to ACTIVE, which is what every caller wanted before this existed
+    // and is what the everyday export means. Judged on `status` alone, exactly like
+    // getReportCards — the two must agree, since an export is meant to BE the table.
+    const rawStatus = String(req.query.studentStatus ?? '').trim().toUpperCase()
+    const studentStatus = ['ACTIVE', 'DISABLED', 'DISMISSED'].includes(rawStatus) ? rawStatus : 'ACTIVE'
 
     if (!termId) {
       res.status(400).json({ message: 'A term is required' })
@@ -526,10 +532,11 @@ export const getMarksExport = async (req: AuthRequest, res: Response) => {
     // Base on the report cards OF THIS TERM — so the export matches exactly the
     // students shown when the table is filtered to that term (a student only
     // "belongs" to a term once they have a report card in it). Disabled/Dismissed
-    // students are excluded — this drives bulk CSV exports, same rule as bulk
-    // report-card printing (see Student.status in schema.prisma).
+    // students are excluded unless they are what was asked for: a school exporting its
+    // Dismissed list wants exactly those, and an unfiltered `isActive: true` here handed
+    // it back an empty file instead (see Student.status in schema.prisma).
     const cards = await prisma.reportCard.findMany({
-      where: { schoolId, termId, student: { isActive: true, ...(classLevel ? { classLevel } : {}) } },
+      where: { schoolId, termId, student: { status: studentStatus as any, ...(classLevel ? { classLevel } : {}) } },
       include: { student: true, entries: { include: { subject: true } } },
       orderBy: [{ student: { classLevel: 'asc' } }, { position: 'asc' }, { student: { name: 'asc' } }],
     })

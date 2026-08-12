@@ -91,8 +91,12 @@ export interface MarksExport {
   students: MarksExportStudent[]
 }
 
-export const getMarksExportApi = async (termId: string, classLevel?: string): Promise<MarksExport> => {
-  const res = await api.get('/report-cards/marks-export', { params: { termId, ...(classLevel ? { classLevel } : {}) } })
+// `studentStatus` defaults to ACTIVE server-side, so a caller that has no status filter
+// of its own (the single-class marks sheet) keeps its old behaviour by omitting it.
+export const getMarksExportApi = async (termId: string, classLevel?: string, studentStatus?: StudentStatus): Promise<MarksExport> => {
+  const res = await api.get('/report-cards/marks-export', {
+    params: { termId, ...(classLevel ? { classLevel } : {}), ...(studentStatus ? { studentStatus } : {}) },
+  })
   return res.data
 }
 
