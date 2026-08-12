@@ -119,7 +119,16 @@ function TextColorToolbar({ canvasRef }: { canvasRef: React.RefObject<HTMLDivEle
       if (!el?.closest('[contenteditable="true"]')) { setVisible(false); return }
       savedRange.current = range.cloneRange()
       const rect = range.getBoundingClientRect()
-      setPos({ top: rect.top - 48, left: rect.left + rect.width / 2 })
+      // Above the selection by default, but never behind the sticky toolbar and never off
+      // the top of the window — both of which happen the moment you colour something in the
+      // upper part of a scrolled canvas, and both look exactly like the palette failing to
+      // appear. Flip below the selection when there is no room above, and keep the whole bar
+      // inside the window horizontally.
+      const toolbarBottom = document.querySelector('.rc-design-toolbar')?.getBoundingClientRect().bottom ?? 0
+      const above = rect.top - 48
+      const top = above < toolbarBottom + 6 ? Math.min(rect.bottom + 8, window.innerHeight - 48) : above
+      const left = Math.min(Math.max(rect.left + rect.width / 2, 120), window.innerWidth - 120)
+      setPos({ top, left })
       setVisible(true)
     }
     document.addEventListener('selectionchange', onSelChange)
@@ -162,55 +171,68 @@ function TextColorToolbar({ canvasRef }: { canvasRef: React.RefObject<HTMLDivEle
 }
 
 // ── Inline-edit text (contentEditable, supports text color + immediate sync) ─
+//
+// ONE element, editable at all times. It used to render a plain <span> and swap it for a
+// contentEditable <div> on the first click, which broke the gesture people actually use:
+// a double-click's two clicks landed on two DIFFERENT nodes, so the browser often did not
+// treat it as a double-click at all and selected nothing — and when it did, a setTimeout
+// left over from entering edit mode collapsed the caret to the end and wiped the selection
+// a moment later. Either way the colour palette (which only appears for a real selection)
+// came and went for no reason the user could see. Keeping the node stable makes
+// double-click-a-word work first time, every time, and the <span> matches the idle layout
+// so editing no longer nudges the design around.
 function ET({ value, onChange, onColorApplied, style, placeholder, multiline }: {
   value: string; onChange: (v: string) => void
   onColorApplied?: (color: string) => void
   style?: React.CSSProperties; placeholder?: string; multiline?: boolean
 }) {
   const t = useT()
-  const divRef = useRef<HTMLDivElement>(null)
-  const [editing, setEditing] = useState(false)
+  const divRef = useRef<HTMLSpanElement>(null)
+  const [focused, setFocused] = useState(false)
+  const placeholderHtml = `<span style="color:#94a3b8">${placeholder || t('Click to edit…')}</span>`
 
-  const startEdit = () => {
-    // Register this field's color callback so toolbar can sync siblings immediately
+  // Write the DOM from `value` only while UNFOCUSED. Touching innerHTML under the caret
+  // replaces the text nodes the selection points at, which is what silently cancelled a
+  // selection mid-gesture whenever anything else on the canvas re-rendered.
+  useEffect(() => {
+    const el = divRef.current
+    if (!el || focused) return
+    const next = value || placeholderHtml
+    if (el.innerHTML !== next) el.innerHTML = next
+  }, [value, focused, placeholderHtml])
+
+  const handleFocus = () => {
+    // Register this field's color callback so the toolbar can sync siblings immediately
     activeColorCallback = onColorApplied || null
-    setEditing(true)
-    setTimeout(() => {
-      if (!divRef.current) return
-      divRef.current.innerHTML = value || ''
-      divRef.current.focus()
-      const r = document.createRange(); const sel = window.getSelection()
-      r.selectNodeContents(divRef.current); r.collapse(false)
-      sel?.removeAllRanges(); sel?.addRange(r)
-    }, 0)
+    setFocused(true)
+    // Clear the greyed placeholder rather than making the user select and delete it.
+    const el = divRef.current
+    if (el && !value && el.innerHTML === placeholderHtml) el.innerHTML = ''
   }
 
   const handleBlur = () => {
     activeColorCallback = null
-    if (divRef.current) {
-      const html = divRef.current.innerHTML.replace(/^<br>$/, '')
-      onChange(html)
-    }
-    setEditing(false)
+    setFocused(false)
+    const el = divRef.current
+    if (!el) return
+    const html = el.innerHTML.replace(/^<br>$/, '')
+    if (html !== value) onChange(html === placeholderHtml ? '' : html)
   }
 
   const base: React.CSSProperties = {
     minWidth: 40, outline: 'none',
-    borderBottom: editing ? '2px solid #F03E2F' : '1px dashed rgba(148,163,184,0.5)',
-    background: editing ? 'rgba(240,62,47,0.05)' : 'transparent',
-    borderRadius: editing ? 3 : 0, padding: editing ? '1px 3px' : 0, cursor: 'text',
+    borderBottom: focused ? '2px solid #F03E2F' : '1px dashed rgba(148,163,184,0.5)',
+    background: focused ? 'rgba(240,62,47,0.05)' : 'transparent',
+    borderRadius: focused ? 3 : 0, cursor: 'text',
     ...style,
   }
 
-  if (editing) {
-    return <div ref={divRef} contentEditable suppressContentEditableWarning onBlur={handleBlur}
+  return (
+    <span ref={divRef} contentEditable suppressContentEditableWarning
+      title={t('Click to edit')}
+      onFocus={handleFocus} onBlur={handleBlur}
       onKeyDown={e => { if (!multiline && e.key === 'Enter') { e.preventDefault(); divRef.current?.blur() } }}
       style={base} />
-  }
-  return (
-    <span onClick={startEdit} title={t('Click to edit')} style={base}
-      dangerouslySetInnerHTML={{ __html: value || `<span style="color:#94a3b8">${placeholder || t('Click to edit…')}</span>` }}
-    />
   )
 }
 
@@ -223,7 +245,17 @@ function ColorableCell({ sampleText, color, onColorChange, style }: {
   const active = useRef(false)
   const getHtml = () => color ? `<span style="color:${color}">${sampleText}</span>` : sampleText
 
-  useEffect(() => { if (ref.current && !active.current) ref.current.innerHTML = getHtml() })
+  // Rewrite the cell only when its own text or colour actually changed, and never while it
+  // holds the caret. This used to run after EVERY render of the canvas with no dependency
+  // list, so any unrelated edit elsewhere replaced this cell's text nodes — and if that
+  // landed between the two clicks of a double-click, the selection vanished and the colour
+  // palette never appeared. `active` alone did not cover it: the re-render can arrive before
+  // the focus event that sets it.
+  const html = getHtml()
+  useEffect(() => {
+    if (!ref.current || active.current) return
+    if (ref.current.innerHTML !== html) ref.current.innerHTML = html
+  }, [html])
 
   const handleFocus = () => {
     active.current = true
@@ -368,6 +400,18 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 
 function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; accent: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null; language?: string; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null } | null; update: (s: HeaderSec) => void }) {
   const t = useT()
+  // The term chip is the one piece of the ribbon whose words are generated (term name +
+  // session), so it cannot be edited or colour-selected like a label. People try anyway —
+  // clicking it points at the swatch that DOES control it and flashes it for a moment,
+  // rather than leaving the click doing nothing.
+  const chipTextRef = useRef<HTMLInputElement>(null)
+  const [chipHint, setChipHint] = useState(false)
+  const pointAtChipControls = () => {
+    setChipHint(true)
+    chipTextRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    chipTextRef.current?.focus()
+    setTimeout(() => setChipHint(false), 1600)
+  }
   const logoSize = sec.logoSize || 60
   const officialLeftResolved = resolveOfficialText(school, 'left', sec.leftText ?? '')
   const officialRightResolved = resolveOfficialText(school, 'right', sec.rightText ?? '')
@@ -523,9 +567,11 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
           {sec.showTitleRibbon !== false && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={t('Colour of the term text inside the chip')}>
               {t('Chip text:')}
-              <input type="color" value={sec.termChipTextColor || '#ffffff'}
+              <input ref={chipTextRef} type="color" value={sec.termChipTextColor || '#ffffff'}
                 onChange={e => update({ ...sec, termChipTextColor: e.target.value })}
-                style={{ width: 20, height: 20, padding: 0, border: '1px solid #d1d5db', borderRadius: 3, cursor: 'pointer' }} />
+                style={{ width: 20, height: 20, padding: 0, borderRadius: 3, cursor: 'pointer',
+                  border: chipHint ? '2px solid #F03E2F' : '1px solid #d1d5db',
+                  boxShadow: chipHint ? '0 0 0 3px rgba(240,62,47,0.25)' : 'none' }} />
               {sec.termChipTextColor && (
                 <button onClick={() => update({ ...sec, termChipTextColor: undefined })}
                   style={{ fontSize: 10, color: '#94a3b8', textDecoration: 'underline', cursor: 'pointer' }}>
@@ -599,8 +645,10 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                 style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 13, letterSpacing: 5, fontWeight: 'bold', color: '#fff' }} />
             </div>
-            <div style={{ background: sec.termChipColor || accent, color: sec.termChipTextColor || '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
-              {t('First Term')} · 2025/2026
+            <div onClick={pointAtChipControls}
+              title={t('The term and year are filled in automatically. Use Chip colour and Chip text above to restyle this.')}
+              style={{ background: sec.termChipColor || accent, color: sec.termChipTextColor || '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+              [term] · [session]
             </div>
           </div>
         ) : null
