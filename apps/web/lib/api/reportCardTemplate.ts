@@ -227,7 +227,10 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   showTitleRibbon?: boolean
   /** Term/session chip background, independent of the shared accent colour. Unset =
    *  follows accent (unchanged look for every design saved before this existed). */
-  termChipColor?: string }
+  termChipColor?: string
+  /** Text colour of that same chip. The chip's words are generated (term name + session),
+   *  not an editable field, so they cannot be coloured by selecting them — this is how. */
+  termChipTextColor?: string }
 
 // Official header only: the left/right text blocks auto-scale with the logo size
 // (bigger logo -> bigger text, so they stay visually balanced), on top of the
@@ -1599,6 +1602,65 @@ export function ensureAnnualAverageRow<T extends Partial<TemplateConfig>>(cfg: T
   const next = [...sections]
   next[idx] = { ...legend, rightTables: nextTables } as LayoutSection
   return { ...cfg, sections: next, annualAverageRowSeeded: true }
+}
+
+/**
+ * Repaint a saved design: every colour in `from` becomes `to`.
+ *
+ * The Color and Accent pickers only ever set two top-level fields, but a table's colours
+ * are STORED ON ITS CELLS — a header cell carries `bgColor` written when the table was
+ * seeded, not a reference to the design's colour. So picking a new Color moved anything
+ * that reads `primaryColor` live (captions, rules, hero text) and left every table header
+ * on the colour it was born with: an Annual layout seeded teal stayed teal however many
+ * times the Color box changed. Rather than making cells read the design colour — which
+ * would take away the ability to colour one column differently, which the cell toolbar
+ * exists for — the picker now rewrites the cells that were using the old colour.
+ *
+ * Deep-walks the whole structure rather than knowing field names, so `bgColor`,
+ * `textColor`, `valueColor`, `placeholderColor` and a colour inside legend HTML are all
+ * covered, and a section type added later needs nothing here. Case-insensitive: a hand-
+ * typed `#0F766E` and a seeded `#0f766e` are the same colour.
+ */
+export function recolorSections<T>(sections: T[], from: (string | undefined)[], to: string): T[] {
+  const set = new Set(from.filter((c): c is string => !!c).map((c) => c.toLowerCase()))
+  if (set.size === 0) return sections
+  const walk = (v: any): any => {
+    if (typeof v === 'string') return set.has(v.toLowerCase()) ? to : v
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') {
+      const out: any = {}
+      for (const k of Object.keys(v)) out[k] = walk(v[k])
+      return out
+    }
+    return v
+  }
+  return sections.map(walk)
+}
+
+/**
+ * Which colours the Color picker should repaint: the design's current `primaryColor`, plus
+ * whatever its marks-table HEADER ROWS are actually painted with.
+ *
+ * The second half is what makes the picker work on a design whose tables never matched
+ * `primaryColor` in the first place (every Annual layout, seeded teal for primary and navy
+ * for secondary regardless of the theme). Reading the colour off the header means the
+ * picker changes what you can see is coloured, instead of a field that agrees with it only
+ * on a freshly seeded design.
+ *
+ * White and the page background are excluded: an uncoloured header must not drag every
+ * white in the document along with it.
+ */
+export function primaryColorTargets(cfg: Partial<TemplateConfig>): (string | undefined)[] {
+  const out = new Set<string>()
+  if (cfg.primaryColor) out.add(cfg.primaryColor)
+  const neutral = new Set(['#fff', '#ffffff', 'transparent', (cfg.bgColor ?? '').toLowerCase()])
+  for (const sec of cfg.sections ?? []) {
+    if (sec.type !== 'marks_table') continue
+    for (const cell of (sec as MarksTableSec).template?.rows?.[0]?.cells ?? []) {
+      if (cell.bgColor && !neutral.has(cell.bgColor.toLowerCase())) out.add(cell.bgColor)
+    }
+  }
+  return [...out]
 }
 
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {

@@ -523,6 +523,8 @@ const FR: Record<string, string> = {
   'The Report Card Designer needs the space and precision of a bigger display. Please use a laptop or desktop computer to customize your report card layout.': 'Le concepteur de bulletin nécessite l\'espace et la précision d\'un grand écran. Veuillez utiliser un ordinateur portable ou de bureau pour personnaliser la mise en page de votre bulletin.',
   'Background': 'Arrière-plan',
   'reset': 'réinitialiser',
+  'Chip text:': 'Texte de la puce :',
+  'Colour of the term text inside the chip': 'Couleur du texte du trimestre dans la puce',
   'Watermark': 'Filigrane',
   'Text': 'Texte',
   'Logo': 'Logo',

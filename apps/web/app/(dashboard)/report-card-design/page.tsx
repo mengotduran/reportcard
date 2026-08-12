@@ -5,6 +5,7 @@ import { useAuthStore } from '@/lib/store/auth.store'
 import api from '@/lib/api/client'
 import {
   getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands, ensureAnnualAverageRow,
+  recolorSections, primaryColorTargets,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
@@ -152,6 +153,15 @@ function TextColorToolbar({ canvasRef }: { canvasRef: React.RefObject<HTMLDivEle
       if (!canvasRef.current) return
       const range = sel.getRangeAt(0)
       if (!canvasRef.current.contains(range.commonAncestorContainer)) { setVisible(false); return }
+      // Only over text that can actually take a colour. The canvas is full of text that is
+      // not editable here — the term chip, the school name and contact line (School
+      // Settings), sample data — and selecting any of it used to raise this palette, which
+      // then ran execCommand on a non-editable node and did nothing at all. A palette that
+      // appears and silently no-ops is worse than one that stays away: it reads as the
+      // colour being applied and not sticking. Fields that ARE editable are unaffected.
+      const node = range.commonAncestorContainer
+      const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
+      if (!el?.closest('[contenteditable="true"]')) { setVisible(false); return }
       savedRange.current = range.cloneRange()
       const rect = range.getBoundingClientRect()
       setPos({ top: rect.top - 48, left: rect.left + rect.width / 2 })
@@ -553,6 +563,22 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               )}
             </label>
           )}
+          {/* The chip's words are generated (term name + session), so there is no text to
+              select and colour the way an editable label is coloured. */}
+          {sec.showTitleRibbon !== false && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={t('Colour of the term text inside the chip')}>
+              {t('Chip text:')}
+              <input type="color" value={sec.termChipTextColor || '#ffffff'}
+                onChange={e => update({ ...sec, termChipTextColor: e.target.value })}
+                style={{ width: 20, height: 20, padding: 0, border: '1px solid #d1d5db', borderRadius: 3, cursor: 'pointer' }} />
+              {sec.termChipTextColor && (
+                <button onClick={() => update({ ...sec, termChipTextColor: undefined })}
+                  style={{ fontSize: 10, color: '#94a3b8', textDecoration: 'underline', cursor: 'pointer' }}>
+                  {t('reset')}
+                </button>
+              )}
+            </label>
+          )}
         </>}
       </div>
 
@@ -618,7 +644,7 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                 style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 13, letterSpacing: 5, fontWeight: 'bold', color: '#fff' }} />
             </div>
-            <div style={{ background: sec.termChipColor || accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+            <div style={{ background: sec.termChipColor || accent, color: sec.termChipTextColor || '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               {t('First Term')} · 2025/2026
             </div>
           </div>
@@ -1965,6 +1991,19 @@ export default function ReportCardDesignPage() {
     })
   }
 
+  // Changing a colour repaints the design, not just the field. Without this the picker only
+  // moved the parts that read primaryColor/accentColor live (captions, rules, hero text)
+  // while every table header kept the colour baked into its cells when the table was
+  // seeded — so an Annual layout stayed teal no matter what the Color box said, on screen
+  // and in the printed copy alike. See recolorSections/primaryColorTargets.
+  const applyPrimaryColor = (next: string) =>
+    setConfig(c => ({ ...c, primaryColor: next, sections: recolorSections(c.sections ?? [], primaryColorTargets(c), next) }))
+
+  // Accent has no equivalent of the header-row search: it is only ever the design's own
+  // accent, so swapping the previous value is exactly right.
+  const applyAccentColor = (next: string) =>
+    setConfig(c => ({ ...c, accentColor: next, sections: recolorSections(c.sections ?? [], [accentOf(c)], next) }))
+
   const addSection = (type: AddSectionType) => {
     const sec = newSection(type, config.primaryColor, schoolType)
     setConfig(c => ({ ...c, sections: [...c.sections, sec] }))
@@ -2179,13 +2218,12 @@ export default function ReportCardDesignPage() {
         <div className="flex items-center gap-2 ml-2">
           <label className="text-xs text-muted-foreground">{tr('Color')}</label>
           <input type="color" value={config.primaryColor}
-            onChange={e => { setConfig(c => ({ ...c, primaryColor: e.target.value })); setColorText(e.target.value) }}
+            onChange={e => { applyPrimaryColor(e.target.value); setColorText(e.target.value) }}
             className="w-7 h-7 rounded border border-border cursor-pointer" />
           <input type="text" value={colorText}
             onChange={e => {
               setColorText(e.target.value)
-              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-                setConfig(c => ({ ...c, primaryColor: e.target.value }))
+              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) applyPrimaryColor(e.target.value)
             }}
             className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
         </div>
@@ -2194,13 +2232,12 @@ export default function ReportCardDesignPage() {
         <div className="flex items-center gap-2 ml-2">
           <label className="text-xs text-muted-foreground">{tr('Accent')}</label>
           <input type="color" value={accentOf(config)}
-            onChange={e => { setConfig(c => ({ ...c, accentColor: e.target.value })); setAccentText(e.target.value) }}
+            onChange={e => { applyAccentColor(e.target.value); setAccentText(e.target.value) }}
             className="w-7 h-7 rounded border border-border cursor-pointer" />
           <input type="text" value={accentText}
             onChange={e => {
               setAccentText(e.target.value)
-              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-                setConfig(c => ({ ...c, accentColor: e.target.value }))
+              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) applyAccentColor(e.target.value)
             }}
             className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
         </div>

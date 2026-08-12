@@ -1098,6 +1098,21 @@ Every section also carries **`showOn`** (*Both copies* / *Official only* / *Stud
 - **Position**: shown as `3rd` (ordinal)
 - Grade badges: squared corners (not circular)
 
+### Colour: the picker repaints the design
+
+A table's colours live **on its cells** (`bgColor` / `textColor`, written when the table was seeded) rather than being read from the design's `primaryColor` at render time — that is what lets an admin colour one column differently from the rest, which the cell toolbar exists for. The consequence was that the **Color** box only moved the parts that read `primaryColor` live (captions, rules, hero text) and left every table header on the colour it was born with: an Annual layout seeded teal `#0f766e` stayed teal however many times Color changed, on screen and on paper.
+
+Changing **Color** or **Accent** now repaints the design (`recolorSections`, a deep walk that swaps one colour for another wherever it appears, so `bgColor`, `textColor`, `valueColor`, `placeholderColor` and a colour inside legend HTML are all covered). Color repaints `primaryColor` **plus whatever the marks-table header rows are actually painted with** (`primaryColorTargets`) — reading the colour off the header is what makes the picker work on a design whose tables never matched `primaryColor` in the first place. White and the page background are excluded, so an uncoloured header cannot drag every white in the document with it; the neutral `#f1f5f9` totals bands are untouched. Save, and the report card preview, the annual report and every print/download follow, since all of them render from these same cells.
+
+### Text colour: select the words, pick a colour
+
+Selecting text in an editable label raises a floating palette; the colour is stored **in the text** (the fields are contentEditable, so the value becomes `<font color="…">…</font>`). Two things stopped that working:
+
+- Several fields were printed as plain React children, so the colour either vanished or the markup printed as literal characters. Everything an admin can colour now goes through **`richLabel`**, which translates the TEXT while keeping the markup (a translation key never matches a string with tags in it) and returns the designer's exact markup untouched when no translation applies, so a label carrying two colours keeps both. Covered: the title ribbon, the marks-table caption, panel titles and their rows, the annual band tag, the stamp caption, the remarks signature caption, and the grading-legend title and its summary-table titles. Table CELLS are a separate mechanism and always worked — they carry `textColor` / `bgColor`, set from the cell toolbar.
+- The palette appeared over **any** selection in the canvas, including text that is not editable here — the term chip, the school name and contact line (both from School Settings), sample data — and then ran `execCommand` on a non-editable node and did nothing. It now only appears inside `[contenteditable="true"]`, because a palette that appears and silently no-ops reads as the colour being applied and not sticking.
+
+The term chip's words are generated (term name + session), so there is nothing to select: the header section has **Chip colour** and **Chip text** swatches instead.
+
 ### Section-type defaults (Primary / Secondary / University)
 A school with **no saved report-card design** starts from `getDefaultLayoutForType`. Admins edit & save from there.
 

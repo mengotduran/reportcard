@@ -139,6 +139,35 @@ function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
   return (lang === 'FR' ? fr : en).trim()
 }
 
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * An admin-authored label that MAY carry inline colour picked in the designer.
+ *
+ * The designer's text fields are contentEditable, so choosing a colour stores the text as
+ * HTML (`<font color="…">` or a colour span). Fields rendered here as plain React children
+ * printed that markup as literal characters or, once passed through `t()`, lost the colour
+ * entirely — which is why colouring a title ribbon, a table caption or a panel heading
+ * looked like it did nothing. Anything an admin can colour has to come through here.
+ *
+ * Translation still applies, on the TEXT rather than the markup (a translation key never
+ * matches a string with tags in it). When the text needs no translating — every custom
+ * title, i.e. almost always — the designer's exact markup is returned untouched, so a label
+ * carrying two colours keeps both.
+ */
+function richLabel(value: string | undefined | null, t: (s: string) => string, lang: 'EN' | 'FR'): string {
+  if (!value) return ''
+  const hasMarkup = /<[a-z!/][^>]*>/i.test(value)
+  const plain = hasMarkup ? value.replace(/<[^>]*>/g, '') : value
+  const out = t(localizeLabel(plain, lang))
+  if (!hasMarkup) return escapeHtml(out)
+  if (out === plain) return value
+  // Translated AND coloured: rebuild round the new words, keeping the first colour.
+  const m = value.match(/color\s*[:=]\s*["']?([^;"'>]+)/i)
+  return m ? `<span style="color:${m[1].trim()}">${escapeHtml(out)}</span>` : escapeHtml(out)
+}
+
 function hexToRgb(hex: string) {
   const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
   return r ? `${parseInt(r[1], 16)}, ${parseInt(r[2], 16)}, ${parseInt(r[3], 16)}` : '30, 58, 95'
@@ -975,10 +1004,9 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         ) : null
         const titleRibbon = s.showTitleRibbon !== false ? (
           <div style={{ display: 'flex', marginTop: 10, border: `1px solid ${color}` }}>
-            <div style={{ flex: 1, background: color, color: '#fff', textAlign: 'center', padding: '6px 0', fontFamily: DISPLAY_SERIF, fontSize: 13, letterSpacing: 5, fontWeight: 'bold' }}>
-              {t(s.reportTitle)}
-            </div>
-            <div style={{ background: s.termChipColor || accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+            <div style={{ flex: 1, background: color, color: '#fff', textAlign: 'center', padding: '6px 0', fontFamily: DISPLAY_SERIF, fontSize: 13, letterSpacing: 5, fontWeight: 'bold' }}
+              dangerouslySetInnerHTML={{ __html: richLabel(s.reportTitle, t, lang) }} />
+            <div style={{ background: s.termChipColor || accent, color: s.termChipTextColor || '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               {t(term.name)} · {term.session}
             </div>
           </div>
@@ -1219,7 +1247,7 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         // Redesign: small-caps caption with a rule running off to the right. `{term}` is
         // substituted so one saved caption reads correctly on every term's card.
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '11px 0 5px', fontSize: 8, letterSpacing: 2.6, textTransform: 'uppercase', color, fontWeight: 'bold' }}>
-          <span>{t(s.caption).replace(/\{term\}/gi, t(term.name))}</span>
+          <span dangerouslySetInnerHTML={{ __html: richLabel(s.caption, t, lang).replace(/\{term\}/gi, t(term.name)) }} />
           <span style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${accent}, rgba(${accentRgb},0.15))` }} />
         </div>
       ) : null
@@ -1740,9 +1768,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             {s.signatureCaption && (
               <div style={{ display: 'flex', alignItems: 'flex-end', padding: '8px 8px 6px' }}>
                 <span style={{ flex: 1, borderBottom: '.7px dotted #9aa2ae', height: 15, marginRight: 8 }} />
-                <span style={{ fontSize: 6.4, letterSpacing: 1, textTransform: 'uppercase', color: '#8b93a1', fontWeight: 'bold' }}>
-                  {t(s.signatureCaption)}
-                </span>
+                <span style={{ fontSize: 6.4, letterSpacing: 1, textTransform: 'uppercase', color: '#8b93a1', fontWeight: 'bold' }}
+                  dangerouslySetInnerHTML={{ __html: richLabel(s.signatureCaption, t, lang) }} />
               </div>
             )}
           </div>
@@ -1765,12 +1792,13 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <div style={{ border: `.8px solid rgba(${rgb},0.28)`, background: '#fff', height: '100%' }}>
           {s.title && (
             <div style={{ background: `rgba(${rgb},0.07)`, color, fontSize: 6.9, letterSpacing: 1.7, textTransform: 'uppercase', padding: '3.6px 7px', fontWeight: 'bold', borderBottom: `.6px solid rgba(${rgb},0.22)` }}>
-              {t(s.title)}
+              <span dangerouslySetInnerHTML={{ __html: richLabel(s.title, t, lang) }} />
             </div>
           )}
           {s.rows.map((row, i) => (
             <div key={row.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 10, fontSize: 8.4, padding: '3.4px 7px', ...(i < s.rows.length - 1 ? { borderBottom: '.5px solid #efece2' } : {}) }}>
-              <span style={{ color: '#6b7280', whiteSpace: 'nowrap' }}>{t(row.label)}</span>
+              <span style={{ color: '#6b7280', whiteSpace: 'nowrap' }}
+                dangerouslySetInnerHTML={{ __html: richLabel(row.label, t, lang) }} />
               <span style={{ flex: 1, borderBottom: '.6px dotted #c2c9d3', height: 11 }} />
             </div>
           ))}
@@ -1786,9 +1814,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       return (
         <div style={{ marginBottom: 9, border: `1.1px solid ${accent}`, background: `rgba(${accentRgb},0.07)`, display: 'flex', alignItems: 'stretch' }}>
           {s.tag && (
-            <div style={{ background: accent, color: '#fff', writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 7.4, letterSpacing: 2.4, fontWeight: 'bold', textAlign: 'center', padding: '6px 4px', textTransform: 'uppercase' }}>
-              {t(s.tag)}
-            </div>
+            <div style={{ background: accent, color: '#fff', writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 7.4, letterSpacing: 2.4, fontWeight: 'bold', textAlign: 'center', padding: '6px 4px', textTransform: 'uppercase' }}
+              dangerouslySetInnerHTML={{ __html: richLabel(s.tag, t, lang) }} />
           )}
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${s.cells.length}, 1fr)` }}>
             {s.cells.map((cell, i) => (
@@ -1861,7 +1888,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <div style={{ display: 'flex', justifyContent: justify, padding: '8px 0', marginBottom: 8 }}>
           <div style={{ textAlign: 'center' }}>
             <img src={school.stamp} alt="" style={{ width: size, height: size, objectFit: 'contain', display: 'block' }} />
-            {s.label ? <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{t(s.label)}</div> : null}
+            {s.label ? <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}
+              dangerouslySetInnerHTML={{ __html: richLabel(s.label, t, lang) }} /> : null}
           </div>
         </div>
       )
@@ -1945,7 +1973,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         <table key={st.id} style={{ borderCollapse: 'collapse', border: `1px solid rgba(${rgb},0.3)`, flex: 1 }}>
           {st.title && (
             <thead>
-              <tr><th colSpan={st.colCount} style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center' }}>{st.title}</th></tr>
+              <tr><th colSpan={st.colCount} style={{ backgroundColor: color, color: '#fff', padding: '3px 8px', fontSize: 10, fontWeight: 'bold', textAlign: 'center' }}
+                dangerouslySetInnerHTML={{ __html: richLabel(st.title, t, lang) }} /></tr>
             </thead>
           )}
           <tbody>
@@ -1979,7 +2008,8 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
       )
       return (
         <div style={{ marginTop: 14, marginBottom: 12 }}>
-          {s.title && <div style={{ fontWeight: 'bold', fontSize: 12, color, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>{s.title}</div>}
+          {s.title && <div style={{ fontWeight: 'bold', fontSize: 12, color, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}
+            dangerouslySetInnerHTML={{ __html: richLabel(s.title, t, lang) }} />}
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
             {/* LEFT — built-in grade table + optional extra tables */}
             <div style={{ flex: '1.6', display: 'flex', flexDirection: leftLayout === 'rows' ? 'column' : 'row', gap: 8, alignItems: 'flex-start' }}>
