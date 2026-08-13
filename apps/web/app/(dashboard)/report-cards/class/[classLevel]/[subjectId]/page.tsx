@@ -16,6 +16,7 @@ import { onRealtimeDebounced } from '@/lib/socket'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getMeApi } from '@/lib/api/auth'
 import { useT, useLang } from '@/lib/i18n'
+import { adminMayEnterMarks } from '@/lib/marksPermission'
 import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 import CompetencyEntryPage from './CompetencyEntry'
 
@@ -94,14 +95,14 @@ function NumericMarksEntry() {
   const isPrimary = school?.type === 'PRIMARY'
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   // True when the signed-in user isn't who this school's policy lets record marks: a
-  // teacher when the school routes entry through the administration, or an admin
-  // anywhere except the one arrangement built for them (university + ADMIN_ONLY) — an
-  // admin has no standing to enter marks themselves otherwise. An older cached session
+  // teacher when the school routes entry through the administration, or a UNIVERSITY admin
+  // outside ADMIN_ONLY (see adminMayEnterMarks — a primary/secondary admin may always step
+  // in for an unreachable teacher). An older cached session
   // with no mode reads as TEACHERS, matching the API's permissive default: the API is
   // the real gate, so guessing wrong here only costs a pointless 403 rather than letting
   // anything through.
   const adminOnlyMarks = isAdminRole
-    ? !(isUniversity && school?.marksEntryMode === 'ADMIN_ONLY')
+    ? !adminMayEnterMarks(school?.type, school?.marksEntryMode)
     : school?.marksEntryMode === 'ADMIN_ONLY'
   // Under ADMIN_ONLY, a university teacher may still record the CA themselves — only the
   // Exam and Resit stay the administration's. The CA tab (seqIndex 0) is the one exception

@@ -17,6 +17,7 @@ import { onRealtimeDebounced } from '@/lib/socket'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { getMeApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
+import { adminMayEnterMarks } from '@/lib/marksPermission'
 
 /**
  * Marks entry for a COMPETENCY class (nursery / pre-primary).
@@ -67,7 +68,12 @@ export default function CompetencyEntryPage() {
   // Same rule the numeric sheet uses, minus the university branches: a competency class only
   // ever exists at a primary school, so an admin never has standing to record ratings and a
   // teacher loses it only when the school routes entry through the administration.
-  const adminOnlyMarks = isAdminRole ? true : school?.marksEntryMode === 'ADMIN_ONLY'
+  // A primary admin may now record ratings too — nursery classes are primary, so the blanket
+  // "an admin never enters" that used to sit here locked them out of the one school type
+  // where they are the fallback. See adminMayEnterMarks.
+  const adminOnlyMarks = isAdminRole
+    ? !adminMayEnterMarks(school?.type, school?.marksEntryMode)
+    : school?.marksEntryMode === 'ADMIN_ONLY'
 
   const [rows, setRows] = useState<Row[]>([])
   // Ratings exactly as last loaded, keyed by pupil. `rows` is the edit buffer, so this is

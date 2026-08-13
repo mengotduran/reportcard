@@ -1002,6 +1002,14 @@ Some universities record marks centrally so the person who teaches a course neve
 
 **Switching the mode is capped and audited**: a school may switch **twice per semester** (free between academic years, when nothing is running); after that the **provider (superadmin)** sets it from the superadmin school page — uncapped, logged as the provider, never counting against the school's two. Every switch is a permanent `MarksEntryModeChange` row (who, when, which semester) shown in Settings with a "used X of 2" counter. This cannot stop a dishonest admin (they can already change any mark); it removes the ability to flip quietly.
 
+### An admin may always enter marks at a primary or secondary school
+
+Teachers still own the job — the readiness panel keeps naming exactly who has not filled which subject, and that is unchanged — but a term cannot be held hostage by one teacher who has gone unreachable. So at a **PRIMARY or SECONDARY** school an admin/VP can record marks themselves, in the ordinary marks sheet, whatever `marksEntryMode` says. Needing a per-card grant to act as the fallback (which the admin issued to themselves anyway) was ceremony, not a control.
+
+**University is unchanged**: `ADMIN_ONLY` is the arrangement built for exactly this, it is capped and audited, and switching it on is the deliberate act that moves entry to the administration. An explicit per-card grant still works everywhere, and a **published card stays frozen for everyone** — to change a mark you unpublish first.
+
+The rule lives in `saveEntries` and is mirrored by `adminMayEnterMarks` in both clients (`lib/marksPermission.ts`), so a grid never invites an edit the API will refuse. The same rule drifted across three call sites once before; keep it in the helper. Nursery ratings count as primary — the old blanket "an admin never enters" locked them out of the one school type where they are the fallback.
+
 ### Admin view
 
 The admin report card detail page is **read-only for marks**. Admin sees subject scores, letter grades, coefficients, per-subject remarks, general remarks, average, and position, and can **Publish**. Admin/VP can also **write the general remarks** when the class has no class master (otherwise remarks are master-only).

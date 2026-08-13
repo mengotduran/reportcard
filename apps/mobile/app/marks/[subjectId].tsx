@@ -18,6 +18,7 @@ import { useT, useLang } from '@/lib/i18n'
 import { onRealtimeDebounced } from '@/lib/socket'
 import { getClasses, GradingMode } from '@/lib/api/classes'
 import CompetencyMarksEntry from '@/components/CompetencyMarksEntry'
+import { adminMayEnterMarks } from '@/lib/marksPermission'
 
 // University marking split: CA out of 30, exam out of 70, course out of 100.
 const EXAM_MAX = 70
@@ -142,7 +143,12 @@ function NumericMarksEntry() {
   // The school records marks centrally AND I am a teacher. Admins are never locked out.
   // Same rule as the web grid; the API is the real gate either way.
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
-  const adminOnlyMarks = school?.marksEntryMode === 'ADMIN_ONLY' && !isAdminRole
+  // An admin was never locked out here even when the API would refuse the save (a university
+  // outside ADMIN_ONLY), so the grid invited an edit and then 403'd on Save. Now it asks the
+  // same question the API does: see adminMayEnterMarks.
+  const adminOnlyMarks = isAdminRole
+    ? !adminMayEnterMarks(school?.type, school?.marksEntryMode)
+    : school?.marksEntryMode === 'ADMIN_ONLY'
   // Under ADMIN_ONLY, a university teacher may still record the CA themselves — only the
   // Exam and Resit stay the administration's. Same rule as the web grid.
   const caExemptForTeacher = adminOnlyMarks && isUniversity && seqIndex === 0

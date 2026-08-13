@@ -845,11 +845,17 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Admin-entered marks are a university-only arrangement, and only once the school has
-    // switched it on. A primary/secondary admin, or a university admin who hasn't enabled
-    // ADMIN_ONLY, has the same standing as any other non-teacher here: none, unless
-    // explicitly granted this one card.
-    if (ADMIN_ROLES.includes(role) && !(isUniversity && school?.marksEntryMode === 'ADMIN_ONLY') && reportCard.marksEditGrantedTo !== userId) {
+    // A PRIMARY or SECONDARY admin may always record marks. Teachers still own the job —
+    // the readiness panel keeps naming whoever has not filled a subject, and that is
+    // unchanged — but a term cannot be held hostage by one teacher who has gone
+    // unreachable. The admin is the fallback, and needing a per-card grant to act as one
+    // (which the admin issued to themselves anyway) was ceremony, not a control.
+    //
+    // A UNIVERSITY is different and stays as it was: ADMIN_ONLY is the arrangement built
+    // for exactly this, it is recorded and capped per semester (see setSchoolSettings), and
+    // switching it on is the deliberate act that moves entry to the administration. An
+    // explicit per-card grant still works there, as everywhere.
+    if (ADMIN_ROLES.includes(role) && isUniversity && school?.marksEntryMode !== 'ADMIN_ONLY' && reportCard.marksEditGrantedTo !== userId) {
       res.status(403).json({ message: 'Marks are entered by teachers at this school. Ask the subject teacher to record them, or grant yourself access to this class.' })
       return
     }
