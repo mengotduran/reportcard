@@ -95,7 +95,7 @@ npx prisma studio          # View data at localhost:5555
 
 | Model | Key Fields |
 |-------|-----------|
-| `User` | name, email, password, role, schoolId, **masterClassLevel** (CLASS_MASTER only) |
+| `User` | name, **email** (nullable), **username** (nullable), password, role, schoolId, **masterClassLevel** (CLASS_MASTER only) |
 | `Student` | name, studentId, classLevel (e.g. "Form 4 Arts"), guardianName/Phone/Email, **dateOfBirth**/**placeOfBirth** (optional; DOB stored as `"YYYY-MM-DD"` TEXT, never a timestamp — a timezone would shift a birth date by a day), status |
 
 ### Academic
@@ -992,6 +992,23 @@ The bulk **"Publish Class"** action checks the whole class: the dropdown button 
 ### Published = frozen, for everyone
 
 Once a card is **PUBLISHED**, nobody can save marks on it — the administration included. Unpublish first. Publishing fixes a class's averages and positions, so a mark moving underneath a published card would silently invalidate cards already handed out; making the admin unpublish makes that consequence a deliberate act. Enforced in `saveEntries` with **no role exemption** (this also closed a hole where SUBJECT_TEACHER, unnamed in the old check, could edit published marks). The one exception is the explicit `marksEditGrantedTo` grant, consumed on use. The marks-grid banner names the remedy per role: an admin is told to unpublish, a teacher to ask their admin.
+
+### Signing in: email or username
+
+Not every teacher has an email. An account can therefore be created with a **username** instead, and `POST /auth/login` accepts either identifier in the same field — email is tried first (still the common case), the username lookup only runs if that misses. Both login screens say "Email or username", and iOS AutoFill is told `username`, not `emailAddress`, so it offers both.
+
+**Switching from a username to an email later is self-service.** `PATCH /auth/me/email` sets it for the signed-in user, and **adding an email never clears the username** — both keep working, so nobody is locked out mid-switch. Reachable from:
+
+- **Web** → `/account` (teachers/class masters) and Settings → Account (admins).
+- **Mobile** → Account. This did not exist before, which mattered most: teachers are the people who get a username, and the phone is where they live. Nobody else could do it for them either — an admin's teacher edit takes role, class and departments only.
+
+The card stays visible **after** an email is set, so a typo can be corrected. Hiding it once an address existed stranded the user: an address they cannot receive mail at owns their password recovery, and no admin screen can fix it.
+
+**An admin can set it too.** `PUT /teachers/:id` now accepts `email`, so an admin holding the address on paper, or fixing a typo that has broken a teacher's recovery, no longer needs that teacher to do it themselves. Sent-or-not like `departments`: omit it and the address is left alone. Clearing it back to nothing is refused (400) unless the teacher has a username, or the account would be left with no way to sign in; a clash returns 409.
+
+**Changing an address asks for the current password; adding the first one does not.** Whoever owns the login email owns password recovery, so an unattended phone was enough to move an account to a stranger's address. Adding a first email carries no such risk — there was nothing to take over — and that is the flow this exists to make easy, so it stays frictionless. Enforced in `updateMyEmail` (400 without, 401 wrong) and asked for by all three self-service surfaces. The admin path above is deliberately exempt: an admin proving their own password says nothing about the teacher whose address they are setting.
+
+`forgot-password` remains email-only by design — it emails a link, and a username-only account has nowhere to send it. That is what the admin's direct reset is for.
 
 ### Who enters marks (`School.marksEntryMode`, university setting)
 

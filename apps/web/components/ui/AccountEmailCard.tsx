@@ -15,7 +15,12 @@ export default function AccountEmailCard() {
   const { user, updateUser } = useAuthStore()
   const { toast, showToast, hideToast } = useToast()
   const [value, setValue] = useState(user?.email ?? '')
+  const [currentPassword, setCurrentPassword] = useState('')
   const [saving, setSaving] = useState(false)
+  // Changing an address that already exists is what needs proving; adding a first one does
+  // not. Whoever holds the login email holds password recovery, and an unattended phone was
+  // enough to move an account to someone else's address. See updateMyEmail.
+  const needsPassword = !!user?.email && value.trim().toLowerCase() !== user.email.toLowerCase()
   useEffect(() => { setValue(user?.email ?? '') }, [user?.email])
 
   const handleSave = async () => {
@@ -23,8 +28,9 @@ export default function AccountEmailCard() {
     if (!trimmed) { showToast('Email is required', 'error'); return }
     setSaving(true)
     try {
-      const res = await updateMyEmailApi(trimmed)
+      const res = await updateMyEmailApi(trimmed, needsPassword ? currentPassword : undefined)
       updateUser({ email: res.email })
+      setCurrentPassword('')
       showToast('Your email was updated')
     } catch (err: any) {
       showToast(err.response?.data?.message ?? 'Failed to update email', 'error')
@@ -56,10 +62,23 @@ export default function AccountEmailCard() {
           onChange={(e) => setValue(e.target.value)}
           className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
+        {needsPassword && (
+          <div className="mt-3">
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Current password <span className="text-destructive">*</span></label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              autoComplete="current-password"
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+            <p className="text-xs text-muted-foreground mt-1">Asked because this address is how your password is recovered.</p>
+          </div>
+        )}
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || (needsPassword && !currentPassword)}
           className="mt-3 text-sm font-medium bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-[#d63429] disabled:opacity-50 transition-colors"
         >
           {saving ? 'Saving…' : 'Save Email'}

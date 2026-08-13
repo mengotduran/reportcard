@@ -240,7 +240,7 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id)
     const schoolId = req.user!.schoolId!
-    const { role, masterClassLevel, departments } = req.body
+    const { role, masterClassLevel, departments, email } = req.body
 
     const teacher = await prisma.user.findFirst({ where: { id, schoolId } })
     if (!teacher) { res.status(404).json({ message: 'Teacher not found' }); return }
@@ -270,6 +270,24 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // The admin's copy of the teacher's own "add an email later" (PATCH /auth/me/email).
+    // A teacher hired without one signs in with a username, and until now nobody but that
+    // teacher could attach an address — so an admin holding it on paper, or fixing a typo
+    // that has broken their password recovery, had no way in.
+    //
+    // Clearing it back to nothing is allowed ONLY while a username remains, or the account
+    // would be left with no way to sign in at all. Sent-or-not, like departments above: a
+    // caller that knows nothing about email must not wipe it.
+    let emailPatch: { email: string | null } | Record<string, never> = {}
+    if (email !== undefined) {
+      const trimmed = String(email ?? '').trim().toLowerCase()
+      if (!trimmed && !teacher.username) {
+        res.status(400).json({ message: 'This teacher signs in with their email, so it cannot be removed. Give them a username first.' })
+        return
+      }
+      emailPatch = { email: trimmed || null }
+    }
+
     const updated = await prisma.user.update({
       where: { id },
       data: {
@@ -278,8 +296,9 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
         // Only touched when the client actually sent it, same as birth details on
         // Student — a caller that knows nothing about departments shouldn't wipe them.
         ...(departments !== undefined ? { departments: sanitizeDepartments(departments) } : {}),
+        ...emailPatch,
       },
-      select: { id: true, name: true, email: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
+      select: { id: true, name: true, email: true, username: true, role: true, masterClassLevel: true, createdAt: true, departments: true }
     })
 
     res.json({
@@ -289,7 +308,13 @@ export const updateTeacher = async (req: AuthRequest, res: Response) => {
         ? `${displacedName} was removed as Class Master and is now a Class Teacher`
         : undefined
     })
-  } catch (error) {
+  } catch (error: any) {
+    // The email column is unique across every school, so a clash is a real answer, not a
+    // crash — say which field, since the admin can only have meant this one.
+    if (error?.code === 'P2002') {
+      res.status(409).json({ message: 'That email is already in use by another account' })
+      return
+    }
     console.error(error)
     res.status(500).json({ message: 'Server error' })
   }

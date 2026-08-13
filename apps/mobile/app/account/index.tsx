@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert,
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useTheme, Colors } from '@/lib/useTheme'
-import { changeMyPasswordApi } from '@/lib/api/auth'
+import { changeMyPasswordApi, updateMyEmailApi } from '@/lib/api/auth'
 import { useT } from '@/lib/i18n'
 
 // Temporarily off during testing — flip back to true to restore the Change Password
@@ -50,8 +50,37 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
 export default function AccountScreen() {
   const { colors } = useTheme()
   const styles = makeStyles(colors)
-  const { user } = useAuthStore()
+  const { user, setUser } = useAuthStore()
   const t = useT()
+
+  // Self-service login email. A teacher hired without one signs in with a username; when
+  // they later get an email, this is how they attach it — nobody else can (an admin's
+  // teacher edit takes role/class/departments only). Adding it never clears the username,
+  // so both identifiers keep working and nobody is locked out mid-switch.
+  const [emailValue, setEmailValue] = useState(user?.email ?? '')
+  const [emailPassword, setEmailPassword] = useState('')
+  const [savingEmail, setSavingEmail] = useState(false)
+  const emailDirty = emailValue.trim().toLowerCase() !== (user?.email ?? '').toLowerCase()
+  // Proving the password is asked for when CHANGING an address that already owns password
+  // recovery, never when adding a first one — a phone left unattended was otherwise enough
+  // to move someone's account to a stranger's address.
+  const emailNeedsPassword = !!user?.email && emailDirty
+
+  const handleSaveEmail = async () => {
+    const trimmed = emailValue.trim()
+    if (!trimmed) { Alert.alert(t('Error'), t('Email is required')); return }
+    setSavingEmail(true)
+    try {
+      const res = await updateMyEmailApi(trimmed, emailNeedsPassword ? emailPassword : undefined)
+      setUser({ email: res.email })
+      setEmailPassword('')
+      Alert.alert(t('Saved'), t('You can now sign in with this email.'))
+    } catch (err: any) {
+      Alert.alert(t('Error'), err?.response?.data?.message || t('Failed to update email.'))
+    } finally {
+      setSavingEmail(false)
+    }
+  }
 
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -86,9 +115,55 @@ export default function AccountScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{user?.name}</Text>
-            <Text style={styles.email}>{user?.email}</Text>
+            <Text style={styles.email}>{user?.email || user?.username || ''}</Text>
           </View>
         </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{user?.email ? t('Login Email') : t('Add an Email')}</Text>
+        <Text style={styles.cardSub}>
+          {user?.email
+            ? t('The email you sign in with')
+            : `${t('You sign in with the username')} "${user?.username ?? ''}". ${t('Add an email to sign in with it instead and to recover your password by email — your username keeps working either way.')}`}
+        </Text>
+        <Text style={styles.label}>{t('Email')}</Text>
+        <TextInput
+          style={[styles.input, { paddingRight: 14, marginBottom: 14 }]}
+          value={emailValue}
+          onChangeText={setEmailValue}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          textContentType="emailAddress"
+          placeholder="you@school.com"
+          placeholderTextColor={colors.textMuted}
+        />
+        {emailNeedsPassword && (
+          <>
+            <Text style={styles.label}>{t('Current Password')}</Text>
+            <TextInput
+              style={[styles.input, { paddingRight: 14, marginBottom: 6 }]}
+              value={emailPassword}
+              onChangeText={setEmailPassword}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="password"
+              placeholderTextColor={colors.textMuted}
+            />
+            <Text style={[styles.cardSub, { marginBottom: 14 }]}>{t('Asked because this address is how your password is recovered.')}</Text>
+          </>
+        )}
+        <TouchableOpacity
+          style={[styles.button, (!emailDirty || savingEmail || (emailNeedsPassword && !emailPassword)) && styles.buttonDisabled]}
+          onPress={handleSaveEmail}
+          disabled={!emailDirty || savingEmail || (emailNeedsPassword && !emailPassword)}
+          activeOpacity={0.85}
+        >
+          {savingEmail ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="mail-outline" size={17} color="#fff" />}
+          <Text style={styles.buttonText}>{savingEmail ? t('Saving...') : user?.email ? t('Update Email') : t('Save Email')}</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.card}>

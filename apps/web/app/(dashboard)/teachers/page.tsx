@@ -87,7 +87,7 @@ export default function TeachersPage() {
   const [removeFromClassTarget, setRemoveFromClassTarget] = useState<{ teacherId: string; teacherName: string; className: string } | null>(null)
   const [removingFromClass, setRemovingFromClass] = useState(false)
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
-  const [editForm, setEditForm] = useState({ role: '', masterClassLevel: '', departments: [] as string[] })
+  const [editForm, setEditForm] = useState({ role: '', masterClassLevel: '', departments: [] as string[], email: '' })
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState('')
   const [resetTarget, setResetTarget] = useState<Teacher | null>(null)
@@ -263,7 +263,7 @@ export default function TeachersPage() {
 
   const openEditModal = (teacher: Teacher) => {
     setEditTarget(teacher)
-    setEditForm({ role: teacher.role, masterClassLevel: teacher.masterClassLevel ?? '', departments: teacher.departments ?? [] })
+    setEditForm({ role: teacher.role, masterClassLevel: teacher.masterClassLevel ?? '', departments: teacher.departments ?? [], email: teacher.email ?? '' })
     setEditError('')
   }
 
@@ -280,6 +280,10 @@ export default function TeachersPage() {
         role: editForm.role,
         masterClassLevel: editForm.role === 'CLASS_MASTER' ? editForm.masterClassLevel : null,
         departments: editForm.departments,
+        // Sent only when it actually changed, so an unrelated role edit can never rewrite
+        // an address (and never trips the uniqueness check for no reason).
+        ...(editForm.email.trim().toLowerCase() !== (editTarget.email ?? '').toLowerCase()
+          ? { email: editForm.email.trim() || null } : {}),
       })
       setEditTarget(null)
       fetchAll()
@@ -867,6 +871,21 @@ export default function TeachersPage() {
             </div>
             {editError && <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-sm">{editError}</div>}
             <div className="space-y-3">
+              {/* A teacher hired without an email signs in with a username. Until now only
+                  they could attach an address later, so an admin holding it on paper — or
+                  fixing a typo that has broken their password recovery — had no way in. */}
+              <div>
+                <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Login Email')}</label>
+                <input type="email" value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  placeholder={editTarget.username ? tr('No email — signs in with their username') : ''}
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                <p className="text-xs text-muted-foreground mt-1">
+                  {editTarget.username
+                    ? `${tr('Username')}: ${editTarget.username} — ${tr('keeps working whether or not an email is set.')}`
+                    : tr('They sign in with this address, so it cannot be emptied unless they also have a username.')}
+                </p>
+              </div>
               <div>
                 <label className="block text-xs font-medium text-foreground dark:text-foreground mb-1">{tr('Role')}</label>
                 <select value={editForm.role}

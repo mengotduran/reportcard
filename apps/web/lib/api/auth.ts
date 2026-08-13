@@ -65,7 +65,9 @@ export const updateLanguagePreferenceApi = async (language: 'EN' | 'FR') => {
 // Self-service — this is how a username-only account (no email on file) adds a real one
 // afterward, unlocking email-based password recovery going forward. Their username keeps
 // working as a login identifier too; it's never cleared.
-export const updateMyEmailApi = async (email: string) => {
-  const res = await api.patch('/auth/me/email', { email })
+// `currentPassword` is required only when CHANGING an address that is already on file —
+// adding a first one stays frictionless. See updateMyEmail.
+export const updateMyEmailApi = async (email: string, currentPassword?: string) => {
+  const res = await api.patch('/auth/me/email', { email, ...(currentPassword ? { currentPassword } : {}) })
   return res.data as { id: string; name: string; email: string; role: string }
 }

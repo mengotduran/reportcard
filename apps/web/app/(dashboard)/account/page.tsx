@@ -34,7 +34,11 @@ export default function AccountPage() {
         </div>
       </div>
 
-      {!user?.email && <AccountEmailCard />}
+      {/* Always shown, not only while the account has no email. Hiding it once an email
+          existed meant a typo stranded the user: the address they cannot receive mail at
+          owns their password recovery, and no admin screen can correct it either (a
+          teacher edit takes role/class/departments only). */}
+      <AccountEmailCard />
       <ChangePasswordCard />
     </div>
   )

@@ -181,6 +181,29 @@ export const updateMyEmail = async (req: AuthRequest, res: Response) => {
   try {
     const trimmed = String(req.body.email ?? '').trim().toLowerCase()
     if (!trimmed) { res.status(400).json({ message: 'Email is required' }); return }
+
+    const current = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { email: true, password: true } })
+    if (!current) { res.status(404).json({ message: 'User not found' }); return }
+
+    // CHANGING an address asks for the current password; adding the FIRST one does not.
+    //
+    // Whoever owns the login email owns password recovery, so an unattended phone was
+    // enough to move an account to a stranger's address and lock its owner out. Adding a
+    // first email carries no such risk — there was nothing to take over, the account had a
+    // username and no recovery path at all — and that is the flow this feature exists to
+    // make easy, so it stays frictionless.
+    if (current.email && current.email !== trimmed) {
+      const currentPassword = String(req.body.currentPassword ?? '')
+      if (!currentPassword) {
+        res.status(400).json({ message: 'Enter your current password to change the email you sign in with.' })
+        return
+      }
+      if (!(await bcrypt.compare(currentPassword, current.password))) {
+        res.status(401).json({ message: 'Current password is incorrect' })
+        return
+      }
+    }
+
     const updated = await prisma.user.update({ where: { id: req.user!.id }, data: { email: trimmed } })
     res.json({
       id: updated.id, name: updated.name, email: updated.email, role: updated.role,

@@ -5,7 +5,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 interface User {
   id: string
   name: string
-  email: string
+  /** Nullable: a username-only account (no email on file) has this null and signs in with
+   *  `username` instead. Either identifier works at the login screen. */
+  email: string | null
+  username?: string | null
   role: string
   schoolId: string | null
   masterClassLevel?: string | null
@@ -43,6 +46,9 @@ interface AuthState {
   logout: () => void
   setHasHydrated: (v: boolean) => void
   setSchool: (school: School) => void
+  /** Patch the signed-in user in place — used after a self-service edit (adding a login
+   *  email) so the UI reflects it without a re-login. */
+  setUser: (patch: Partial<User>) => void
   setActiveSession: (session: string) => void
 }
 
@@ -60,6 +66,7 @@ export const useAuthStore = create<AuthState>()(
       logout: () => set({ token: null, user: null, school: null, isAuthenticated: false, activeSession: null, rememberMe: true }),
       setHasHydrated: (v) => set({ _hasHydrated: v }),
       setSchool: (school) => set({ school }),
+      setUser: (patch) => set((state) => ({ user: state.user ? { ...state.user, ...patch } : state.user })),
       setActiveSession: (session) => set({ activeSession: session }),
     }),
     {
