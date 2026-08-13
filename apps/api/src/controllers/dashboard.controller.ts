@@ -64,6 +64,14 @@ function cumulativeByWeek(baseCount: number, recentDates: Date[]): number[] {
   return cumulative
 }
 
+/** The academic year a stats endpoint should report on: the one asked for, else the current
+ *  term's. Null when the school has no terms at all, which callers read as "unscoped". */
+async function resolveStatsSession(schoolId: string, requested: string | null): Promise<string | null> {
+  if (requested) return requested
+  const cur = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { session: true } })
+  return cur?.session ?? null
+}
+
 export const getWeeklyStats = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId
@@ -74,18 +82,40 @@ export const getWeeklyStats = async (req: AuthRequest, res: Response) => {
 
     const teacherRoleFilter = { role: { in: [UserRole.CLASS_TEACHER, UserRole.CLASS_MASTER, UserRole.SUBJECT_TEACHER] } }
 
+    // SCOPED TO THE ACADEMIC YEAR, exactly like the number printed above the chart.
+    // Counting school-wide made the two disagree loudly: one secondary school here holds
+    // 3,448 report cards across every year it has run, of which 1,750 belong to the current
+    // one — so the card read "1,750" while its own sparkline peaked at 3,448. A trend line
+    // under a figure has to be a history OF that figure.
+    //
+    // Same definitions getDashboardStats uses: a year is the classes that actually ran it,
+    // and students are those with a report card in it. Teachers and subjects only looked
+    // right before because neither is recreated per year.
+    const session = await resolveStatsSession(schoolId, req.query.session ? String(req.query.session) : null)
+    const yearStudents = session
+      ? await prisma.student.findMany({ where: { schoolId, reportCards: { some: { term: { session } } } }, select: { id: true, classLevel: true, createdAt: true } })
+      : []
+    const classLevels = [...new Set(yearStudents.map((s) => s.classLevel))]
+    const studentScope = { schoolId, ...(session ? { reportCards: { some: { term: { session } } } } : {}) }
+    const cardScope = { schoolId, ...(session ? { term: { session } } : {}) }
+    const subjectScope = { schoolId, ...(session ? { classLevel: { in: classLevels } } : {}) }
+    const teacherScope = {
+      schoolId, ...teacherRoleFilter,
+      ...(session ? { teacherSubjects: { some: { subject: { classLevel: { in: classLevels } } } } } : {}),
+    }
+
     const [
       students, reportCards, teachers, subjects,
       studentsBase, reportCardsBase, teachersBase, subjectsBase,
     ] = await Promise.all([
-      prisma.student.findMany({ where: { schoolId, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
-      prisma.reportCard.findMany({ where: { schoolId, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
-      prisma.user.findMany({ where: { schoolId, ...teacherRoleFilter, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
-      prisma.subject.findMany({ where: { schoolId, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
-      prisma.student.count({ where: { schoolId, createdAt: { lt: cutoff } } }),
-      prisma.reportCard.count({ where: { schoolId, createdAt: { lt: cutoff } } }),
-      prisma.user.count({ where: { schoolId, ...teacherRoleFilter, createdAt: { lt: cutoff } } }),
-      prisma.subject.count({ where: { schoolId, createdAt: { lt: cutoff } } }),
+      prisma.student.findMany({ where: { ...studentScope, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
+      prisma.reportCard.findMany({ where: { ...cardScope, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
+      prisma.user.findMany({ where: { ...teacherScope, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
+      prisma.subject.findMany({ where: { ...subjectScope, createdAt: { gte: cutoff } }, select: { createdAt: true } }),
+      prisma.student.count({ where: { ...studentScope, createdAt: { lt: cutoff } } }),
+      prisma.reportCard.count({ where: { ...cardScope, createdAt: { lt: cutoff } } }),
+      prisma.user.count({ where: { ...teacherScope, createdAt: { lt: cutoff } } }),
+      prisma.subject.count({ where: { ...subjectScope, createdAt: { lt: cutoff } } }),
     ])
 
     res.json({
@@ -298,11 +328,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     }
 
     // Academic year (session) to report on — defaults to the current term's session.
-    let session = req.query.session ? String(req.query.session) : null
-    if (!session) {
-      const cur = await prisma.term.findFirst({ where: { schoolId, isCurrent: true }, select: { session: true } })
-      session = cur?.session ?? null
-    }
+    const session = await resolveStatsSession(schoolId, req.query.session ? String(req.query.session) : null)
 
     if (!session) {
       // No terms yet — fall back to the live roster + school-wide counts.

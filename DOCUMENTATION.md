@@ -1268,6 +1268,18 @@ The university transcript is a **two-page document by design** (content ≈1370p
 
 ---
 
+### The Decision wording is capped at 40 characters
+
+`PromotionScale`'s three labels (`passLabel` / `trialLabel` / `repeatLabel`) are the school's own wording, and the decision prints inside **one row of the report card's totals band** — so wording that runs away breaks the document, not just the form. The default trial wording is already 34 characters, and it printed as "promoted on" with the rest cut off by the table edge, because the value sat in the last (narrowest) column under `white-space: nowrap; overflow: hidden`.
+
+Both halves are fixed: the API refuses a label over **40 characters** (400, naming which one), both editor fields carry `maxLength` and a live counter so the limit is visible rather than a surprise on save, and on the card the DECISION row now gives its VALUE a third of the table (at least two columns) and wraps instead of clipping — unlike the numeric bands above it, the long half here is the value, not the label. Measured at the full 40: content width equals box width, nothing clipped, wrapping to a second line.
+
+### Dashboard trends are scoped to the academic year
+
+The four "Weekly Trends" sparklines are **cumulative running totals** by `createdAt`, not per-week new counts: bulk import creates hundreds of rows on one day, which turns a per-week chart into a single spike against flat zeroes (and Recharts draws that as nothing at all).
+
+`GET /dashboard/weekly-stats` takes the same **`session`** as `/dashboard/stats`, and applies the same definitions — a year is the classes that actually ran it, students are those with a report card in it. Counted school-wide, the two disagreed loudly: one secondary school holds 3,448 report cards across every year it has run, of which 1,750 belong to the current one, so the card read **1,750** while its own sparkline peaked at **3,448**. Teachers and subjects only looked right because neither is recreated per year. **A trend line under a figure has to be a history of that figure**: the last point of every series now equals the number printed above it, on all three school types and on a past year too.
+
 ## 16. Web App Pages
 
 | Page | Path | Who |
