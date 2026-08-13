@@ -163,13 +163,16 @@ export default function StudentsPage() {
   const [importError, setImportError] = useState('')
   const [activeTermId, setActiveTermId] = useState<string>('')
 
+  // The reference data below does not depend on the academic year, so it is
+  // fetched once per mount. The roster and the fee badges DO depend on it and
+  // are owned by the effect below — keeping them out of here is what stops the
+  // page fetching the (large) student list and fee overview twice on every
+  // visit, since activeSession is persisted and already set at mount.
   useEffect(() => {
     if (!isAuthenticated) router.push('/login')
     else {
-      fetchStudents()
       fetchFilterClasses()
       fetchDefinedClasses()
-      fetchFeesOverview()
       fetchSubjects()
       fetchTerms()
       if (isSecondary) getDepartmentsApi().then(d => setDepartments(d.departments)).catch(() => {})
@@ -236,12 +239,15 @@ export default function StudentsPage() {
     finally { setLoading(false) }
   }
 
-  // Re-pull the roster + fee badges whenever the active academic year changes.
+  // Sole owner of the roster + fee badges: once on mount, and again only when the
+  // active academic year actually changes. Note there is deliberately no
+  // `!activeSession` guard — a school with no term yet still has a roster to show,
+  // and bailing out here used to leave the page permanently empty for them.
   useEffect(() => {
-    if (!isAuthenticated || !activeSession) return
+    if (!isAuthenticated) return
     fetchStudents()
     fetchFeesOverview()
-  }, [activeSession])
+  }, [isAuthenticated, activeSession])
 
   const handleStatusFilter = (status: StudentStatus) => {
     setStatusFilter(status)

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Blinker, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import ThemeProvider from "@/components/ui/ThemeProvider";
+import QueryProvider from "@/lib/query/QueryProvider";
 
 // Design system fonts (see the Bulletin design spec): three families, three jobs.
 //   Blinker        display       → names, section headings, titles
@@ -55,7 +56,12 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <link href="https://fonts.googleapis.com/css2?family=Share+Tech&display=swap" rel="stylesheet" />
       </head>
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        {/* QueryProvider sits at the root so the cache survives navigation between
+            route groups, which is the whole point: a page the user already visited
+            should not pay another round trip to the API to render again. */}
+        <QueryProvider>
+          <ThemeProvider>{children}</ThemeProvider>
+        </QueryProvider>
       </body>
     </html>
   );
