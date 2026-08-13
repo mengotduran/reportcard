@@ -277,6 +277,9 @@ model User {
   absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
   notifications    Notification[]
   pastTermMarksGrantsGiven PastTermMarksGrant[]
+
+  // Mirrors schema.prisma — see the comment there.
+  @@index([schoolId, role])
 }
 
 model Student {
@@ -314,6 +317,9 @@ model Student {
 
   @@unique([schoolId, studentId])
   subjectExclusions   SubjectExclusion[]
+
+  // Mirrors schema.prisma — see the comment there.
+  @@index([schoolId, classLevel])
 }
 
 model FeePayment {
@@ -331,6 +337,8 @@ model FeePayment {
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([studentId, session])
+  // Mirrors schema.prisma — see the comment there.
+  @@index([schoolId, session])
 }
 
 model HndRegistrationPayment {
@@ -392,6 +400,9 @@ model Subject {
   pastTermGrants  PastTermMarksGrant[]
   exclusions      SubjectExclusion[]
   privateSlots    TimetableSlot[]    @relation("PrivateSlotCourse")
+
+  // Mirrors schema.prisma — see the comment there.
+  @@index([schoolId, classLevel])
 }
 
 // Mirrors schema.prisma — see the comment there.
@@ -560,6 +571,10 @@ model Term {
   school      School       @relation(fields: [schoolId], references: [id])
   reportCards ReportCard[]
   pastTermMarksGrants PastTermMarksGrant[]
+
+  // Mirrors schema.prisma — see the comment there.
+  @@index([schoolId, isCurrent])
+  @@index([schoolId, session])
 }
 
 // Mirrors schema.prisma — see the comment there.
@@ -607,6 +622,9 @@ model ReportCard {
   entries   ReportEntry[]
 
   @@unique([studentId, termId])
+  // Mirrors schema.prisma — see the comment there.
+  @@index([schoolId, termId])
+  @@index([termId])
 }
 
 model ReportEntry {
@@ -624,6 +642,10 @@ model ReportEntry {
 
   reportCard ReportCard @relation(fields: [reportCardId], references: [id])
   subject    Subject    @relation(fields: [subjectId], references: [id])
+
+  // Mirrors schema.prisma — see the comment there.
+  @@index([reportCardId])
+  @@index([subjectId])
 }
 
 /// Every switch of who records marks, kept forever. Mirrors the Postgres model

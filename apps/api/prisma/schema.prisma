@@ -278,6 +278,10 @@ model User {
   notifications    Notification[]
   pastTermMarksGrantsGiven PastTermMarksGrant[]
   school           School?          @relation(fields: [schoolId], references: [id])
+
+  // email/username are already unique-indexed, so login is fine; this is for the
+  // staff-list and class-master lookups, which filter by school and role.
+  @@index([schoolId, role])
 }
 
 model Student {
@@ -312,6 +316,10 @@ model Student {
 
   @@unique([schoolId, studentId])
   subjectExclusions   SubjectExclusion[]
+
+  // @@unique([schoolId, studentId]) already covers "this school's students" as a
+  // leftmost prefix; this covers the class roster reads, which are the common case.
+  @@index([schoolId, classLevel])
 }
 
 model FeePayment {
@@ -328,6 +336,8 @@ model FeePayment {
   student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([studentId, session])
+  // The fees overview reads a whole school's ledger for one session at a time.
+  @@index([schoolId, session])
 }
 
 model HndRegistrationPayment {
@@ -377,6 +387,10 @@ model Subject {
   pastTermGrants  PastTermMarksGrant[]
   exclusions      SubjectExclusion[]
   privateSlots    TimetableSlot[]    @relation("PrivateSlotCourse")
+
+  // Subject had no index at all; { schoolId, classLevel } is how nearly every
+  // marks and report card screen loads a class's subject list.
+  @@index([schoolId, classLevel])
 }
 
 // A teacher may only edit marks for the CURRENTLY active term/semester — once it's no
@@ -615,6 +629,11 @@ model Term {
   reportCards     ReportCard[]
   school          School       @relation(fields: [schoolId], references: [id])
   pastTermMarksGrants PastTermMarksGrant[]
+
+  // { schoolId, isCurrent } is the single hottest filter in the codebase (11 call
+  // sites) and ran as a full scan of every term of every school on each request.
+  @@index([schoolId, isCurrent])
+  @@index([schoolId, session])
 }
 
 model ReportCard {
@@ -643,7 +662,11 @@ model ReportCard {
   term                 Term          @relation(fields: [termId], references: [id])
   entries              ReportEntry[]
 
+  // @@unique([studentId, termId]) already indexes studentId (leftmost prefix), so
+  // these cover the two lookups it cannot: a school's cards, and a term's cards.
   @@unique([studentId, termId])
+  @@index([schoolId, termId])
+  @@index([termId])
 }
 
 model ReportEntry {
@@ -658,6 +681,12 @@ model ReportEntry {
   resitScore   Float?     // university only: exam mark re-obtained after resitting a failed course; seq2Score is kept as the original attempt
   reportCard   ReportCard @relation(fields: [reportCardId], references: [id])
   subject      Subject    @relation(fields: [subjectId], references: [id])
+
+  // The largest table in the database and it had no index but the primary key.
+  // Postgres does not index foreign keys automatically, so every "marks for this
+  // card" and "marks for this subject" read scanned the whole table.
+  @@index([reportCardId])
+  @@index([subjectId])
 }
 
 model ExcelTemplate {

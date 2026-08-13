@@ -1,5 +1,6 @@
 'use client'
 import { useRouter, usePathname } from 'next/navigation'
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { Users, BookOpen, FileText, School, LogOut, LayoutDashboard, Calendar, ShieldCheck, Settings, GraduationCap, Palette, Star, MessageSquare, Menu, X, ClipboardList, Wallet, CalendarRange, BookMarked, CalendarClock, CalendarCheck, Bell, Search, ChevronsUpDown, Award } from 'lucide-react'
@@ -302,9 +303,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
                   const meta = navMeta[item.href]
                   return (
-                    <button
+                    // A real <Link>, not a button calling router.push. Next only
+                    // prefetches a route's JavaScript for <Link>, and on a slow
+                    // connection that is the whole difference between a click that
+                    // responds and one that appears to do nothing for several
+                    // seconds while the chunk downloads. The onClick side effects
+                    // (closing the drawer, clearing the filter) still run.
+                    <Link
                       key={item.label}
-                      onClick={() => { router.push(item.href); setMobileNavOpen(false); setNavQuery('') }}
+                      href={item.href}
+                      onClick={() => { setMobileNavOpen(false); setNavQuery('') }}
                       className={`relative w-full flex items-center gap-2.5 pl-3 pr-2.5 py-[7px] rounded-md text-[13px] transition-colors ${
                         isActive
                           ? 'bg-muted text-foreground font-medium'
@@ -325,7 +333,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                           {meta}
                         </span>
                       )}
-                    </button>
+                    </Link>
                   )
                 })}
               </div>
