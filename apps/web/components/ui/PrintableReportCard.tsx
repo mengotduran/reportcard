@@ -1478,7 +1478,11 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
         }
         const FLEX_FIELDS = new Set(['m:subject', 'm:subject_fr'])
         // Fixed-width but prose-y: wrap to a second line rather than clipping.
-        const WRAP_FIELDS = new Set(['m:remarks', 'm:evaluation'])
+        // `decision` is admin-authored ("This student was promoted on trial" is the default
+        // trial wording, 34 characters) and landed in the last, narrowest column, where it
+        // printed as "promoted on" with the rest cut off by the table edge. It is given
+        // several columns' width below and wraps here rather than clipping.
+        const WRAP_FIELDS = new Set(['m:remarks', 'm:evaluation', 'decision'])
 
         const dataRowFields: string[] = dataRowTpl?.cells.map((c: SheetCell) => c.field ?? '') ?? []
 
@@ -1604,12 +1608,17 @@ function SectionsRenderer(props: PrintableReportCardProps & { cfg: TemplateConfi
             { text: cgpa!.toFixed(2), bold: true, align: 'center' as const },
           ],
         }] : []
+        const decisionSpan = Math.min(Math.max(2, Math.ceil(colCount / 3)), Math.max(1, colCount - 1))
         const effectiveFooterRows: SheetRow[] = showDecisionInFooter
           ? [...baseFooterRows, ...annualRows, {
               id: '__decision_footer',
+              // Unlike the numeric bands above it, the VALUE is the long half here — a
+              // school writes its own promotion wording. So the label takes what is left
+              // and the decision gets a third of the table (at least two columns), which
+              // with wrapping fits the 40-character cap the promotion scale enforces.
               cells: [
-                { text: `${t('DECISION')}:`, bold: true, colSpan: Math.max(1, colCount - 1), align: 'right' as const, textColor: color },
-                { field: 'decision', bold: true, align: 'center' as const, textColor: color, fontSize: 15 },
+                { text: `${t('DECISION')}:`, bold: true, colSpan: Math.max(1, colCount - decisionSpan), align: 'right' as const, textColor: color },
+                { field: 'decision', bold: true, colSpan: decisionSpan, align: 'center' as const, textColor: color, fontSize: 13 },
               ],
             }]
           : showCumulativeInFooter
