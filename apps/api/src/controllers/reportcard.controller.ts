@@ -143,18 +143,34 @@ export const getReportCards = async (req: AuthRequest, res: Response) => {
     const search = String(req.query.search ?? '').trim()
     const like = (value: string) => (IS_OFFLINE_BUILD ? { contains: value } : { contains: value, mode: 'insensitive' as const })
 
+    // Every condition on the STUDENT relation has to be merged into one object rather than
+    // spread as separate `student:` keys. Object spread keeps only the last value for a
+    // repeated key, so the old shape meant a class filter and a department filter could not
+    // both apply — whichever spread came second silently discarded the other.
+    const studentWhere: Record<string, unknown> = {}
+    if (classLevel) studentWhere.classLevel = String(classLevel)
+    // Comma-separated set of classes — how a secondary school's DEPARTMENT filter is
+    // expressed (a department spans several classes). Must be server-side once the list is
+    // paginated: filtering a page client-side can empty it out while later pages still hold
+    // matches, which reads as "no report cards" rather than "keep going".
+    if (classLevels) {
+      studentWhere.classLevel = { in: String(classLevels).split(',').map((c) => c.trim()).filter(Boolean) }
+    }
+    // Active / Disabled / Dismissed, driving the tabs on the report cards screen. A student
+    // who has left keeps every card they ever earned — a dismissed student still needs a
+    // transcript to transfer — but they belong in their own tab rather than mixed into the
+    // everyday list. Unset means no status filter at all, which is what the transcript and
+    // print routes want: those address one student who has already been chosen.
+    const studentStatus = String(req.query.studentStatus ?? '').trim().toUpperCase()
+    if (['ACTIVE', 'DISABLED', 'DISMISSED'].includes(studentStatus)) {
+      studentWhere.status = studentStatus
+    }
+
     const where = {
       schoolId,
       ...(termId ? { termId: String(termId) } : {}),
       ...(session ? { term: { session: String(session) } } : {}),
-      ...(classLevel ? { student: { classLevel: String(classLevel) } } : {}),
-      // Comma-separated set of classes — how a secondary school's DEPARTMENT filter is
-      // expressed (a department spans several classes). Must be server-side once the
-      // list is paginated: filtering a page client-side can empty it out while later
-      // pages still hold matches, which reads as "no report cards" rather than "keep going".
-      ...(classLevels
-        ? { student: { classLevel: { in: String(classLevels).split(',').map((c) => c.trim()).filter(Boolean) } } }
-        : {}),
+      ...(Object.keys(studentWhere).length ? { student: studentWhere } : {}),
       ...(search
         ? {
             OR: [
@@ -487,6 +503,12 @@ export const getMarksExport = async (req: AuthRequest, res: Response) => {
     const schoolId = req.user!.schoolId!
     const termId = String(req.query.termId || '')
     const classLevel = req.query.classLevel ? String(req.query.classLevel) : undefined
+    // Which students to include, matching the status filter on the screen that asked for
+    // this file. Defaults to ACTIVE, which is what every caller wanted before this existed
+    // and is what the everyday export means. Judged on `status` alone, exactly like
+    // getReportCards — the two must agree, since an export is meant to BE the table.
+    const rawStatus = String(req.query.studentStatus ?? '').trim().toUpperCase()
+    const studentStatus = ['ACTIVE', 'DISABLED', 'DISMISSED'].includes(rawStatus) ? rawStatus : 'ACTIVE'
 
     if (!termId) {
       res.status(400).json({ message: 'A term is required' })
@@ -510,10 +532,11 @@ export const getMarksExport = async (req: AuthRequest, res: Response) => {
     // Base on the report cards OF THIS TERM — so the export matches exactly the
     // students shown when the table is filtered to that term (a student only
     // "belongs" to a term once they have a report card in it). Disabled/Dismissed
-    // students are excluded — this drives bulk CSV exports, same rule as bulk
-    // report-card printing (see Student.status in schema.prisma).
+    // students are excluded unless they are what was asked for: a school exporting its
+    // Dismissed list wants exactly those, and an unfiltered `isActive: true` here handed
+    // it back an empty file instead (see Student.status in schema.prisma).
     const cards = await prisma.reportCard.findMany({
-      where: { schoolId, termId, student: { isActive: true, ...(classLevel ? { classLevel } : {}) } },
+      where: { schoolId, termId, student: { status: studentStatus as any, ...(classLevel ? { classLevel } : {}) } },
       include: { student: true, entries: { include: { subject: true } } },
       orderBy: [{ student: { classLevel: 'asc' } }, { position: 'asc' }, { student: { name: 'asc' } }],
     })
@@ -822,11 +845,17 @@ export const saveEntries = async (req: AuthRequest, res: Response) => {
       return
     }
 
-    // Admin-entered marks are a university-only arrangement, and only once the school has
-    // switched it on. A primary/secondary admin, or a university admin who hasn't enabled
-    // ADMIN_ONLY, has the same standing as any other non-teacher here: none, unless
-    // explicitly granted this one card.
-    if (ADMIN_ROLES.includes(role) && !(isUniversity && school?.marksEntryMode === 'ADMIN_ONLY') && reportCard.marksEditGrantedTo !== userId) {
+    // A PRIMARY or SECONDARY admin may always record marks. Teachers still own the job —
+    // the readiness panel keeps naming whoever has not filled a subject, and that is
+    // unchanged — but a term cannot be held hostage by one teacher who has gone
+    // unreachable. The admin is the fallback, and needing a per-card grant to act as one
+    // (which the admin issued to themselves anyway) was ceremony, not a control.
+    //
+    // A UNIVERSITY is different and stays as it was: ADMIN_ONLY is the arrangement built
+    // for exactly this, it is recorded and capped per semester (see setSchoolSettings), and
+    // switching it on is the deliberate act that moves entry to the administration. An
+    // explicit per-card grant still works there, as everywhere.
+    if (ADMIN_ROLES.includes(role) && isUniversity && school?.marksEntryMode !== 'ADMIN_ONLY' && reportCard.marksEditGrantedTo !== userId) {
       res.status(403).json({ message: 'Marks are entered by teachers at this school. Ask the subject teacher to record them, or grant yourself access to this class.' })
       return
     }
@@ -1357,27 +1386,8 @@ export const publishReportCard = async (req: AuthRequest, res: Response) => {
   }
 }
 
-// Delete report card
-export const deleteReportCard = async (req: AuthRequest, res: Response) => {
-  try {
-    const id = String(req.params.id)
-    const schoolId = req.user!.schoolId!
-
-    const reportCard = await prisma.reportCard.findFirst({ where: { id, schoolId } })
-    if (!reportCard) {
-      res.status(404).json({ message: 'Report card not found' })
-      return
-    }
-
-    await prisma.reportEntry.deleteMany({ where: { reportCardId: id } })
-    await prisma.reportCard.delete({ where: { id } })
-
-    res.json({ message: 'Report card deleted' })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: 'Server error' })
-  }
-}
+// deleteReportCard was removed deliberately — see the comment where its route used to be
+// in routes/reportcard.routes.ts. Use unpublishReportCard to reopen a card for correction.
 
 // Returns all students in a class with their report card status for a given term
 export const getClassOverview = async (req: AuthRequest, res: Response) => {
@@ -1497,17 +1507,31 @@ export const getClassOverview = async (req: AuthRequest, res: Response) => {
  * General remarks may only be written once every subject the student offers is
  * marked: all compulsory subjects + any optional subject they have an entry for.
  * Mirrors the report-card screen's "all sequences filled" gate.
+ *
+ * This is the FIFTH place "is this card complete?" is written, alongside
+ * findPublishBlockers, getReadinessDetail, publishReportCard and saveEntries — and it has
+ * to be competency-aware for the same reason they are. A rated (nursery) entry stores
+ * `score: null` deliberately, with the rating in `grade`, so a score-only check reports
+ * every fully rated card as unmarked. That made a nursery card impossible to write a
+ * general remark on, and since publishing requires one, impossible to publish at all:
+ * the only way a rated card ever got a remark was the competency branch of saveEntries
+ * writing it alongside the ratings.
  */
 async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string): Promise<boolean> {
   const rc = await prisma.reportCard.findFirst({
     where: { id: reportCardId }, select: { studentId: true, student: { select: { classLevel: true } }, term: { select: { name: true } } },
   })
   if (!rc) return false
-  const [classSubjects, entries] = await Promise.all([
+  const [classSubjects, entries, levelRow] = await Promise.all([
     prisma.subject.findMany({ where: { schoolId, classLevel: rc.student.classLevel, ...subjectTermFilter(rc.term.name) }, select: { id: true, compulsory: true } }),
-    prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true } }),
+    prisma.reportEntry.findMany({ where: { reportCardId }, select: { subjectId: true, score: true, grade: true } }),
+    // Resolved from the CLASS, not the school: one primary school runs both modes at once,
+    // its nursery classes rated while Class 1-6 stay marked.
+    prisma.classLevel.findFirst({ where: { schoolId, name: rc.student.classLevel }, select: { gradingMode: true } }),
   ])
-  const scoreBy = new Map(entries.map((e) => [e.subjectId, e.score]))
+  const isCompetency = levelRow?.gradingMode === 'COMPETENCY'
+  // "Has this subject been assessed?" — a rating for a rated class, a score otherwise.
+  const assessedBy = new Map(entries.map((e) => [e.subjectId, isCompetency ? (e.grade?.trim() ? e.grade : null) : e.score]))
   // A course the student has been ticked off is not theirs to have marks for, so it can
   // never be what blocks their card.
   const excluded = (await excludedSubjectIdsFor([rc.studentId])).get(rc.studentId) ?? new Set<string>()
@@ -1519,9 +1543,9 @@ async function offeredSubjectsAllMarked(schoolId: string, reportCardId: string):
     // counts once the student has actually started it — they have streams and electives
     // that nobody is formally ticked off.
     if (school?.type === 'UNIVERSITY') return true
-    return s.compulsory !== false || scoreBy.has(s.id)
+    return s.compulsory !== false || assessedBy.has(s.id)
   })
-  return offered.length > 0 && offered.every((s) => scoreBy.get(s.id) != null)
+  return offered.length > 0 && offered.every((s) => assessedBy.get(s.id) != null)
 }
 
 export const updateRemarks = async (req: AuthRequest, res: Response) => {

@@ -42,6 +42,12 @@ export const getPromotionScale = async (req: AuthRequest, res: Response) => {
   }
 }
 
+// A decision prints inside one row of the report card's totals band, so wording that runs
+// away breaks the document rather than the form: "This student was promoted on trial" (34
+// characters, the default) already needed a third of the table's width and a second line.
+// 40 leaves room to reword it without the card having to shrink around it.
+const MAX_LABEL = 40
+
 export const savePromotionScale = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
@@ -52,6 +58,13 @@ export const savePromotionScale = async (req: AuthRequest, res: Response) => {
     if (parsedTrialMinimum !== null && !Number.isFinite(parsedTrialMinimum)) {
       res.status(400).json({ message: 'Minimum must be a number' })
       return
+    }
+
+    for (const [field, value] of [['Pass', passLabel], ['Trial', trialLabel], ['Repeat', repeatLabel]] as const) {
+      if (typeof value === 'string' && value.trim().length > MAX_LABEL) {
+        res.status(400).json({ message: `The ${field} wording must be ${MAX_LABEL} characters or fewer — it has to fit on the report card.` })
+        return
+      }
     }
 
     if (parsedTrialMinimum !== null) {

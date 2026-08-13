@@ -428,7 +428,7 @@ function AdminHome() {
   const today = new Date().toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
 
   useEffect(() => {
-    Promise.all([getDashboardStats(activeSession ?? undefined), getWeeklyStats()])
+    Promise.all([getDashboardStats(activeSession ?? undefined), getWeeklyStats(activeSession ?? undefined)])
       .then(([s, w]) => { setStats(s); setWeeklyStats(w) })
       .catch(console.error)
       .finally(() => setLoading(false))

@@ -26,7 +26,9 @@ export const createTeacherApi = async (data: {
   return res.data
 }
 
-export const updateTeacherApi = async (id: string, data: { role: string; masterClassLevel?: string | null; departments?: string[] }) => {
+// `email` is sent only when the admin actually edited it — omitted, the server leaves the
+// teacher's address alone (same convention as departments).
+export const updateTeacherApi = async (id: string, data: { role: string; masterClassLevel?: string | null; departments?: string[]; email?: string | null }) => {
   const res = await api.put(`/teachers/${id}`, data)
   return res.data as { message: string; teacher: any; displaced?: string }
 }

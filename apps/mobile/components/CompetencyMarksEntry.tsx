@@ -17,6 +17,7 @@ import { getCompetencyScaleApi } from '@/lib/api/competencyScale'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { useT } from '@/lib/i18n'
 import { onRealtimeDebounced } from '@/lib/socket'
+import { adminMayEnterMarks } from '@/lib/marksPermission'
 
 /**
  * Marks entry for a COMPETENCY class (nursery / pre-primary) on a phone.
@@ -79,7 +80,12 @@ export default function CompetencyMarksEntry() {
   const isAdminRole = ['SCHOOL_ADMIN', 'VICE_PRINCIPAL'].includes(user?.role ?? '')
   // A competency class only ever exists at a primary school, so an admin never has
   // standing to record ratings and a teacher loses it only under ADMIN_ONLY.
-  const adminOnlyMarks = isAdminRole ? true : school?.marksEntryMode === 'ADMIN_ONLY'
+  // Nursery classes are primary, so the blanket "an admin never enters" that used to sit here
+  // locked admins out of the one school type where they are the fallback. See
+  // adminMayEnterMarks.
+  const adminOnlyMarks = isAdminRole
+    ? !adminMayEnterMarks(school?.type, school?.marksEntryMode)
+    : school?.marksEntryMode === 'ADMIN_ONLY'
 
   const [rows, setRows] = useState<Row[]>([])
   const loadedRatingsRef = useRef<Record<string, string>>({})

@@ -1,6 +1,6 @@
 import { Router, RequestHandler } from 'express'
 import {
-  getStudents, getStudent, createStudent, updateStudent, setStudentStatus, getClassLevels,
+  getStudents, getStudent, createStudent, updateStudent, setStudentStatus, deleteStudent, getStudentDeletable, getClassLevels,
   bulkPromoteStudents,
   downloadStudentImportTemplate, previewStudentImport, commitStudentImport,
   uploadStudentPhoto, removeStudentPhoto,
@@ -40,6 +40,15 @@ router.post('/bulk-promote', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), bulkP
 router.post('/', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_TEACHER'), createStudent)
 router.put('/:id', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_TEACHER'), updateStudent)
 router.put('/:id/status', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'), setStudentStatus)
+// Narrower than setting a status on purpose. Disabling or dismissing is reversible and
+// is the normal way a student leaves, so a vice-principal can do it; deleting is not
+// reversible and only ever cleans up a mis-typed row, so it stays with the admin. The
+// controller refuses outright once the student has any record against them.
+router.delete('/:id', restrictTo('SCHOOL_ADMIN'), deleteStudent)
+// Read-only pre-flight for the delete dialog, so it can grey the button out and say why
+// instead of refusing after the admin has typed the whole name. Same role as the delete
+// itself: nobody else has any use for it.
+router.get('/:id/deletable', restrictTo('SCHOOL_ADMIN'), getStudentDeletable)
 router.post('/:id/photo', restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL', 'CLASS_TEACHER'), requirePhotoUploadsEnabled, upload.single('photo'), uploadStudentPhoto)
 // Removal stays enabled while uploads are off, so an already-uploaded photo can still be
 // cleared (and its file deleted) rather than being stranded with no way to reclaim the space.

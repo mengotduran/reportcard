@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
 import api from '@/lib/api/client'
 import {
-  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands,
+  getTemplateApi, saveTemplateApi, getDefaultLayout, getDefaultLayoutForType, getLedgerLayout, getDefaultTranscriptLayout, ensureNoPrimaryTotalsBands, ensureAnnualAverageRow, ensureStampOnRight,
+  recolorSections, primaryColorTargets,
   TemplateConfig, TemplateName, TEMPLATE_DEFAULTS,
   LayoutSection, InfoRow, SummaryBox, SignatureLine,
   HeaderSec, StudentInfoSec, MarksTableSec, SummarySec,
@@ -31,50 +32,12 @@ import {
   SHEET_FIELD_OPTIONS, SheetRange,
 } from '@/components/ui/SpreadsheetEditor'
 
-// ── Sample data for canvas preview ──────────────────────────────────────────
-const SD = {
-  school: { name: 'Your School Name', type: 'SECONDARY' },
-  student: { name: 'Nguemo Alice', studentId: 'STU001', classLevel: 'Form 4 Science', guardianName: 'Nguemo Jean' },
-  term: { name: 'First Term', session: '2025/2026' },
-  subjects: ['Mathematics','Physics','Chemistry','English Language','History'],
-  entries: [15,13,17,11,18],
-  seq1: [14,12,16,10,17],
-  seq2: [16,14,18,12,19],
-  grades: ['B','C','A','D','A+'],
-  remarks: ['Good','Satisfactory','Excellent','Needs improvement','Outstanding'],
-  position: 3,
-}
+const DESIGN_TOOLS_STORAGE_KEY = 'report-card-design-tools'
 
-// ── University sample data (scores /100, GPA derived from DEFAULT_UNIVERSITY_RANGES) ──
-const U_SEQ1    = [23, 19, 25, 17, 21]         // CA /30
-const U_SEQ2    = [53, 43, 58, 39, 50]         // Exam /70
-const U_SCORES  = U_SEQ1.map((s, i) => s + U_SEQ2[i])  // [76, 62, 83, 56, 71]
-function _gpForScore(score: number) {
-  const sorted = [...DEFAULT_UNIVERSITY_RANGES].sort((a, b) => b.minScore - a.minScore)
-  const r = sorted.find(x => score >= x.minScore && score <= x.maxScore)
-  return { grade: r?.grade ?? 'F', gp: r?.gradePoint ?? 0 }
-}
-const U_GP     = U_SCORES.map(_gpForScore)
-
-const SD_UNI = {
-  student: {
-    name: 'Nguemo Alice',
-    studentId: 'UNI/2025/HND/3/COMP1/042',
-    classLevel: 'HND Computer Science - Level 1',
-    guardianName: '—',
-    gender: 'F',
-  },
-  term:        { name: 'First Semester', session: '2024/2025' },
-  subjects:    ['Introduction to Programming', 'Mathematics for Computing', 'Computer Architecture', 'Database Management', 'Operating Systems'],
-  codes:       ['CS101', 'MA101', 'CS102', 'DB201', 'CS201'],
-  entries:     U_SCORES,
-  seq1:        U_SEQ1,
-  seq2:        U_SEQ2,
-  grades:      U_GP.map(g => g.grade),
-  remarks:     ['Very Good', 'Good', 'Excellent', 'Fairly Good', 'Very Good'],
-  juryDecisions: ['VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED', 'VALIDATED'],
-  position:    3,
-}
+// No sample data on the canvas. Every bound value renders as its `[field]` key instead
+// (see resolveField and the marks table's cells), so there is nothing here to drift out of
+// step with what actually prints — and nothing that can be mistaken for a design carrying
+// one student's details.
 
 // Bilingual labels are authored "Français / English"; show only the school's language.
 function localizeLabel(label: string, lang: 'EN' | 'FR'): string {
@@ -97,24 +60,17 @@ function localizeLayout<T extends { sections?: any[] }>(layout: T, lang: 'EN' | 
   }
 }
 
-function resolveField(field: string, schoolName: string, schoolType?: string) {
-  const isUni = schoolType === 'UNIVERSITY'
-  const stu  = isUni ? SD_UNI.student : SD.student
-  const term = isUni ? SD_UNI.term    : SD.term
-  const map: Record<string, string> = {
-    'student.name':        stu.name,
-    'student.studentId':   stu.studentId,
-    'student.classLevel':  stu.classLevel,
-    'student.guardianName': stu.guardianName,
-    'student.gender':      isUni ? SD_UNI.student.gender : '—',
-    // Sample values: these are optional per student, so a real card may print them blank.
-    'student.dateOfBirth': '12 May 2003',
-    'student.placeOfBirth': 'Bamenda',
-    'term.name':           term.name,
-    'term.session':        term.session,
-    'school.name':         schoolName,
-  }
-  return map[field] ?? field
+/**
+ * What a bound student-info value shows ON THE CANVAS: its `[field]` key, never an example.
+ *
+ * Same convention as every other bound cell in the designer (`[m:subject]`, `[average]`,
+ * `[gpa]`) and for the same reason: these values are filled in per student at print time, so
+ * a plausible-looking "Nguemo Alice / Form 4 Science / 12 May 2003" invited the reading that
+ * the design carries that data, and made it impossible to tell at a glance WHICH field a row
+ * is bound to without opening its dropdown.
+ */
+function resolveField(field: string) {
+  return `[${field}]`
 }
 
 // ── Color system ─────────────────────────────────────────────────────────────
@@ -152,9 +108,27 @@ function TextColorToolbar({ canvasRef }: { canvasRef: React.RefObject<HTMLDivEle
       if (!canvasRef.current) return
       const range = sel.getRangeAt(0)
       if (!canvasRef.current.contains(range.commonAncestorContainer)) { setVisible(false); return }
+      // Only over text that can actually take a colour. The canvas is full of text that is
+      // not editable here — the term chip, the school name and contact line (School
+      // Settings), sample data — and selecting any of it used to raise this palette, which
+      // then ran execCommand on a non-editable node and did nothing at all. A palette that
+      // appears and silently no-ops is worse than one that stays away: it reads as the
+      // colour being applied and not sticking. Fields that ARE editable are unaffected.
+      const node = range.commonAncestorContainer
+      const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
+      if (!el?.closest('[contenteditable="true"]')) { setVisible(false); return }
       savedRange.current = range.cloneRange()
       const rect = range.getBoundingClientRect()
-      setPos({ top: rect.top - 48, left: rect.left + rect.width / 2 })
+      // Above the selection by default, but never behind the sticky toolbar and never off
+      // the top of the window — both of which happen the moment you colour something in the
+      // upper part of a scrolled canvas, and both look exactly like the palette failing to
+      // appear. Flip below the selection when there is no room above, and keep the whole bar
+      // inside the window horizontally.
+      const toolbarBottom = document.querySelector('.rc-design-toolbar')?.getBoundingClientRect().bottom ?? 0
+      const above = rect.top - 48
+      const top = above < toolbarBottom + 6 ? Math.min(rect.bottom + 8, window.innerHeight - 48) : above
+      const left = Math.min(Math.max(rect.left + rect.width / 2, 120), window.innerWidth - 120)
+      setPos({ top, left })
       setVisible(true)
     }
     document.addEventListener('selectionchange', onSelChange)
@@ -197,55 +171,68 @@ function TextColorToolbar({ canvasRef }: { canvasRef: React.RefObject<HTMLDivEle
 }
 
 // ── Inline-edit text (contentEditable, supports text color + immediate sync) ─
+//
+// ONE element, editable at all times. It used to render a plain <span> and swap it for a
+// contentEditable <div> on the first click, which broke the gesture people actually use:
+// a double-click's two clicks landed on two DIFFERENT nodes, so the browser often did not
+// treat it as a double-click at all and selected nothing — and when it did, a setTimeout
+// left over from entering edit mode collapsed the caret to the end and wiped the selection
+// a moment later. Either way the colour palette (which only appears for a real selection)
+// came and went for no reason the user could see. Keeping the node stable makes
+// double-click-a-word work first time, every time, and the <span> matches the idle layout
+// so editing no longer nudges the design around.
 function ET({ value, onChange, onColorApplied, style, placeholder, multiline }: {
   value: string; onChange: (v: string) => void
   onColorApplied?: (color: string) => void
   style?: React.CSSProperties; placeholder?: string; multiline?: boolean
 }) {
   const t = useT()
-  const divRef = useRef<HTMLDivElement>(null)
-  const [editing, setEditing] = useState(false)
+  const divRef = useRef<HTMLSpanElement>(null)
+  const [focused, setFocused] = useState(false)
+  const placeholderHtml = `<span style="color:#94a3b8">${placeholder || t('Click to edit…')}</span>`
 
-  const startEdit = () => {
-    // Register this field's color callback so toolbar can sync siblings immediately
+  // Write the DOM from `value` only while UNFOCUSED. Touching innerHTML under the caret
+  // replaces the text nodes the selection points at, which is what silently cancelled a
+  // selection mid-gesture whenever anything else on the canvas re-rendered.
+  useEffect(() => {
+    const el = divRef.current
+    if (!el || focused) return
+    const next = value || placeholderHtml
+    if (el.innerHTML !== next) el.innerHTML = next
+  }, [value, focused, placeholderHtml])
+
+  const handleFocus = () => {
+    // Register this field's color callback so the toolbar can sync siblings immediately
     activeColorCallback = onColorApplied || null
-    setEditing(true)
-    setTimeout(() => {
-      if (!divRef.current) return
-      divRef.current.innerHTML = value || ''
-      divRef.current.focus()
-      const r = document.createRange(); const sel = window.getSelection()
-      r.selectNodeContents(divRef.current); r.collapse(false)
-      sel?.removeAllRanges(); sel?.addRange(r)
-    }, 0)
+    setFocused(true)
+    // Clear the greyed placeholder rather than making the user select and delete it.
+    const el = divRef.current
+    if (el && !value && el.innerHTML === placeholderHtml) el.innerHTML = ''
   }
 
   const handleBlur = () => {
     activeColorCallback = null
-    if (divRef.current) {
-      const html = divRef.current.innerHTML.replace(/^<br>$/, '')
-      onChange(html)
-    }
-    setEditing(false)
+    setFocused(false)
+    const el = divRef.current
+    if (!el) return
+    const html = el.innerHTML.replace(/^<br>$/, '')
+    if (html !== value) onChange(html === placeholderHtml ? '' : html)
   }
 
   const base: React.CSSProperties = {
     minWidth: 40, outline: 'none',
-    borderBottom: editing ? '2px solid #F03E2F' : '1px dashed rgba(148,163,184,0.5)',
-    background: editing ? 'rgba(240,62,47,0.05)' : 'transparent',
-    borderRadius: editing ? 3 : 0, padding: editing ? '1px 3px' : 0, cursor: 'text',
+    borderBottom: focused ? '2px solid #F03E2F' : '1px dashed rgba(148,163,184,0.5)',
+    background: focused ? 'rgba(240,62,47,0.05)' : 'transparent',
+    borderRadius: focused ? 3 : 0, cursor: 'text',
     ...style,
   }
 
-  if (editing) {
-    return <div ref={divRef} contentEditable suppressContentEditableWarning onBlur={handleBlur}
+  return (
+    <span ref={divRef} contentEditable suppressContentEditableWarning
+      title={t('Click to edit')}
+      onFocus={handleFocus} onBlur={handleBlur}
       onKeyDown={e => { if (!multiline && e.key === 'Enter') { e.preventDefault(); divRef.current?.blur() } }}
       style={base} />
-  }
-  return (
-    <span onClick={startEdit} title={t('Click to edit')} style={base}
-      dangerouslySetInnerHTML={{ __html: value || `<span style="color:#94a3b8">${placeholder || t('Click to edit…')}</span>` }}
-    />
   )
 }
 
@@ -258,7 +245,17 @@ function ColorableCell({ sampleText, color, onColorChange, style }: {
   const active = useRef(false)
   const getHtml = () => color ? `<span style="color:${color}">${sampleText}</span>` : sampleText
 
-  useEffect(() => { if (ref.current && !active.current) ref.current.innerHTML = getHtml() })
+  // Rewrite the cell only when its own text or colour actually changed, and never while it
+  // holds the caret. This used to run after EVERY render of the canvas with no dependency
+  // list, so any unrelated edit elsewhere replaced this cell's text nodes — and if that
+  // landed between the two clicks of a double-click, the selection vanished and the colour
+  // palette never appeared. `active` alone did not cover it: the re-render can arrive before
+  // the focus event that sets it.
+  const html = getHtml()
+  useEffect(() => {
+    if (!ref.current || active.current) return
+    if (ref.current.innerHTML !== html) ref.current.innerHTML = html
+  }, [html])
 
   const handleFocus = () => {
     active.current = true
@@ -403,6 +400,18 @@ function SectionWrap({ index, total, onMove, onDelete, onDragStart, onDragOver, 
 
 function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, school, update }: { sec: HeaderSec; color: string; accent: string; schoolName: string; schoolType: string; schoolLogo?: string | null; school?: { email?: string; phone?: string | null; address?: string | null; website?: string | null; language?: string; authorizationNumber?: string | null; officialLeftTextEn?: string | null; officialLeftTextFr?: string | null; officialRightTextEn?: string | null; officialRightTextFr?: string | null } | null; update: (s: HeaderSec) => void }) {
   const t = useT()
+  // The term chip is the one piece of the ribbon whose words are generated (term name +
+  // session), so it cannot be edited or colour-selected like a label. People try anyway —
+  // clicking it points at the swatch that DOES control it and flashes it for a moment,
+  // rather than leaving the click doing nothing.
+  const chipTextRef = useRef<HTMLInputElement>(null)
+  const [chipHint, setChipHint] = useState(false)
+  const pointAtChipControls = () => {
+    setChipHint(true)
+    chipTextRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    chipTextRef.current?.focus()
+    setTimeout(() => setChipHint(false), 1600)
+  }
   const logoSize = sec.logoSize || 60
   const officialLeftResolved = resolveOfficialText(school, 'left', sec.leftText ?? '')
   const officialRightResolved = resolveOfficialText(school, 'right', sec.rightText ?? '')
@@ -553,6 +562,24 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               )}
             </label>
           )}
+          {/* The chip's words are generated (term name + session), so there is no text to
+              select and colour the way an editable label is coloured. */}
+          {sec.showTitleRibbon !== false && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={t('Colour of the term text inside the chip')}>
+              {t('Chip text:')}
+              <input ref={chipTextRef} type="color" value={sec.termChipTextColor || '#ffffff'}
+                onChange={e => update({ ...sec, termChipTextColor: e.target.value })}
+                style={{ width: 20, height: 20, padding: 0, borderRadius: 3, cursor: 'pointer',
+                  border: chipHint ? '2px solid #F03E2F' : '1px solid #d1d5db',
+                  boxShadow: chipHint ? '0 0 0 3px rgba(240,62,47,0.25)' : 'none' }} />
+              {sec.termChipTextColor && (
+                <button onClick={() => update({ ...sec, termChipTextColor: undefined })}
+                  style={{ fontSize: 10, color: '#94a3b8', textDecoration: 'underline', cursor: 'pointer' }}>
+                  {t('reset')}
+                </button>
+              )}
+            </label>
+          )}
         </>}
       </div>
 
@@ -618,8 +645,10 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
               <ET value={sec.reportTitle} onChange={v => update({ ...sec, reportTitle: v })}
                 style={{ fontFamily: 'Caladea, Georgia, serif', fontSize: 13, letterSpacing: 5, fontWeight: 'bold', color: '#fff' }} />
             </div>
-            <div style={{ background: sec.termChipColor || accent, color: '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
-              {t('First Term')} · 2025/2026
+            <div onClick={pointAtChipControls}
+              title={t('The term and year are filled in automatically. Use Chip colour and Chip text above to restyle this.')}
+              style={{ background: sec.termChipColor || accent, color: sec.termChipTextColor || '#fff', padding: '6px 12px', fontSize: 9.2, letterSpacing: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+              [term] · [session]
             </div>
           </div>
         ) : null
@@ -740,7 +769,7 @@ function RenderHeader({ sec, color, accent, schoolName, schoolType, schoolLogo, 
   )
 }
 
-function RenderStudentInfo({ sec, color, schoolName, schoolType, showPhoto, photoSize, update }: { sec: StudentInfoSec; color: string; schoolName: string; schoolType?: string; showPhoto: boolean; photoSize: number; update: (s: StudentInfoSec) => void }) {
+function RenderStudentInfo({ sec, color, showPhoto, photoSize, update }: { sec: StudentInfoSec; color: string; showPhoto: boolean; photoSize: number; update: (s: StudentInfoSec) => void }) {
   const t = useT()
   const rgb = hexRgb(color)
   const FIELD_OPTIONS = [
@@ -812,7 +841,7 @@ function RenderStudentInfo({ sec, color, schoolName, schoolType, showPhoto, phot
             <span style={{ color: '#9ca3af' }}>:</span>
             {/* Colorable value — select text and pick color to style all values */}
             <ColorableCell
-              sampleText={resolveField(row.field, schoolName, schoolType)}
+              sampleText={resolveField(row.field)}
               color={row.valueColor ?? currentValueColor}
               onColorChange={c => syncValueColor(c)}
               style={{ flex: 1, minWidth: 0 }}
@@ -1656,6 +1685,20 @@ export default function ReportCardDesignPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
+  // The tool bar is ~190px of controls above a card that is what the admin is actually
+  // trying to look at. Collapsing it leaves a slim bar (title, this toggle, Save) so the
+  // design gets the screen. Remembered per browser: someone who works collapsed should not
+  // have to re-collapse on every visit.
+  const [toolsOpen, setToolsOpen] = useState(true)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setToolsOpen(window.localStorage.getItem(DESIGN_TOOLS_STORAGE_KEY) !== 'closed')
+  }, [])
+  const toggleTools = () => setToolsOpen(open => {
+    const next = !open
+    if (typeof window !== 'undefined') window.localStorage.setItem(DESIGN_TOOLS_STORAGE_KEY, next ? 'open' : 'closed')
+    return next
+  })
   const [colorText, setColorText] = useState(config.primaryColor)
   const [accentText, setAccentText] = useState(accentOf(config))
   const [bgText, setBgText] = useState(config.bgColor || '#ffffff')
@@ -1722,7 +1765,7 @@ export default function ReportCardDesignPage() {
       case 'header':
         return <RenderHeader sec={sec} color={config.primaryColor} accent={accentOf(config)} schoolName={schoolName} schoolType={schoolType} schoolLogo={schoolLogo} school={school} update={update} />
       case 'student_info':
-        return <RenderStudentInfo sec={sec} color={config.primaryColor} schoolName={schoolName} schoolType={schoolType} showPhoto={config.showStudentPhoto ?? true} photoSize={clampStudentPhotoSize(config.studentPhotoSize)} update={update} />
+        return <RenderStudentInfo sec={sec} color={config.primaryColor} showPhoto={config.showStudentPhoto ?? true} photoSize={clampStudentPhotoSize(config.studentPhotoSize)} update={update} />
       case 'marks_table':
         return <RenderMarksTable sec={sec} color={config.primaryColor} schoolType={schoolType} update={update} />
       case 'summary':
@@ -1794,9 +1837,28 @@ export default function ReportCardDesignPage() {
   // Logo mode has no `text`/`color` keys at all (JSON drops undefined), and
   // feeding undefined into the controlled text/color inputs below flips them
   // to uncontrolled (React console error). Every field must always be defined.
-  const watermark = { enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8, logoUrl: null as string | null, size: 240, rotation: -45, ...(config.watermark ?? {}) }
+  //
+  // Two of those defaults depend on the TYPE. A logo watermark sits upright in the middle of
+  // the page — a tilted crest reads as a mistake — while text runs diagonally, which is what
+  // a "SPECIMEN" stamp is expected to do. Size likewise: 240px is a picture, 80px is a font
+  // size, and the single 240 that used to cover both meant a text watermark defaulted to a
+  // 240px font, past the end of its own 20-160 slider. Both match PrintableReportCard's
+  // Watermark, which must resolve the same defaults or the canvas and the paper disagree.
+  const wmType = (config.watermark?.type ?? 'text') as 'text' | 'logo'
+  const watermark = {
+    enabled: false, type: 'text' as const, text: '', color: '#000000', opacity: 8,
+    logoUrl: null as string | null,
+    size: wmType === 'logo' ? 240 : 80,
+    rotation: wmType === 'logo' ? 0 : -45,
+    ...(config.watermark ?? {}),
+  }
+  // Merge onto the SAVED object, not the defaulted one above. Merging onto the defaults
+  // materialised every one of them on the first click — so ticking the checkbox wrote
+  // rotation: -45, and switching to Logo then carried the text tilt with it and made the
+  // type-aware default unreachable. Storing only what was actually set keeps a field on its
+  // default until someone moves that slider.
   const setWatermark = (patch: Partial<typeof watermark>) =>
-    setConfig(c => ({ ...c, watermark: { ...watermark, ...patch } }))
+    setConfig(c => ({ ...c, watermark: { ...(c.watermark ?? {}), ...patch } }))
   const wmUploadRef = useRef<HTMLInputElement>(null)
   const [uploadingStamp, setUploadingStamp] = useState(false)
   const [showRemoveStamp, setShowRemoveStamp] = useState(false)
@@ -1862,7 +1924,11 @@ export default function ReportCardDesignPage() {
     const ensure = (cfg: any) => ensureNoPrimaryTotalsBands(ensureMarksTables(cfg, sType), sType)
     // Ledger isn't in getDefaultLayout's set — it has its own base builder
     // (special TOTAL/AVERAGE/POSITION footer rows baked into the marks table).
-    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(sType), layoutType: 'ledger' as const } : getDefaultLayout(tpl)
+    // getDefaultLayout MUST be given the school type. Without it every base is built as a
+    // secondary card — coef/weighted marks columns and the TOTAL COEFFICIENTS / TOTAL POINTS
+    // OBTAINED / WEIGHTED AVERAGE bands — and a primary or university school merging onto
+    // that base picks up the wrong table whenever the saved config has no sections of its own.
+    const baseFor = (tpl: TemplateName) => tpl === 'ledger' ? { ...getLedgerLayout(sType), layoutType: 'ledger' as const } : getDefaultLayout(tpl, sType)
     if (saved && (saved as any).sections?.length > 0) {
       const base = baseFor((saved.template as TemplateName) || 'classic')
       return ensure(localizeLayout({ ...base, ...saved } as any, lang))
@@ -1904,6 +1970,12 @@ export default function ReportCardDesignPage() {
       // picked up the Stamp/Seal section Ledger/Annual defaults gained after the Official/
       // Student copy split. Standard already had it from day one, so it's excluded.
       Object.assign(merged, ensureStampSection(merged, merged.template === 'ledger' || merged.layoutType === 'transcript'))
+      // And the annual document's Annual Average row, for the legacy case where a
+      // transcript design was saved at the top level. Only annual layouts get the row;
+      // everything else just gets the marker so this stops running on every load.
+      Object.assign(merged, ensureAnnualAverageRow(merged, sType, merged.layoutType === 'transcript'))
+      // And the seal to the right, once, on a Standard design that still has it centred.
+      Object.assign(merged, ensureStampOnRight(merged))
       // "Failing marks in red" is stored school-wide at the top level (see handleSave),
       // so stamp it onto whichever layout loaded — the checkbox must read the same in
       // every view, not whatever a layout happened to be saved with.
@@ -1957,6 +2029,19 @@ export default function ReportCardDesignPage() {
     })
   }
 
+  // Changing a colour repaints the design, not just the field. Without this the picker only
+  // moved the parts that read primaryColor/accentColor live (captions, rules, hero text)
+  // while every table header kept the colour baked into its cells when the table was
+  // seeded — so an Annual layout stayed teal no matter what the Color box said, on screen
+  // and in the printed copy alike. See recolorSections/primaryColorTargets.
+  const applyPrimaryColor = (next: string) =>
+    setConfig(c => ({ ...c, primaryColor: next, sections: recolorSections(c.sections ?? [], primaryColorTargets(c), next) }))
+
+  // Accent has no equivalent of the header-row search: it is only ever the design's own
+  // accent, so swapping the previous value is exactly right.
+  const applyAccentColor = (next: string) =>
+    setConfig(c => ({ ...c, accentColor: next, sections: recolorSections(c.sections ?? [], [accentOf(c)], next) }))
+
   const addSection = (type: AddSectionType) => {
     const sec = newSection(type, config.primaryColor, schoolType)
     setConfig(c => ({ ...c, sections: [...c.sections, sec] }))
@@ -1998,7 +2083,12 @@ export default function ReportCardDesignPage() {
     const lang: 'EN' | 'FR' = school?.language === 'FR' ? 'FR' : 'EN'
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.template === name && saved?.layoutType !== 'transcript') ? buildMergedConfig(saved, lang, sType) : null
-    const layout = restored ?? getDefaultLayout(name)
+    // A theme is a PALETTE, not a different card. The fallback has to be built for this
+    // school's type and localized exactly like loadStandardLayout's, or picking a theme
+    // rebuilds the layout as a secondary one: a primary school's marks table came back with
+    // Coef / Avg × Coef columns and the three totals bands it is specifically built without,
+    // and a French section came back with English headers.
+    const layout = restored ?? ensureMarksTables(localizeLayout(getDefaultLayout(name, sType), lang), sType)
     setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))
@@ -2017,7 +2107,7 @@ export default function ReportCardDesignPage() {
     const sType = school?.type || 'SECONDARY'
     const restored = (saved?.layoutType !== 'transcript' && saved?.layoutType !== 'ledger' && (saved as any)?.sections?.length > 0)
       ? buildMergedConfig(saved, lang, sType) : null
-    const layout = ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType)
+    const layout = ensureStampOnRight(ensureBirthRows(restored ?? ensureMarksTables(localizeLayout(getDefaultLayoutForType(school?.type), lang), sType), sType))
     setConfig(c => ({ ...layout, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))
@@ -2052,7 +2142,9 @@ export default function ReportCardDesignPage() {
     const layout = hasTranscriptSections
       ? ensureMarksTables(localizeLayout({ ...getDefaultTranscriptLayout(schoolType), ...savedT } as any, lang), schoolType)
       : { ...getDefaultTranscriptLayout(schoolType), layoutType: 'transcript' as const }
-    const seeded = ensureStampSection(ensureBirthRows(layout, schoolType), true)
+    // Same backfill the transcript print path runs, so what the designer shows is what
+    // will print (and so an admin can move or delete the row, which then sticks).
+    const seeded = ensureAnnualAverageRow(ensureStampSection(ensureBirthRows(layout, schoolType), true), schoolType)
     setConfig(c => ({ ...seeded, layoutType: 'transcript' as const, highlightFailingRed: c.highlightFailingRed, showStudentPhoto: c.showStudentPhoto, studentPhotoSize: c.studentPhotoSize }))
     setColorText(layout.primaryColor)
     setAccentText(accentOf(layout))
@@ -2135,12 +2227,21 @@ export default function ReportCardDesignPage() {
       {/* ── Designer — desktop / tablet only ── */}
       <div className="hidden md:block">
       {/* ── Sticky header (main row + optional spreadsheet toolbar row) ── */}
-      <div className="sticky top-0 z-30 bg-card border-b border-border -mx-8 -mt-8 px-8 mb-6">
+      {/* rc-design-toolbar: the colour palette measures this to avoid opening behind it. */}
+      <div className="rc-design-toolbar sticky top-0 z-30 bg-card border-b border-border -mx-8 -mt-8 px-8 mb-6">
       <div className="py-3 flex items-center gap-4 flex-wrap">
-        <div>
+        <div className="flex items-center gap-2">
           <h2 className="text-xl font-bold text-foreground">{tr('Report Card Design')}</h2>
+          <button onClick={toggleTools}
+            title={toolsOpen ? tr('Hide the tools and give the card the screen') : tr('Show the design tools')}
+            className="flex items-center gap-1 border border-border text-muted-foreground px-2 py-1 rounded-lg text-xs hover:bg-hover hover:text-foreground transition">
+            {toolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {toolsOpen ? tr('Hide tools') : tr('Show tools')}
+          </button>
         </div>
 
+
+        {toolsOpen && (<>
         {/* Theme picker. Each swatch shows the theme's two colours, since that is now the
             only difference between them — the layout is shared. Hidden in transcript mode,
             which picks its own layout on the right. */}
@@ -2164,13 +2265,12 @@ export default function ReportCardDesignPage() {
         <div className="flex items-center gap-2 ml-2">
           <label className="text-xs text-muted-foreground">{tr('Color')}</label>
           <input type="color" value={config.primaryColor}
-            onChange={e => { setConfig(c => ({ ...c, primaryColor: e.target.value })); setColorText(e.target.value) }}
+            onChange={e => { applyPrimaryColor(e.target.value); setColorText(e.target.value) }}
             className="w-7 h-7 rounded border border-border cursor-pointer" />
           <input type="text" value={colorText}
             onChange={e => {
               setColorText(e.target.value)
-              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-                setConfig(c => ({ ...c, primaryColor: e.target.value }))
+              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) applyPrimaryColor(e.target.value)
             }}
             className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
         </div>
@@ -2179,13 +2279,12 @@ export default function ReportCardDesignPage() {
         <div className="flex items-center gap-2 ml-2">
           <label className="text-xs text-muted-foreground">{tr('Accent')}</label>
           <input type="color" value={accentOf(config)}
-            onChange={e => { setConfig(c => ({ ...c, accentColor: e.target.value })); setAccentText(e.target.value) }}
+            onChange={e => { applyAccentColor(e.target.value); setAccentText(e.target.value) }}
             className="w-7 h-7 rounded border border-border cursor-pointer" />
           <input type="text" value={accentText}
             onChange={e => {
               setAccentText(e.target.value)
-              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-                setConfig(c => ({ ...c, accentColor: e.target.value }))
+              if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) applyAccentColor(e.target.value)
             }}
             className="w-20 border border-border rounded px-2 py-1 text-xs font-mono text-foreground" />
         </div>
@@ -2365,12 +2464,19 @@ export default function ReportCardDesignPage() {
                   onClick={() => setWatermark({ type: 'logo' })}>{tr('Logo')}</button>
               </div>
 
+              {/* KEYS ARE LOAD-BEARING. These two branches are sibling <div>s in the same
+                  position, so without them React reconciles one into the other and matches
+                  their children BY INDEX: the text branch's colour <input> and the logo
+                  branch's hidden file <input> are both `input`, so React reused the node and
+                  swapped its type, taking `value` from "#000000" to undefined — a controlled
+                  input turning uncontrolled, which is the console error clicking Logo threw.
+                  A key per branch makes React unmount one and mount the other instead. */}
               {(watermark.type ?? 'text') === 'text' ? (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <input type="text" value={watermark.text} onChange={e => setWatermark({ text: e.target.value })}
+                <div key="wm-text" className="flex items-center gap-1.5 flex-wrap">
+                  <input type="text" value={watermark.text ?? ''} onChange={e => setWatermark({ text: e.target.value })}
                     placeholder={schoolName}
                     className="border border-border rounded px-2 py-1 text-xs w-28" />
-                  <input type="color" value={watermark.color} onChange={e => setWatermark({ color: e.target.value })}
+                  <input type="color" value={watermark.color ?? '#000000'} onChange={e => setWatermark({ color: e.target.value })}
                     className="w-7 h-7 rounded border border-border cursor-pointer" title={tr('Watermark color')} />
 
                   {/* Font size */}
@@ -2410,7 +2516,7 @@ export default function ReportCardDesignPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div key="wm-logo" className="flex items-center gap-1.5 flex-wrap">
                   {/* Preview thumbnail */}
                   {(watermark.logoUrl || schoolLogo)
                     ? <img src={watermark.logoUrl || schoolLogo!} alt="wm" className="w-7 h-7 object-contain rounded border border-border" />
@@ -2478,10 +2584,14 @@ export default function ReportCardDesignPage() {
             </>
           )}
         </div>
+        </>)}
 
         <div className="flex-1" />
 
-        {/* Add section */}
+        {/* Add section — a design tool, so it travels with the rest of them. Save stays
+            visible when collapsed: an admin who tidied the bar away to look at the card
+            should not have to bring it back just to keep their work. */}
+        {toolsOpen && (
         <button ref={addMenuBtnRef}
           onClick={() => {
             if (addMenuCoords) { setAddMenuCoords(null); return }
@@ -2491,6 +2601,7 @@ export default function ReportCardDesignPage() {
           className="flex items-center gap-1 border border-border text-foreground px-3 py-1.5 rounded-lg text-sm hover:bg-hover transition">
           <Plus size={14} /> {tr('Add Section')}
         </button>
+        )}
 
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition">
@@ -2499,7 +2610,10 @@ export default function ReportCardDesignPage() {
         </button>
       </div>{/* end main row */}
 
-      {/* Second row: spreadsheet table toolbar — always in layout so sticky bar never resizes */}
+      {/* Second row: spreadsheet table toolbar — always in layout so the sticky bar never
+          resizes as cells are selected. Collapsed, that reservation would defeat the point,
+          so it is rendered only when there IS a selected cell to act on. */}
+      {(toolsOpen || !!pageActiveTableId) && (
       <div className="py-1.5 border-t border-border" style={{ color: '#374151', visibility: pageActiveTableId ? 'visible' : 'hidden' }}>
         <SpreadsheetToolbar
           table={pageActiveTableId ? activeTableRef.current : null}
@@ -2515,6 +2629,7 @@ export default function ReportCardDesignPage() {
           color={config.primaryColor}
         />
       </div>
+      )}
       </div>{/* end sticky wrapper */}
 
       {/* ── Canvas ── */}
@@ -2531,7 +2646,7 @@ export default function ReportCardDesignPage() {
 
       {/* Main canvas column */}
       <div style={{ width: 740, minWidth: 0, flexShrink: 1 }}>
-        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
+        {!isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Click on any text to edit · Select text and pick a color to highlight · Drag handles to reorder · [square brackets] are filled in per student when the card prints{isTranscript ? ' · The per-period tables share one design' : ''}</p>}
         {isLedger && <p className="text-xs text-muted-foreground text-center mb-4">Totals live inside the marks table · Double-click any cell to change its key</p>}
 
         {/* The canvas mirrors the printed page: on the redesign it takes the same double
@@ -2598,7 +2713,7 @@ export default function ReportCardDesignPage() {
 
       {/* ── Right sidebar: Layout switcher (university only) ── */}
       {schoolType === 'UNIVERSITY' && (
-        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: 110 }}>
+        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: toolsOpen ? 110 : 58 }}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
             <LayoutTemplate size={12} /> Layout
           </p>
@@ -2721,7 +2836,7 @@ export default function ReportCardDesignPage() {
 
       {/* ── Right sidebar: Layout switcher (secondary/primary only) ── */}
       {schoolType !== 'UNIVERSITY' && (
-        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: 110 }}>
+        <div className="flex-shrink-0" style={{ width: 168, position: 'sticky', top: toolsOpen ? 110 : 58 }}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-1.5">
             <LayoutTemplate size={12} /> Layout
           </p>

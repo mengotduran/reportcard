@@ -1,4 +1,5 @@
 import api from './client'
+import type { StudentStatus } from './students'
 
 export interface ReportCardSummary {
   id: string
@@ -220,6 +221,10 @@ export const getAllReportCards = async (params?: {
   termId?: string; classLevel?: string; session?: string
   /** Comma-separated classes — how a secondary school's department filter is sent. */
   classLevels?: string
+  /** Active / Disabled / Dismissed, driving the status tabs. Server-side for the same
+   *  reason as everything else here: this list is paginated, so narrowing it on the
+   *  client would empty a page while later pages still held matches. */
+  studentStatus?: StudentStatus
   page?: number; pageSize?: number; search?: string
 }) => {
   const res = await api.get('/report-cards', { params })

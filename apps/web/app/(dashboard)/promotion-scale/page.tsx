@@ -11,6 +11,11 @@ import { useT } from '@/lib/i18n'
 const CARD = 'bg-card rounded-xl border border-border p-6'
 const FIELD = 'w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50'
 
+// Matches the API's cap. A decision prints inside one row of the report card's totals
+// band, so wording that runs away breaks the document, not just the form — the default
+// trial wording is already 34 characters.
+const MAX_LABEL = 40
+
 export default function PromotionScalePage() {
   const router = useRouter()
   const { isAuthenticated, school } = useAuthStore()
@@ -103,7 +108,8 @@ export default function PromotionScalePage() {
             <label className="text-xs font-medium text-muted-foreground mb-1 block">
               {t('Pass')} ({isUniversity ? t('CGPA') : t('average')} {'≥'} {truePassMark})
             </label>
-            <input type="text" value={passLabel} onChange={(e) => setPassLabel(e.target.value)} className={FIELD} placeholder="Pass" />
+            <input type="text" value={passLabel} maxLength={MAX_LABEL} onChange={(e) => setPassLabel(e.target.value)} className={FIELD} placeholder="Pass" />
+            <p className="text-xs text-muted-foreground mt-1 text-right">{passLabel.length}/{MAX_LABEL}</p>
           </div>
           {isUniversity && (
             <button onClick={() => router.push('/grading-scale')}
@@ -127,7 +133,8 @@ export default function PromotionScalePage() {
             />
             {' '}{t('up to')} {truePassMark})
           </label>
-          <input type="text" value={trialLabel} onChange={(e) => setTrialLabel(e.target.value)} className={`${FIELD} mt-2`} placeholder="This student was promoted on trial" />
+          <input type="text" value={trialLabel} maxLength={MAX_LABEL} onChange={(e) => setTrialLabel(e.target.value)} className={`${FIELD} mt-2`} placeholder="This student was promoted on trial" />
+          <p className="text-xs text-muted-foreground mt-1 text-right">{trialLabel.length}/{MAX_LABEL}</p>
           <p className="text-xs text-muted-foreground mt-1">
             {trialMinimum !== ''
               ? t('This still counts as a promotion — only the wording differs from Pass. Leave blank to disable this band entirely (straight Pass/Repeat at the real pass mark).')
@@ -141,7 +148,8 @@ export default function PromotionScalePage() {
           <label className="text-xs font-medium text-muted-foreground mb-1 block">
             {t('Repeat')} ({t('below the minimum above')})
           </label>
-          <input type="text" value={repeatLabel} onChange={(e) => setRepeatLabel(e.target.value)} className={FIELD} placeholder="Repeat" />
+          <input type="text" value={repeatLabel} maxLength={MAX_LABEL} onChange={(e) => setRepeatLabel(e.target.value)} className={FIELD} placeholder="Repeat" />
+          <p className="text-xs text-muted-foreground mt-1 text-right">{repeatLabel.length}/{MAX_LABEL}</p>
         </div>
       </div>
 

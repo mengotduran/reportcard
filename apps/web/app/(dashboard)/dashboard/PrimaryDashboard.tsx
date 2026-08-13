@@ -48,10 +48,16 @@ export default function PrimaryDashboard() {
   // to /superadmin by layout, but useEffect fires before that redirect completes)
   useEffect(() => {
     if (!isAdminRole) { setLoading(false); return }
-    Promise.all([getWeeklyStatsApi(), getAcademicYearsApi()])
-      .then(([w, y]) => { setWeeklyStats(w); setYears(y.academicYears) })
-      .catch(console.error)
+    getAcademicYearsApi().then((y) => setYears(y.academicYears)).catch(console.error)
   }, [isAdminRole])
+
+  // The trend follows the SAME academic year as the figure above it. Fetched school-wide,
+  // it peaked at every report card the school had ever produced while the number beside it
+  // counted only this year's — see getWeeklyStats.
+  useEffect(() => {
+    if (!isAdminRole || !session) return
+    getWeeklyStatsApi(session).then(setWeeklyStats).catch(console.error)
+  }, [isAdminRole, session])
 
   // Stats follow the app-wide active academic year.
   useEffect(() => {

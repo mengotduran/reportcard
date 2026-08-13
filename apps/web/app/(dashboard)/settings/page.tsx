@@ -353,7 +353,11 @@ export default function SettingsPage() {
   // My Account — the logged-in admin's own login email, distinct from the
   // school's institutional email above.
   const [myEmail, setMyEmail] = useState(user?.email ?? '')
+  const [myEmailPassword, setMyEmailPassword] = useState('')
   const [savingMyEmail, setSavingMyEmail] = useState(false)
+  // See AccountEmailCard: proving the password is asked for when CHANGING an address that
+  // already owns password recovery, never when adding a first one.
+  const needsPasswordForEmail = !!user?.email && myEmail.trim().toLowerCase() !== user.email.toLowerCase()
   useEffect(() => { setMyEmail(user?.email ?? '') }, [user?.email])
 
   const handleSaveMyEmail = async () => {
@@ -364,10 +368,11 @@ export default function SettingsPage() {
       // Keep the "Saving…" state up for at least a beat so a fast response
       // doesn't flash past unnoticed — the change is worth confirming visually.
       const [res] = await Promise.all([
-        updateMyEmailApi(trimmed),
+        updateMyEmailApi(trimmed, needsPasswordForEmail ? myEmailPassword : undefined),
         new Promise(resolve => setTimeout(resolve, 1000)),
       ])
       updateUser({ email: res.email })
+      setMyEmailPassword('')
       showToast(t('Your email was updated'))
     } catch (err: any) {
       showToast(err.response?.data?.message ?? t('Failed to update email'), 'error')
@@ -479,9 +484,18 @@ export default function SettingsPage() {
                   value={myEmail}
                   onChange={e => setMyEmail(e.target.value)}
                 />
+                {needsPasswordForEmail && (
+                  <div className="mt-3">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('Current password')} <span className="text-destructive">*</span></label>
+                    <input type="password" className={FIELD} value={myEmailPassword}
+                      autoComplete="current-password"
+                      onChange={e => setMyEmailPassword(e.target.value)} />
+                    <p className="text-xs text-muted-foreground mt-1">{t('Asked because this address is how your password is recovered.')}</p>
+                  </div>
+                )}
                 <button
                   onClick={handleSaveMyEmail}
-                  disabled={savingMyEmail}
+                  disabled={savingMyEmail || (needsPasswordForEmail && !myEmailPassword)}
                   className="mt-4 bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-[#d63429] disabled:opacity-50 transition"
                 >
                   {savingMyEmail ? t('Saving…') : t('Save Email')}

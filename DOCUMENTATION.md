@@ -94,7 +94,7 @@ npx prisma studio          # View data at localhost:5555
 
 | Model | Key Fields |
 |-------|-----------|
-| `User` | name, email, password, role, schoolId, **masterClassLevel** (CLASS_MASTER only) |
+| `User` | name, **email** (nullable), **username** (nullable), password, role, schoolId, **masterClassLevel** (CLASS_MASTER only) |
 | `Student` | name, studentId, classLevel (e.g. "Form 4 Arts"), guardianName/Phone/Email, **dateOfBirth**/**placeOfBirth** (optional; DOB stored as `"YYYY-MM-DD"` TEXT, never a timestamp — a timezone would shift a birth date by a day), status |
 
 ### Academic
@@ -171,13 +171,47 @@ Base URL: `http://localhost:5000/api`
 | POST | `/auth/create-superadmin` | Create the first superadmin |
 
 ### Students
-| Method | Route | Description |
-|--------|-------|-------------|
-| GET | `/students` | List all students |
-| POST | `/students` | Create a student |
-| PUT | `/students/:id` | Edit a student |
-| DELETE | `/students/:id` | Delete a student |
-| GET | `/students/class-levels` | Get distinct class levels |
+| Method | Route | Roles | Description |
+|--------|-------|-------|-------------|
+| GET | `/students` | Any | List all students |
+| POST | `/students` | Admin, VP, Class teacher | Create a student |
+| PUT | `/students/:id` | Admin, VP, Class teacher | Edit a student |
+| PUT | `/students/:id/status` | Admin, VP | Set `ACTIVE` / `DISABLED` / `DISMISSED`. **The normal way a student leaves** |
+| DELETE | `/students/:id` | Admin only | Delete a student outright. **Refuses with 409** once they have a report card or any payment (see below) |
+| GET | `/students/:id/deletable` | Admin only | Read-only pre-flight: `{ deletable, counts, message }`. Asked when the delete dialog opens |
+| GET | `/students/class-levels` | Any | Get distinct class levels |
+
+**Deleting a student is for a data-entry mistake only** — a duplicate row, a name typed into
+the wrong class, a registration that was never a real child. It is not how a student leaves.
+
+A student who has been graded is an academic record, not a row: schools are expected to
+produce a transcript years after a student has gone, so once anything has been recorded
+against them the delete path closes for good. The API refuses with `409` and
+`reason: 'HAS_ACADEMIC_RECORD'` when the student has any **report card**, **fee payment** or
+**HND registration payment**, and its message names the counts and points at the status route
+instead. The check is the same for primary, secondary and university; "has a report card"
+carries the rule for all three, because a card is created for every active student when a term
+opens, so anyone who has sat so much as one term or semester has one.
+
+`DISABLED` and `DISMISSED` are the real exits. They keep the record and take the student out
+of rosters, class lists, bulk print and exports, and they are reversible.
+
+Both dashboards require the admin to **type the student's full name** before the delete button
+activates, the same pattern as deleting a school. That guards against the mistake that actually
+happens with a delete icon sat beside everyday buttons: deleting the wrong row. A yes/no prompt
+confirms the act rather than the target, so it does not help there.
+
+**The dialog asks the server before it opens.** `GET /students/:id/deletable` decides whether
+the student can be deleted at all; when they cannot, the confirm button is dead from the start,
+the name box is not shown (there is nothing to type your way past), and the reason is stated in
+the dialog. Being made to type out a full name and only then refused is worse than not offering
+the button. Both that route and `DELETE` read the **same** `getStudentDeleteBlockers` helper, so
+the greyed-out button and the eventual refusal can never disagree; a pre-flight that contradicts
+the enforcement is worse than none, because it teaches admins to trust a button that lies.
+
+The `409` is still enforced on delete regardless. The pre-flight can go stale between opening
+the dialog and confirming (a fee recorded on another screen, a term opened), and only the server
+decides. If the pre-flight itself fails, the dialog blocks rather than opens up.
 
 ### Subjects
 | Method | Route | Description |
@@ -247,10 +281,59 @@ A coverage row is **one course**, with a `contributors[]` breakdown and a `gaps[
 | PUT | `/report-cards/:id/unpublish` | Admin, VP | Unpublish (unlocks for editing) |
 | POST | `/report-cards/bulk-publish` | Admin, VP | Publish a whole class; skips + reports students not ready |
 | PUT | `/report-cards/:id/grant-edit` · `/revoke-edit` | Admin, VP | Grant/revoke one-time edit on a published card |
-| DELETE | `/report-cards/:id` | Admin, VP | Delete a report card |
+| ~~DELETE~~ | ~~`/report-cards/:id`~~ | — | **Removed.** A report card cannot be deleted, by anyone (see below) |
 | GET | `/report-cards/class-overview` | All | Students + card status for a class/term |
 | GET | `/report-cards/class-readiness?termId` | Admin, VP | Per-class publish readiness (drives bulk-publish gating) |
 | GET | `/report-cards/:id/readiness-detail` | Admin, VP | Which teacher is missing marks / who must write remarks |
+
+`GET /report-cards` also takes **`studentStatus`** (`ACTIVE` / `DISABLED` / `DISMISSED`),
+which drives the status filter on both dashboards — a **Status** dropdown beside the class
+filter on the web, matching the Students page control exactly, and pills on mobile. Unset
+returns every status, which is what the transcript and print routes want since those address
+one already-chosen student.
+
+**The exports on that screen follow the filters on screen.** Both buttons ("Export data"
+and "Export data (with marks)") send the selected term, class and student status, then apply
+the browser-side programme and search filters on top, so the file is the table. Selecting
+"All Terms" still writes one file per term of the active year, and a term with no cards yet
+simply produces no file. When the table is empty both buttons are disabled rather than
+producing a zero-row download, and the scope line beside them names every filter the file
+will carry. `GET /report-cards/marks-export` gained **`studentStatus`** for this (default
+`ACTIVE`); it judges on `status` alone, like `GET /report-cards`, because its old
+`isActive: true` clause returned an empty file for any Disabled or Dismissed export.
+
+The web report cards table also carries the **Change Status** action (admin/VP, the same
+`PUT /students/:id/status` the Students page uses, in the same modal with the same wording).
+A student leaves mid-term while their cards are what you have on screen, and sending an
+admin to another screen to record that is the friction worth removing. Moving one out of the
+tab you are viewing removes the row from it, which is where their cards now live.
+
+**A report card cannot be deleted.** The route was removed outright rather than guarded.
+
+A card is an **issued document**: once published, a parent may be holding a printed copy,
+and deleting the school's copy does not recall theirs. It only makes the school's record
+disagree with the paper in their hand, with nothing left to show the card ever existed. That
+is worse than a wrong card you can see and correct. Grade records are treated as append-only
+across the sector for this reason, corrected by amendment rather than erasure.
+
+The correction path is **`PUT /report-cards/:id/unpublish`**, which reopens the card for
+editing and keeps its history. There is also nothing to clean up by deleting: a card is
+auto-created for every active student when a term opens, so deleting one for an active
+student was never permanent to begin with.
+
+This also closes a hole in the student rules above: while report cards could be deleted, an
+admin could delete a student's cards and then delete the student, walking straight around
+the retention guard.
+
+**Students who have left keep their report cards.** `DISABLED` and `DISMISSED` students are
+not hidden and nothing of theirs is removed. Their cards move to their own tab, defaulting
+to Active so the everyday view is the school's current pupils. A dismissed student still
+needs a transcript to transfer, so their cards stay fully viewable and printable; they are
+only kept out of bulk operations for the current term (bulk publish already filters on
+`isActive`).
+
+Filtering is **server-side**. The list is paginated, so narrowing it on the client would
+empty a page while later pages still held matches.
 
 ### Teachers
 | Method | Route | Description |
@@ -909,6 +992,23 @@ The bulk **"Publish Class"** action checks the whole class: the dropdown button 
 
 Once a card is **PUBLISHED**, nobody can save marks on it — the administration included. Unpublish first. Publishing fixes a class's averages and positions, so a mark moving underneath a published card would silently invalidate cards already handed out; making the admin unpublish makes that consequence a deliberate act. Enforced in `saveEntries` with **no role exemption** (this also closed a hole where SUBJECT_TEACHER, unnamed in the old check, could edit published marks). The one exception is the explicit `marksEditGrantedTo` grant, consumed on use. The marks-grid banner names the remedy per role: an admin is told to unpublish, a teacher to ask their admin.
 
+### Signing in: email or username
+
+Not every teacher has an email. An account can therefore be created with a **username** instead, and `POST /auth/login` accepts either identifier in the same field — email is tried first (still the common case), the username lookup only runs if that misses. Both login screens say "Email or username", and iOS AutoFill is told `username`, not `emailAddress`, so it offers both.
+
+**Switching from a username to an email later is self-service.** `PATCH /auth/me/email` sets it for the signed-in user, and **adding an email never clears the username** — both keep working, so nobody is locked out mid-switch. Reachable from:
+
+- **Web** → `/account` (teachers/class masters) and Settings → Account (admins).
+- **Mobile** → Account. This did not exist before, which mattered most: teachers are the people who get a username, and the phone is where they live. Nobody else could do it for them either — an admin's teacher edit takes role, class and departments only.
+
+The card stays visible **after** an email is set, so a typo can be corrected. Hiding it once an address existed stranded the user: an address they cannot receive mail at owns their password recovery, and no admin screen can fix it.
+
+**An admin can set it too.** `PUT /teachers/:id` now accepts `email`, so an admin holding the address on paper, or fixing a typo that has broken a teacher's recovery, no longer needs that teacher to do it themselves. Sent-or-not like `departments`: omit it and the address is left alone. Clearing it back to nothing is refused (400) unless the teacher has a username, or the account would be left with no way to sign in; a clash returns 409.
+
+**Changing an address asks for the current password; adding the first one does not.** Whoever owns the login email owns password recovery, so an unattended phone was enough to move an account to a stranger's address. Adding a first email carries no such risk — there was nothing to take over — and that is the flow this exists to make easy, so it stays frictionless. Enforced in `updateMyEmail` (400 without, 401 wrong) and asked for by all three self-service surfaces. The admin path above is deliberately exempt: an admin proving their own password says nothing about the teacher whose address they are setting.
+
+`forgot-password` remains email-only by design — it emails a link, and a username-only account has nowhere to send it. That is what the admin's direct reset is for.
+
 ### Who enters marks (`School.marksEntryMode`, university setting)
 
 Some universities record marks centrally so the person who teaches a course never enters its marks:
@@ -917,6 +1017,14 @@ Some universities record marks centrally so the person who teaches a course neve
 - **ADMIN_ONLY** — only SCHOOL_ADMIN / VICE_PRINCIPAL may save marks (CA, Exam **and** Resit). Teachers open the marks sheet **read-only** with a banner naming the policy, so they can still check their subject. Enforced in `saveEntries` (403), not just the UI. Admins enter marks from the **Courses page** (Level → Department → Semester → course → *Enter marks*) or via the report card's *Edit marks* button; the marks sheet has an in-place **CA / Exam / Resit switcher** (web + mobile).
 
 **Switching the mode is capped and audited**: a school may switch **twice per semester** (free between academic years, when nothing is running); after that the **provider (superadmin)** sets it from the superadmin school page — uncapped, logged as the provider, never counting against the school's two. Every switch is a permanent `MarksEntryModeChange` row (who, when, which semester) shown in Settings with a "used X of 2" counter. This cannot stop a dishonest admin (they can already change any mark); it removes the ability to flip quietly.
+
+### An admin may always enter marks at a primary or secondary school
+
+Teachers still own the job — the readiness panel keeps naming exactly who has not filled which subject, and that is unchanged — but a term cannot be held hostage by one teacher who has gone unreachable. So at a **PRIMARY or SECONDARY** school an admin/VP can record marks themselves, in the ordinary marks sheet, whatever `marksEntryMode` says. Needing a per-card grant to act as the fallback (which the admin issued to themselves anyway) was ceremony, not a control.
+
+**University is unchanged**: `ADMIN_ONLY` is the arrangement built for exactly this, it is capped and audited, and switching it on is the deliberate act that moves entry to the administration. An explicit per-card grant still works everywhere, and a **published card stays frozen for everyone** — to change a mark you unpublish first.
+
+The rule lives in `saveEntries` and is mirrored by `adminMayEnterMarks` in both clients (`lib/marksPermission.ts`), so a grid never invites an edit the API will refuse. The same rule drifted across three call sites once before; keep it in the helper. Nursery ratings count as primary — the old blanket "an admin never enters" locked them out of the one school type where they are the fallback.
 
 ### Admin view
 
@@ -1014,6 +1122,35 @@ Every section also carries **`showOn`** (*Both copies* / *Official only* / *Stud
 - **Position**: shown as `3rd` (ordinal)
 - Grade badges: squared corners (not circular)
 
+### Hide tools
+
+The toolbar is ~190px of controls sitting above the thing an admin is actually trying to look at. **Hide tools**, beside the title, collapses it to a 57px bar — 131px of card back, and the sticky LAYOUT rail moves up with it. The choice is remembered per browser (`localStorage`, `report-card-design-tools`), so someone who works collapsed does not re-collapse on every visit.
+
+**Save Design stays visible when collapsed**: having tidied the bar away to look at the card, you should not have to bring it back just to keep your work. Add Section travels with the rest of the tools. The second row (the spreadsheet cell toolbar) normally holds its space so the bar never resizes as cells are selected; collapsed, that reservation would defeat the point, so it appears only when there IS a selected cell — a collapsed bar grows from 57px to 98px while you are editing a table, then shrinks back.
+
+### Colour: the picker repaints the design
+
+A table's colours live **on its cells** (`bgColor` / `textColor`, written when the table was seeded) rather than being read from the design's `primaryColor` at render time — that is what lets an admin colour one column differently from the rest, which the cell toolbar exists for. The consequence was that the **Color** box only moved the parts that read `primaryColor` live (captions, rules, hero text) and left every table header on the colour it was born with: an Annual layout seeded teal `#0f766e` stayed teal however many times Color changed, on screen and on paper.
+
+Changing **Color** or **Accent** now repaints the design (`recolorSections`, a deep walk that swaps one colour for another wherever it appears, so `bgColor`, `textColor`, `valueColor`, `placeholderColor` and a colour inside legend HTML are all covered). Color repaints `primaryColor` **plus whatever the marks-table header rows are actually painted with** (`primaryColorTargets`) — reading the colour off the header is what makes the picker work on a design whose tables never matched `primaryColor` in the first place. White and the page background are excluded, so an uncoloured header cannot drag every white in the document with it; the neutral `#f1f5f9` totals bands are untouched. Save, and the report card preview, the annual report and every print/download follow, since all of them render from these same cells.
+
+### Text colour: select the words, pick a colour
+
+Selecting text in an editable label raises a floating palette; the colour is stored **in the text** (the fields are contentEditable, so the value becomes `<font color="…">…</font>`). Two things stopped that working:
+
+- Several fields were printed as plain React children, so the colour either vanished or the markup printed as literal characters. Everything an admin can colour now goes through **`richLabel`**, which translates the TEXT while keeping the markup (a translation key never matches a string with tags in it) and returns the designer's exact markup untouched when no translation applies, so a label carrying two colours keeps both. Covered: the title ribbon, the marks-table caption, panel titles and their rows, the annual band tag, the stamp caption, the remarks signature caption, and the grading-legend title and its summary-table titles. Table CELLS are a separate mechanism and always worked — they carry `textColor` / `bgColor`, set from the cell toolbar.
+- The palette appeared over **any** selection in the canvas, including text that is not editable here — the term chip, the school name and contact line (both from School Settings), sample data — and then ran `execCommand` on a non-editable node and did nothing. It now only appears inside `[contenteditable="true"]`, because a palette that appears and silently no-ops reads as the colour being applied and not sticking.
+
+The term chip's words are generated (term name + session), so there is nothing to select: the header section has **Chip colour** and **Chip text** swatches instead. Clicking the chip on the canvas focuses the Chip text swatch and flashes it for a moment, since selecting its text is what people try first. Both swatches appear wherever a design HAS a title ribbon, which is every redesign header (`headerStyle: 'crest' | 'logo'`) on every layout and school type. A design saved before the redesign carries no `headerStyle` and draws the old letterhead, which has no ribbon and therefore no chip — in the designer and in print alike; picking a header style adds one.
+
+**Bound values on the canvas show their `[field]` key, never an example.** Student-info rows read `[student.name]`, `[student.classLevel]`, `[term.session]`, and the chip reads `[term] · [session]` — the same convention the marks table (`[m:subject]`) and the summary boxes (`[average]`) already used. Sample data ("Nguemo Alice", "Form 4 Science", "12 May 2003") invited the reading that the design carries that data, and made it impossible to tell which field a row was bound to without opening its dropdown. Printing is unaffected: `resolveField` is designer-only, and a real card still prints Edith Fru / RIA-0040 / Class 1 / Third Term · 2026/2027.
+
+This holds for **every layout and every school type** — the `SD` / `SD_UNI` sample-data constants were deleted outright, so there is nothing left to fall back to. Audited on the canvas across Standard / Ledger / Annual (Transcript at a university) for all three types: no sample values anywhere, 14–28 bound `[keys]` per layout. The one intentional exception is a transcript's **period caption** ("First Semester", "THIRD TERM"): it names which slot each table covers, which is what lets you tell three identical-looking tables apart while designing, and the printed card replaces it with that term's real name.
+
+**Editable labels are one element, editable at all times.** They used to render a plain `<span>` and swap it for a contentEditable `<div>` on the first click, which broke the gesture people actually use: a double-click's two clicks landed on two different nodes, so the browser often did not treat it as a double-click and selected nothing — and when it did, a `setTimeout` left from entering edit mode collapsed the caret to the end and wiped the selection a moment later. Since the palette only appears for a real selection, it came and went for no visible reason. Two more sources of the same symptom: the sample-data cells rewrote their own `innerHTML` after **every** canvas render (no dependency list), so an unrelated edit could replace the text nodes a selection pointed at; and the palette was positioned at `rect.top - 48` with no clamp, so colouring anything in the upper part of a scrolled canvas put it behind the 188px sticky toolbar or off the top of the window. It now flips below the selection when there is no room above, and stays inside the window horizontally.
+
+One consequence worth knowing: text scrolled under the sticky toolbar cannot be clicked at all — that is the toolbar receiving the click, not the field failing.
+
 ### Section-type defaults (Primary / Secondary / University)
 A school with **no saved report-card design** starts from `getDefaultLayoutForType`. Admins edit & save from there.
 
@@ -1044,6 +1181,10 @@ A second design per school, stored under the template config's `transcript` key 
 - Printed **from the closing period's row** (2nd semester / 3rd term) on the report-cards list, enabled only when **every** period of that year is published for the student. The transcript endpoint returns published cards only.
 - All period tables share one table design (edits mirror across them).
 
+**Every figure on it comes off the report cards; nothing is re-derived.** A period's TERM AVERAGE is that card's stored `average`, and the **annual average is the mean of those stored term averages** — the same arithmetic on the same inputs as the API's `annualAverage` (see `getReportCard`) and as `endAcademicYear`'s PASS/TRIAL/REPEAT, so the transcript and the card that fed it can never disagree. The transcript used to recompute each term from the entries: harmless for secondary (which happened to match) and wrong for primary, whose subjects are marked raw but whose average is normalised to /20 — one pupil's transcript read **77.60** for a term her report card called **15.5**, and the annual average, the Grade and the Decision were all judged on that /100 figure against /20 bands. Labels now state the scale (`TERM AVERAGE /20`, `Annual Average /20`, `Annual Average /100` at a university).
+
+**Every school type states the year's average.** University summaries carry `Annual Average /100` (a credit-weighted mark, which is what `ReportCard.average` holds there) beside Credits / CGPA / Remark. Two defects hid this: the grading-legend's summary tables were gated on *the grading scale carrying grade points*, not on school type, so a primary or secondary school's OVERALL SUMMARY was built and then never rendered; and the transcript passed no `cgpa`, so **every university transcript printed a dash** for Cumulative GPA (it now reads the year-closing card's, rather than reimplementing a rule the server owns). Saved designs are backfilled once by `ensureAnnualAverageRow`, the same idiom as `ensureBirthRows` / `ensureStampSection` — matched on the bound field, not the label, so a renamed row is left alone and a deliberate deletion sticks.
+
 ### Official vs Student copies
 
 A school needs both copies alive at once, so **the copy is chosen when printing, never saved into the design**:
@@ -1051,6 +1192,8 @@ A school needs both copies alive at once, so **the copy is chosen when printing,
 - **Student copy** — handed out at term end; the default on every print surface, and the only thing bulk printing produces (officials are per-student, on request).
 - **Official copy** — the school seals and sends it itself (WES, embassies). Prints an automatic, non-editable **"Official Copy"** note under the title; the student copy prints nothing there (absence of the note is what makes it unofficial).
 - Per-section `showOn` decides what differs (signatures/seal official-only; a "not valid for official use" note student-only). The **watermark** is scoped the same way (`watermark.showOn`) — an UNOFFICIAL wash on student copies while the official stays clean.
+- **The seal sits on the RIGHT.** Every layout seeded it there except Standard, which seeded `align: 'center'` — so the everyday report card was the one document whose stamp sat in the middle of the page, under the signatures rather than beside them. The default is now `right`, and `ensureStampOnRight` moves an existing centred one **once** (same marker idiom as `ensureBirthRows`), so a school that then deliberately centres its seal keeps it. It runs inside `mergeSavedStandardConfig`, which is the one path every standard-layout reader shares, so the seal moves on paper whether or not the admin reopens the designer.
+- **Watermark defaults depend on the type**: a **logo** is upright (`rotation: 0`) and 240px, a **text** watermark runs diagonally (`-45`) at 80px; both are centred. Resolved identically by the designer and by `PrintableReportCard`'s `Watermark`, so the canvas and the paper agree. Only what an admin actually changes is stored — every field of `TemplateConfig.watermark` is optional for that reason. Merging the *resolved* defaults back in on every edit was what froze a text tilt onto a logo: ticking the checkbox wrote `rotation: -45`, and switching to Logo then carried it. The two type branches also need their `key`, or React reconciles one into the other and reuses the colour `<input>` as the hidden file `<input>`, which is the "controlled input to be uncontrolled" error clicking Logo used to throw.
 - The designer has a **Preview: Official | Student copy** switch (view-only, never saved); sections scoped to the other copy dim with a badge rather than vanishing.
 - Transcript and report-card pages have **two print buttons**; the preview follows the chosen copy.
 
@@ -1124,6 +1267,18 @@ The university transcript is a **two-page document by design** (content ≈1370p
 
 ---
 
+### The Decision wording is capped at 40 characters
+
+`PromotionScale`'s three labels (`passLabel` / `trialLabel` / `repeatLabel`) are the school's own wording, and the decision prints inside **one row of the report card's totals band** — so wording that runs away breaks the document, not just the form. The default trial wording is already 34 characters, and it printed as "promoted on" with the rest cut off by the table edge, because the value sat in the last (narrowest) column under `white-space: nowrap; overflow: hidden`.
+
+Both halves are fixed: the API refuses a label over **40 characters** (400, naming which one), both editor fields carry `maxLength` and a live counter so the limit is visible rather than a surprise on save, and on the card the DECISION row now gives its VALUE a third of the table (at least two columns) and wraps instead of clipping — unlike the numeric bands above it, the long half here is the value, not the label. Measured at the full 40: content width equals box width, nothing clipped, wrapping to a second line.
+
+### Dashboard trends are scoped to the academic year
+
+The four "Weekly Trends" sparklines are **cumulative running totals** by `createdAt`, not per-week new counts: bulk import creates hundreds of rows on one day, which turns a per-week chart into a single spike against flat zeroes (and Recharts draws that as nothing at all).
+
+`GET /dashboard/weekly-stats` takes the same **`session`** as `/dashboard/stats`, and applies the same definitions — a year is the classes that actually ran it, students are those with a report card in it. Counted school-wide, the two disagreed loudly: one secondary school holds 3,448 report cards across every year it has run, of which 1,750 belong to the current one, so the card read **1,750** while its own sparkline peaked at **3,448**. Teachers and subjects only looked right because neither is recreated per year. **A trend line under a figure has to be a history of that figure**: the last point of every series now equals the number printed above it, on all three school types and on a past year too.
+
 ## 16. Web App Pages
 
 | Page | Path | Who |
@@ -1152,7 +1307,7 @@ The university transcript is a **two-page document by design** (content ≈1370p
 
 | Screen | File | Who | Description |
 |--------|------|-----|-------------|
-| Login | `login.tsx` | All | Email + password |
+| Login | `login.tsx` | All | **Email or username** + password |
 | Home (SuperAdmin) | `(tabs)/index.tsx` | SUPERADMIN | Red header, 4 stat cards (schools/groups/students/active), "Manage Schools" button |
 | Home (teacher/master) | `(tabs)/index.tsx` | CLASS_TEACHER, CLASS_MASTER | School banner; purple "Manage Remarks" for CLASS_MASTER, blue "Enter My Classes" for CLASS_TEACHER |
 | Home (admin) | `(tabs)/index.tsx` | SCHOOL_ADMIN, VICE_PRINCIPAL | Dashboard stats cards |
@@ -1277,7 +1432,9 @@ day-split timetable (one teacher Mondays, another Tuesdays) never produces a sha
 "both absent at once" can never occur and the rule is inert.
 
 ### Which courses appear
-A course earns a row by having an hours target **or** by having absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed.
+A course earns a row by having an hours target, **any hours at all** (scheduled, taught or projected), **or** absences recorded against it. Requiring a target made an absence on any other course invisible in By Course entirely — an admin could open the view, delete every absence it listed, and still have absences on record with nothing hinting they existed. It also withheld hours already worked: a teacher could teach a whole term on a course nobody had set a target for, and the one screen the school looks at to answer "how much has been taught" showed nothing. Untargeted rows carry their taught and projected hours with status `NO_TARGET`, which both clients already colour neutrally, sort last and offer as a "No target" filter.
+
+What still earns nothing is a course with a teacher, no target, no absences and **no hours whatsoever** — never timetabled, nothing taught, nothing projected. There are hundreds of those (217 at one secondary school, every one reading 0/0) and they would bury the rows carrying real work.
 
 Gaps deliberately do **not** earn a row. Assignments rarely start on a term's first day, so nearly every course has an uncovered stretch; including them listed all 112 courses in one school and buried the two that mattered.
 

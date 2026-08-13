@@ -123,7 +123,13 @@ export interface TemplateConfig {
   // `showOn` scopes the watermark to one printed copy, the way a section's does — it is
   // what stamps UNOFFICIAL across a student copy while the sealed official stays clean.
   // Undefined = both copies, so existing watermarks are unaffected.
-  watermark?: { enabled: boolean; type: 'text' | 'logo'; text: string; color: string; opacity: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
+  // Every field is OPTIONAL because only what an admin actually set is stored — a field left
+  // alone keeps resolving to its default, and some of those defaults depend on `type` (a logo
+  // watermark is upright and 240px, text is diagonal and 80px). Writing the resolved defaults
+  // into the saved object instead would freeze a text tilt onto a logo the moment the type
+  // changed. Readers must therefore default every field: see the designer's `watermark` and
+  // PrintableReportCard's Watermark, which resolve the same ones.
+  watermark?: { enabled?: boolean; type?: 'text' | 'logo'; text?: string; color?: string; opacity?: number; logoUrl?: string | null; size?: number; rotation?: number; x?: number; y?: number; showOn?: DocVariant }
   // top-level layout type — 'standard' (section-based designer), 'transcript' (the
   // annual/multi-period stacked design), or 'ledger' (totals-merged-into-the-table style)
   layoutType?: 'standard' | 'transcript' | 'ledger'
@@ -161,6 +167,11 @@ export interface TemplateConfig {
    * same backfill idiom as birthRowsSeeded (see ensureStampSection).
    */
   stampSeeded?: boolean
+  /** Same backfill idiom again: the annual document's Annual Average row has been offered
+   *  to this saved design once (see ensureAnnualAverageRow). */
+  annualAverageRowSeeded?: boolean
+  /** And once for moving a centred seal to the right (see ensureStampOnRight). */
+  stampAlignSeeded?: boolean
 }
 
 // ── Section types ─────────────────────────────────────────────────────────────
@@ -224,7 +235,10 @@ export interface HeaderSec     { id: string; type: 'header';       reportTitle: 
   showTitleRibbon?: boolean
   /** Term/session chip background, independent of the shared accent colour. Unset =
    *  follows accent (unchanged look for every design saved before this existed). */
-  termChipColor?: string }
+  termChipColor?: string
+  /** Text colour of that same chip. The chip's words are generated (term name + session),
+   *  not an editable field, so they cannot be coloured by selecting them — this is how. */
+  termChipTextColor?: string }
 
 // Official header only: the left/right text blocks auto-scale with the logo size
 // (bigger logo -> bigger text, so they stay visually balanced), on top of the
@@ -591,12 +605,12 @@ function seedTranscriptTermMarksTable(color: string, schoolType?: string): Sprea
         id: `mfoot_${ts + 3}`,
         cells: isPrimary
           ? [
-              { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+              { text: 'TERM AVERAGE /20:', bold: true, colSpan: 4, align: 'right', textColor: color },
               { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
               { text: '', colSpan: 1 },
             ]
           : [
-              { text: 'TERM AVERAGE:', bold: true, colSpan: 4, align: 'right', textColor: color },
+              { text: 'TERM AVERAGE /20:', bold: true, colSpan: 4, align: 'right', textColor: color },
               { field: 'average', bold: true, align: 'center', textColor: color, fontSize: 15 },
               { text: '', colSpan: 2 },
             ],
@@ -1007,7 +1021,7 @@ function buildRedesignLayout(tpl: TemplateName, schoolType?: string): TemplateCo
     // copy must never carry it (see StampSec's own doc comment). Missing entirely let it
     // print on BOTH copies for every school on the default (Standard) layout until that was
     // found and fixed separately from this.
-    { id: uid('stp'), type: 'stamp', size: 92, align: 'center', label: 'School Stamp', showOn: 'official' },
+    { id: uid('stp'), type: 'stamp', size: 92, align: 'right', label: 'School Stamp', showOn: 'official' },
     {
       id: uid('ft'), type: 'text_block',
       content: t.footerText || 'This document is an official record and is invalid without the school stamp.',
@@ -1351,6 +1365,11 @@ export function getDefaultTranscriptLayout(schoolType?: string): TemplateConfig 
         id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
         rows: [
           { id: uid('rr'), cells: [{ text: 'Credits Earned', bold: true }, { field: 'credits' }] },
+          // Every annual document states the year's average, whatever the school type —
+          // a university's is a credit-weighted mark out of 100 (what ReportCard.average
+          // holds there), which is why the scale is spelled out rather than assumed. The
+          // GPA rows below say something different: how those marks convert to points.
+          { id: uid('rr'), cells: [{ text: 'Annual Average /100', bold: true }, { field: 'average' }] },
           { id: uid('rr'), cells: [{ text: 'Cumulative GPA', bold: true }, { field: 'cgpa' }] },
           { id: uid('rr'), cells: [{ text: 'Remark', bold: true }, { field: 'classification' }] },
         ],
@@ -1403,7 +1422,10 @@ function getTranscriptTermLayout(schoolType?: string): TemplateConfig & { sectio
       rightTables: [{
         id: uid('rt'), title: 'OVERALL SUMMARY', colCount: 2,
         rows: [
-          { id: uid('rr'), cells: [{ text: 'Annual Average', bold: true }, { field: 'average' }] },
+          // /20 on both primary and secondary: subjects are marked on the class's own
+          // ceiling but the average is normalised, the same figure the report card prints
+          // under "TERM AVERAGE /20" (see primary's note in saveEntries).
+          { id: uid('rr'), cells: [{ text: 'Annual Average /20', bold: true }, { field: 'average' }] },
           { id: uid('rr'), cells: [{ text: 'Grade', bold: true }, { field: 'grade' }] },
         ],
       }],
@@ -1541,6 +1563,146 @@ export function ensureStampSection<T extends Partial<TemplateConfig>>(cfg: T, ap
   return { ...cfg, sections: next, stampSeeded: true }
 }
 
+/**
+ * Give an already-saved ANNUAL (transcript) design its Annual Average row, once — same
+ * idiom as ensureBirthRows/ensureStampSection above.
+ *
+ * An annual document that does not state the year's average is missing the one figure it
+ * exists to report, and a school whose transcript design predates this would never get it
+ * from a changed default. University designs never had the row at all (they summarised by
+ * CGPA alone); primary/secondary ones had it, but it was suppressed at render time by a
+ * gate that only let these tables print when the grading scale carried grade points.
+ *
+ * Idempotent by two independent means: the seeded marker, and a field check that leaves any
+ * table already binding `average` alone. Once seeded, a deliberate deletion sticks.
+ */
+export function ensureAnnualAverageRow<T extends Partial<TemplateConfig>>(cfg: T, schoolType?: string, applies = true): T {
+  if (cfg.annualAverageRowSeeded) return cfg
+  if (!applies) return { ...cfg, annualAverageRowSeeded: true }
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, annualAverageRowSeeded: true }
+
+  const idx = sections.findIndex(s => s.type === 'grading_legend')
+  if (idx < 0) return { ...cfg, annualAverageRowSeeded: true }
+  const legend = sections[idx] as GradingLegendSec & { rightTables?: SpreadsheetTable[] }
+  const tables = legend.rightTables
+  if (!Array.isArray(tables) || tables.length === 0) return { ...cfg, annualAverageRowSeeded: true }
+  // Already states it — under whatever label the school has renamed it to, which is why
+  // this matches on the bound field and not on the text.
+  if (tables.some(t => t.rows?.some(r => r.cells?.some(c => c.field === 'average')))) {
+    return { ...cfg, annualAverageRowSeeded: true }
+  }
+
+  const isUni = schoolType === 'UNIVERSITY'
+  const row: SheetRow = {
+    id: uid('rr'),
+    cells: [
+      { text: isUni ? 'Annual Average /100' : 'Annual Average /20', bold: true, align: 'left' },
+      { field: 'average' },
+    ],
+  }
+  // Second row at a university, matching the fresh default: under Credits Earned and above
+  // the GPA rows, since it describes the same marks those points are derived from.
+  const at = isUni ? Math.min(1, tables[0].rows.length) : 0
+  const rows = [...tables[0].rows]
+  rows.splice(at, 0, row)
+  const nextTables = [{ ...tables[0], rows }, ...tables.slice(1)]
+  const next = [...sections]
+  next[idx] = { ...legend, rightTables: nextTables } as LayoutSection
+  return { ...cfg, sections: next, annualAverageRowSeeded: true }
+}
+
+/**
+ * Repaint a saved design: every colour in `from` becomes `to`.
+ *
+ * The Color and Accent pickers only ever set two top-level fields, but a table's colours
+ * are STORED ON ITS CELLS — a header cell carries `bgColor` written when the table was
+ * seeded, not a reference to the design's colour. So picking a new Color moved anything
+ * that reads `primaryColor` live (captions, rules, hero text) and left every table header
+ * on the colour it was born with: an Annual layout seeded teal stayed teal however many
+ * times the Color box changed. Rather than making cells read the design colour — which
+ * would take away the ability to colour one column differently, which the cell toolbar
+ * exists for — the picker now rewrites the cells that were using the old colour.
+ *
+ * Deep-walks the whole structure rather than knowing field names, so `bgColor`,
+ * `textColor`, `valueColor`, `placeholderColor` and a colour inside legend HTML are all
+ * covered, and a section type added later needs nothing here. Case-insensitive: a hand-
+ * typed `#0F766E` and a seeded `#0f766e` are the same colour.
+ */
+export function recolorSections<T>(sections: T[], from: (string | undefined)[], to: string): T[] {
+  const set = new Set(from.filter((c): c is string => !!c).map((c) => c.toLowerCase()))
+  if (set.size === 0) return sections
+  const walk = (v: any): any => {
+    if (typeof v === 'string') return set.has(v.toLowerCase()) ? to : v
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') {
+      const out: any = {}
+      for (const k of Object.keys(v)) out[k] = walk(v[k])
+      return out
+    }
+    return v
+  }
+  return sections.map(walk)
+}
+
+/**
+ * Which colours the Color picker should repaint: the design's current `primaryColor`, plus
+ * whatever its marks-table HEADER ROWS are actually painted with.
+ *
+ * The second half is what makes the picker work on a design whose tables never matched
+ * `primaryColor` in the first place (every Annual layout, seeded teal for primary and navy
+ * for secondary regardless of the theme). Reading the colour off the header means the
+ * picker changes what you can see is coloured, instead of a field that agrees with it only
+ * on a freshly seeded design.
+ *
+ * White and the page background are excluded: an uncoloured header must not drag every
+ * white in the document along with it.
+ */
+export function primaryColorTargets(cfg: Partial<TemplateConfig>): (string | undefined)[] {
+  const out = new Set<string>()
+  if (cfg.primaryColor) out.add(cfg.primaryColor)
+  const neutral = new Set(['#fff', '#ffffff', 'transparent', (cfg.bgColor ?? '').toLowerCase()])
+  for (const sec of cfg.sections ?? []) {
+    if (sec.type !== 'marks_table') continue
+    for (const cell of (sec as MarksTableSec).template?.rows?.[0]?.cells ?? []) {
+      if (cell.bgColor && !neutral.has(cell.bgColor.toLowerCase())) out.add(cell.bgColor)
+    }
+  }
+  return [...out]
+}
+
+/**
+ * Put the seal on the RIGHT, once, on a design that still has it centred.
+ *
+ * Every layout seeded it right except Standard, which seeded `align: 'center'` — so the
+ * everyday report card was the one document whose stamp sat in the middle of the page,
+ * under the signatures rather than beside them, which is not where a school stamps.
+ * Changing the default only reaches designs built afterwards, so this moves an existing one.
+ *
+ * Only a stamp still on the OLD default is touched, and the marker means it happens once:
+ * a school that then deliberately centres its seal keeps it centred. Recurses into
+ * `panel_row` children, where a layout can pair the seal with a remarks block.
+ */
+export function ensureStampOnRight<T extends Partial<TemplateConfig>>(cfg: T): T {
+  if (cfg.stampAlignSeeded) return cfg
+  const sections = cfg.sections
+  if (!Array.isArray(sections)) return { ...cfg, stampAlignSeeded: true }
+  let changed = false
+  const move = (secs: LayoutSection[]): LayoutSection[] => secs.map((sec) => {
+    if (sec.type === 'panel_row') {
+      const row = sec as PanelRowSec
+      if (!Array.isArray(row.children)) return sec
+      const kids = move(row.children as LayoutSection[])
+      return kids === row.children ? sec : { ...row, children: kids } as LayoutSection
+    }
+    if (sec.type !== 'stamp' || (sec as StampSec).align !== 'center') return sec
+    changed = true
+    return { ...sec, align: 'right' as const }
+  })
+  const next = move(sections)
+  return changed ? { ...cfg, sections: next, stampAlignSeeded: true } : { ...cfg, stampAlignSeeded: true }
+}
+
 export function getDefaultLayoutForType(schoolType?: string): TemplateConfig & { sections: LayoutSection[] } {
   // Since the 2026 redesign every school type gets the SAME layout, differing only in its
   // marks columns and stat boxes (see buildRedesignLayout). The per-type builders below
@@ -1632,7 +1794,10 @@ export function mergeSavedStandardConfig(saved: Partial<TemplateConfig> | null |
   if (Object.keys(top).length === 0 || top.layoutType === 'transcript')
     return { ...getDefaultLayoutForType(schoolType), ...policy }
   const base = TEMPLATE_DEFAULTS[(top.template as TemplateName) ?? 'classic']
-  return { ...base, ...top } as TemplateConfig
+  // Applied here rather than at each call site: this is the one path every standard-layout
+  // reader shares (the card page, the class print page, the report cards list), so the seal
+  // moves on paper whether or not the admin ever reopens the designer.
+  return ensureStampOnRight({ ...base, ...top } as TemplateConfig)
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────

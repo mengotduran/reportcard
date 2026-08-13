@@ -2,11 +2,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { getStudentTranscriptApi, StudentTranscript, TranscriptReportCard } from '@/lib/api/reportcards'
+import { getStudentTranscriptApi, getReportCardApi, StudentTranscript, TranscriptReportCard } from '@/lib/api/reportcards'
 import PrintableReportCard, { PrintEntry, TranscriptSemesterData } from '@/components/ui/PrintableReportCard'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { ArrowLeft, Printer } from 'lucide-react'
-import { getTemplateApi, getDefaultTranscriptLayout, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor, DocVariant } from '@/lib/api/reportCardTemplate'
+import { getTemplateApi, getDefaultTranscriptLayout, ensureAnnualAverageRow, TemplateConfig, TranscriptPeriod, transcriptPeriodsFor, DocVariant } from '@/lib/api/reportCardTemplate'
 import { getPromotionScaleApi, PromotionScale } from '@/lib/api/promotionScale'
 import { getClassLevelsApi, GradingMode } from '@/lib/api/classLevels'
 
@@ -22,6 +22,8 @@ function toSemesterData(card?: TranscriptReportCard): TranscriptSemesterData | u
       subjectId: e.subject.id, score: e.score ?? 0, seq1Score: e.seq1Score, seq2Score: e.seq2Score,
       resitScore: e.resitScore, grade: e.grade ?? '', remarks: '',
     })),
+    // The term's own average as the card stores it — see TranscriptSemesterData.average.
+    average: card.average ?? null,
   }
 }
 
@@ -43,6 +45,13 @@ export default function AnnualTranscriptPage() {
   const [promotionScale, setPromotionScale] = useState<PromotionScale | null>(null)
   // A nursery transcript is three terms of ratings — no marks, no averages, no ranking.
   const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
+  // University only. The transcript's OVERALL SUMMARY asks for a cumulative GPA, and
+  // nothing was passing one, so it printed a dash on every university transcript ever
+  // produced. Read off the year-closing card rather than recomputed here: the CGPA counts
+  // unsat compulsory courses and excluded ones by rules the server owns (see getReportCard),
+  // and a second implementation of that is how the card and the list came to disagree once
+  // already.
+  const [cgpa, setCgpa] = useState<number | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
 
   const session = searchParams.get('session') ?? undefined
@@ -58,6 +67,13 @@ export default function AnnualTranscriptPage() {
       .then(([transcript, tpl, promoScale, levels]) => {
         setData(transcript)
         setPromotionScale(promoScale)
+        // The year-closing card is the only one that carries a cumulative GPA (see
+        // isFinalTermOfSession in getReportCard). Failure is silent: a missing cumulative
+        // must not stop the transcript rendering everything else.
+        const closing = transcript.reportCards[transcript.reportCards.length - 1]
+        if ((transcript.school.type ?? 'UNIVERSITY') === 'UNIVERSITY' && closing) {
+          getReportCardApi(closing.id).then((c) => setCgpa(c.cgpa ?? null)).catch(() => {})
+        }
         setGradingMode(levels.classLevels.find((c) => c.name === transcript.student.classLevel)?.gradingMode ?? 'NUMERIC')
         const saved = tpl.config as Partial<TemplateConfig> | undefined
         // The school's transcript design lives under saved.transcript (the top
@@ -83,7 +99,11 @@ export default function AnnualTranscriptPage() {
         finalConfig.highlightFailingRed = saved?.highlightFailingRed ?? true
         finalConfig.showStudentPhoto = saved?.showStudentPhoto ?? true
         finalConfig.studentPhotoSize = saved?.studentPhotoSize
-        setConfig(finalConfig)
+        // A design saved before the annual average was stated here would never pick it up
+        // from a changed default, and an annual report without the year's average is
+        // missing the figure it exists to report. Applied for printing whether or not the
+        // admin ever re-saves; the designer runs the same helper so it also sticks.
+        setConfig(ensureAnnualAverageRow(finalConfig, sType) as TemplateConfig)
       })
       .catch(() => setError('Failed to load transcript.'))
       .finally(() => setLoading(false))
@@ -119,7 +139,6 @@ export default function AnnualTranscriptPage() {
     </div>
   )
   const isUniversity = (data.school.type ?? 'UNIVERSITY') === 'UNIVERSITY'
-  const isPrimary = data.school.type === 'PRIMARY'
   const periodWord = isUniversity ? 'semester' : 'term'
   // Safety net for direct URL access — the report-cards list already disables its
   // transcript button until every period is published, but nothing stops someone
@@ -147,26 +166,22 @@ export default function AnnualTranscriptPage() {
   // (Credits/CGPA/Remark at a university, Annual Average/Grade elsewhere).
   const allSubjects = periods.flatMap(p => p.subjects)
   const allEntries = periods.flatMap(p => p.entries)
-  // Annual average = mean of the year's term averages. Secondary weights each term's
-  // average by subject coefficient; primary (Test+Exam, no coefficient — see
-  // reportcard.controller.ts saveEntries) takes a plain mean of subject totals instead.
-  // University transcripts summarise by CGPA instead and ignore this.
-  const termAverages = periods.map(p => {
-    if (isPrimary) {
-      const filled = p.subjects
-        .map(subj => p.entries.find(x => x.subjectId === subj.id))
-        .filter((e): e is typeof p.entries[number] => e?.score != null)
-      return filled.length > 0 ? filled.reduce((s, e) => s + e.score!, 0) / filled.length : 0
-    }
-    let coef = 0, weighted = 0
-    for (const subj of p.subjects) {
-      const e = p.entries.find(x => x.subjectId === subj.id)
-      if (e?.score == null) continue
-      const c = subj.coefficient ?? 1
-      coef += c; weighted += e.score * c
-    }
-    return coef > 0 ? weighted / coef : 0
-  })
+  // Annual average = the mean of the year's TERM AVERAGES AS STORED on each card, which is
+  // exactly how the API computes the figure the third-term report card prints and how
+  // endAcademicYear decides PASS/TRIAL/REPEAT (see getReportCard's annualAverage). It has
+  // to be the same arithmetic on the same inputs, or the transcript and the card that fed
+  // it disagree about the same year.
+  //
+  // It used to re-derive each term from the entries: a coefficient-weighted mean for
+  // secondary (which happens to match) and a plain mean of subject totals for primary
+  // (which does not — primary marks subjects raw but stores its average normalised to /20,
+  // so the transcript printed 77.60 for a term the card called 15.5). Deriving it again
+  // could only ever agree by luck, so it no longer derives it at all.
+  //
+  // Cards with no average (a rated nursery term) drop out rather than counting as zero.
+  const termAverages = periods
+    .map(p => p.average)
+    .filter((a): a is number => a != null)
   const annualAverage = termAverages.length ? termAverages.reduce((s, a) => s + a, 0) / termAverages.length : 0
 
   const printableProps = {
@@ -196,6 +211,8 @@ export default function AnnualTranscriptPage() {
     // PrintableReportCard's resolveStat), same rule the report card's own Third Term
     // card uses.
     annualAverage,
+    // University only, and only ever a figure the server computed (see the cgpa state).
+    ...(cgpa != null ? { cgpa } : {}),
     config,
     gradeBands: data.gradingScale,
     classificationBands: data.classificationBands,

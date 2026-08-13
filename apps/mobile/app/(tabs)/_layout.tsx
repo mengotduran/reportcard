@@ -74,12 +74,18 @@ export default function TabsLayout() {
   // and reusing it after a different login would deliver their signals to the wrong person.
   const handleLogout = () => { disconnectSocket(); logout(); router.replace('/login') }
 
+  // NO padding on these buttons. A 22px icon wrapped in `padding: 8` is 38px tall, which
+  // overflows the header's right-hand container and gets CLIPPED — on an iPhone the bell
+  // lost its bottom third and the log-out glyph its base, while the ThemeToggle beside them
+  // (no padding) rendered whole. That is the tell, and the same trio in DashboardHome has
+  // always used hitSlop instead. hitSlop keeps the tap target well past 44px without adding
+  // a single pixel to the laid-out box.
   const notificationBell = (
-    <TouchableOpacity onPress={() => router.push('/notifications' as any)} style={{ padding: 8 }} hitSlop={8}>
+    <TouchableOpacity onPress={() => router.push('/notifications' as any)} hitSlop={12}>
       <Ionicons name="notifications-outline" size={22} color={colors.textSecondary} />
       {unreadCount > 0 && (
         <View style={{
-          position: 'absolute', top: 4, right: 4, backgroundColor: '#ef4444', borderRadius: 8,
+          position: 'absolute', top: -5, right: -5, backgroundColor: '#ef4444', borderRadius: 8,
           minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
         }}>
           <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' }}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
@@ -88,11 +94,15 @@ export default function TabsLayout() {
     </TouchableOpacity>
   )
 
+  // Fixed height so the three sit on one line and the row can never be taller than the
+  // header allows, whatever an icon inside it is.
+  const headerActionRow = { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 14, height: 30, marginRight: 12 }
+
   const logoutButton = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
+    <View style={headerActionRow}>
       {notificationBell}
       <ThemeToggle size="sm" />
-      <TouchableOpacity onPress={handleLogout} style={{ padding: 8 }} hitSlop={8}>
+      <TouchableOpacity onPress={handleLogout} hitSlop={12}>
         <Ionicons name="log-out-outline" size={22} color="#ef4444" />
       </TouchableOpacity>
     </View>
@@ -100,9 +110,9 @@ export default function TabsLayout() {
 
 
   const logoutButtonWhite = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
+    <View style={headerActionRow}>
       <ThemeToggle size="sm" />
-      <TouchableOpacity onPress={handleLogout} style={{ padding: 8 }} hitSlop={8}>
+      <TouchableOpacity onPress={handleLogout} hitSlop={12}>
         <Ionicons name="log-out-outline" size={22} color="#fff" />
       </TouchableOpacity>
     </View>

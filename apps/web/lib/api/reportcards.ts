@@ -1,4 +1,5 @@
 import api from './client'
+import type { StudentStatus } from './students'
 
 export const getCurrentTermApi = async () => {
   const res = await api.get('/terms/current')
@@ -60,7 +61,10 @@ export const saveEntriesWithSeqApi = async (id: string, data: {
   return res.data
 }
 
-export const getReportCardsApi = async (params?: { termId?: string; classLevel?: string; session?: string }) => {
+// `studentStatus` drives the Active / Disabled / Dismissed tabs. Filtered server-side
+// because the list is paginated: narrowing only the rows already loaded would empty a page
+// while later pages still held matches. Omitting it returns every status.
+export const getReportCardsApi = async (params?: { termId?: string; classLevel?: string; session?: string; studentStatus?: StudentStatus }) => {
   const res = await api.get('/report-cards', { params })
   return res.data
 }
@@ -87,8 +91,12 @@ export interface MarksExport {
   students: MarksExportStudent[]
 }
 
-export const getMarksExportApi = async (termId: string, classLevel?: string): Promise<MarksExport> => {
-  const res = await api.get('/report-cards/marks-export', { params: { termId, ...(classLevel ? { classLevel } : {}) } })
+// `studentStatus` defaults to ACTIVE server-side, so a caller that has no status filter
+// of its own (the single-class marks sheet) keeps its old behaviour by omitting it.
+export const getMarksExportApi = async (termId: string, classLevel?: string, studentStatus?: StudentStatus): Promise<MarksExport> => {
+  const res = await api.get('/report-cards/marks-export', {
+    params: { termId, ...(classLevel ? { classLevel } : {}), ...(studentStatus ? { studentStatus } : {}) },
+  })
   return res.data
 }
 
@@ -130,10 +138,9 @@ export const revokeEditPermissionApi = async (id: string, type: 'marks' | 'remar
   return res.data
 }
 
-export const deleteReportCardApi = async (id: string) => {
-  const res = await api.delete(`/report-cards/${id}`)
-  return res.data
-}
+// No deleteReportCardApi: the route was removed. A published card is an issued document a
+// parent may already hold, and the card is re-created for any active student anyway. Use
+// unpublishReportCardApi to reopen one for correction.
 
 export const updateRemarksApi = async (id: string, remarks?: string, remarksFr?: string) => {
   const res = await api.put(`/report-cards/${id}/remarks`, { remarks, remarksFr })

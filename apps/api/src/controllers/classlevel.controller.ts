@@ -97,13 +97,22 @@ function validatePrimaryScale(schoolType: string | undefined, maxScore: unknown,
 export const getClassLevels = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const [levels, frozen] = await Promise.all([
+    const [levels, frozen, rolls] = await Promise.all([
       prisma.classLevel.findMany({
         where: { schoolId },
         orderBy: [{ order: 'asc' }, { name: 'asc' }],
       }),
       frozenScaleClasses(schoolId),
+      // The class roll, in ONE grouped query rather than a count per class. ACTIVE only:
+      // this is "how many children are in this class", and a dismissed pupil is not one of
+      // them — they are kept on file but are out of rosters, class lists and report runs.
+      prisma.student.groupBy({
+        by: ['classLevel'],
+        where: { schoolId, status: 'ACTIVE' },
+        _count: { _all: true },
+      }),
     ])
+    const rollOf = new Map(rolls.map((r) => [r.classLevel, r._count._all]))
     // `scaleLockedBy` is the closed term that settled this class's assessment settings (its
     // mark totals AND its marks-vs-ratings mode) for the year, or null when they are still
     // free to change. Sent so the Classes form can lock those fields and say why, rather
@@ -113,6 +122,7 @@ export const getClassLevels = async (req: AuthRequest, res: Response) => {
       classLevels: levels.map((l) => ({
         ...l,
         scaleLockedBy: l.scaleUnlockedAt == null ? (frozen.get(l.name) ?? null) : null,
+        studentCount: rollOf.get(l.name) ?? 0,
       })),
     })
   } catch (error) {

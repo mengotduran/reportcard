@@ -20,6 +20,10 @@ export interface ClassLevel {
   // lecturers and different students, each sitting being its own class.
   programme?: Programme
   gradingMode?: GradingMode
+  /** ACTIVE students currently in this class — the class roll. Disabled and dismissed
+   *  pupils are kept on file but are not in it, the same as everywhere else they are
+   *  excluded from rosters and report runs. Served by GET /class-levels. */
+  studentCount?: number
   /**
    * The closed term that settled how this class is assessed — its mark totals AND its
    * marks-vs-ratings mode — for the academic year, or null when they can still change.

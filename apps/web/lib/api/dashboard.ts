@@ -22,8 +22,10 @@ export interface WeeklyStats {
   subjects: number[]
 }
 
-export const getWeeklyStatsApi = async (): Promise<WeeklyStats> => {
-  const res = await api.get('/dashboard/weekly-stats')
+// Same `session` as getDashboardStatsApi — the trend under a figure has to be a history
+// OF that figure, so both follow the academic-year selector together.
+export const getWeeklyStatsApi = async (session?: string): Promise<WeeklyStats> => {
+  const res = await api.get('/dashboard/weekly-stats', { params: session ? { session } : {} })
   return res.data
 }
 
