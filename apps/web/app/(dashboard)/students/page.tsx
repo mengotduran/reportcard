@@ -518,14 +518,21 @@ export default function StudentsPage() {
       const rest = { ...form_, ...('error' in phone ? { guardianPhone: undefined } : { guardianPhone: phone.e164 }) }
       const isLevel2 = / - Level 2$/i.test(classLevel)
       if (editingId) {
-        await updateStudentApi(editingId, { ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
-        showToast(t('Student updated'))
+        const saved = await updateStudentApi(editingId, { ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
+        // Say so when the guardian details matched a parent who already has an account:
+        // the child appears in their portal immediately and nobody needs inviting.
+        showToast(saved.guardianLinked?.linked
+          ? `${t('Student updated')}. ${t('Added to')} ${saved.guardianLinked.parentName}${t("'s parent portal")}.`
+          : t('Student updated'))
       } else {
-        await createStudentApi({ ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
+        const saved = await createStudentApi({ ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
         const switchedTo = switchToLiveYearIfNeeded()
+        const linked = saved.guardianLinked?.linked
+          ? ` ${t('Added to')} ${saved.guardianLinked.parentName}${t("'s parent portal")}.`
+          : ''
         showToast(switchedTo
-          ? `${t('Student added successfully')} — ${t('switched to the current academic year')} (${switchedTo})`
-          : t('Student added successfully'))
+          ? `${t('Student added successfully')}. ${t('Switched to the current academic year')} (${switchedTo}).${linked}`
+          : `${t('Student added successfully')}.${linked}`)
       }
       closeModal()
       fetchStudents(activeClass)

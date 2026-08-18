@@ -6,6 +6,7 @@ import { AuthRequest } from '../middleware/auth'
 import { stripProgramme, withProgrammeOf } from '../utils/programme'
 import { normalizeGuardianPhone } from '../utils/phone'
 import { buildGuardianPhoneSheet, readGuardianPhoneSheet, phoneProblemOf } from '../utils/guardianPhoneSheet'
+import { linkGuardianByContact } from '../utils/guardianLink'
 import { demoLimitBlock } from '../config/demo'
 import { UPLOAD_DIR } from '../config/uploads'
 
@@ -320,7 +321,13 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
     })
     await ensureReportCardForCurrentTerm(schoolId, student.id, req.user!.id)
 
-    res.status(201).json({ message: 'Student created', student })
+    // A parent who already has an account for this contact sees the new child straight away,
+    // with no second invite and no second password.
+    const link = await linkGuardianByContact({
+      schoolId, studentId: student.id, guardianPhone: phone.e164, guardianEmail,
+    })
+
+    res.status(201).json({ message: 'Student created', student, guardianLinked: link })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
@@ -386,7 +393,16 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
       }
     })
 
-    res.json({ message: 'Student updated', student: updated })
+    // Same on an edit: pointing a student at a guardian who is already registered attaches
+    // them, rather than leaving that parent to be invited all over again.
+    const link = await linkGuardianByContact({
+      schoolId,
+      studentId: updated.id,
+      guardianPhone: updated.guardianPhone,
+      guardianEmail: updated.guardianEmail,
+    })
+
+    res.json({ message: 'Student updated', student: updated, guardianLinked: link })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })

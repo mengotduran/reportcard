@@ -408,6 +408,67 @@ export const previewClaim = async (req: Request, res: Response) => {
 }
 
 /**
+ * How many children one claim may pull in besides the invited one.
+ *
+ * A family with more than this many children at one school does not exist; a contact shared
+ * by more than this many students is bad data — a school that filled guardianPhone with its
+ * own office number, or with one placeholder for a whole class. Linking those would hand a
+ * single "parent" most of the roster, so past the cap only the invited child is linked and
+ * the rest go back to needing their own invite.
+ */
+const SIBLING_LINK_MAX = 10
+
+/**
+ * Link the other children this same guardian has at this same school.
+ *
+ * An invite is issued against one student, so without this a parent with three children
+ * needs three links and three claims to see all three. The school itself recorded this
+ * contact against those other students, so the match is that school's own assertion, no
+ * weaker than the one link being redeemed right now.
+ *
+ * Deliberately scoped to the SAME school. A parent whose children are at the group's primary
+ * and secondary still claims each school separately, so one school's typo can never expose
+ * another school's student.
+ *
+ * Phone matching runs through normalizeGuardianPhone rather than a SQL equality, because the
+ * column holds whatever was typed before the rule existed: "+237 670 000 05" and
+ * "237670000005" are the same number and a string comparison would miss it.
+ */
+async function linkMatchingSiblings(
+  tx: Prisma.TransactionClient,
+  opts: { schoolId: string; userId: string; studentId: string; phone: string | null; email: string | null },
+): Promise<number> {
+  const { schoolId, userId, studentId, phone, email } = opts
+  if (!phone && !email) return 0
+
+  const candidates = await tx.student.findMany({
+    where: {
+      schoolId,
+      id: { not: studentId },
+      isActive: true,
+      status: 'ACTIVE',
+      ...(email ? { guardianEmail: { not: null } } : { guardianPhone: { not: null } }),
+    },
+    select: { id: true, guardianPhone: true, guardianEmail: true },
+  })
+
+  const matches = candidates.filter((s) => {
+    if (email) return (s.guardianEmail ?? '').trim().toLowerCase() === email
+    const onFile = normalizeGuardianPhone(s.guardianPhone)
+    return !('error' in onFile) && onFile.e164 === phone
+  })
+
+  if (matches.length === 0 || matches.length > SIBLING_LINK_MAX) return 0
+
+  await tx.guardian.createMany({
+    data: matches.map((s) => ({ userId, studentId: s.id, schoolId })),
+    // A child this parent already claimed is left alone rather than failing the whole claim.
+    skipDuplicates: true,
+  })
+  return matches.length
+}
+
+/**
  * POST /api/parent/claim — redeem the invite and hand back a session.
  *
  * The parent's login identifier is their PHONE NUMBER, stored in User.username. It is already
@@ -452,6 +513,7 @@ export const claimInvite = async (req: Request, res: Response) => {
       return
     }
 
+    let siblingsLinked = 0
     const result = await prisma.$transaction(async (tx) => {
       let user = existing
       if (user) {
@@ -484,6 +546,15 @@ export const claimInvite = async (req: Request, res: Response) => {
         update: {},
       })
 
+      // Siblings at the same school, so one link covers the whole family.
+      siblingsLinked = await linkMatchingSiblings(tx, {
+        schoolId: invite.schoolId,
+        userId: user.id,
+        studentId: invite.studentId,
+        phone: invite.phone,
+        email: invite.email,
+      })
+
       await tx.guardianInvite.update({
         where: { id: invite.id },
         data: { claimedAt: new Date(), claimedBy: user.id },
@@ -500,6 +571,9 @@ export const claimInvite = async (req: Request, res: Response) => {
     const user = result.user!
     res.status(201).json({
       message: 'Account ready',
+      // Everything this claim gave access to: the invited child plus any sibling the school
+      // has the same contact for.
+      childrenLinked: 1 + siblingsLinked,
       token: generateToken({ id: user.id, role: user.role, schoolId: null }),
       user: {
         id: user.id, name: user.name, email: user.email, username: user.username,

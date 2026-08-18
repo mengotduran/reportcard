@@ -12,6 +12,9 @@ export const getStudentsApi = async (params?: { classLevel?: string; search?: st
   return res.data
 }
 
+/** Set when saving attached the student to a parent who already had an account. */
+export interface GuardianLinked { linked: boolean; parentName?: string }
+
 export const createStudentApi = async (data: {
   name: string
   classLevel: string
@@ -24,7 +27,7 @@ export const createStudentApi = async (data: {
   guardianPhone?: string
   guardianEmail?: string
   directLevel2Entry?: boolean
-}) => {
+}): Promise<{ student: unknown; guardianLinked?: GuardianLinked }> => {
   const res = await api.post('/students', data)
   return res.data
 }
@@ -40,7 +43,7 @@ export const updateStudentApi = async (id: string, data: {
   guardianEmail?: string
   directLevel2Entry?: boolean
   isRepeatingLevel?: boolean
-}) => {
+}): Promise<{ student: unknown; guardianLinked?: GuardianLinked }> => {
   const res = await api.put(`/students/${id}`, data)
   return res.data
 }
