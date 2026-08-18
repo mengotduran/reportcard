@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useTheme, Colors } from '@/lib/useTheme'
 import { useT, useLocaleCode } from '@/lib/i18n'
 import {
-  getStudentFees, addFeePayment, deleteFeePayment, formatXAF,
+  getStudentFees, addFeePayment, deleteFeePayment, formatXAF, FeeKind,
   StudentFees, FeeStatus,
 } from '@/lib/api/fees'
 
@@ -19,6 +19,13 @@ function statusChip(status: FeeStatus, t: (s: string) => string) {
     NONE: { label: t('No fee set'), bg: '#f3f4f6', fg: '#6b7280' },
   }
   return map[status]
+}
+
+/** Which balance a payment of this kind is measured against. Mirrors the server exactly. */
+function potOf(data: StudentFees | null, kind: FeeKind): { due: number; balance: number } | null {
+  if (!data) return null
+  if (!data.registrationSeparate) return { due: data.due, balance: data.balance }
+  return kind === 'REGISTRATION' ? data.registration : data.tuition
 }
 
 export default function StudentFeesModal({
@@ -41,6 +48,8 @@ export default function StudentFeesModal({
   const [data, setData] = useState<StudentFees | null>(null)
   const [loading, setLoading] = useState(true)
   const [amount, setAmount] = useState('')
+  // Which pot the money goes into. Only asked when the school collects the two apart.
+  const [kind, setKind] = useState<FeeKind>('TUITION')
   const [paidOn, setPaidOn] = useState(() => new Date().toISOString().slice(0, 10))
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
@@ -68,9 +77,16 @@ export default function StudentFeesModal({
       Alert.alert(t('Validation'), t('Enter the date as YYYY-MM-DD'))
       return
     }
+    // Mirrors the server's overpayment guard so a mistyped figure is caught before a round
+    // trip. Only when a fee is configured: with none set there is nothing to exceed.
+    const pot = potOf(data, kind)
+    if (pot && pot.due > 0 && amt > pot.balance) {
+      Alert.alert(t('Validation'), `${t('That is more than this student still owes. The most you can record is')} ${formatXAF(pot.balance)}.`)
+      return
+    }
     setSaving(true)
     try {
-      const updated = await addFeePayment(studentId, { amount: amt, paidOn, note: note.trim() || undefined })
+      const updated = await addFeePayment(studentId, { amount: amt, paidOn, note: note.trim() || undefined, kind })
       setData(updated)
       setAmount('')
       setNote('')
@@ -208,9 +224,39 @@ export default function StudentFeesModal({
               {data.due > 0 && data.balance > 0 ? (
                 <View style={s.addBox}>
                   <Text style={s.addTitle}>{t('Record a payment')}</Text>
+
+                  {/* What the money is for. Nothing to choose when the school treats the two
+                      as one figure, so the row is not rendered at all. */}
+                  {data.registrationSeparate && (
+                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+                      {([
+                        { value: 'REGISTRATION' as const, label: t('Registration'), side: data.registration },
+                        { value: 'TUITION' as const, label: t('School fees'), side: data.tuition },
+                      ]).map((option) => {
+                        const on = kind === option.value
+                        const settledPot = option.side.due > 0 && option.side.balance <= 0
+                        return (
+                          <TouchableOpacity key={option.value} activeOpacity={0.7}
+                            onPress={() => { setKind(option.value); setAmount('') }}
+                            style={{
+                              flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10,
+                              borderColor: on ? '#F03E2F' : colors.border,
+                              backgroundColor: on ? 'rgba(240,62,47,0.08)' : colors.card,
+                            }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: colors.text }}>{option.label}</Text>
+                            <Text style={{ fontSize: 11, marginTop: 2, color: settledPot ? '#16a34a' : colors.textMuted }}>
+                              {settledPot ? t('Settled') : `${formatXAF(option.side.balance)} ${t('left')}`}
+                            </Text>
+                          </TouchableOpacity>
+                        )
+                      })}
+                    </View>
+                  )}
+
                   <Text style={s.fieldLabel}>{t('Amount paid')} <Text style={s.required}>*</Text></Text>
                   <TextInput style={s.input} value={amount} onChangeText={setAmount}
                     placeholder="75000" placeholderTextColor="#9ca3af" keyboardType="numeric" />
+                  <Text style={s.fieldHint}>{t('Up to')} {formatXAF(potOf(data, kind)?.balance ?? 0)}</Text>
                   <Text style={s.fieldLabel}>{t('Payment date')} <Text style={s.required}>*</Text></Text>
                   <TextInput style={s.input} value={paidOn} onChangeText={setPaidOn}
                     placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" autoCapitalize="none" />
@@ -263,6 +309,7 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   addBox: { backgroundColor: colors.bgSecondary, borderRadius: 12, padding: 12, marginBottom: 8 },
   addTitle: { fontSize: 12, fontWeight: '700', color: colors.text, marginBottom: 8 },
   fieldLabel: { fontSize: 11, color: colors.textSecondary, marginBottom: 4, marginTop: 6 },
+  fieldHint: { fontSize: 10, color: colors.textSecondary, marginTop: 3 },
   required: { color: '#ef4444' },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 10, fontSize: 14, color: colors.text, backgroundColor: colors.card },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#F03E2F', borderRadius: 10, paddingVertical: 12, marginTop: 12 },

@@ -203,6 +203,8 @@ export default function ClassesScreen() {
   // a fee that has nothing to do with their school's actual tuition. The input's
   // placeholder shows the same number as a hint instead.
   const [feeAmount, setFeeAmount] = useState('')
+  // Enrolment registration, charged again each academic year on top of the class fee.
+  const [registrationFee, setRegistrationFee] = useState('')
   // Primary only. A nursery class is assessed by rating, not by marks — see
   // ClassLevel.gradingMode. Everything else stays NUMERIC, which is the API's default.
   const [gradingMode, setGradingMode] = useState<GradingMode>('NUMERIC')
@@ -321,6 +323,7 @@ export default function ClassesScreen() {
       for (const name of toCreate) {
         await createClass({
           name, hasStream, maxScore: Number(maxScore) || 20, feeAmount: Number(feeAmount) || 0,
+          registrationFee: Number(registrationFee) || 0,
           ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
           ...(isPrimary ? { gradingMode } : {}),
         })
@@ -330,6 +333,7 @@ export default function ClassesScreen() {
       setHasStream(false)
       setMaxScore(isPrimary ? '100' : '20')
       setFeeAmount('')
+      setRegistrationFee('')
       setGradingMode('NUMERIC')
       setSections([])
       await fetchClasses()
@@ -706,6 +710,16 @@ export default function ClassesScreen() {
               value={feeAmount}
               onChangeText={setFeeAmount}
               placeholder="150000"
+              placeholderTextColor="#9ca3af"
+              keyboardType="numeric"
+            />
+
+            <Text style={styles.label}>{t('Registration Fee (XAF)')}</Text>
+            <TextInput
+              style={styles.input}
+              value={registrationFee}
+              onChangeText={setRegistrationFee}
+              placeholder="0"
               placeholderTextColor="#9ca3af"
               keyboardType="numeric"
             />

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { X, Plus, Trash2, Wallet, RefreshCw, Receipt, Info } from 'lucide-react'
 import {
-  getStudentFeesApi, addFeePaymentApi, deleteFeePaymentApi, formatXAF,
+  getStudentFeesApi, addFeePaymentApi, deleteFeePaymentApi, formatXAF, FeeKind,
   StudentFees, FeeStatus,
 } from '@/lib/api/fees'
 import { updateStudentApi } from '@/lib/api/students'
@@ -16,6 +16,16 @@ function statusChip(status: FeeStatus, t: (s: string) => string) {
     NONE: { label: t('No fee set'), cls: 'bg-muted text-muted-foreground' },
   }
   return map[status]
+}
+
+/**
+ * Which balance a payment of this kind is measured against. Mirrors the server exactly:
+ * separate schools guard the two pots independently, combined schools have one pot.
+ */
+function potOf(data: StudentFees | null, kind: FeeKind): { due: number; balance: number } | null {
+  if (!data) return null
+  if (!data.registrationSeparate) return { due: data.due, balance: data.balance }
+  return kind === 'REGISTRATION' ? data.registration : data.tuition
 }
 
 export default function StudentFeesModal({
@@ -34,6 +44,9 @@ export default function StudentFeesModal({
   const [data, setData] = useState<StudentFees | null>(null)
   const [loading, setLoading] = useState(true)
   const [amount, setAmount] = useState('')
+  // Which pot the money goes into. Only ever shown when the school collects the two apart;
+  // otherwise there is one pot and the picker would be a question with one answer.
+  const [kind, setKind] = useState<FeeKind>('TUITION')
   const [paidOn, setPaidOn] = useState(() => new Date().toISOString().slice(0, 10))
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
@@ -61,9 +74,17 @@ export default function StudentFeesModal({
       setError(t('Enter a payment amount greater than zero'))
       return
     }
+    // Mirrors the server's overpayment guard so a mistyped figure is caught before a round
+    // trip. Only when a fee is actually configured: with no class fee set there is no
+    // expected amount to exceed, and the server allows it for the same reason.
+    const pot = potOf(data, kind)
+    if (pot && pot.due > 0 && amt > pot.balance) {
+      setError(`${t('That is more than this student still owes. The most you can record is')} ${formatXAF(pot.balance)}.`)
+      return
+    }
     setSaving(true)
     try {
-      const updated = await addFeePaymentApi(studentId, { amount: amt, paidOn, note: note.trim() || undefined })
+      const updated = await addFeePaymentApi(studentId, { amount: amt, paidOn, note: note.trim() || undefined, kind })
       setData(updated)
       setAmount('')
       setNote('')
@@ -178,6 +199,24 @@ export default function StudentFeesModal({
                     </div>
                   </div>
                   <div className="text-right text-sm space-y-1">
+                    {/* The split, when the school keeps the two apart. Shown above the total
+                        rather than instead of it: the parent still asks one question. */}
+                    {data.registrationSeparate && data.registration.due > 0 && (
+                      <>
+                        <p className="text-muted-foreground text-xs">
+                          {t('Registration')}{' '}
+                          <span className="font-semibold text-foreground tabular-nums ml-1">
+                            {formatXAF(data.registration.paid)} / {formatXAF(data.registration.due)}
+                          </span>
+                        </p>
+                        <p className="text-muted-foreground text-xs">
+                          {t('School fees')}{' '}
+                          <span className="font-semibold text-foreground tabular-nums ml-1">
+                            {formatXAF(data.tuition.paid)} / {formatXAF(data.tuition.due)}
+                          </span>
+                        </p>
+                      </>
+                    )}
                     <p className="text-muted-foreground">
                       {t('Total fee')} <span className="font-bold text-foreground tabular-nums ml-2">{formatXAF(data.due)}</span>
                     </p>
@@ -228,12 +267,38 @@ export default function StudentFeesModal({
               {data.due > 0 && data.balance > 0 ? (
                 <form onSubmit={handleAdd} className="rounded-2xl bg-hover p-5 mb-6">
                   <p className="text-sm font-bold text-foreground mb-3">{t('Record a payment')}</p>
+
+                  {/* What the money is for. Only a question when the school keeps the two
+                      apart; otherwise everything is one pot and this would be noise. */}
+                  {data.registrationSeparate && (
+                    <div className="flex gap-2 mb-3">
+                      {([
+                        { value: 'REGISTRATION' as const, label: t('Registration'), side: data.registration },
+                        { value: 'TUITION' as const, label: t('School fees'), side: data.tuition },
+                      ]).map((option) => {
+                        const settledPot = option.side.due > 0 && option.side.balance <= 0
+                        return (
+                          <button key={option.value} type="button"
+                            onClick={() => { setKind(option.value); setAmount(''); setError('') }}
+                            className={`flex-1 rounded-lg border px-3 py-2 text-left transition ${
+                              kind === option.value ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-hover'}`}>
+                            <span className="block text-xs font-semibold text-foreground">{option.label}</span>
+                            <span className={`block text-[11px] mt-0.5 ${settledPot ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+                              {settledPot ? t('Settled') : `${formatXAF(option.side.balance)} ${t('left')}`}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="flex-1 min-w-[130px]">
                       <label className="block text-xs font-medium text-muted-foreground mb-1.5">{t('Amount paid')} <span className="text-destructive">*</span></label>
-                      <input type="number" min="1" step="any" placeholder="75000" value={amount}
+                      <input type="number" min="1" max={potOf(data, kind)?.balance ?? undefined} step="any" placeholder="75000" value={amount}
                         onChange={(e) => setAmount(e.target.value)} required
                         className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-card focus:outline-none focus:ring-2 focus:ring-ring" />
+                      <p className="mt-1 text-[11px] text-muted-foreground">{t('Up to')} {formatXAF(potOf(data, kind)?.balance ?? 0)}</p>
                     </div>
                     <div className="min-w-[150px]">
                       <label className="block text-xs font-medium text-muted-foreground mb-1.5">{t('Payment date')} <span className="text-destructive">*</span></label>

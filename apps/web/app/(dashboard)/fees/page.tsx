@@ -168,6 +168,17 @@ export default function FeesPage() {
       showToast(t('Pick a valid payment date'), 'error')
       return
     }
+    // Mirrors the server's overpayment guard. Named rather than counted: with 15 rows on
+    // screen, "2 amounts are too high" leaves the admin hunting for which two.
+    const feeOf = (s: { fee?: number | null }) => (isHnd ? (s.fee ?? data!.feeAmount) : data!.feeAmount)
+    const overRows = entries
+      .map((e) => ({ e, s: (data?.students ?? []).find((st) => st.studentId === e.studentId) }))
+      .filter(({ e, s }) => s && feeOf(s) > 0 && e.amount > s.balance)
+      .map(({ s }) => s!.name)
+    if (overRows.length > 0) {
+      showToast(`${t('These amounts are more than the student still owes')}: ${overRows.join(', ')}`, 'error')
+      return
+    }
     setSaving(true)
     try {
       const res = await addBulkPaymentsApi({ entries })
@@ -386,6 +397,9 @@ export default function FeesPage() {
                       const rowFee = isHnd ? (s.fee ?? data!.feeAmount) : data!.feeAmount
                       const disabled = rowFee === 0 || s.balance === 0
                       const hasEntry = Number(r.amount) > 0
+                      // Flagged inline rather than only on save, so the admin sees the bad
+                      // cell while looking at that student's balance in the same row.
+                      const over = rowFee > 0 && Number(r.amount) > s.balance
                       return (
                         <tr key={s.studentId} className={`group transition ${hasEntry ? 'bg-primary/5' : 'hover:bg-hover/60'}`}>
                           <td className={`sticky left-0 z-10 w-12 px-4 py-2.5 text-muted-foreground text-sm border-b border-border ${hasEntry ? 'bg-[#fdf0ef] dark:bg-card' : 'bg-card group-hover:bg-hover/60'}`}>{start + i + 1}</td>
@@ -410,9 +424,10 @@ export default function FeesPage() {
                           <td className="px-4 py-2.5 text-right text-sm font-medium text-foreground whitespace-nowrap border-b border-border">{formatXAF(s.balance)}</td>
                           <td className="px-4 py-2.5 whitespace-nowrap border-b border-border"><StatusBadge status={s.status} balance={s.balance} t={t} /></td>
                           <td className="px-4 py-2.5 border-b border-l border-border">
-                            <input type="number" min="1" step="any" placeholder="0" value={r.amount}
+                            <input type="number" min="1" max={s.balance} step="any" placeholder="0" value={r.amount}
                               onChange={(e) => setField(s.studentId, 'amount', e.target.value)} disabled={disabled}
-                              className="w-28 border border-border rounded-lg px-2.5 py-1.5 text-sm text-right text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-40 disabled:cursor-not-allowed" />
+                              title={over ? `${t('More than the balance of')} ${formatXAF(s.balance)}` : undefined}
+                              className={`w-28 border rounded-lg px-2.5 py-1.5 text-sm text-right bg-background focus:outline-none focus:ring-2 disabled:opacity-40 disabled:cursor-not-allowed ${over ? 'border-destructive text-destructive focus:ring-destructive' : 'border-border text-foreground focus:ring-ring'}`} />
                           </td>
                           <td className="px-4 py-2.5 border-b border-border">
                             <input type="date" value={r.date}

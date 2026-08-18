@@ -85,6 +85,10 @@ model School {
   logo           String?
   // Defaults to TEACHERS, so existing schools keep behaving exactly as they did.
   marksEntryMode MarksEntryMode @default(TEACHERS)
+  // Whether registration is collected and reported APART from the class fee. It does not
+  // change what a student owes (always feeAmount + registrationFee), only whether the two
+  // are kept as separate totals or added into one figure.
+  registrationSeparate Boolean @default(false)
   marksEntryChanges MarksEntryModeChange[]
   // Official stamp/seal image. Prints on OFFICIAL copies only, via a `stamp` section
   // the admin places on the report card or transcript. Separate from `logo`: the logo
@@ -222,6 +226,10 @@ model ClassLevel {
   maxScore           Int      @default(20)
   testMaxScore       Int      @default(30) // primary only — Test ceiling out of maxScore, Exam = maxScore - testMaxScore
   feeAmount          Int      @default(0) // total fee for this class per academic session, in XAF
+  // Enrolment registration, charged once per academic year on top of feeAmount. Nothing to
+  // do with hndRegistrationFee below, which is the GOVERNMENT EXAM registration (FSLC / GCE
+  // / HND) a final-year class pays to an exam board — different money, different ledger.
+  registrationFee    Int      @default(0)
   hndRegistrationFee Int?
   departmentId       String?
   // Day or Evening sitting; existing classes are all DAY.
@@ -335,6 +343,9 @@ model FeePayment {
   studentId  String
   session    String   // academic session this payment counts toward, e.g. "2026/2027"
   amount     Int      // installment amount paid, in XAF
+  // What this money was for. Rows written before this column existed are all tuition,
+  // which is what the default backfills.
+  kind       FeeKind  @default(TUITION)
   paidOn     DateTime // date the payment was made
   note       String?
   recordedBy String?  // id of the user who recorded the payment
@@ -809,4 +820,13 @@ enum GuardianRequestStatus {
   PENDING
   SENT
   REJECTED
+}
+
+/**
+ * What a FeePayment was collected for. REGISTRATION is the yearly enrolment fee, kept as its
+ * own kind rather than a note on the row so the two totals can be trusted.
+ */
+enum FeeKind {
+  TUITION
+  REGISTRATION
 }

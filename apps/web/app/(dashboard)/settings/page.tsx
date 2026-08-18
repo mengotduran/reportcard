@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/lib/store/auth.store'
-import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, CalendarCheck, type LucideIcon } from 'lucide-react'
+import { Upload, Trash2, Image, Building2, Plus, Star, Palette, ArrowRight, DatabaseBackup, FileSpreadsheet, Download, Pencil, X, Check, GraduationCap, Languages, UserCircle, Type, Stamp, CalendarCheck, Wallet, type LucideIcon } from 'lucide-react'
 import api from '@/lib/api/client'
 import { updateLanguagePreferenceApi, updateMyEmailApi } from '@/lib/api/auth'
 import { saveBlob } from '@/lib/csv'
@@ -217,6 +217,10 @@ export default function SettingsPage() {
   const [savingInfo, setSavingInfo] = useState(false)
   // Minutes after a period starts before it counts as missed. Blank = the older rule
   // (changeable until the period ends), which is what every school starts on.
+  // Whether registration is collected and reported apart from the class fee. It changes no
+  // amount owed, only whether the two are two figures or one.
+  const [regSeparate, setRegSeparate] = useState<boolean>(Boolean((school as any)?.registrationSeparate))
+  const [savingRegSeparate, setSavingRegSeparate] = useState(false)
   const [graceValue, setGraceValue] = useState<string>(school?.absenceGraceMinutes != null ? String(school.absenceGraceMinutes) : '')
   const [savingGrace, setSavingGrace] = useState(false)
   // Who records marks. University only: some keep marks out of teachers' hands so the
@@ -258,6 +262,7 @@ export default function SettingsPage() {
       })
       setGraceValue(s.absenceGraceMinutes != null ? String(s.absenceGraceMinutes) : '')
       setMarksMode((s as any).marksEntryMode ?? 'TEACHERS')
+      setRegSeparate(Boolean((s as any).registrationSeparate))
       setMarksSwitches(res.data.marksEntrySwitches ?? null)
       setMarksHistory(res.data.marksEntryModeHistory ?? [])
       setOfficialTextForm({
@@ -324,6 +329,19 @@ export default function SettingsPage() {
     const total = 7 * 60 + 30 + mins
     return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
   })()
+
+  const handleToggleRegSeparate = async (next: boolean) => {
+    setSavingRegSeparate(true)
+    try {
+      const res = await api.put('/school/settings', { registrationSeparate: next })
+      updateSchool(res.data.school)
+      setRegSeparate(next)
+      showToast(next ? t('Registration is now tracked separately') : t('Registration is now part of the school fee total'))
+    } catch (err) {
+      const e = err as { response?: { data?: { message?: string } } }
+      showToast(e.response?.data?.message || t('Failed to save'), 'error')
+    } finally { setSavingRegSeparate(false) }
+  }
 
   const handleSaveGrace = async () => {
     setSavingGrace(true)
@@ -392,6 +410,7 @@ export default function SettingsPage() {
     { id: 'profile', label: t('School Profile') },
     { id: 'branding', label: t('Branding') },
     { id: 'reportcards', label: t('Report Cards') },
+    { id: 'fees', label: t('Fees') },
     { id: 'attendance', label: t('Attendance') },
     ...(isOfflineInstall ? [{ id: 'data', label: t('Data & Backup') }] : []),
   ]
@@ -1131,6 +1150,36 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </section>
+
+          {/* ══ Fees ═════════════════════════════════════════════════════ */}
+          <section id="fees" className="scroll-mt-8 space-y-4">
+            <h4 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">{t('Fees')}</h4>
+
+            <div className={CARD}>
+              <CardHead
+                icon={Wallet}
+                title={t('Registration fee')}
+                desc={t('Set each class its own registration amount on the Classes page. This only decides whether it is collected and reported apart from the school fee, or added into one figure. Either way a student owes the same total.')}
+              />
+              <div className="mt-5 space-y-2">
+                {[
+                  { value: false, label: t('One total'), hint: t('The class fee and registration are added together. Parents see one figure and one receipt, and the Revenue page shows one column.') },
+                  { value: true, label: t('Track registration separately'), hint: t('Two figures, two receipts and two totals everywhere, so you can see exactly how much of the year\'s money is registration.') },
+                ].map((option) => (
+                  <button
+                    key={String(option.value)}
+                    onClick={() => { if (option.value !== regSeparate) handleToggleRegSeparate(option.value) }}
+                    disabled={savingRegSeparate}
+                    className={`w-full text-left rounded-xl border p-3.5 transition disabled:opacity-60 ${
+                      regSeparate === option.value ? 'border-primary bg-primary/5' : 'border-border hover:bg-hover'}`}
+                  >
+                    <p className="text-sm font-medium text-foreground">{option.label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{option.hint}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
           </section>
 
           {/* ══ Attendance ═══════════════════════════════════════════════ */}

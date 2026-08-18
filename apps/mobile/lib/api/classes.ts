@@ -12,6 +12,8 @@ export interface ClassLevel {
   order: number
   maxScore?: number
   feeAmount?: number
+  /** Yearly enrolment registration, on top of feeAmount. */
+  registrationFee?: number
   departmentId?: string | null
   // Day or Evening sitting. A university runs the same programme twice with the same
   // lecturers and different students, each sitting being its own class.
@@ -24,7 +26,7 @@ export const getClasses = async (): Promise<{ classLevels: ClassLevel[] }> => {
   return res.data
 }
 
-export const createClass = async (data: { name: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number; departmentId?: string | null; gradingMode?: GradingMode }) => {
+export const createClass = async (data: { name: string; hasStream?: boolean; order?: number; maxScore?: number; feeAmount?: number; registrationFee?: number; departmentId?: string | null; gradingMode?: GradingMode }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }

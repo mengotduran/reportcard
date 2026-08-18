@@ -13,6 +13,11 @@ export interface FeePayment {
   createdAt: string
 }
 
+export type FeeKind = 'TUITION' | 'REGISTRATION'
+
+/** One side of what a student owes: the class fee, or the yearly registration. */
+export interface FeeSide { due: number; paid: number; balance: number }
+
 export interface StudentFees {
   session: string | null
   student: { id: string; name: string; studentId: string; classLevel: string }
@@ -20,6 +25,10 @@ export interface StudentFees {
   totalPaid: number
   balance: number
   status: FeeStatus
+  /** Whether this school keeps registration apart from the class fee. */
+  registrationSeparate: boolean
+  tuition: FeeSide
+  registration: FeeSide
   payments: FeePayment[]
 }
 
@@ -38,7 +47,7 @@ export const getStudentFees = async (studentId: string): Promise<StudentFees> =>
 
 export const addFeePayment = async (
   studentId: string,
-  data: { amount: number; paidOn?: string; note?: string },
+  data: { amount: number; paidOn?: string; note?: string; kind?: FeeKind },
 ): Promise<StudentFees> => {
   const res = await api.post(`/fees/student/${studentId}/payments`, data)
   return res.data

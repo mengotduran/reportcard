@@ -27,6 +27,11 @@ model School {
   logo               String?
   // Defaults to TEACHERS, so existing schools keep behaving exactly as they did.
   marksEntryMode     MarksEntryMode      @default(TEACHERS)
+  // Whether registration is collected and reported APART from the class fee. It does not
+  // change what a student owes — that is always feeAmount + registrationFee — only whether
+  // the two are kept as separate totals and separate receipts, or added into one figure.
+  // False keeps every existing school reading exactly as it did.
+  registrationSeparate Boolean            @default(false)
   marksEntryChanges  MarksEntryModeChange[]
   // Official stamp/seal image. Prints on OFFICIAL copies only, via a `stamp` section
   // the admin places on the report card or transcript. Separate from `logo`: the logo
@@ -179,6 +184,13 @@ model ClassLevel {
   order        Int      @default(0)
   createdAt    DateTime @default(now())
   feeAmount            Int      @default(0)
+  // Enrolment registration, charged once per academic year on top of feeAmount. Nothing to
+  // do with hndRegistrationFee below, which is the GOVERNMENT EXAM registration (FSLC / GCE
+  // / HND) a final-year class pays to an exam board — different money, different ledger.
+  //
+  // Defaults to 0 so every existing school is unchanged: a school whose feeAmount already
+  // covers registration simply leaves this alone.
+  registrationFee      Int      @default(0)
   maxScore             Int      @default(20)
   // Primary only: the Test component's ceiling out of `maxScore` (Exam ceiling is
   // maxScore - testMaxScore, derived rather than stored — same relationship as university's
@@ -335,6 +347,9 @@ model FeePayment {
   studentId  String
   session    String
   amount     Int
+  // What this money was for. Every row written before this column existed is tuition, which
+  // is what the default backfills — there was nothing else it could have been.
+  kind       FeeKind  @default(TUITION)
   paidOn     DateTime
   note       String?
   recordedBy String?
@@ -940,4 +955,16 @@ enum GuardianRequestStatus {
   PENDING
   SENT
   REJECTED
+}
+
+/**
+ * What a FeePayment was collected for.
+ *
+ * TUITION is the class fee. REGISTRATION is the yearly enrolment fee, kept as its own kind
+ * rather than a note on the row because the whole point is being able to total the two
+ * separately and have the figures be trustworthy.
+ */
+enum FeeKind {
+  TUITION
+  REGISTRATION
 }

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { getStudentFees, addPayment, deletePayment, getFeesOverview, getClassFees, addBulkPayments } from '../controllers/fees.controller'
+import { getStudentFees, addPayment, deletePayment, getFeesOverview, getClassFees, addBulkPayments, getRevenue } from '../controllers/fees.controller'
 import { protect, restrictTo } from '../middleware/auth'
 
 const router = Router()
@@ -8,6 +8,8 @@ router.use(protect)
 router.use(restrictTo('SCHOOL_ADMIN', 'VICE_PRINCIPAL'))
 
 router.get('/overview', getFeesOverview)
+// What the school actually took in, per class, per department and school-wide.
+router.get('/revenue', getRevenue)
 router.get('/class/:classLevel', getClassFees)
 router.post('/payments/bulk', addBulkPayments)
 router.get('/student/:studentId', getStudentFees)
