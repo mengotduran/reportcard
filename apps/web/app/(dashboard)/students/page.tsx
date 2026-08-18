@@ -406,10 +406,22 @@ export default function StudentsPage() {
   }
 
   const openEdit = (s: Student) => {
+    // Work out whether the last word is a STREAM ("Form 4" + "Arts") or simply part of the
+    // class's own name ("Form 5 Science" defined as one class). Both exist in the wild, and
+    // guessing by the word alone mis-read the second kind: the class was reduced to "Form 5",
+    // which matches no defined class, so its department could not be resolved and the
+    // Department field opened empty on a student who plainly had one. An exact match wins,
+    // and a stream is only split off when the base class actually declares one.
     const streams = ['Arts', 'Science']
     const parts = s.classLevel.split(' ')
-    const stream = streams.includes(parts[parts.length - 1]) ? parts[parts.length - 1] : ''
-    const baseClass = stream ? parts.slice(0, -1).join(' ') : s.classLevel
+    const last = parts[parts.length - 1]
+    const withoutLast = parts.slice(0, -1).join(' ')
+    const isStream =
+      !definedClasses.some((c) => c.name === s.classLevel) &&
+      streams.includes(last) &&
+      definedClasses.some((c) => c.name === withoutLast && c.hasStream)
+    const stream = isStream ? last : ''
+    const baseClass = isStream ? withoutLast : s.classLevel
     setEditingId(s.id)
     setForm({
       name: s.name,
@@ -487,8 +499,13 @@ export default function StudentsPage() {
     // Normalised here as well as on the server so a typo is caught before a round trip, and
     // so the value actually sent is already canonical. The server re-checks regardless: this
     // is convenience, not the guard.
+    //
+    // Left blank while editing an existing student means "still unknown", not an error: the
+    // roster is full of students recorded before a phone was required. Anything actually
+    // typed is validated either way, so a wrong number is still caught.
+    const phoneEntered = form.guardianPhone.trim() !== ''
     const phone = normalizeGuardianPhone(form.guardianPhone)
-    if ('error' in phone) {
+    if ('error' in phone && (phoneEntered || !editingId)) {
       setError(t(phone.error))
       return
     }
@@ -496,7 +513,9 @@ export default function StudentsPage() {
     try {
       const classLevel = needsStream ? `${form.classLevel} ${form.stream}` : form.classLevel
       const { stream, studentId: _sid, uniDept: _ud, uniLevel: _ul, secDept: _sd, ...form_ } = form
-      const rest = { ...form_, guardianPhone: phone.e164 }
+      // Only send the phone when there is one to send. An empty string would be read as an
+      // attempt to set it, and refused.
+      const rest = { ...form_, ...('error' in phone ? { guardianPhone: undefined } : { guardianPhone: phone.e164 }) }
       const isLevel2 = / - Level 2$/i.test(classLevel)
       if (editingId) {
         await updateStudentApi(editingId, { ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
@@ -1408,7 +1427,10 @@ export default function StudentsPage() {
                 { name: 'guardianName', label: 'Guardian Name', placeholder: 'e.g. Nguemo Jean', required: false, hint: '' },
                 // Required: this is the number the guardian is reached on, and the one a
                 // parent will be matched against when they claim their account.
-                { name: 'guardianPhone', label: 'Guardian Phone', placeholder: 'e.g. 677000000', required: true,
+                // Required for a NEW student only. Every student already on the roster
+                // predates this rule and has no number on file, so requiring it here made
+                // editing any of them impossible without first inventing a phone number.
+                { name: 'guardianPhone', label: 'Guardian Phone', placeholder: 'e.g. 677000000', required: !editingId,
                   hint: 'Cameroon numbers can be typed as 677000000. For another country, start with + and the country code.' },
                 { name: 'guardianEmail', label: 'Guardian Email', placeholder: 'e.g. guardian@email.com', required: false, hint: '' },
               ].map((field) => (

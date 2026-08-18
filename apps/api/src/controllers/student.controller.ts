@@ -350,12 +350,18 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // Only validated when the caller actually sends the field, so a client that knows
-    // nothing about guardian details cannot be forced to supply one. When it IS sent it must
+    // Only validated when the caller actually sends a value, so a client that knows nothing
+    // about guardian details cannot be forced to supply one. When something IS typed it must
     // be valid — including on a student created before the rule existed, which is how those
     // older rows get cleaned up.
+    //
+    // An EMPTY string means "still unknown" and leaves the column alone. It is not an error:
+    // guardian phone only became required for newly created students, so the roster of a
+    // school that has been running for years is full of blanks, and refusing the update
+    // would mean no such student could be edited at all until a number was invented for
+    // them. Clearing a number that is already on file is deliberately not offered here.
     let normalizedPhone: string | undefined
-    if (guardianPhone !== undefined) {
+    if (guardianPhone !== undefined && String(guardianPhone).trim() !== '') {
       const phone = normalizeGuardianPhone(guardianPhone)
       if ('error' in phone) {
         res.status(400).json({ message: phone.error })
