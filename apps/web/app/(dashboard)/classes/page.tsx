@@ -94,6 +94,7 @@ type FormState = {
   maxScore: string
   testMaxScore: string // primary only — see ClassLevel.testMaxScore
   feeAmount: string
+  registrationFee: string
   hndRegistrationFee: string
   programme: Programme
   gradingMode: GradingMode // primary only — see ClassLevel.gradingMode
@@ -104,8 +105,8 @@ type FormState = {
 // text), so a distracted admin could save every class with a fee that has nothing to do
 // with their school's actual tuition. The input's placeholder already shows the same
 // number as a hint — this just stops it from also being the submitted value.
-const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  testMaxScore: '30', feeAmount: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY', gradingMode: 'NUMERIC' }
-const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', testMaxScore: '30', feeAmount: '', hndRegistrationFee: '65000', programme: 'DAY', gradingMode: 'NUMERIC' }
+const STD_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '20',  testMaxScore: '30', feeAmount: '', registrationFee: '', hndRegistrationFee: GCE_DEFAULT_FEE, programme: 'DAY', gradingMode: 'NUMERIC' }
+const UNI_EMPTY: FormState  = { name: '', deptName: '', uniLevel: 'Level 1', abbreviation: '', hasStream: false, maxScore: '100', testMaxScore: '30', feeAmount: '', registrationFee: '', hndRegistrationFee: '65000', programme: 'DAY', gradingMode: 'NUMERIC' }
 // Primary defaults to a raw /100 Test+Exam scale (30 Test / 70 Exam), unlike secondary's /20,
 // and its own default FSLC (not GCE) registration fee.
 const PRIMARY_EMPTY: FormState = { ...STD_EMPTY, maxScore: '100', hndRegistrationFee: FSLC_DEFAULT_FEE }
@@ -342,6 +343,7 @@ export default function ClassesPage() {
       abbreviation: src.abbreviation ?? '',
       maxScore: String(src.maxScore ?? (isUniversity ? 100 : 20)),
       feeAmount: String(src.feeAmount ?? 0),
+      registrationFee: String(src.registrationFee ?? 0),
     }))
     // The whole of the day department's current semester by default, since an evening intake
     // usually runs the same programme. Untick the ones it does not take.
@@ -404,6 +406,7 @@ export default function ClassesPage() {
         maxScore: String(cls.maxScore ?? 100),
         testMaxScore: '30',
         feeAmount: String(cls.feeAmount ?? 0),
+        registrationFee: String(cls.registrationFee ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? 65000),
         programme: cls.programme ?? 'DAY',
         gradingMode: 'NUMERIC', // university is never rated
@@ -418,6 +421,7 @@ export default function ClassesPage() {
         maxScore: String(cls.maxScore ?? (isPrimary ? 100 : 20)),
         testMaxScore: String(cls.testMaxScore ?? 30),
         feeAmount: String(cls.feeAmount ?? 0),
+        registrationFee: String(cls.registrationFee ?? 0),
         hndRegistrationFee: String(cls.hndRegistrationFee ?? (isPrimary ? FSLC_DEFAULT_FEE : GCE_DEFAULT_FEE)),
         programme: cls.programme ?? 'DAY',
         gradingMode: cls.gradingMode ?? 'NUMERIC',
@@ -485,6 +489,7 @@ export default function ClassesPage() {
         maxScore: Number(form.maxScore),
         ...(isPrimary ? { testMaxScore: Number(form.testMaxScore) } : {}),
         feeAmount: Number(form.feeAmount) || 0,
+        registrationFee: Number(form.registrationFee) || 0,
         hndRegistrationFee: isExamReg ? (Number(form.hndRegistrationFee) || 0) : null,
         ...(isSecondary && activeDeptId ? { departmentId: activeDeptId } : {}),
         programme: form.programme,
@@ -1399,8 +1404,12 @@ export default function ClassesPage() {
                   deliberately omit) an average and a position, so neither the total nor the
                   marks/ratings choice can move until next year. Said here, with the controls
                   disabled, rather than letting an admin set something the API will refuse.
-                  A new class is never locked — it has no published history yet. */}
-              {scaleLockedBy && (
+                  A new class is never locked — it has no published history yet.
+                  `isPrimary` matters: this copy belongs to the Assessment toggle directly
+                  below, which only primary schools get. Without it a secondary or university
+                  school rendered this notice AND the !isPrimary one further down, showing the
+                  same warning twice. */}
+              {scaleLockedBy && isPrimary && (
                 <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   <Lock size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-800">
@@ -1514,6 +1523,9 @@ export default function ClassesPage() {
                   </div>
                 )
               })() : (
+                // Two fields, so the branch needs a fragment: the school fee, and the
+                // enrolment registration charged alongside it.
+                <>
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
                     {isUniversity && form.uniLevel === 'Level 1' ? '2-year HND Program Fee (XAF)' : t('School Fee (XAF)')}
@@ -1530,6 +1542,22 @@ export default function ClassesPage() {
                           "Annual fee for this department. Record payments from the Students page.")}
                   </p>
                 </div>
+
+                {/* Enrolment registration. Optional, and nothing to do with the exam
+                    registration field elsewhere on this form. */}
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">
+                    {t('Registration Fee (XAF)')}
+                  </label>
+                  <input type="number" min="0" step="any" placeholder="0"
+                    value={form.registrationFee}
+                    onChange={(e) => setForm({ ...form, registrationFee: e.target.value })}
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {t('Charged once each academic year on top of the school fee. Leave at 0 if your school fee already covers registration. Whether it is collected and reported separately is set in Settings.')}
+                  </p>
+                </div>
+                </>
               )}
 
               {/* HND Registration Fee — only for Level 2 university departments */}

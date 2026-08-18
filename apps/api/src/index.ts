@@ -6,6 +6,8 @@ import http from 'http'
 import authRoutes from './routes/auth.routes'
 import passwordResetRoutes from './routes/passwordReset.routes'
 import studentRoutes from './routes/student.routes'
+import parentRoutes from './routes/parent.routes'
+import { denyParents } from './middleware/auth'
 import subjectRoutes from './routes/subject.routes'
 import termRoutes from './routes/term.routes'
 import reportCardRoutes from './routes/reportcard.routes'
@@ -50,6 +52,12 @@ app.get('/health', (req, res) => {
 
 app.use('/api/auth', authRoutes)
 app.use('/api/auth', passwordResetRoutes)
+app.use('/api/parent', parentRoutes)
+
+// Everything registered below this line is STAFF ONLY. A parent's entire surface is
+// /api/parent above; see denyParents for why this is a blanket deny rather than a
+// per-route allow.
+app.use(denyParents)
 app.use('/api/students', studentRoutes)
 app.use('/api/subjects', subjectRoutes)
 app.use('/api/terms', termRoutes)

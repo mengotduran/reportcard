@@ -10,6 +10,7 @@ import * as DocumentPicker from 'expo-document-picker'
 import { getStudents, createStudent, updateStudent, setStudentStatus, deleteStudent, getStudentDeletable, Student, StudentStatus, previewStudentImportApi, commitStudentImportApi, ImportPreviewResult, CarryOverRow } from '@/lib/api/students'
 import { getClasses, ClassLevel } from '@/lib/api/classes'
 import { stripProgrammeSuffix } from '@/lib/programme'
+import { normalizeGuardianPhone } from '@/lib/phone'
 import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/ProgrammeFilter'
 import { getDepartments, Department } from '@/lib/api/departments'
 import { getSubjects } from '@/lib/api/reportcards'
@@ -169,6 +170,7 @@ const makeStylesStyles = (colors: Colors) => StyleSheet.create(({
   confirmDeleteBtnDisabled: { opacity: 0.4 },
   confirmDeleteText: { fontSize: 14, fontWeight: '600', color: '#fff' },
   formLabel: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  formHint: { fontSize: 11, color: colors.textSecondary, marginTop: 4, marginBottom: 2 },
   required: { color: '#ef4444' },
   formInput: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 10,
@@ -409,6 +411,9 @@ function CreateStudentModal({
   const [dateOfBirth, setDateOfBirth] = useState('')
   const [placeOfBirth, setPlaceOfBirth] = useState('')
   const [guardianName, setGuardianName] = useState('')
+  // Required, unlike the other guardian details: this is the number the guardian is
+  // reached on and the one a parent is matched against when claiming their account.
+  const [guardianPhone, setGuardianPhone] = useState('')
   const [creating, setCreating] = useState(false)
   const [deptPickerOpen, setDeptPickerOpen] = useState(false)
   const [classPickerOpen, setClassPickerOpen] = useState(false)
@@ -420,7 +425,7 @@ function CreateStudentModal({
 
   const reset = () => {
     setName(''); setSecDept(''); setClassLevel(''); setGender(''); setGuardianName('')
-    setDateOfBirth(''); setPlaceOfBirth('')
+    setGuardianPhone(''); setDateOfBirth(''); setPlaceOfBirth('')
   }
 
   const handleCreate = async () => {
@@ -436,11 +441,19 @@ function CreateStudentModal({
       Alert.alert(t('Validation'), t('Please select the student\'s gender.'))
       return
     }
+    // Checked here as well as on the server so a typo is caught before a round trip, and so
+    // the value sent is already canonical. The server re-checks regardless.
+    const phone = normalizeGuardianPhone(guardianPhone)
+    if ('error' in phone) {
+      Alert.alert(t('Validation'), t(phone.error))
+      return
+    }
     setCreating(true)
     try {
       await createStudent({
         name: name.trim(), classLevel, gender,
         guardianName: guardianName.trim() || undefined,
+        guardianPhone: phone.e164,
         dateOfBirth: dateOfBirth.trim() || undefined,
         placeOfBirth: placeOfBirth.trim() || undefined,
       })
@@ -530,6 +543,13 @@ function CreateStudentModal({
 
               <Text style={styles.formLabel}>{t('Guardian Name (optional)')}</Text>
               <TextInput style={styles.formInput} value={guardianName} onChangeText={setGuardianName} placeholder={t('e.g. Mrs. Jane Doe')} placeholderTextColor="#9ca3af" autoCapitalize="words" />
+
+              <Text style={styles.formLabel}>{t('Guardian Phone')} *</Text>
+              <TextInput style={styles.formInput} value={guardianPhone} onChangeText={setGuardianPhone}
+                placeholder="677000000" placeholderTextColor="#9ca3af" keyboardType="phone-pad" autoCapitalize="none" />
+              <Text style={styles.formHint}>
+                {t('Cameroon numbers can be typed as 677000000. For another country, start with + and the country code.')}
+              </Text>
 
               <TouchableOpacity style={[styles.createBtn, creating && styles.disabled]} onPress={handleCreate} disabled={creating}>
                 {creating

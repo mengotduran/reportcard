@@ -60,6 +60,12 @@ async function rebuildDemoSchool(tx: Prisma.TransactionClient, hashed: string) {
     // competency and promotion scales, Excel templates, past-term grants...). Every one
     // of them silently broke this function the day it was introduced. If you add a model
     // with a `schoolId`, add it here too, or give its School relation onDelete: Cascade.
+    // Parent-portal links first. A PARENT user has schoolId = null, so the user.deleteMany
+    // at the end of this list cannot see them; they are cleaned up explicitly below.
+    const demoParentIds = (await tx.guardian.findMany({ where: { schoolId }, select: { userId: true } })).map((g) => g.userId)
+    await tx.guardianAccessRequest.deleteMany({ where: { schoolId } })
+    await tx.guardianInvite.deleteMany({ where: { schoolId } })
+    await tx.guardian.deleteMany({ where: { schoolId } })
     await tx.notification.deleteMany({ where: { schoolId } })
     await tx.teacherAbsence.deleteMany({ where: { schoolId } })
     await tx.timetableSlot.deleteMany({ where: { schoolId } })
@@ -85,6 +91,15 @@ async function rebuildDemoSchool(tx: Prisma.TransactionClient, hashed: string) {
     await tx.reportCardTemplate.deleteMany({ where: { schoolId } })
     await tx.classListTemplate.deleteMany({ where: { schoolId } })
     await tx.user.deleteMany({ where: { schoolId } })
+    // Same rule as delete-school: a parent with no remaining children anywhere loses their
+    // account, one with a child at another school keeps it.
+    if (demoParentIds.length > 0) {
+      const stillLinked = new Set(
+        (await tx.guardian.findMany({ where: { userId: { in: demoParentIds } }, select: { userId: true } })).map((g) => g.userId),
+      )
+      const orphaned = demoParentIds.filter((uid) => !stillLinked.has(uid))
+      if (orphaned.length > 0) await tx.user.deleteMany({ where: { id: { in: orphaned }, role: 'PARENT' } })
+    }
     await tx.school.delete({ where: { id: schoolId } })
   }
 
@@ -201,7 +216,11 @@ async function rebuildDemoSchool(tx: Prisma.TransactionClient, hashed: string) {
       seq++
       const studentId = `2025-${String(++studentCount).padStart(4, '0')}`
       const student = await tx.student.create({
-        data: { schoolId, name, studentId, classLevel: className, guardianName: 'Guardian ' + name.split(' ')[0], guardianPhone: '+237 670 000 0' + String(i) },
+        // Stored in the same canonical E.164 shape the API now enforces (utils/phone.ts).
+        // The old literal here produced only 8 national digits, which the guardian-phone
+        // rule rejects — a seeded student could then not be edited at all without the
+        // admin first fixing a number the seed itself wrote.
+        data: { schoolId, name, studentId, classLevel: className, guardianName: 'Guardian ' + name.split(' ')[0], guardianPhone: `23767000000${i % 10}` },
       })
 
       // Build entries with deterministic-but-varied marks.

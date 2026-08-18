@@ -155,3 +155,42 @@ export const commitStudentImportApi = async (rows: ParsedStudentRow[]): Promise<
   const res = await api.post('/students/import/commit', { rows })
   return res.data
 }
+
+// ── Guardian phone backfill ─────────────────────────────────────────────────
+// Fills the guardian phone in for students who are already on the roster. The student
+// importer above only creates, so it cannot be used to correct an existing row.
+
+export const downloadGuardianPhoneSheetApi = async (classLevel?: string, missingOnly = true): Promise<Blob> => {
+  const res = await api.get('/students/guardian-phones/sheet', {
+    responseType: 'blob',
+    params: { classLevel: classLevel && classLevel !== 'all' ? classLevel : undefined, missingOnly: missingOnly ? 1 : 0 },
+  })
+  return res.data
+}
+
+export interface PhoneImportChange {
+  row: number
+  matricule: string
+  studentId: string
+  name: string
+  e164: string
+  display: string
+  current: string | null
+}
+
+export interface PhoneImportResult {
+  changes: PhoneImportChange[]
+  unchanged: number
+  skipped: number
+  errors: { row: number; matricule: string; reason: string }[]
+  applied: number
+}
+
+/** `apply` false reads the file and reports what would change without writing anything. */
+export const importGuardianPhonesApi = async (file: File, apply: boolean): Promise<PhoneImportResult> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (apply) formData.append('apply', '1')
+  const res = await api.post('/students/guardian-phones/import', formData)
+  return res.data
+}

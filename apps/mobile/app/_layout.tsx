@@ -66,6 +66,9 @@ export default function RootLayout() {
       <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
+      {/* Parents, in their own group with its own header. Not tabs: two screens do not
+          need a tab bar, and none of the staff tabs would work for them anyway. */}
+      <Stack.Screen name="(parent)" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="account/index" options={{ title: t('My Account'), headerBackTitle: '' }} />
       <Stack.Screen name="notifications" options={{ title: t('Notifications'), headerBackTitle: '' }} />
       <Stack.Screen name="absences" options={{ title: t('Absences'), headerBackTitle: '' }} />

@@ -2,12 +2,14 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView, Animated,
+  Alert, Linking,
 } from 'react-native'
 import { useThemeStore } from '@/lib/store/theme.store'
 import { Redirect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuthStore } from '@/lib/store/auth.store'
 import { loginApi } from '@/lib/api/auth'
+import { PARENT_SIGNUP_URL } from '@/lib/config'
 import { useTheme, Colors, type, space, radius, hairlineWidth } from '@/lib/useTheme'
 
 const makeStyles = (colors: Colors) => StyleSheet.create({
@@ -44,7 +46,10 @@ const makeStyles = (colors: Colors) => StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { ...type.buttonLabel, color: colors.onBrass },
-  secureRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: space.xl },
+  parentRow: { alignItems: 'center', marginTop: space.lg },
+  parentText: { ...type.bodySmall, color: colors.textDim, textAlign: 'center' },
+  parentLink: { color: colors.brassInk },
+  secureRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: space.lg },
   secureText: { ...type.microLabel, color: colors.textFaint, marginLeft: space.xs },
 })
 
@@ -68,7 +73,7 @@ export default function LoginScreen() {
     ).start()
   }, [errorKey, shake])
   const router = useRouter()
-  const { isAuthenticated, _hasHydrated, login } = useAuthStore()
+  const { isAuthenticated, _hasHydrated, user, login } = useAuthStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -78,7 +83,9 @@ export default function LoginScreen() {
   const passwordRef = useRef<TextInput>(null)
 
   if (!_hasHydrated) return null
-  if (isAuthenticated) return <Redirect href="/(tabs)" />
+  // A remembered session lands wherever that role belongs. Parents have their own group;
+  // see the PARENT branch in handleLogin.
+  if (isAuthenticated) return <Redirect href={user?.role === 'PARENT' ? '/(parent)/children' : '/(tabs)'} />
 
   const handleLogin = async () => {
     if (!email || !password) { setError('Please fill in all fields.'); setErrorKey(k => k + 1); return }
@@ -86,7 +93,19 @@ export default function LoginScreen() {
     setError('')
     try {
       const data = await loginApi({ email, password })
+
       login(data.token, data.user, data.school, rememberMe)
+
+      // A parent goes to their own route group, never to the staff tabs: every screen in
+      // there is written against a staff user with a school, and a parent's account has
+      // neither (User.schoolId is null by design, since their children can be at two
+      // schools at once). The API draws the same line, refusing a PARENT token on every
+      // staff route, so this is not merely cosmetic routing.
+      //
+      // Same account and same password as the website. There is no separate sign-up here:
+      // a parent asks for access on the site, sets their password once from the link they
+      // are sent, and signs in here with it from then on.
+      if (data.user?.role === 'PARENT') { router.replace('/(parent)/children'); return }
     } catch (err: any) {
       setError(err?.response
         ? 'One of your credentials is incorrect. Please check and try again.'
@@ -134,7 +153,7 @@ export default function LoginScreen() {
               <Ionicons name="mail-outline" size={18} color={colors.textFaint} style={styles.inputIcon} />
               <TextInput
                 style={styles.inputField}
-                placeholder="Email or username"
+                placeholder="Email, phone or username"
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -210,6 +229,21 @@ export default function LoginScreen() {
               {loading
                 ? <ActivityIndicator color={colors.onBrass} />
                 : <Text style={styles.buttonText}>Sign in</Text>}
+            </TouchableOpacity>
+
+            {/* Parents sign in here like anyone else, but there is no sign-up in the app:
+                asking for access needs the school and class pickers, and the link that comes
+                back is emailed. That whole flow lives on the website, so this hands them to
+                it. Once their password is set, this same screen is their way in. */}
+            <TouchableOpacity
+              onPress={() => Linking.openURL(PARENT_SIGNUP_URL).catch(() =>
+                Alert.alert('Could not open the browser', `Visit ${PARENT_SIGNUP_URL} to ask for access.`))}
+              activeOpacity={0.7}
+              style={styles.parentRow}
+            >
+              <Text style={styles.parentText}>
+                Parent? <Text style={styles.parentLink}>Get access to your child&apos;s results</Text>
+              </Text>
             </TouchableOpacity>
 
             <View style={styles.secureRow}>

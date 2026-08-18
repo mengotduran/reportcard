@@ -485,6 +485,13 @@ export const deleteSchool = async (req: Request, res: Response) => {
     await prisma.$transaction(async (tx) => {
       const reportCardIds = (await tx.reportCard.findMany({ where: { schoolId: id }, select: { id: true } })).map((r) => r.id)
       await tx.reportEntry.deleteMany({ where: { reportCardId: { in: reportCardIds } } })
+      // Parent-portal links. Taken FIRST, and their parent users handled at the end: a
+      // PARENT user has schoolId = null, so the `user.deleteMany({ schoolId })` below cannot
+      // see them and they would be left behind as orphans with a dead login.
+      const parentUserIds = (await tx.guardian.findMany({ where: { schoolId: id }, select: { userId: true } })).map((g) => g.userId)
+      await tx.guardianAccessRequest.deleteMany({ where: { schoolId: id } })
+      await tx.guardianInvite.deleteMany({ where: { schoolId: id } })
+      await tx.guardian.deleteMany({ where: { schoolId: id } })
       await tx.reportCard.deleteMany({ where: { schoolId: id } })
       await tx.teacherSubject.deleteMany({ where: { OR: [{ user: { schoolId: id } }, { subject: { schoolId: id } }] } })
       await tx.timetableSlot.deleteMany({ where: { schoolId: id } })
@@ -510,6 +517,17 @@ export const deleteSchool = async (req: Request, res: Response) => {
       await tx.reportCardTemplate.deleteMany({ where: { schoolId: id } })
       await tx.classListTemplate.deleteMany({ where: { schoolId: id } })
       await tx.user.deleteMany({ where: { schoolId: id } })
+      // A parent whose ONLY children were at this school has nothing left to sign in for, so
+      // the account goes. One whose other child is at a different school keeps theirs, which
+      // is why this is a "no links remain" check rather than a blanket delete of the ids
+      // collected above. Deliberately after the school's own users, and before school.delete.
+      if (parentUserIds.length > 0) {
+        const stillLinked = new Set(
+          (await tx.guardian.findMany({ where: { userId: { in: parentUserIds } }, select: { userId: true } })).map((g) => g.userId),
+        )
+        const orphaned = parentUserIds.filter((uid) => !stillLinked.has(uid))
+        if (orphaned.length > 0) await tx.user.deleteMany({ where: { id: { in: orphaned }, role: 'PARENT' } })
+      }
       await tx.school.delete({ where: { id } })
     }, {
       // A real school is far bigger than the demo one (hundreds of students, thousands

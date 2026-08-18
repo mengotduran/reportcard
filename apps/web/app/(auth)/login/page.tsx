@@ -43,7 +43,9 @@ export default function LoginPage() {
       setAuth(data.user, data.school, data.token)
       _email = ''
       _password = ''
-      window.location.href = '/dashboard'
+      // A parent has no school and no dashboard — sending them to /dashboard would bounce
+      // them straight back out. Their whole app is the portal.
+      window.location.href = data.user?.role === 'PARENT' ? '/parent' : '/dashboard'
     } catch {
       // Always show the spinner for at least 500 ms so users know the request happened
       const elapsed = Date.now() - start
@@ -104,7 +106,7 @@ export default function LoginPage() {
         <div className="bg-card border border-border rounded-xl p-6 space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-              Email or Username
+              Email, Phone or Username
             </label>
             <input
               type="text"
@@ -112,7 +114,7 @@ export default function LoginPage() {
               onChange={(e) => handleEmailChange(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && document.getElementById('pw-input')?.focus()}
               className="w-full border border-border rounded-lg px-3 py-2.5 text-sm text-foreground bg-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-shadow"
-              placeholder="Email or username"
+              placeholder="Email, phone or username"
               autoComplete="username"
             />
           </div>
@@ -178,8 +180,16 @@ export default function LoginPage() {
           </button>
         </div>
 
+          {/* Staff are given an account by their school; a parent asks for one themselves,
+              which is a different door and needs saying so on the way in. */}
           <p className="mt-5 text-center text-sm text-[#6f6553] dark:text-white/50">
-            Contact your administrator to get access.
+            Staff: contact your administrator to get access.
+          </p>
+          <p className="mt-1.5 text-center text-sm text-[#6f6553] dark:text-white/50">
+            Parent?{' '}
+            <a href="/parent/signup" className="text-primary font-medium hover:underline">
+              See your child&apos;s results
+            </a>
           </p>
           </div>
         </div>

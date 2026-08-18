@@ -27,6 +27,11 @@ model School {
   logo               String?
   // Defaults to TEACHERS, so existing schools keep behaving exactly as they did.
   marksEntryMode     MarksEntryMode      @default(TEACHERS)
+  // Whether registration is collected and reported APART from the class fee. It does not
+  // change what a student owes — that is always feeAmount + registrationFee — only whether
+  // the two are kept as separate totals and separate receipts, or added into one figure.
+  // False keeps every existing school reading exactly as it did.
+  registrationSeparate Boolean            @default(false)
   marksEntryChanges  MarksEntryModeChange[]
   // Official stamp/seal image. Prints on OFFICIAL copies only, via a `stamp` section
   // the admin places on the report card or transcript. Separate from `logo`: the logo
@@ -92,6 +97,9 @@ model School {
   notifications      Notification[]
   pastTermMarksGrants PastTermMarksGrant[]
   holidays                 SchoolHoliday[]
+  guardians                Guardian[]
+  guardianInvites          GuardianInvite[]
+  guardianAccessRequests   GuardianAccessRequest[]
 }
 
 model GradingScale {
@@ -176,6 +184,13 @@ model ClassLevel {
   order        Int      @default(0)
   createdAt    DateTime @default(now())
   feeAmount            Int      @default(0)
+  // Enrolment registration, charged once per academic year on top of feeAmount. Nothing to
+  // do with hndRegistrationFee below, which is the GOVERNMENT EXAM registration (FSLC / GCE
+  // / HND) a final-year class pays to an exam board — different money, different ledger.
+  //
+  // Defaults to 0 so every existing school is unchanged: a school whose feeAmount already
+  // covers registration simply leaves this alone.
+  registrationFee      Int      @default(0)
   maxScore             Int      @default(20)
   // Primary only: the Test component's ceiling out of `maxScore` (Exam ceiling is
   // maxScore - testMaxScore, derived rather than stored — same relationship as university's
@@ -277,6 +292,7 @@ model User {
   absencesRecorded TeacherAbsence[] @relation("AbsencesRecorded")
   notifications    Notification[]
   pastTermMarksGrantsGiven PastTermMarksGrant[]
+  guardianOf       Guardian[]
   school           School?          @relation(fields: [schoolId], references: [id])
 
   // email/username are already unique-indexed, so login is fine; this is for the
@@ -316,6 +332,9 @@ model Student {
 
   @@unique([schoolId, studentId])
   subjectExclusions   SubjectExclusion[]
+  guardians           Guardian[]
+  guardianInvites     GuardianInvite[]
+  guardianAccessRequests GuardianAccessRequest[]
 
   // @@unique([schoolId, studentId]) already covers "this school's students" as a
   // leftmost prefix; this covers the class roster reads, which are the common case.
@@ -328,6 +347,9 @@ model FeePayment {
   studentId  String
   session    String
   amount     Int
+  // What this money was for. Every row written before this column existed is tuition, which
+  // is what the default backfills — there was nothing else it could have been.
+  kind       FeeKind  @default(TUITION)
   paidOn     DateTime
   note       String?
   recordedBy String?
@@ -819,4 +841,130 @@ model SubjectExclusion {
 
   @@unique([subjectId, studentId])
   @@index([schoolId, subjectId])
+}
+
+/**
+ * Links a parent's login to one child. A join table rather than a column on either side:
+ * one parent commonly has several children, and a child can have two parents holding
+ * separate logins.
+ *
+ * `schoolId` is the school the CHILD attends. The parent's own User row deliberately has
+ * schoolId = null (like SUPERADMIN), because a parent may have children in more than one
+ * School at once — a primary and a secondary under the same ParentSchool are two separate
+ * School rows, which is the common case here, not an edge case. Every parent-facing query
+ * therefore resolves access through these rows and never through the token's schoolId.
+ */
+model Guardian {
+  id        String   @id @default(uuid())
+  schoolId  String
+  userId    String
+  studentId String
+  createdAt DateTime @default(now())
+  school    School   @relation(fields: [schoolId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  // One link per parent/child pair; claiming the same child twice is a no-op, not a duplicate.
+  @@unique([userId, studentId])
+  // "Which children does this parent have" is the query behind every parent screen.
+  @@index([userId])
+  // Used when deleting a school, to find parent users that belong to no school themselves.
+  @@index([schoolId])
+}
+
+/**
+ * A single-use invitation letting a parent claim their account. Issued by an admin against
+ * one student, delivered to the guardian's phone over WhatsApp (a wa.me deep link opened
+ * from the admin's own phone, so no messaging gateway is involved) or handed over printed.
+ *
+ * Only the SHA-256 hash of the token is stored, never the token itself — the same treatment
+ * User.resetTokenHash gets, and for the same reason: a leaked database should not hand
+ * anyone a working key to a child's records.
+ */
+model GuardianInvite {
+  id        String    @id @default(uuid())
+  schoolId  String
+  studentId String
+  tokenHash String    @unique
+  // The contact this invite was issued against, as it stood at that moment. Kept so a later
+  // edit to the student's record cannot silently redirect an invite already in someone's
+  // hand. Exactly one of the two is set, and it becomes the parent's login identifier: an
+  // invite delivered over WhatsApp or on paper is keyed to the phone, one emailed from the
+  // public sign-up form is keyed to the address it was sent to.
+  phone     String?
+  email     String?
+  expiresAt DateTime
+  claimedAt DateTime?
+  claimedBy String?
+  createdBy String
+  createdAt DateTime  @default(now())
+  school    School    @relation(fields: [schoolId], references: [id])
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  // "Does this student have a live invite already" drives the admin button's state.
+  @@index([schoolId, studentId])
+}
+
+/**
+ * A parent asking the school for access to their own child, from the public sign-up form.
+ *
+ * The other direction to GuardianInvite: that one starts with an admin picking a student,
+ * this one starts with a parent who found the site on their own. It exists as a stored row
+ * rather than an immediate yes/no because most requests cannot be settled automatically —
+ * the roster usually holds no contact for the child at all (a guardian phone only became
+ * required for newly created students), so somebody at the school has to recognise the
+ * family. Approving one also writes the contact onto the Student record, which is how the
+ * empty column gets filled without anyone chasing a thousand numbers.
+ *
+ * `matched` records whether the contact the parent typed already equalled what the school
+ * holds for that student. A matched EMAIL is delivered without a human, because sending to
+ * an address already on file proves the requester can read that mailbox. A matched PHONE
+ * cannot be: nothing here can send a WhatsApp message, so it waits for an admin to tap send
+ * from their own phone. That is the whole reason this table has states rather than being a
+ * fire-and-forget lookup.
+ */
+model GuardianAccessRequest {
+  id          String   @id @default(uuid())
+  schoolId    String
+  // Set when the typed name and class resolved to exactly one active student. Null when
+  // nothing matched, or when two children share the name, which is a case for a human.
+  studentId   String?
+  // What the parent typed, kept verbatim even after studentId resolves, so an admin reading
+  // the queue sees the request as it was made.
+  studentName String
+  classLevel  String
+  parentName  String?
+  // Exactly one of these is set, whichever kind of contact was typed.
+  email       String?
+  phone       String?
+  matched     Boolean  @default(false)
+  status      GuardianRequestStatus @default(PENDING)
+  createdAt   DateTime @default(now())
+  resolvedAt  DateTime?
+  // Null on a request that was delivered automatically, which is what distinguishes it from
+  // one an admin approved.
+  resolvedBy  String?
+  school      School   @relation(fields: [schoolId], references: [id])
+  student     Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  // The queue read: this school's outstanding requests, newest first.
+  @@index([schoolId, status])
+}
+
+enum GuardianRequestStatus {
+  PENDING
+  SENT
+  REJECTED
+}
+
+/**
+ * What a FeePayment was collected for.
+ *
+ * TUITION is the class fee. REGISTRATION is the yearly enrolment fee, kept as its own kind
+ * rather than a note on the row because the whole point is being able to total the two
+ * separately and have the figures be trustworthy.
+ */
+enum FeeKind {
+  TUITION
+  REGISTRATION
 }

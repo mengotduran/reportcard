@@ -19,6 +19,10 @@ interface CustomSelectProps {
   onChange: (value: string) => void
   placeholder?: string
   searchable?: boolean
+  /** Number of options above which the search box appears. Lower it to 0 to always show it,
+   *  which is what a list the user does not already know by heart needs (the parent sign-up
+   *  school picker, where four schools today may be four hundred later). */
+  searchThreshold?: number
   className?: string
   disabled?: boolean
   compact?: boolean
@@ -31,7 +35,7 @@ const PANEL_ESTIMATE = 280
 
 export default function CustomSelect({
   options, value, onChange, placeholder = 'Select…',
-  searchable = true, className = '', disabled = false, compact = false,
+  searchable = true, searchThreshold = 4, className = '', disabled = false, compact = false,
 }: CustomSelectProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -145,7 +149,7 @@ export default function CustomSelect({
           }}
           className="z-[100] border border-border rounded-xl shadow-xl overflow-hidden"
         >
-          {searchable && options.length > 4 && (
+          {searchable && options.length > searchThreshold && (
             <div className="p-2 border-b border-border">
               <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-1.5">
                 <Search size={13} className="text-muted-foreground flex-shrink-0" />

@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs'
 import { stripProgramme } from './programme'
+import { normalizeGuardianPhone } from './phone'
 
 export interface ParsedStudentRow {
   row: number
@@ -191,7 +192,7 @@ function fieldForHeader(header: string): string | null {
   return null
 }
 
-interface RawRow { rowNumber: number; data: Record<string, string> }
+export interface RawRow { rowNumber: number; data: Record<string, string> }
 
 // Dependency-free CSV tokenizer — handles quoted fields (commas/newlines inside
 // quotes, doubled "" for an escaped quote). Mirrors this repo's existing
@@ -278,6 +279,17 @@ async function parseXlsx(buffer: Buffer): Promise<RawRow[]> {
   return rows
 }
 
+/**
+ * Reads an uploaded .xlsx or .csv into header-keyed rows. Exported so other importers
+ * (guardian phones, see utils/guardianPhoneSheet.ts) read a file exactly the way the
+ * student roster importer does, quoted CSV fields and rich-text cells included, rather
+ * than growing a second parser that handles a slightly different set of files.
+ */
+export async function parseSpreadsheet(buffer: Buffer, filename: string): Promise<RawRow[]> {
+  const ext = filename.toLowerCase().split('.').pop()
+  return ext === 'csv' ? parseCsv(buffer.toString('utf-8')) : parseXlsx(buffer)
+}
+
 // Validates+normalizes one uploaded file against the school's actual class
 // list. Does NOT write to the database — see commitStudentImport in
 // student.controller.ts for that (separate step so nothing is created until
@@ -297,8 +309,7 @@ export async function previewStudentRows(
   existingStudents?: { name: string; studentId: string }[],
   programme: ImportProgramme = 'ALL',
 ): Promise<ImportPreviewResult> {
-  const ext = filename.toLowerCase().split('.').pop()
-  const rawRows = ext === 'csv' ? parseCsv(buffer.toString('utf-8')) : await parseXlsx(buffer)
+  const rawRows = await parseSpreadsheet(buffer, filename)
 
   const allHeaders = new Set<string>()
   for (const r of rawRows) for (const h of Object.keys(r.data)) allHeaders.add(h)
@@ -344,6 +355,14 @@ export async function previewStudentRows(
     if (genderRaw === 'male' || genderRaw === 'm') gender = 'Male'
     else if (genderRaw === 'female' || genderRaw === 'f') gender = 'Female'
     if (!gender) { errors.push({ row: rowNumber, reason: `Gender must be Male or Female (got "${mapped.gender || ''}")` }); continue }
+
+    // Guardian phone is required and must normalise, same rule as the single-student form.
+    // Errored per-row rather than failing the whole file: a 500-row roster with eight bad
+    // numbers should import 492 students and hand the admin a list of eight to fix, which is
+    // how every other row-level problem here already behaves.
+    const phone = normalizeGuardianPhone(mapped.guardianPhone)
+    if ('error' in phone) { errors.push({ row: rowNumber, reason: phone.error }); continue }
+    const guardianPhone = phone.e164
 
     // A typo in a financial figure shouldn't be silently dropped — error the
     // row if the cell has *something* that isn't a valid non-negative number.
@@ -399,7 +418,7 @@ export async function previewStudentRows(
       valid.push({
         row: rowNumber, name, classLevel: matchedClass, gender, matricule,
         guardianName: mapped.guardianName?.trim() || undefined,
-        guardianPhone: mapped.guardianPhone?.trim() || undefined,
+        guardianPhone,
         guardianEmail: mapped.guardianEmail?.trim() || undefined,
         feePaid, paymentDate, directLevel2Entry: true,
       })
@@ -409,7 +428,7 @@ export async function previewStudentRows(
     valid.push({
       row: rowNumber, name, classLevel: matchedClass, gender, matricule,
       guardianName: mapped.guardianName?.trim() || undefined,
-      guardianPhone: mapped.guardianPhone?.trim() || undefined,
+      guardianPhone,
       guardianEmail: mapped.guardianEmail?.trim() || undefined,
       feePaid, paymentDate,
     })

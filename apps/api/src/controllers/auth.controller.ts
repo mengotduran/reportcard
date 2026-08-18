@@ -6,6 +6,7 @@ import { AuthRequest } from '../middleware/auth'
 import { generateRawToken, hashToken, INVITE_TOKEN_TTL_MS } from '../utils/resetToken'
 import { sendPasswordSetupEmail } from '../utils/email'
 import { validateNewPassword, validateUsername } from '../utils/passwordValidation'
+import { normalizeGuardianPhone } from '../utils/phone'
 
 // Register a new school + admin account
 export const registerSchool = async (req: Request, res: Response) => {
@@ -86,13 +87,46 @@ export const login = async (req: Request, res: Response) => {
     // it misses, so this costs a second query only for username-based logins.
     const { email: identifier, password } = req.body
 
-    const user = (await prisma.user.findUnique({
+    let user = (await prisma.user.findUnique({
       where: { email: identifier },
       include: { school: true },
     })) ?? (await prisma.user.findUnique({
       where: { username: identifier },
       include: { school: true },
     }))
+
+    // Third try: the same address in lower case. Postgres compares TEXT exactly, so an
+    // account stored as "parent@example.com" is not found by "Parent@Example.com" — and a
+    // phone keyboard capitalises the first letter for you. Addresses are stored lower-cased
+    // wherever this codebase writes them, so folding the typed one is enough.
+    if (!user && typeof identifier === 'string' && identifier.includes('@')) {
+      const lowered = identifier.trim().toLowerCase()
+      if (lowered !== identifier) {
+        user = await prisma.user.findUnique({ where: { email: lowered }, include: { school: true } })
+      }
+    }
+
+    // Fourth try: the identifier read as a phone number.
+    //
+    // A parent's username IS their phone number, stored as E.164 digits with no "+"
+    // ("237677123456"). Nobody types it that way — they type 677123456, or 0677123456, or
+    // the "+237 677 123 456" that the school printed on their slip, and an exact-match
+    // lookup turns every one of those into "Invalid credentials" on an account that exists
+    // and whose password is right. Normalising here means the phone is one identity however
+    // it is written, exactly as it already is on the Student record.
+    //
+    // Only reached when both exact lookups miss, so a staff login costs nothing extra and a
+    // literal username always wins: a member of staff who chose "677123456" as their
+    // username is found by the exact lookup above before this branch is ever considered.
+    if (!user) {
+      const phone = normalizeGuardianPhone(String(identifier ?? ''))
+      if (!('error' in phone) && phone.e164 !== identifier) {
+        user = await prisma.user.findUnique({
+          where: { username: phone.e164 },
+          include: { school: true },
+        })
+      }
+    }
 
     if (!user || !user.isActive) {
       res.status(401).json({ message: 'Invalid credentials' })

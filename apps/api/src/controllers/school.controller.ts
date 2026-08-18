@@ -33,7 +33,7 @@ export const getSchoolSettings = async (req: AuthRequest, res: Response) => {
 export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
   try {
     const schoolId = req.user!.schoolId!
-    const { name, email, phone, address, website, acronym, batch, absenceGraceMinutes, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr, marksEntryMode } = req.body
+    const { name, email, phone, address, website, acronym, batch, absenceGraceMinutes, authorizationNumber, officialLeftTextEn, officialLeftTextFr, officialRightTextEn, officialRightTextFr, marksEntryMode, registrationSeparate } = req.body
     const data: Record<string, unknown> = {}
     if (name             !== undefined) data.name             = String(name).trim()
     if (phone            !== undefined) data.phone            = String(phone).trim() || null
@@ -73,6 +73,10 @@ export const updateSchoolSettings = async (req: AuthRequest, res: Response) => {
       }
       data.marksEntryMode = marksEntryMode
     }
+    // Whether registration is collected and reported apart from the class fee. It changes
+    // no amount: a student always owes the class fee plus their class's registration. What
+    // it changes is whether the two are two receipts and two totals, or one of each.
+    if (registrationSeparate !== undefined) data.registrationSeparate = Boolean(registrationSeparate)
     if (authorizationNumber !== undefined) data.authorizationNumber = String(authorizationNumber).trim() || null
     if (officialLeftTextEn  !== undefined) data.officialLeftTextEn  = String(officialLeftTextEn).trim() || null
     if (officialLeftTextFr  !== undefined) data.officialLeftTextFr  = String(officialLeftTextFr).trim() || null

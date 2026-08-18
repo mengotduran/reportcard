@@ -14,6 +14,8 @@ export interface ClassLevel {
   maxScore: number
   testMaxScore: number
   feeAmount: number
+  /** Yearly enrolment registration, on top of feeAmount. Not the exam registration below. */
+  registrationFee: number
   hndRegistrationFee?: number | null
   departmentId?: string | null
   // Day or Evening sitting. A university runs the same programme twice with the same
@@ -40,12 +42,12 @@ export const getClassLevelsApi = async (): Promise<{ classLevels: ClassLevel[] }
   return res.data
 }
 
-export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme; gradingMode?: GradingMode }) => {
+export const createClassLevelApi = async (data: { name: string; abbreviation?: string; hasStream: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; registrationFee?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme; gradingMode?: GradingMode }) => {
   const res = await api.post('/class-levels', data)
   return res.data
 }
 
-export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme; gradingMode?: GradingMode }) => {
+export const updateClassLevelApi = async (id: string, data: { name?: string; abbreviation?: string; hasStream?: boolean; order?: number; maxScore?: number; testMaxScore?: number; feeAmount?: number; registrationFee?: number; hndRegistrationFee?: number | null; departmentId?: string | null; programme?: Programme; gradingMode?: GradingMode }) => {
   const res = await api.put(`/class-levels/${id}`, data)
   return res.data
 }
