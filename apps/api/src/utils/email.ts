@@ -46,6 +46,27 @@ const SETUP_COPY = {
   },
 }
 
+// A parent who asked for access to their child's records on the public sign-up form, and
+// whose email already matched the one the school holds for that child. Worded around the
+// child's name because a parent with several children needs to know which one this is for,
+// and because it is the detail that tells them at a glance the mail is genuinely theirs.
+const GUARDIAN_ACCESS_COPY = {
+  EN: {
+    subject: 'Your access to your child\'s report cards',
+    heading: 'Hello,',
+    body: 'You asked for access to {student}\'s report cards and school fees at {school}. Click below to choose a password. This link works once and expires in 24 hours.',
+    button: 'Set my password',
+    ignore: "If you did not ask for this, you can ignore this email. Nobody gets access unless this link is opened.",
+  },
+  FR: {
+    subject: 'Votre accès aux bulletins de votre enfant',
+    heading: 'Bonjour,',
+    body: "Vous avez demandé l'accès aux bulletins et aux frais de scolarité de {student} à {school}. Cliquez ci-dessous pour choisir un mot de passe. Ce lien ne fonctionne qu'une fois et expire dans 24 heures.",
+    button: 'Définir mon mot de passe',
+    ignore: "Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail. Personne n'obtient l'accès tant que ce lien n'est pas ouvert.",
+  },
+}
+
 type Copy = { subject: string; heading: string; body: string; button: string; ignore: string }
 
 async function dispatchEmail(opts: { to: string; resetUrl: string; copy: Copy; logLabel: string }): Promise<void> {
@@ -116,4 +137,26 @@ export async function sendPasswordSetupEmail(opts: {
 }): Promise<void> {
   const copy = SETUP_COPY[opts.lang === 'FR' ? 'FR' : 'EN']
   await dispatchEmail({ to: opts.to, resetUrl: opts.resetUrl, copy, logLabel: 'password setup' })
+}
+
+/**
+ * Parent-portal access, sent to the guardian email already on the student's record.
+ *
+ * Delivery to an address the school recorded before today is what stands in for proving
+ * the requester is the guardian: anyone can type an address, only the guardian can read
+ * the mailbox. Nothing is sent to an address that does not already match.
+ */
+export async function sendGuardianAccessEmail(opts: {
+  to: string
+  claimUrl: string
+  studentName: string
+  schoolName: string
+  lang?: 'EN' | 'FR'
+}): Promise<void> {
+  const base = GUARDIAN_ACCESS_COPY[opts.lang === 'FR' ? 'FR' : 'EN']
+  const copy: Copy = {
+    ...base,
+    body: base.body.replace('{student}', opts.studentName).replace('{school}', opts.schoolName),
+  }
+  await dispatchEmail({ to: opts.to, resetUrl: opts.claimUrl, copy, logLabel: 'guardian access' })
 }

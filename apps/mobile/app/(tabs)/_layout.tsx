@@ -66,6 +66,11 @@ export default function TabsLayout() {
 
   if (!_hasHydrated) return null
   if (!isAuthenticated) return <Redirect href="/login" />
+  // These tabs are staff only. A parent reaching them (a session stored by an older build,
+  // or a stray link) is sent to their own group rather than signed out: their account is
+  // perfectly valid, it just belongs somewhere else. Every screen here would call a staff
+  // route and be refused by denyParents on the API.
+  if (user?.role === 'PARENT') return <Redirect href="/(parent)/children" />
 
   const isSuperAdmin = user?.role === 'SUPERADMIN'
   const isUniversity = school?.type === 'UNIVERSITY'

@@ -4,6 +4,8 @@ import fs from 'fs'
 import prisma, { IS_OFFLINE_BUILD } from '../config/prisma'
 import { AuthRequest } from '../middleware/auth'
 import { stripProgramme, withProgrammeOf } from '../utils/programme'
+import { normalizeGuardianPhone } from '../utils/phone'
+import { buildGuardianPhoneSheet, readGuardianPhoneSheet, phoneProblemOf } from '../utils/guardianPhoneSheet'
 import { demoLimitBlock } from '../config/demo'
 import { UPLOAD_DIR } from '../config/uploads'
 
@@ -275,6 +277,16 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
       return
     }
 
+    // Required, and stored in one canonical international shape. This is the number a
+    // guardian is reached on, so it has to be dialable rather than merely present — see
+    // utils/phone.ts for why the column itself stays nullable (existing rows predate the
+    // rule and a NOT NULL migration would need a backfill nobody can supply).
+    const phone = normalizeGuardianPhone(guardianPhone)
+    if ('error' in phone) {
+      res.status(400).json({ message: phone.error })
+      return
+    }
+
     // Every downstream thing a student touches (report cards, fees) is scoped to the
     // current term/session — fee recording already refused to work without one
     // (currentSession, used by fees.controller.ts). Creating a student before one exists
@@ -303,7 +315,7 @@ export const createStudent = async (req: AuthRequest, res: Response) => {
     const student = await prisma.student.create({
       // Birth details are optional: an empty form field becomes NULL rather than "", so
       // "not provided" stays a single thing and the row simply prints blank.
-      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone, guardianEmail, directLevel2Entry: !!directLevel2Entry,
+      data: { schoolId, name, studentId, classLevel, gender, guardianName, guardianPhone: phone.e164, guardianEmail, directLevel2Entry: !!directLevel2Entry,
         dateOfBirth: normalizeBirthDate(dateOfBirth), placeOfBirth: blankToNull(placeOfBirth) }
     })
     await ensureReportCardForCurrentTerm(schoolId, student.id, req.user!.id)
@@ -338,12 +350,27 @@ export const updateStudent = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // Only validated when the caller actually sends the field, so a client that knows
+    // nothing about guardian details cannot be forced to supply one. When it IS sent it must
+    // be valid — including on a student created before the rule existed, which is how those
+    // older rows get cleaned up.
+    let normalizedPhone: string | undefined
+    if (guardianPhone !== undefined) {
+      const phone = normalizeGuardianPhone(guardianPhone)
+      if ('error' in phone) {
+        res.status(400).json({ message: phone.error })
+        return
+      }
+      normalizedPhone = phone.e164
+    }
+
     const updated = await prisma.student.update({
       where: { id },
       data: {
         name, classLevel,
         ...(gender !== undefined ? { gender } : {}),
-        guardianName, guardianPhone, guardianEmail,
+        guardianName, guardianEmail,
+        ...(normalizedPhone !== undefined ? { guardianPhone: normalizedPhone } : {}),
         ...(directLevel2Entry !== undefined ? { directLevel2Entry: !!directLevel2Entry } : {}),
         ...(isRepeatingLevel !== undefined ? { isRepeatingLevel: !!isRepeatingLevel } : {}),
         // Only touched when the client actually sends them, so a caller that knows
@@ -754,5 +781,102 @@ export const deleteStudent = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: 'Server error' })
+  }
+}
+
+// ── Guardian phone backfill ─────────────────────────────────────────────────
+//
+// Guardian phone became required in createStudent, but only for students created after
+// that. A school that has been running for years has a full roster and an empty column,
+// and no parent can be given portal access until it is filled: the invite is delivered to
+// that number. These two endpoints are the bulk way to fill it — download who is missing
+// one, fill one column, upload it back. See utils/guardianPhoneSheet.ts.
+
+/** GET /api/students/guardian-phones/sheet?classLevel=&missingOnly=1 */
+export const downloadGuardianPhoneSheet = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const classLevel = String(req.query.classLevel ?? '').trim()
+    // Default: only the students who actually need attention. A whole-roster sheet is
+    // available (missingOnly=0) for a school that would rather review every number.
+    const missingOnly = String(req.query.missingOnly ?? '1') !== '0'
+
+    const students = await prisma.student.findMany({
+      where: {
+        schoolId,
+        isActive: true,
+        status: 'ACTIVE',
+        ...(classLevel && classLevel !== 'all' ? { classLevel } : {}),
+      },
+      select: { studentId: true, name: true, classLevel: true, guardianName: true, guardianPhone: true },
+      orderBy: [{ classLevel: 'asc' }, { name: 'asc' }],
+    })
+
+    // Filtered here rather than in the query: "usable" is normalizeGuardianPhone's verdict,
+    // which no `where` can express — a stored "+237 670 000 00" is present and still useless.
+    const rows = missingOnly ? students.filter((s) => phoneProblemOf(s.guardianPhone) !== null) : students
+
+    const buffer = await buildGuardianPhoneSheet(rows)
+    const scope = classLevel && classLevel !== 'all' ? classLevel.replace(/[^a-z0-9]+/gi, '-') : 'all-classes'
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="guardian-phones-${scope}.xlsx"`)
+    res.send(buffer)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+/**
+ * POST /api/students/guardian-phones/import — dry run by default.
+ *
+ * The same file is uploaded twice: once to see what would change, once with `apply=1` to
+ * write it. Re-reading the file on apply (rather than trusting a client-supplied row list,
+ * as the student importer does) is deliberate here, because the payload would otherwise be
+ * a list of "set student X's phone to Y" that the browser could hold while the admin walks
+ * away and the roster moves underneath it.
+ */
+export const importGuardianPhones = async (req: AuthRequest, res: Response) => {
+  try {
+    const schoolId = req.user!.schoolId!
+    const file = (req as any).file as Express.Multer.File | undefined
+    if (!file) { res.status(400).json({ message: 'No file uploaded' }); return }
+    const apply = String(req.body?.apply ?? '') === '1'
+
+    const students = await prisma.student.findMany({
+      where: { schoolId },
+      select: { id: true, studentId: true, name: true, guardianPhone: true },
+    })
+
+    const result = await readGuardianPhoneSheet(file.buffer, file.originalname, students)
+    if (result.headerError) {
+      res.status(400).json({ message: result.headerError })
+      return
+    }
+
+    if (!apply) {
+      res.json({ ...result, applied: 0 })
+      return
+    }
+
+    // Chunked rather than one transaction over a thousand updates: Postgres holds every row
+    // lock until the commit, and this runs against a live school where somebody else is
+    // editing students at the same time. A chunk that fails leaves the earlier ones written,
+    // which is the right outcome here — re-uploading the same file is safe and idempotent.
+    const CHUNK = 100
+    let applied = 0
+    for (let i = 0; i < result.changes.length; i += CHUNK) {
+      const chunk = result.changes.slice(i, i + CHUNK)
+      await prisma.$transaction(
+        chunk.map((c) => prisma.student.update({ where: { id: c.studentId }, data: { guardianPhone: c.e164 } })),
+        { timeout: 60_000 },
+      )
+      applied += chunk.length
+    }
+
+    res.json({ ...result, applied })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: 'Failed to read that file. Make sure it is a valid .xlsx or .csv file.' })
   }
 }

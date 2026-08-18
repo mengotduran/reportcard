@@ -12,13 +12,18 @@ import { useProgrammeFilter, ProgrammeChips, EveningBadge } from '@/components/u
 import { stripProgrammeSuffix, withProgrammeSuffix, PROGRAMME_LABELS } from '@/lib/programme'
 import { getDepartmentsApi, Department } from '@/lib/api/departments'
 import { STUDENT_PHOTO_UPLOADS_ENABLED } from '@/lib/features'
+import { normalizeGuardianPhone, formatPhoneForDisplay } from '@/lib/phoneValidation'
+import { getGuardianRequestsApi } from '@/lib/api/parent'
 import { getSubjectsApi } from '@/lib/api/subjects'
 import { getTermsApi } from '@/lib/api/terms'
-import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle, Trash2 } from 'lucide-react'
+import { Users, Plus, Search, UserX, Pencil, X, Wallet, Download, Upload, AlertTriangle, CheckCircle2, ArrowUpCircle, Info, ChevronDown, ArrowUp, AlertCircle, Trash2, Send } from 'lucide-react'
 import Toast from '@/components/ui/Toast'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import Pagination from '@/components/ui/Pagination'
 import StudentFeesModal from '@/components/ui/StudentFeesModal'
+import GuardianInviteModal from '@/components/ui/GuardianInviteModal'
+import BulkGuardianInviteModal from '@/components/ui/BulkGuardianInviteModal'
+import GuardianRequestsModal from '@/components/ui/GuardianRequestsModal'
 import CustomSelect from '@/components/ui/CustomSelect'
 import { usePagination } from '@/lib/usePagination'
 import { useToast } from '@/lib/useToast'
@@ -148,6 +153,12 @@ export default function StudentsPage() {
   const [deleteBlockedReason, setDeleteBlockedReason] = useState('')
   const [checkingDeletable, setCheckingDeletable] = useState(false)
   const [feesTarget, setFeesTarget] = useState<{ id: string; name: string } | null>(null)
+  const [inviteTarget, setInviteTarget] = useState<{ id: string; name: string } | null>(null)
+  const [bulkInviteOpen, setBulkInviteOpen] = useState(false)
+  // Parents waiting on the school. Surfaced as a banner rather than another header button:
+  // it is nothing at all most days, and something that should be hard to miss when it isn't.
+  const [pendingRequests, setPendingRequests] = useState(0)
+  const [requestsOpen, setRequestsOpen] = useState(false)
   const [feesByStudent, setFeesByStudent] = useState<Record<string, FeeOverviewRow>>({})
   const [subjectsByClass, setSubjectsByClass] = useState<Record<string, string[]>>({})
   const [exporting, setExporting] = useState(false)
@@ -175,6 +186,7 @@ export default function StudentsPage() {
       fetchDefinedClasses()
       fetchSubjects()
       fetchTerms()
+      fetchPendingRequests()
       if (isSecondary) getDepartmentsApi().then(d => setDepartments(d.departments)).catch(() => {})
     }
   }, [isAuthenticated])
@@ -213,6 +225,15 @@ export default function StudentsPage() {
     } catch { /* ignore */ }
   }
 
+  const fetchPendingRequests = async () => {
+    // Admin-only endpoint; a class teacher on this page would just collect a 403.
+    if (user?.role !== 'SCHOOL_ADMIN' && user?.role !== 'VICE_PRINCIPAL') return
+    try {
+      const data = await getGuardianRequestsApi('PENDING')
+      setPendingRequests(data.pending)
+    } catch { /* ignore */ }
+  }
+
   const fetchDefinedClasses = async () => {
     try {
       const data = await getClassLevelsApi()
@@ -235,7 +256,13 @@ export default function StudentsPage() {
       else params.status = statusVal
       const data = await getStudentsApi(params)
       setStudents(data.students)
-    } catch { console.error('Failed to fetch students') }
+    } catch (err: unknown) {
+      // The status matters: a 403 here means a parent session is sitting on a staff page
+      // (AuthGuard now redirects, but a stale tab can still get here), a 401 means the token
+      // expired. Swallowing it left the console saying only "failed", which is unactionable.
+      const e = err as { response?: { status?: number; data?: { message?: string } } }
+      console.error('Failed to fetch students', e.response?.status ?? '', e.response?.data?.message ?? '')
+    }
     finally { setLoading(false) }
   }
 
@@ -393,7 +420,9 @@ export default function StudentsPage() {
       dateOfBirth: s.dateOfBirth || '',
       placeOfBirth: s.placeOfBirth || '',
       guardianName: s.guardianName || '',
-      guardianPhone: s.guardianPhone || '',
+      // Shown in the readable "+237 677 123 456" form rather than the stored digits.
+      // It re-normalises to the same value on save, so the round trip is lossless.
+      guardianPhone: formatPhoneForDisplay(s.guardianPhone),
       guardianEmail: s.guardianEmail || '',
       uniDept: isUniversity ? univDept(baseClass) : '',
       uniLevel: isUniversity ? univLevel(baseClass) : '',
@@ -455,10 +484,19 @@ export default function StudentsPage() {
       setError(t('Please select the student\'s gender.'))
       return
     }
+    // Normalised here as well as on the server so a typo is caught before a round trip, and
+    // so the value actually sent is already canonical. The server re-checks regardless: this
+    // is convenience, not the guard.
+    const phone = normalizeGuardianPhone(form.guardianPhone)
+    if ('error' in phone) {
+      setError(t(phone.error))
+      return
+    }
     setSaving(true)
     try {
       const classLevel = needsStream ? `${form.classLevel} ${form.stream}` : form.classLevel
-      const { stream, studentId: _sid, uniDept: _ud, uniLevel: _ul, secDept: _sd, ...rest } = form
+      const { stream, studentId: _sid, uniDept: _ud, uniLevel: _ul, secDept: _sd, ...form_ } = form
+      const rest = { ...form_, guardianPhone: phone.e164 }
       const isLevel2 = / - Level 2$/i.test(classLevel)
       if (editingId) {
         await updateStudentApi(editingId, { ...rest, classLevel, directLevel2Entry: isLevel2 ? rest.directLevel2Entry : false })
@@ -650,7 +688,7 @@ export default function StudentsPage() {
       { label: t('Class'), value: (s: Student) => stripProgrammeSuffix(isSecondary ? stripDeptSuffix(s.classLevel) : s.classLevel) },
       { label: t(isUniversity ? 'Courses' : 'Subjects'), value: (s: Student) => (subjectsByClass[s.classLevel] || []).join(', ') },
       { label: t('Guardian'), value: (s: Student) => s.guardianName || '' },
-      { label: t('Guardian Phone'), value: (s: Student) => s.guardianPhone || '' },
+      { label: t('Guardian Phone'), value: (s: Student) => formatPhoneForDisplay(s.guardianPhone) },
       { label: t('Guardian Email'), value: (s: Student) => s.guardianEmail || '' },
       { label: t('Total fee'), value: (s: Student) => feesByStudent[s.id]?.due ?? '' },
       { label: t('Paid'), value: (s: Student) => feesByStudent[s.id]?.paid ?? '' },
@@ -829,6 +867,14 @@ export default function StudentsPage() {
               </>
             )}
           </div>
+          {/* Parent access is issued a class at a time: a wa.me link opens one chat per tap,
+              so the whole school in one go is not a thing the delivery path can do, and the
+              class is the unit an admin actually works through. */}
+          <button onClick={() => setBulkInviteOpen(true)} disabled={activeClass === 'all'}
+            title={activeClass === 'all' ? t('Pick a class first. Parent links are created one class at a time.') : undefined}
+            className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
+            <Send size={16} /> {t('Parent access')}
+          </button>
           <button onClick={openImportModal} disabled={!hasCurrentTerm}
             title={hasCurrentTerm ? undefined : ts('Set a current academic year/term before adding students.', 'Set a current academic year/semester before adding students.')}
             className="flex items-center gap-2 border border-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition">
@@ -841,6 +887,20 @@ export default function StudentsPage() {
           </button>
         </div>
       </div>
+
+      {pendingRequests > 0 && (
+        <button onClick={() => setRequestsOpen(true)}
+          className="w-full mb-4 p-3 rounded-lg border border-sky-200 bg-sky-50 dark:bg-sky-950/20 dark:border-sky-800 text-sm text-sky-800 dark:text-sky-300 flex items-center gap-2 hover:brightness-95 transition text-left">
+          <Send size={15} className="shrink-0" />
+          <span className="flex-1">
+            <strong>{pendingRequests}</strong>{' '}
+            {pendingRequests === 1
+              ? t('parent has asked for access to their child.')
+              : t('parents have asked for access to their children.')}
+          </span>
+          <span className="font-medium underline shrink-0">{t('Review')}</span>
+        </button>
+      )}
 
       {!hasCurrentTerm && (
         <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2">
@@ -1027,6 +1087,10 @@ export default function StudentsPage() {
                       <button onClick={() => setFeesTarget({ id: s.id, name: s.name })} title={t('School Fees')}
                         className="p-1.5 rounded-lg text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition">
                         <Wallet size={14} />
+                      </button>
+                      <button onClick={() => setInviteTarget({ id: s.id, name: s.name })} title={t('Parent access')}
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-sky-600 hover:bg-sky-50 dark:hover:bg-sky-950/30 transition">
+                        <Send size={14} />
                       </button>
                       <button onClick={() => openEdit(s)} title={t('Edit')}
                         className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition">
@@ -1341,16 +1405,23 @@ export default function StudentsPage() {
                 </div>
               )}
               {[
-                { name: 'guardianName', label: 'Guardian Name', placeholder: 'e.g. Nguemo Jean' },
-                { name: 'guardianPhone', label: 'Guardian Phone', placeholder: 'e.g. 677000000' },
-                { name: 'guardianEmail', label: 'Guardian Email', placeholder: 'e.g. guardian@email.com' },
+                { name: 'guardianName', label: 'Guardian Name', placeholder: 'e.g. Nguemo Jean', required: false, hint: '' },
+                // Required: this is the number the guardian is reached on, and the one a
+                // parent will be matched against when they claim their account.
+                { name: 'guardianPhone', label: 'Guardian Phone', placeholder: 'e.g. 677000000', required: true,
+                  hint: 'Cameroon numbers can be typed as 677000000. For another country, start with + and the country code.' },
+                { name: 'guardianEmail', label: 'Guardian Email', placeholder: 'e.g. guardian@email.com', required: false, hint: '' },
               ].map((field) => (
                 <div key={field.name}>
-                  <label className="block text-xs font-medium text-foreground mb-1">{t(field.label)}</label>
+                  <label className="block text-xs font-medium text-foreground mb-1">
+                    {t(field.label)}{field.required && <span className="text-destructive"> *</span>}
+                  </label>
                   <input type="text" placeholder={field.placeholder}
                     value={form[field.name as keyof typeof emptyForm] as string}
                     onChange={(e) => setForm({ ...form, [field.name]: e.target.value })}
+                    required={field.required}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                  {field.hint && <p className="mt-1 text-[11px] text-muted-foreground">{t(field.hint)}</p>}
                 </div>
               ))}
               <div className="flex gap-3 pt-2">
@@ -1465,6 +1536,32 @@ export default function StudentsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {inviteTarget && (
+        <GuardianInviteModal studentId={inviteTarget.id} studentName={inviteTarget.name}
+          onClose={() => setInviteTarget(null)} />
+      )}
+
+      {requestsOpen && (
+        <GuardianRequestsModal
+          onClose={() => setRequestsOpen(false)}
+          // Approving one writes a contact onto the student's record, so the roster behind
+          // the modal is refreshed along with the count.
+          onResolved={() => { fetchPendingRequests(); fetchStudents(activeClass) }}
+        />
+      )}
+
+      {bulkInviteOpen && activeClass !== 'all' && (
+        <BulkGuardianInviteModal
+          classLevel={activeClass}
+          classLabel={stripProgrammeSuffix(isSecondary ? stripDeptSuffix(activeClass) : activeClass)}
+          schoolName={school?.name ?? ''}
+          onClose={() => setBulkInviteOpen(false)}
+          // Filling guardian phones in from the sheet changes the roster underneath the
+          // page, so the list behind the modal is refreshed rather than left stale.
+          onPhonesChanged={() => fetchStudents(activeClass)}
+        />
       )}
 
       {feesTarget && (

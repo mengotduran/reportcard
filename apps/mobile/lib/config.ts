@@ -23,3 +23,21 @@ const API_BASE_ROOT = __DEV__ ? DEV_API_BASE : PROD_API_BASE
 
 export const API_BASE_URL = `${API_BASE_ROOT}/api`
 export const API_BASE = API_BASE_ROOT
+
+// The web app, for the one thing this app cannot do itself: the parent portal.
+//
+// Parents have no screens here at all — every tab is written against a staff user with a
+// school, and a parent's account has neither. Their whole app is the website, so a parent
+// who installs Bulletin from the Play Store is handed off to it rather than being dropped
+// into a staff app where every screen answers 403. See the PARENT branch in app/login.tsx.
+//
+// In development this points at the web dev server on the same LAN address as the API
+// above, so the hand-off is testable from a real phone.
+const DEV_WEB_BASE = 'http://192.168.1.249:3000'
+const PROD_WEB_BASE = 'https://usebulletin.org'
+
+export const WEB_BASE = __DEV__ ? DEV_WEB_BASE : PROD_WEB_BASE
+export const PARENT_PORTAL_URL = `${WEB_BASE}/parent`
+// Asking for access needs the school and class pickers and an emailed link, so sign-up
+// stays on the website. The app is for signing in once that is done.
+export const PARENT_SIGNUP_URL = `${WEB_BASE}/parent/signup`

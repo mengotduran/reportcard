@@ -2,7 +2,7 @@
   "expo": {
     "name": "Bulletin",
     "slug": "reportcard-mobile",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "icon": "./assets/images/icon.png",
     "scheme": "reportcard",
     "platforms": [
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.bulletin.app",
-      "versionCode": 1,
+      "versionCode": 10,
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       }
