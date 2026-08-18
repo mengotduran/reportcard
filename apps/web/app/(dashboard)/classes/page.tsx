@@ -1399,8 +1399,12 @@ export default function ClassesPage() {
                   deliberately omit) an average and a position, so neither the total nor the
                   marks/ratings choice can move until next year. Said here, with the controls
                   disabled, rather than letting an admin set something the API will refuse.
-                  A new class is never locked — it has no published history yet. */}
-              {scaleLockedBy && (
+                  A new class is never locked — it has no published history yet.
+                  `isPrimary` matters: this copy belongs to the Assessment toggle directly
+                  below, which only primary schools get. Without it a secondary or university
+                  school rendered this notice AND the !isPrimary one further down, showing the
+                  same warning twice. */}
+              {scaleLockedBy && isPrimary && (
                 <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   <Lock size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-800">
